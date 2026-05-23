@@ -1,0 +1,44 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+  background: #0b0b0f;
+  color: #fff;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  overflow: hidden;
+}
+
+/* Hide scrollbars but keep scroll */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { scrollbar-width: none; }
+
+/* Custom scrollbar for content panes */
+.thin-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
+.thin-scrollbar::-webkit-scrollbar-thumb {
+  background: #2a2a36;
+  border-radius: 4px;
+}
+.thin-scrollbar::-webkit-scrollbar-thumb:hover { background: #3a3a48; }
+.thin-scrollbar::-webkit-scrollbar-track { background: transparent; }
+
+/* Make the drag region the title bar area on macOS */
+.titlebar-drag {
+  -webkit-app-region: drag;
+}
+.titlebar-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Smooth focus rings */
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid rgba(229, 9, 20, 0.7);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
