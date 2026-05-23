@@ -6,3 +6,5 @@ release
 .env.local
 .DS_Store
 *.log
+resources/mpv
+build/icon_tmp
