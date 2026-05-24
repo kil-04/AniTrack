@@ -133,7 +133,18 @@ let _alState = { connected: false, username: null as string | null };
 
 // ── Shim installation ──────────────────────────────────────────────────────────
 
-export function installCapacitorApiBridge() {
+export async function installCapacitorApiBridge() {
+  // --- SUPABASE NATIVE RECOVERY ---
+  // If the WebView's localStorage gets wiped during an app update, this recovers
+  // the user's Supabase sync details from Android SharedPreferences BEFORE React boots.
+  const supaUrl = await AniTrackSettings.get({ key: "supabase_url" }).catch(() => ({ value: null }));
+  const supaKey = await AniTrackSettings.get({ key: "supabase_key" }).catch(() => ({ value: null }));
+  const supaUid = await AniTrackSettings.get({ key: "supabase_user_id" }).catch(() => ({ value: null }));
+  
+  if (supaUrl.value) localStorage.setItem("supabase_url", supaUrl.value);
+  if (supaKey.value) localStorage.setItem("supabase_key", supaKey.value);
+  if (supaUid.value) localStorage.setItem("supabase_user_id", supaUid.value);
+
   // Bridge Capacitor plugin events → JS event bus so Settings.tsx listeners work unchanged.
   AniTrackMal.addListener("mal:auth-complete", async (data: any) => {
     // Auto-pull the user's MAL list right after connecting so Library populates immediately.

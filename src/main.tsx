@@ -20,8 +20,8 @@ function renderApp() {
 // On Android (Capacitor), window.api is not provided by a preload script.
 // Install the Capacitor shim before React renders.
 if ((window as any).Capacitor) {
-  import("./lib/api-capacitor").then(({ installCapacitorApiBridge }) => {
-    installCapacitorApiBridge();
+  import("./lib/api-capacitor").then(async ({ installCapacitorApiBridge }) => {
+    await installCapacitorApiBridge();
     renderApp();
   });
 } else {

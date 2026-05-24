@@ -23,15 +23,33 @@ export function getSyncConfig(): SyncConfig | null {
 }
 
 export function setSyncConfig(cfg: Partial<SyncConfig>) {
-  if (cfg.url    !== undefined) localStorage.setItem(URL_KEY,    cfg.url);
-  if (cfg.key    !== undefined) localStorage.setItem(KEY_KEY,    cfg.key);
+  if (cfg.url !== undefined) localStorage.setItem(URL_KEY, cfg.url);
+  if (cfg.key !== undefined) localStorage.setItem(KEY_KEY, cfg.key);
   if (cfg.userId !== undefined) localStorage.setItem(USERID_KEY, cfg.userId);
+
+  if ((window as any).Capacitor?.isNativePlatform()) {
+    const Settings = (window as any).Capacitor.Plugins.AniTrackSettings;
+    if (Settings) {
+      if (cfg.url !== undefined) Settings.set({ key: URL_KEY, value: cfg.url });
+      if (cfg.key !== undefined) Settings.set({ key: KEY_KEY, value: cfg.key });
+      if (cfg.userId !== undefined) Settings.set({ key: USERID_KEY, value: cfg.userId });
+    }
+  }
 }
 
 export function clearSyncConfig() {
   localStorage.removeItem(URL_KEY);
   localStorage.removeItem(KEY_KEY);
   localStorage.removeItem(USERID_KEY);
+
+  if ((window as any).Capacitor?.isNativePlatform()) {
+    const Settings = (window as any).Capacitor.Plugins.AniTrackSettings;
+    if (Settings) {
+      Settings.del({ key: URL_KEY });
+      Settings.del({ key: KEY_KEY });
+      Settings.del({ key: USERID_KEY });
+    }
+  }
 }
 
 function restHeaders(key: string) {

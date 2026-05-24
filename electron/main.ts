@@ -577,6 +577,7 @@ function registerIpc() {
     }
   });
   ipcMain.handle(IPC.UPDATE_INSTALL, () => {
+    isQuitting = true;
     autoUpdater.quitAndInstall();
   });
 }
