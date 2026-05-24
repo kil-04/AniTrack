@@ -253,8 +253,11 @@ export async function pullList(onProgress?: (n: number) => void): Promise<{ impo
 export async function alMarkEpisodeWatched(anilistId: number, episode: number): Promise<void> {
   if (!getToken() || anilistId <= 0 || anilistId >= 1_000_000_000) return;
   try {
-    // Determine status: we push "CURRENT" with the episode count.
-    // AniList figures out completion when progress === total episodes.
+    // Don't override a "dropped" status — user explicitly stopped watching.
+    const existing = getListEntry(anilistId);
+    if (existing?.status === "dropped") return;
+    // We push "watching" with the episode count. AniList figures out
+    // completion automatically when progress === total episodes.
     const today = new Date().toISOString().slice(0, 10);
     await pushEntry(anilistId, "watching", episode, undefined, today);
   } catch (e) {

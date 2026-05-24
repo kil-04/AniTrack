@@ -11,6 +11,7 @@ const items = [
 
 export default function Sidebar() {
   const mal = useAppStore((s) => s.mal);
+  const al = useAppStore((s) => s.al);
   return (
     <aside className="flex w-60 flex-col border-r border-white/5 bg-bg-elev">
       <div className="flex items-center gap-2 px-6 py-6 titlebar-drag">
@@ -36,20 +37,31 @@ export default function Sidebar() {
           </NavLink>
         ))}
       </nav>
-      <div className="p-4 text-xs">
+      <div className="p-4 text-xs space-y-2">
         {mal.connected ? (
           <div className="rounded-md bg-bg-card px-3 py-2">
-            <div className="text-muted">MAL connected</div>
-            <div className="truncate font-medium text-white">
-              {mal.username || "—"}
-            </div>
+            <div className="text-muted">MAL</div>
+            <div className="truncate font-medium text-white">{mal.username || "—"}</div>
           </div>
         ) : (
           <NavLink
             to="/settings"
             className="block rounded-md bg-accent/20 px-3 py-2 text-accent hover:bg-accent/30"
           >
-            Connect MyAnimeList →
+            Connect MAL →
+          </NavLink>
+        )}
+        {al.connected ? (
+          <div className="rounded-md bg-bg-card px-3 py-2">
+            <div className="text-muted">AniList</div>
+            <div className="truncate font-medium text-white">{al.username || "—"}</div>
+          </div>
+        ) : (
+          <NavLink
+            to="/settings"
+            className="block rounded-md bg-[#02a9ff]/10 px-3 py-2 text-[#02a9ff]/80 hover:bg-[#02a9ff]/20"
+          >
+            Connect AniList →
           </NavLink>
         )}
       </div>

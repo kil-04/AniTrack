@@ -5,11 +5,11 @@ import Card from "../components/Card";
 import { Link } from "react-router-dom";
 import { Play, RefreshCw, Clock, Loader2, X, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { secondsToTimestamp } from "../lib/format";
+import { deleteAnimeProgress } from "../lib/supabase-sync";
 
 function cwStreamUrl(session: string, title: string, episode: number, coverUrl?: string | null, animeId?: number): string {
   const p: Record<string, string> = { session, title, episode: String(episode) };
   if (coverUrl) p.coverUrl = coverUrl;
-  // Pass real AniList ID so the player uses the correct ID for progress tracking
   if (animeId && animeId > 0) p.animeId = String(animeId);
   return "/stream-player?" + new URLSearchParams(p).toString();
 }
@@ -22,7 +22,9 @@ export default function Home() {
   const latestLastPage = useAppStore((s) => s.latestLastPage);
   const refreshLatest = useAppStore((s) => s.refreshLatest);
   const refreshContinue = useAppStore((s) => s.refreshContinue);
+  const refreshAll = useAppStore((s) => s.refreshAll);
   const cw = useAppStore((s) => s.continueWatching);
+  const [cwRefreshing, setCwRefreshing] = useState(false);
 
   // Continue Watching scroll state
   const cwScrollRef = useRef<HTMLDivElement>(null);
@@ -55,6 +57,16 @@ export default function Home() {
   useEffect(() => {
     if (cw.length === 0) return;
 
+    const CACHE_KEY = "pahe-ep-totals";
+    const CACHE_TTL = 60 * 60 * 1000; // 1 hour
+
+    // Seed state from localStorage immediately so stale-but-fast data shows first.
+    let stored: Record<string, { total: number; at: number }> = {};
+    try { stored = JSON.parse(localStorage.getItem(CACHE_KEY) ?? "{}"); } catch { /* ignore */ }
+    const seedMap = new Map<string, number>();
+    for (const [k, v] of Object.entries(stored)) seedMap.set(k, v.total);
+    if (seedMap.size) setPaheEpTotals(new Map(seedMap));
+
     async function getLatestEpNumber(session: string): Promise<number> {
       const first = await window.api.pahe.episodes(session, 1);
       const lastPage = first.lastPage ?? 1;
@@ -65,10 +77,15 @@ export default function Home() {
       return nums.length ? Math.max(...nums) : first.total;
     }
 
+    const now = Date.now();
     const fetches = cw.map(async (item) => {
+      const key = item.animePaheSession ?? item.anime.title;
+      // Skip if cached value is fresh.
+      if (stored[key] && now - stored[key].at < CACHE_TTL) return null;
+
       if (item.animePaheSession) {
-        const latest = await getLatestEpNumber(item.animePaheSession);
-        return { key: item.animePaheSession, total: latest };
+        const total = await getLatestEpNumber(item.animePaheSession);
+        return { key, total };
       }
       const title = item.anime.title;
       const results = await window.api.pahe.search(title);
@@ -76,17 +93,23 @@ export default function Home() {
       const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
       const exact = results.find((r: any) => norm(r.title) === norm(title));
       const best = exact ?? results[0];
-      const latest = await getLatestEpNumber(best.session);
-      return { key: title, total: latest };
+      const total = await getLatestEpNumber(best.session);
+      return { key, total };
     });
 
     Promise.allSettled(fetches).then((results) => {
-      const map = new Map<string, number>();
+      const updates: Record<string, { total: number; at: number }> = { ...stored };
+      let changed = false;
       for (const r of results) {
         if (r.status === "fulfilled" && r.value) {
-          map.set(r.value.key, r.value.total);
+          updates[r.value.key] = { total: r.value.total, at: now };
+          changed = true;
         }
       }
+      if (!changed) return;
+      try { localStorage.setItem(CACHE_KEY, JSON.stringify(updates)); } catch { /* ignore */ }
+      const map = new Map<string, number>();
+      for (const [k, v] of Object.entries(updates)) map.set(k, v.total);
       setPaheEpTotals(map);
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -98,15 +121,25 @@ export default function Home() {
       {/* Continue Watching */}
       {cw.length > 0 && (
         <section className="mb-10">
-          <div className="mb-4 flex items-center gap-2 px-8">
-            <Clock size={16} className="text-[#4a9eff]" />
-            <Link
-              to="/continue-watching"
-              className="group flex items-center gap-1 text-lg font-semibold hover:text-[#4a9eff] transition-colors"
+          <div className="mb-4 flex items-center justify-between px-8">
+            <div className="flex items-center gap-2">
+              <Clock size={16} className="text-[#4a9eff]" />
+              <Link
+                to="/continue-watching"
+                className="group flex items-center gap-1 text-lg font-semibold hover:text-[#4a9eff] transition-colors"
+              >
+                Continue Watching
+                <ChevronRight size={16} className="opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all" />
+              </Link>
+            </div>
+            <button
+              onClick={async () => { setCwRefreshing(true); await refreshAll(); setCwRefreshing(false); }}
+              disabled={cwRefreshing}
+              className="flex items-center gap-1.5 rounded px-3 py-1.5 text-xs text-white/50 hover:bg-white/10 hover:text-white disabled:opacity-40 transition"
             >
-              Continue Watching
-              <ChevronRight size={16} className="opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all" />
-            </Link>
+              <RefreshCw size={12} className={cwRefreshing ? "animate-spin" : ""} />
+              Refresh
+            </button>
           </div>
           <div className="relative group/cwrow">
             {cwCanScrollLeft && (
@@ -148,7 +181,7 @@ export default function Home() {
                     onClick={(e) => {
                       e.preventDefault();
                       window.api.list.dismissContinueWatching(item.anime.id)
-                        .then(() => refreshContinue())
+                        .then(() => { deleteAnimeProgress(item.anime.id); refreshContinue(); })
                         .catch(() => {});
                     }}
                     className="absolute right-1.5 top-1.5 z-20 flex h-6 w-6 items-center justify-center rounded-full bg-black/70 text-white opacity-0 transition hover:bg-black/90 group-hover:opacity-100"

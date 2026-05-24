@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { ArrowLeft, Plus, Check } from "lucide-react";
-import type { AnimeMeta, ListEntry, WatchStatus } from "../../shared/types";
+import type { AnimeMeta, ListEntry, RelatedAnime, WatchStatus } from "../../shared/types";
 import PahePanel from "../components/PahePanel";
 import { useAppStore } from "../store/useAppStore";
 
@@ -18,6 +18,7 @@ export default function ShowDetail() {
   const animeId = Number(id);
   const navigate = useNavigate();
   const [anime, setAnime] = useState<AnimeMeta | null>(null);
+  const [related, setRelated] = useState<RelatedAnime[]>([]);
   const list = useAppStore((s) => s.list);
   const refreshList = useAppStore((s) => s.refreshList);
   const entry: ListEntry | undefined = list.find(
@@ -25,13 +26,26 @@ export default function ShowDetail() {
   )?.entry;
 
   useEffect(() => {
+    let cancelled = false;
     setAnime(null);
+    setRelated([]);
     window.api.anilist.get(animeId).then((a) => {
+      if (cancelled) return;
       if (a) { setAnime(a); return; }
       const fromStore = list.find((x) => x.entry.animeId === animeId)?.anime;
       if (fromStore) setAnime(fromStore);
       else setAnime({ id: animeId, title: "Unknown", coverImage: null } as any);
-    });
+    }).catch(() => {});
+    if (animeId > 0 && animeId < 1_000_000_000) {
+      window.api.anilist.relations(animeId)
+        .then((r) => {
+          if (cancelled) return;
+          setRelated(r.filter((x) => ["SEQUEL", "PREQUEL", "SIDE_STORY", "ALTERNATIVE", "SPIN_OFF", "PARENT"].includes(x.relationType)));
+        })
+        .catch(() => {});
+    }
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [animeId]);
 
   if (!anime) return <div className="p-8 text-white/40">Loading…</div>;
@@ -171,6 +185,38 @@ export default function ShowDetail() {
         <p className="mt-6 max-w-4xl px-8 text-sm leading-relaxed text-white/70">
           {anime.synopsis}
         </p>
+      )}
+
+      {/* Related anime */}
+      {related.length > 0 && (
+        <div className="mt-8 px-8">
+          <h2 className="mb-3 text-lg font-semibold">Related</h2>
+          <div className="flex gap-4 overflow-x-auto pb-2">
+            {related.map(({ relationType, anime: rel }) => (
+              <button
+                key={rel.id}
+                onClick={() => navigate(`/anime/${rel.id}`)}
+                className="flex-shrink-0 w-28 text-left group"
+              >
+                <div className="relative overflow-hidden rounded-lg">
+                  {rel.coverImage ? (
+                    <img
+                      src={rel.coverImage}
+                      alt={rel.title}
+                      className="h-40 w-28 object-cover transition group-hover:scale-105"
+                    />
+                  ) : (
+                    <div className="h-40 w-28 rounded-lg bg-white/5" />
+                  )}
+                  <div className="absolute bottom-0 inset-x-0 bg-black/60 px-1.5 py-1 text-[10px] text-white/70 capitalize">
+                    {relationType.toLowerCase().replace(/_/g, " ")}
+                  </div>
+                </div>
+                <p className="mt-1.5 text-xs leading-tight text-white/70 line-clamp-2 group-hover:text-white transition">{rel.title}</p>
+              </button>
+            ))}
+          </div>
+        </div>
       )}
 
       {/* AnimePahe episodes */}

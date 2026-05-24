@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { searchAnime } from "./anilist";
 import {
-  clearLocalEpisodes,
+  findAnimeByTitle,
   listLibraryFolders,
+  removeStaleLocalEpisodes,
   upsertAnime,
   upsertLocalEpisode,
 } from "./db";
@@ -94,8 +95,8 @@ export async function scanAll(
     buckets.get(key)!.push({ episode: ep, filePath: fp });
   }
 
-  // Wipe and rebuild local_episode table for a clean scan.
-  clearLocalEpisodes();
+  // Track every file path we found so we can prune stale DB entries at the end.
+  const validPaths = new Set<string>(files);
 
   const titleEntries = [...buckets.entries()];
   let shows = 0;
@@ -103,28 +104,35 @@ export async function scanAll(
   for (let i = 0; i < titleEntries.length; i++) {
     const [titleKey, items] = titleEntries[i];
     onProgress?.(i + 1, titleEntries.length, titleKey);
-    let match: AnimeMeta | null = null;
-    try {
-      const results = await searchAnime(titleKey);
-      match = results[0] ?? null;
-    } catch (e) {
-      console.warn("AniList search failed for", titleKey, e);
-    }
+
+    // Check the local DB before hitting AniList — avoids the network call and
+    // the 250 ms rate-limit delay for any title we've already resolved.
+    let match: AnimeMeta | null = findAnimeByTitle(titleKey);
+
     if (!match) {
-      // Create a local-only placeholder so the show still shows up.
-      // Use a stable hash of the title as id (negative to avoid colliding with AniList).
-      const id = -hashTitle(titleKey);
-      match = {
-        id,
-        malId: null,
-        title: titleEntries[i][0].replace(/\b\w/g, (c) => c.toUpperCase()),
-        episodes: items.length,
-        coverImage: null,
-        genres: [],
-        studios: [],
-      };
+      try {
+        const results = await searchAnime(titleKey);
+        match = results[0] ?? null;
+      } catch (e) {
+        console.warn("AniList search failed for", titleKey, e);
+      }
+      if (!match) {
+        const id = -hashTitle(titleKey);
+        match = {
+          id,
+          malId: null,
+          title: titleKey.replace(/\b\w/g, (c) => c.toUpperCase()),
+          episodes: items.length,
+          coverImage: null,
+          genres: [],
+          studios: [],
+        };
+      }
+      upsertAnime(match);
+      // Be polite to AniList only when we actually called it.
+      await new Promise((r) => setTimeout(r, 250));
     }
-    upsertAnime(match);
+
     for (const it of items) {
       upsertLocalEpisode({
         animeId: match.id,
@@ -135,9 +143,11 @@ export async function scanAll(
       episodes++;
     }
     shows++;
-    // Be polite to AniList — small delay between lookups.
-    await new Promise((r) => setTimeout(r, 250));
   }
+
+  // Remove DB rows for files that no longer exist on disk (incremental update).
+  removeStaleLocalEpisodes(validPaths);
+
   return { shows, episodes };
 }
 

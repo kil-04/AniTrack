@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import type { AnimeMeta, LocalEpisode } from "../../shared/types";
 import { secondsToTimestamp } from "../lib/format";
+import { pushProgress } from "../lib/supabase-sync";
 
 export default function Player() {
   const { animeId: idStr, episode: epStr } = useParams();
@@ -33,6 +34,7 @@ export default function Player() {
   const [position, setPosition] = useState(0);
   const [duration, setDuration] = useState(0);
   const [showControls, setShowControls] = useState(true);
+  const [mouseNearTop, setMouseNearTop] = useState(false);
   const [resumeOffered, setResumeOffered] = useState<number | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
@@ -41,6 +43,7 @@ export default function Player() {
   const hideTimer = useRef<number | null>(null);
   const singleClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastPersist = useRef<number>(0);
+  const lastPositionUpdate = useRef<number>(0);
 
   // Load metadata + resolve file path (or use stream URL directly for pahe)
   useEffect(() => {
@@ -78,11 +81,10 @@ export default function Player() {
   }, [animeId, episode, streamUrl]);
 
   // Persist progress
-  function persist(pos: number, dur: number) {
+  function persist(pos: number, dur: number, force = false) {
     if (!Number.isFinite(pos) || !Number.isFinite(dur) || dur <= 0) return;
     const now = Date.now();
-    // Throttle to once every 5s.
-    if (now - lastPersist.current < 5000) return;
+    if (!force && now - lastPersist.current < 5000) return;
     lastPersist.current = now;
     window.api.progress.set({
       animeId,
@@ -91,13 +93,38 @@ export default function Player() {
       durationSec: dur,
       updatedAt: now,
     });
+    pushProgress({
+      animeId,
+      episode,
+      positionSec: pos,
+      durationSec: dur,
+      animeTitle:    anime?.title      ?? undefined,
+      animeCoverUrl: anime?.coverImage ?? undefined,
+      updatedAt: now,
+    }).catch(() => {});
   }
+
+  // Persist final position on unmount so close-mid-episode doesn't lose progress.
+  useEffect(() => {
+    return () => {
+      const v = videoRef.current;
+      if (!v) return;
+      persist(v.currentTime, v.duration, true);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [animeId, episode]);
 
   function onTimeUpdate() {
     const v = videoRef.current;
     if (!v) return;
-    setPosition(v.currentTime);
     persist(v.currentTime, v.duration);
+    // Throttle React state (and therefore re-renders) to ~4 fps — the seek bar
+    // and timestamp don't need to update at the full timeupdate rate (~10 fps).
+    const now = Date.now();
+    if (now - lastPositionUpdate.current >= 250) {
+      lastPositionUpdate.current = now;
+      setPosition(v.currentTime);
+    }
   }
 
   function onLoaded() {
@@ -200,10 +227,14 @@ export default function Player() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function bumpControls() {
+  function bumpControls(e?: React.MouseEvent) {
     setShowControls(true);
     if (hideTimer.current) window.clearTimeout(hideTimer.current);
-    hideTimer.current = window.setTimeout(() => setShowControls(false), 2500);
+    hideTimer.current = window.setTimeout(() => { setShowControls(false); setMouseNearTop(false); }, 2500);
+    if (e && containerRef.current) {
+      const rect = containerRef.current.getBoundingClientRect();
+      setMouseNearTop(e.clientY - rect.top < 70);
+    }
   }
 
   return (
@@ -244,7 +275,9 @@ export default function Player() {
               togglePlay();
             }, 250);
           }}
-          onEnded={() => gotoEpisode(1)}
+          onEnded={() => {
+            if (localStorage.getItem("ap-autonext") !== "false") gotoEpisode(1);
+          }}
         />
       ) : (
         <div className="flex h-full items-center justify-center text-muted">
@@ -252,9 +285,9 @@ export default function Player() {
         </div>
       )}
 
-      {/* Fullscreen exit X button — top-center */}
+      {/* Fullscreen exit X — only when mouse is near top */}
       {isFullscreen && (
-        <div className={`absolute top-4 left-1/2 -translate-x-1/2 z-30 transition-opacity duration-300 ${showControls ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
+        <div className={`absolute top-4 left-1/2 -translate-x-1/2 z-30 transition-opacity duration-300 ${mouseNearTop ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
           <button
             onClick={fullscreen}
             className="flex h-9 w-9 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur-sm hover:bg-black/80 transition"

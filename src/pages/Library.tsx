@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import Card from "../components/Card";
 import { useAppStore } from "../store/useAppStore";
 import type { WatchStatus } from "../../shared/types";
@@ -28,10 +28,19 @@ export default function Library() {
     [list, tab],
   );
 
-  const countFor = (key: WatchStatus | "all") =>
-    key === "all"
-      ? list.filter((x) => x.anime).length
-      : list.filter((x) => x.anime && x.entry.status === key).length;
+  const counts = useMemo(() => {
+    const withAnime = list.filter((x) => x.anime);
+    const m = new Map<WatchStatus | "all", number>([["all", withAnime.length]]);
+    for (const { key } of TABS.slice(1)) {
+      m.set(key as WatchStatus, withAnime.filter((x) => x.entry.status === key).length);
+    }
+    return m;
+  }, [list]);
+
+  const countFor = useCallback(
+    (key: WatchStatus | "all") => counts.get(key) ?? 0,
+    [counts],
+  );
 
   return (
     <div className="px-8 py-8">

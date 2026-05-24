@@ -9,11 +9,21 @@ contextBridge.exposeInMainWorld("api", {
     disconnect: () => ipcRenderer.invoke(IPC.MAL_DISCONNECT),
     pull: () => ipcRenderer.invoke(IPC.MAL_PULL),
     push: () => ipcRenderer.invoke(IPC.MAL_PUSH_PROGRESS),
+    setClientId: (id: string) => ipcRenderer.invoke(IPC.MAL_SET_CLIENT_ID, id),
+    clientInfo: () => ipcRenderer.invoke(IPC.MAL_CLIENT_INFO),
+  },
+  al: {
+    beginAuth: () => ipcRenderer.invoke(IPC.AL_BEGIN_AUTH),
+    state: () => ipcRenderer.invoke(IPC.AL_STATE),
+    disconnect: () => ipcRenderer.invoke(IPC.AL_DISCONNECT),
+    pull: () => ipcRenderer.invoke(IPC.AL_PULL),
+    setClientId: (id: string) => ipcRenderer.invoke(IPC.AL_SET_CLIENT_ID, id),
   },
   anilist: {
     search: (q: string) => ipcRenderer.invoke(IPC.ANILIST_SEARCH, q),
     trending: () => ipcRenderer.invoke(IPC.ANILIST_TRENDING),
     get: (id: number) => ipcRenderer.invoke(IPC.ANILIST_GET, id),
+    relations: (id: number) => ipcRenderer.invoke(IPC.ANILIST_RELATIONS, id),
   },
   library: {
     addFolder: () => ipcRenderer.invoke(IPC.LIBRARY_ADD_FOLDER),
@@ -36,6 +46,7 @@ contextBridge.exposeInMainWorld("api", {
     get: (id: number, ep: number) =>
       ipcRenderer.invoke(IPC.PROGRESS_GET, id, ep),
     set: (p: unknown) => ipcRenderer.invoke(IPC.PROGRESS_SET, p),
+    getForAnime: (id: number) => ipcRenderer.invoke(IPC.PROGRESS_GET_FOR_ANIME, id),
   },
   player: {
     resolveFile: (p: string) =>
@@ -56,6 +67,12 @@ contextBridge.exposeInMainWorld("api", {
     prefetch: (kwikUrl: string) => ipcRenderer.invoke(IPC.PAHE_PREFETCH, kwikUrl),
     getIds: (paheId: number, session: string) => ipcRenderer.invoke(IPC.PAHE_GET_IDS, paheId, session),
     findById: (anilistId: number | undefined, malId?: number) => ipcRenderer.invoke(IPC.PAHE_FIND_BY_ID, anilistId, malId),
+    getUrl: () => ipcRenderer.invoke(IPC.PAHE_GET_URL),
+    setUrl: (url: string) => ipcRenderer.invoke(IPC.PAHE_SET_URL, url),
+  },
+  updater: {
+    check: () => ipcRenderer.invoke(IPC.UPDATE_CHECK),
+    install: () => ipcRenderer.invoke(IPC.UPDATE_INSTALL),
   },
   on: (channel: string, fn: (...args: unknown[]) => void) => {
     const sub = (_e: unknown, ...args: unknown[]) => fn(...args);

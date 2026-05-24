@@ -1,6 +1,6 @@
 {
   "name": "anitrack",
-  "version": "0.1.0",
+  "version": "4.5.1",
   "description": "Anime tracker + local player with MAL two-way sync and legal-site launcher",
   "main": "dist-electron/electron/main.js",
   "author": "Sanjay",
@@ -9,13 +9,24 @@
     "dev": "concurrently -k \"npm:dev:vite\" \"npm:dev:electron\"",
     "dev:vite": "vite",
     "dev:electron": "wait-on tcp:5173 && tsc -p tsconfig.electron.json && cross-env NODE_ENV=development electron .",
+    "dev:electron-watch": "wait-on tcp:5173 && tsc -p tsconfig.electron.json -w --preserveWatchOutput",
     "build:vite": "vite build",
     "build:electron": "tsc -p tsconfig.electron.json",
     "build": "npm run build:vite && npm run build:electron",
     "pack": "npm run build && electron-builder",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit"
+    "publish": "npm run build && electron-builder --publish always",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
+    "android:sync": "npm run build:vite && npx cap sync android",
+    "android:open": "npx cap open android",
+    "android:build": "npm run android:sync && android\\gradlew.bat assembleRelease",
+    "android:publish": "npm run android:build && node scripts/upload-apk.js"
   },
   "dependencies": {
+    "@capacitor/android": "^6.2.0",
+    "@capacitor/browser": "^6.0.3",
+    "@capacitor/core": "^6.2.0",
+    "@capacitor/screen-orientation": "^6.0.2",
+    "@capacitor-community/sqlite": "^6.0.2",
     "electron-updater": "^6.8.3",
     "hls.js": "^1.5.15",
     "lucide-react": "^0.451.0",
@@ -55,6 +66,10 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "build/icon.ico",
+        "to": "icon.ico"
       }
     ],
     "directories": {
@@ -81,8 +96,9 @@
       "icon": "build/icon.ico"
     },
     "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "AniTrack"
@@ -93,7 +109,8 @@
     "publish": {
       "provider": "github",
       "owner": "kil-04",
-      "repo": "AniTrack"
+      "repo": "AniTrack",
+      "releaseType": "release"
     }
   }
 }

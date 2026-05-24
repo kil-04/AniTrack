@@ -7,11 +7,15 @@ import {
   session,
   shell,
   net,
+  Tray,
+  Menu,
+  nativeImage,
 } from "electron";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   addLibraryFolder,
+  deleteListEntry,
   dismissFromContinueWatching,
   getAllListEntries,
   getAnime,
@@ -20,6 +24,7 @@ import {
   getEpisodesFor,
   getListEntry,
   getProgress,
+  getProgressForAnime,
   listLibraryFolders,
   removeLibraryFolder,
   setListEntry,
@@ -31,10 +36,20 @@ import {
   disconnect as malDisconnect,
   flushDirty,
   getState,
+  getMalClientInfo,
   markEpisodeWatched,
   pullList,
+  setMalClientId,
 } from "./services/mal";
-import { getById, searchAnime, trending } from "./services/anilist";
+import { getById, getRelations, searchAnime, trending } from "./services/anilist";
+import {
+  beginAuth as alBeginAuth,
+  disconnect as alDisconnect,
+  getState as alGetState,
+  pullList as alPullList,
+  setClientId as alSetClientId,
+  alMarkEpisodeWatched,
+} from "./services/anilist-sync";
 import { scanAll } from "./services/library";
 import { linksFor, openLink } from "./services/legal-sites";
 import {
@@ -48,6 +63,8 @@ import {
   prefetchKwik,
   prewarm as pahePrewarm,
   getKwikCookies,
+  getPaheBaseUrl,
+  setPaheBaseUrl,
 } from "./services/animepahe";
 import { IPC } from "../shared/types";
 import { autoUpdater } from "electron-updater";
@@ -55,6 +72,81 @@ import { autoUpdater } from "electron-updater";
 const isDev = process.env.NODE_ENV === "development";
 let mainWindow: BrowserWindow | null = null;
 let malFlushTimer: NodeJS.Timeout | null = null;
+let tray: Tray | null = null;
+let isQuitting = false;
+
+// Web request interceptors — installed once at startup, re-installed when the
+// AnimePahe base URL changes (so the snapshot/CDN host derivations stay current).
+function registerWebRequestHandlers() {
+  // Derive the current AnimePahe host from settings so domain hops (.pw → .si)
+  // don't need a release.
+  let paheHost = "animepahe.pw";
+  try { paheHost = new URL(getPaheBaseUrl()).hostname; } catch {}
+
+  // CDN domains that serve the actual video segments/manifests.
+  // AnimePahe rotates between several CDN backends — add any new ones here.
+  const CDN_URLS = [
+    "*://*.owocdn.top/*",
+    "*://*.owocdn.com/*",
+    "*://*.uwucdn.top/*",
+    "*://*.llnwi.net/*",
+    `*://*.cdn.${paheHost}/*`,
+  ];
+
+  // Snapshot thumbnails — derive from the current host, plus known historical
+  // hosts so old DB references keep working after a domain switch.
+  const snapshotHosts = new Set([
+    `i.${paheHost}`,
+    "i.animepahe.ru",
+    "i.animepahe.pw",
+    "i.animepahe.si",
+    "i.animepahe.cx",
+  ]);
+  const SNAPSHOT_URLS = Array.from(snapshotHosts).map((h) => `*://${h}/*`);
+
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    { urls: SNAPSHOT_URLS },
+    (details, callback) => {
+      const headers: Record<string, string> = { ...details.requestHeaders as Record<string, string> };
+      headers["Referer"] = `https://${paheHost}/`;
+      callback({ requestHeaders: headers });
+    },
+  );
+
+  // Spoof Referer + Origin on outgoing requests to the stream CDN.
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    { urls: [...CDN_URLS, "*://*.kwik.si/*", "*://*.kwik.cx/*", "*://kwik.si/*", "*://kwik.cx/*"] },
+    (details, callback) => {
+      const headers: Record<string, string> = {};
+      for (const [k, v] of Object.entries(details.requestHeaders)) {
+        if (k.toLowerCase() === "origin") continue;
+        headers[k] = v as string;
+      }
+      headers["Referer"] = "https://kwik.cx/";
+      headers["Origin"] = "https://kwik.cx";
+      const kwikCookies = getKwikCookies();
+      if (kwikCookies) headers["Cookie"] = kwikCookies;
+      callback({ requestHeaders: headers });
+    },
+  );
+
+  // Inject CORS headers into CDN responses for hls.js.
+  session.defaultSession.webRequest.onHeadersReceived(
+    { urls: CDN_URLS },
+    (details, callback) => {
+      const headers: Record<string, string[]> = {};
+      for (const [k, v] of Object.entries(details.responseHeaders ?? {})) {
+        if (k.toLowerCase().startsWith("access-control-")) continue;
+        headers[k] = Array.isArray(v) ? v : [v as string];
+      }
+      headers["Access-Control-Allow-Origin"] = ["*"];
+      headers["Access-Control-Allow-Methods"] = ["GET, HEAD, OPTIONS"];
+      headers["Access-Control-Allow-Headers"] = ["*"];
+      headers["Access-Control-Expose-Headers"] = ["*"];
+      callback({ responseHeaders: headers });
+    },
+  );
+}
 
 // Allow our app to be the default handler for anitrack:// URLs.
 if (process.defaultApp) {
@@ -105,6 +197,12 @@ function createWindow() {
   } else {
     mainWindow.loadFile(path.join(__dirname, "../../dist/index.html"));
   }
+  mainWindow.on("close", (e) => {
+    if (!isQuitting) {
+      e.preventDefault();
+      mainWindow?.hide();
+    }
+  });
   mainWindow.on("closed", () => { mainWindow = null; });
 }
 
@@ -119,6 +217,7 @@ if (!gotLock) {
     if (cbUrl) handleProtocolUrl(cbUrl);
     if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) mainWindow.restore();
+      if (!mainWindow.isVisible()) mainWindow.show();
       mainWindow.focus();
     } else {
       createWindow();
@@ -137,60 +236,7 @@ function handleProtocolUrl(_url: string) {
 }
 
 app.whenReady().then(() => {
-  // CDN domains that serve the actual video segments/manifests.
-  // AnimePahe rotates between several CDN backends — add any new ones here.
-  const CDN_URLS = [
-    "*://*.owocdn.top/*",
-    "*://*.owocdn.com/*",
-    "*://*.uwucdn.top/*",   // used by vault-01..vault-NN.uwucdn.top
-    "*://*.llnwi.net/*",
-    "*://*.cdn.animepahe.pw/*",
-  ];
-
-  // Spoof Referer + Origin on outgoing requests to the stream CDN so the CDN
-  // accepts them (it checks these headers to prevent hotlinking).
-  session.defaultSession.webRequest.onBeforeSendHeaders(
-    { urls: [...CDN_URLS, "*://*.kwik.si/*", "*://*.kwik.cx/*", "*://kwik.si/*", "*://kwik.cx/*"] },
-    (details, callback) => {
-      const headers: Record<string, string> = {};
-      for (const [k, v] of Object.entries(details.requestHeaders)) {
-        // Drop Origin so the CDN doesn't see localhost:5173
-        if (k.toLowerCase() === "origin") continue;
-        headers[k] = v as string;
-      }
-      headers["Referer"] = "https://kwik.cx/";
-      headers["Origin"] = "https://kwik.cx";
-
-      // Inject kwik session cookies — Cookie is a forbidden XHR header in the
-      // renderer, but the Electron network interceptor has no such restriction.
-      const kwikCookies = getKwikCookies();
-      if (kwikCookies) headers["Cookie"] = kwikCookies;
-
-      console.log("[header-inject]", details.url.slice(0, 80), "cookies:", kwikCookies.length);
-      callback({ requestHeaders: headers });
-    },
-  );
-
-  // Inject CORS headers into CDN responses so the renderer (hls.js XHR) is
-  // allowed to read them. Without this the browser blocks the response even
-  // after the CDN returns 200.
-  session.defaultSession.webRequest.onHeadersReceived(
-    { urls: CDN_URLS },
-    (details, callback) => {
-      const headers: Record<string, string[]> = {};
-      for (const [k, v] of Object.entries(details.responseHeaders ?? {})) {
-        // Drop any existing CORS headers — we'll set them ourselves below
-        // to avoid the "multiple values '*, *'" browser rejection.
-        if (k.toLowerCase().startsWith("access-control-")) continue;
-        headers[k] = Array.isArray(v) ? v : [v as string];
-      }
-      headers["Access-Control-Allow-Origin"] = ["*"];
-      headers["Access-Control-Allow-Methods"] = ["GET, HEAD, OPTIONS"];
-      headers["Access-Control-Allow-Headers"] = ["*"];
-      headers["Access-Control-Expose-Headers"] = ["*"];
-      callback({ responseHeaders: headers });
-    },
-  );
+  registerWebRequestHandlers();
 
   // Serve local files through a custom protocol so the renderer can <video src="local-video://...">.
   protocol.handle("local-video", (req) => {
@@ -203,24 +249,72 @@ app.whenReady().then(() => {
   registerIpc();
   createWindow();
 
+  // System tray — keep the app alive when the window is closed.
+  // In production the icon is copied to resources/ via extraResources.
+  const iconCandidates = [
+    isDev
+      ? path.join(__dirname, "../../build/icon.ico")
+      : path.join(process.resourcesPath, "icon.ico"),
+    path.join(__dirname, "../../build/icon.ico"),
+    path.join(process.resourcesPath ?? "", "icon.ico"),
+  ];
+  let trayIcon = nativeImage.createEmpty();
+  for (const candidate of iconCandidates) {
+    if (!candidate) continue;
+    const img = nativeImage.createFromPath(candidate);
+    if (!img.isEmpty()) { trayIcon = img; break; }
+  }
+  tray = new Tray(trayIcon);
+  tray.setToolTip("AniTrack");
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      {
+        label: "Show AniTrack",
+        click: () => {
+          if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+          else { mainWindow.show(); mainWindow.focus(); }
+        },
+      },
+      { type: "separator" },
+      {
+        label: "Quit",
+        click: () => { isQuitting = true; app.quit(); },
+      },
+    ]),
+  );
+  tray.on("click", () => {
+    if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+    else if (mainWindow.isVisible()) mainWindow.focus();
+    else mainWindow.show();
+  });
+
   // Pre-warm the AnimePahe hidden window so the Cloudflare session is
   // established before the user opens a show detail page.
   pahePrewarm();
 
-  // Auto-updater — checks GitHub Releases silently on startup.
+  // Auto-updater
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
-  autoUpdater.checkForUpdates().catch(() => {/* no network or no release yet */});
+  autoUpdater.checkForUpdates().catch(() => {});
 
-  autoUpdater.on("update-downloaded", () => {
-    dialog.showMessageBox({
-      type: "info",
-      title: "Update ready",
-      message: "A new version of AniTrack has been downloaded. It will be installed when you quit the app.",
-      buttons: ["Restart now", "Later"],
-    }).then(({ response }) => {
-      if (response === 0) autoUpdater.quitAndInstall();
-    });
+  function sendToRenderer(channel: string, payload?: unknown) {
+    mainWindow?.webContents.send(channel, payload);
+  }
+
+  autoUpdater.on("update-available", (info) => {
+    sendToRenderer("update:available", { version: info.version });
+  });
+  autoUpdater.on("update-not-available", () => {
+    sendToRenderer("update:not-available");
+  });
+  autoUpdater.on("download-progress", (p) => {
+    sendToRenderer("update:progress", { percent: Math.round(p.percent) });
+  });
+  autoUpdater.on("update-downloaded", (info) => {
+    sendToRenderer("update:downloaded", { version: info.version });
+  });
+  autoUpdater.on("error", (err) => {
+    sendToRenderer("update:error", err.message);
   });
 
   // Background flush of dirty list entries to MAL every 30s.
@@ -233,9 +327,14 @@ app.whenReady().then(() => {
   });
 });
 
+app.on("before-quit", () => { isQuitting = true; });
+
 app.on("window-all-closed", () => {
-  if (malFlushTimer) clearInterval(malFlushTimer);
-  if (process.platform !== "darwin") app.quit();
+  // Keep the app running in the tray on Windows; only quit when explicitly requested.
+  if (isQuitting) {
+    if (malFlushTimer) clearInterval(malFlushTimer);
+    if (process.platform !== "darwin") app.quit();
+  }
 });
 
 // ----------------- IPC handlers -----------------
@@ -258,15 +357,35 @@ function registerIpc() {
     return r;
   });
   ipcMain.handle(IPC.MAL_PUSH_PROGRESS, async () => flushDirty());
+  ipcMain.handle(IPC.MAL_SET_CLIENT_ID, (_e, id: string) => setMalClientId(id));
+  ipcMain.handle(IPC.MAL_CLIENT_INFO, () => getMalClientInfo());
 
 
-  // AniList
+  // AniList sync
+  ipcMain.handle(IPC.AL_BEGIN_AUTH, () => {
+    if (!mainWindow) return { ok: false, reason: "no window" };
+    return alBeginAuth(mainWindow);
+  });
+  ipcMain.handle(IPC.AL_STATE, () => alGetState());
+  ipcMain.handle(IPC.AL_DISCONNECT, () => { alDisconnect(); return alGetState(); });
+  ipcMain.handle(IPC.AL_PULL, async () => {
+    return alPullList((n) => mainWindow?.webContents.send("al:pull-progress", n));
+  });
+  ipcMain.handle(IPC.AL_SET_CLIENT_ID, (_e, id: string) => {
+    alSetClientId(id);
+    return alGetState();
+  });
+
+  // AniList metadata
   ipcMain.handle(IPC.ANILIST_SEARCH, (_e, q: string) => searchAnime(q));
   ipcMain.handle(IPC.ANILIST_TRENDING, () => trending());
+  ipcMain.handle(IPC.ANILIST_RELATIONS, (_e, id: number) => getRelations(id));
   ipcMain.handle(IPC.ANILIST_GET, async (_e, id: number) => {
-    // For pseudo-IDs (MAL-only stubs: id > 1_000_000_000) skip AniList entirely
-    // and return whatever we have in the local DB.
-    if (id > 1_000_000_000) {
+    // Skip AniList for synthetic IDs:
+    //   - Negative IDs: paheSession hashes (StreamPlayer) + library title hashes
+    //   - id > 1_000_000_000: MAL-only stubs
+    // For these, only the local DB has any meaningful data.
+    if (id <= 0 || id > 1_000_000_000) {
       return getAnime(id);
     }
     // Try local cache first so we don't hit AniList unnecessarily.
@@ -328,6 +447,9 @@ function registerIpc() {
   ipcMain.handle(IPC.PROGRESS_GET, (_e, id: number, ep: number) =>
     getProgress(id, ep),
   );
+  ipcMain.handle(IPC.PROGRESS_GET_FOR_ANIME, (_e, id: number) =>
+    getProgressForAnime(id),
+  );
   ipcMain.handle(IPC.PROGRESS_SET, async (_e, p: any) => {
     // Ensure the anime row exists so getContinueWatching()'s JOIN succeeds.
     if (p.animeTitle) {
@@ -361,6 +483,8 @@ function registerIpc() {
                     { ...stubEntry, animeId: hit.id },
                     { markDirty: !!hit.malId },
                   );
+                  // Remove the stale stub list entry so it doesn't linger.
+                  deleteListEntry(p.animeId);
                 }
               }
             } catch { /* best-effort */ }
@@ -371,16 +495,27 @@ function registerIpc() {
       }
     }
 
+    // Read existing progress BEFORE writing so we can detect the threshold crossing.
+    const prev = getProgress(p.animeId, p.episode);
     setProgress(p);
 
-    // Auto-mark watched at 85%. Works for real AniList IDs AND negative pahe-only
-    // IDs — markEpisodeWatched will dirty the entry; flushDirty pushes if malId exists.
-    // (animeId === 0 means completely unknown — skip.)
-    if (p.animeId !== 0 && p.durationSec && p.positionSec / p.durationSec >= 0.85) {
-      try {
-        await markEpisodeWatched(p.animeId, p.episode);
-      } catch (e) {
-        console.warn("markEpisodeWatched failed", e);
+    // Auto-mark watched on the FIRST crossing of 85%. Avoids firing MAL/AL push
+    // on every 10-second timer tick once past the threshold.
+    if (p.animeId !== 0 && p.durationSec) {
+      const prevPct = prev && prev.durationSec ? prev.positionSec / prev.durationSec : 0;
+      const newPct = p.positionSec / p.durationSec;
+      const justCrossed = prevPct < 0.85 && newPct >= 0.85;
+      if (justCrossed) {
+        try {
+          await markEpisodeWatched(p.animeId, p.episode);
+        } catch (e) {
+          console.warn("markEpisodeWatched failed", e);
+        }
+        try {
+          await alMarkEpisodeWatched(p.animeId, p.episode);
+        } catch (e) {
+          console.warn("alMarkEpisodeWatched failed", e);
+        }
       }
     }
     return { ok: true };
@@ -412,6 +547,16 @@ function registerIpc() {
   ipcMain.handle(IPC.PAHE_FIND_BY_ID, (_e, anilistId: number | undefined, malId: number | undefined) =>
     paheFindById(anilistId, malId),
   );
+  ipcMain.handle(IPC.PAHE_GET_URL, () => getPaheBaseUrl());
+  ipcMain.handle(IPC.PAHE_SET_URL, (_e, url: string) => {
+    try {
+      setPaheBaseUrl(url);
+      registerWebRequestHandlers(); // re-derive CDN/snapshot hosts from new URL
+      return { ok: true, url: getPaheBaseUrl() };
+    } catch (e: any) {
+      return { ok: false, url: getPaheBaseUrl(), reason: e.message };
+    }
+  });
 
   // Legal
   ipcMain.handle(IPC.LEGAL_LINKS, (_e, id: number) => {
@@ -421,5 +566,17 @@ function registerIpc() {
   });
   ipcMain.handle(IPC.LEGAL_OPEN, (_e, url: string) => {
     openLink(url);
+  });
+
+  ipcMain.handle(IPC.UPDATE_CHECK, async () => {
+    try {
+      const result = await autoUpdater.checkForUpdates();
+      return { ok: true, version: result?.updateInfo?.version ?? null };
+    } catch (e: any) {
+      return { ok: false, reason: e.message };
+    }
+  });
+  ipcMain.handle(IPC.UPDATE_INSTALL, () => {
+    autoUpdater.quitAndInstall();
   });
 }

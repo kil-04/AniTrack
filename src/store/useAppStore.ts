@@ -1,5 +1,7 @@
 import { create } from "zustand";
+import { pullAndMerge } from "../lib/supabase-sync";
 import type {
+  AniListAuthState,
   AnimeMeta,
   ContinueWatchingItem,
   ListEntry,
@@ -8,6 +10,7 @@ import type {
 
 interface AppState {
   mal: MalAuthState;
+  al: AniListAuthState;
   trending: AnimeMeta[];
   latestEpisodes: any[];
   latestPage: number;
@@ -27,6 +30,7 @@ interface AppState {
 
 export const useAppStore = create<AppState>((set) => ({
   mal: { connected: false },
+  al: { connected: false },
   trending: [],
   latestEpisodes: [],
   latestPage: 1,
@@ -39,19 +43,26 @@ export const useAppStore = create<AppState>((set) => ({
 
   refreshAll: async () => {
     set({ loading: true });
-    try {
-      const [mal, trending, cw, list] = await Promise.all([
-        window.api.mal.state(),
-        window.api.anilist.trending(),
-        window.api.list.continueWatching(),
-        window.api.list.getAll(),
-      ]);
-      set({ mal, trending, continueWatching: cw, list });
-    } catch (e) {
-      console.error(e);
-    } finally {
-      set({ loading: false });
-    }
+    // Pull remote playback progress from Supabase before refreshing the UI.
+    // Runs silently — a missing/misconfigured Supabase just returns 0.
+    await pullAndMerge().catch(() => {});
+    // Resolve each call independently so one slow/failing fetch doesn't block
+    // the others. Promise.allSettled lets us partially populate the UI.
+    const results = await Promise.allSettled([
+      window.api.mal.state(),
+      window.api.al.state(),
+      window.api.anilist.trending(),
+      window.api.list.continueWatching(),
+      window.api.list.getAll(),
+    ]);
+    const next: Partial<AppState> = {};
+    if (results[0].status === "fulfilled") next.mal = results[0].value;
+    if (results[1].status === "fulfilled") next.al = results[1].value;
+    if (results[2].status === "fulfilled") next.trending = results[2].value;
+    if (results[3].status === "fulfilled") next.continueWatching = results[3].value;
+    if (results[4].status === "fulfilled") next.list = results[4].value;
+    set({ ...next, loading: false });
+
     // Fetch latest episodes separately (slower, CF-gated); always resets to page 1
     try {
       set({ latestLoading: true, latestPage: 1 });

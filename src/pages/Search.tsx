@@ -9,22 +9,22 @@ export default function Search() {
   const [results, setResults] = useState<AnimeMeta[]>([]);
   const [loading, setLoading] = useState(false);
 
+  const [error, setError] = useState<string | null>(null);
+
   useEffect(() => {
     if (!q.trim()) {
       setResults([]);
+      setError(null);
       return;
     }
     let cancelled = false;
     setLoading(true);
-    window.api.anilist.search(q).then((r) => {
-      if (!cancelled) {
-        setResults(r);
-        setLoading(false);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
+    setError(null);
+    window.api.anilist.search(q)
+      .then((r) => { if (!cancelled) setResults(r); })
+      .catch((e: Error) => { if (!cancelled) { setError(e.message); setResults([]); } })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [q]);
 
   return (
@@ -33,7 +33,10 @@ export default function Search() {
         {q ? `Results for "${q}"` : "Search"}
       </h1>
       {loading && <div className="text-muted">Searching…</div>}
-      {!loading && results.length === 0 && q && (
+      {!loading && error && (
+        <div className="rounded-md bg-red-500/10 px-4 py-3 text-sm text-red-400">{error}</div>
+      )}
+      {!loading && !error && results.length === 0 && q && (
         <div className="text-muted">No results.</div>
       )}
       <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-6">

@@ -69,6 +69,19 @@ export interface MalAuthState {
   expiresAt?: number | null;
 }
 
+export interface AniListAuthState {
+  connected: boolean;
+  username?: string | null;
+  userId?: number | null;
+  expiresAt?: number | null;
+  hasClientId?: boolean;
+}
+
+export interface RelatedAnime {
+  relationType: string; // SEQUEL | PREQUEL | SIDE_STORY | ALTERNATIVE | SPIN_OFF | PARENT
+  anime: AnimeMeta;
+}
+
 export interface StreamingServiceLink {
   service: string;        // "Crunchyroll", "Netflix", ...
   url: string;
@@ -83,6 +96,8 @@ export const IPC = {
   MAL_DISCONNECT: "mal:disconnect",
   MAL_PULL: "mal:pull",
   MAL_PUSH_PROGRESS: "mal:push-progress",
+  MAL_SET_CLIENT_ID: "mal:set-client-id",
+  MAL_CLIENT_INFO: "mal:client-info",
   // AniList / metadata
   ANILIST_SEARCH: "anilist:search",
   ANILIST_TRENDING: "anilist:trending",
@@ -115,6 +130,20 @@ export const IPC = {
   PAHE_LATEST: "pahe:latest",
   PAHE_GET_IDS: "pahe:get-ids",
   PAHE_FIND_BY_ID: "pahe:find-by-id",
+  PAHE_GET_URL: "pahe:get-url",
+  PAHE_SET_URL: "pahe:set-url",
+  // AniList sync
+  AL_BEGIN_AUTH: "al:begin-auth",
+  AL_STATE: "al:state",
+  AL_DISCONNECT: "al:disconnect",
+  AL_PULL: "al:pull",
+  AL_SET_CLIENT_ID: "al:set-client-id",
+  // Extra
+  ANILIST_RELATIONS: "anilist:relations",
+  PROGRESS_GET_FOR_ANIME: "progress:get-for-anime",
+  // Updater
+  UPDATE_CHECK: "update:check",
+  UPDATE_INSTALL: "update:install",
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

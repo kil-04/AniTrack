@@ -21,8 +21,37 @@
 
 import { BrowserWindow, net, session as electronSession } from "electron";
 import vm from "node:vm";
+import { SimpleStore } from "./store";
 
-const BASE = "https://animepahe.pw";
+interface PaheSettings { baseUrl?: string }
+const _paheStore = new SimpleStore<PaheSettings>("anitrack-pahe-settings");
+
+export function getPaheBaseUrl(): string {
+  return _paheStore.get("baseUrl") ?? "https://animepahe.pw";
+}
+
+export function setPaheBaseUrl(url: string): void {
+  let clean = url.trim().replace(/\/$/, "");
+  // Auto-prepend https:// if missing, validate it parses as a URL.
+  if (!/^https?:\/\//i.test(clean)) clean = "https://" + clean;
+  try { new URL(clean); } catch { throw new Error(`Invalid URL: ${url}`); }
+  _paheStore.set("baseUrl", clean);
+  // Force the CF window to reload against the new domain next time it's needed.
+  if (_win && !_win.isDestroyed()) {
+    _win.destroy();
+    _win = null;
+    _ready = false;
+  }
+  // Clear domain-derived caches — they were populated from the old host.
+  _idsCache.clear();
+  _reverseCache.clear();
+  _kwikUrlCache.clear();
+  _lastKwikCookies = "";
+  _lastKwikCookiesAt = 0;
+}
+
+// Dynamic getter so every call picks up runtime changes.
+function BASE() { return getPaheBaseUrl(); }
 
 // ─── Persistent hidden window ─────────────────────────────────────────────────
 
@@ -59,7 +88,7 @@ function getPaheWindow(): Promise<BrowserWindow> {
     }
     _win!.webContents.on("did-finish-load", done);
     setTimeout(done, 10_000);
-    _win!.loadURL(BASE + "/");
+    _win!.loadURL(BASE() + "/");
     _win!.on("closed", () => {
       _win = null;
       _ready = false;
@@ -75,7 +104,7 @@ function getPaheWindow(): Promise<BrowserWindow> {
 // Uses net.fetch with the hidden window's session so cf_clearance is included.
 // More reliable than executeJavaScript for JSON endpoints in Electron 32.
 
-async function paheWindowFetch(url: string): Promise<any> {
+async function paheWindowFetch(url: string, retried = false): Promise<any> {
   const win = await getPaheWindow();
   // `session` is valid at runtime in Electron 32 but absent from TS types.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -84,10 +113,20 @@ async function paheWindowFetch(url: string): Promise<any> {
     headers: {
       Accept: "application/json, text/plain, */*",
       "X-Requested-With": "XMLHttpRequest",
-      Referer: BASE + "/",
+      Referer: BASE() + "/",
     },
   });
   if (!resp.ok) {
+    // CF cookie can expire silently. On the typical CF-block status codes,
+    // destroy the hidden window once and retry — that re-runs the CF challenge
+    // and gets us a fresh cookie. Without this, every API call 403s until app restart.
+    if (!retried && (resp.status === 403 || resp.status === 503 || resp.status === 429)) {
+      if (_win && !_win.isDestroyed()) { _win.destroy(); }
+      _win = null;
+      _ready = false;
+      _readyPromise = null;
+      return paheWindowFetch(url, true);
+    }
     const body = await resp.text().catch(() => "");
     throw new Error(`HTTP ${resp.status} ${resp.statusText}: ${body.slice(0, 120)}`);
   }
@@ -149,7 +188,7 @@ export async function getLatestEpisodes(
   page = 1,
 ): Promise<{ data: PaheLatestEpisode[]; total: number; lastPage: number }> {
   const data = await paheWindowFetch(
-    `${BASE}/api?m=airing&l=${count}&sort=session_id_desc&page=${page}`,
+    `${BASE()}/api?m=airing&l=${count}&sort=session_id_desc&page=${page}`,
   );
   return {
     data: (data.data ?? []) as PaheLatestEpisode[],
@@ -158,8 +197,16 @@ export async function getLatestEpisodes(
   };
 }
 
-/** In-process cache so repeated ShowDetail opens don't re-fetch. */
+/** In-process cache so repeated ShowDetail opens don't re-fetch. Bounded to avoid unbounded growth. */
 const _idsCache = new Map<string, { malId?: number; anilistId?: number; kitsuId?: number }>();
+const IDS_CACHE_MAX = 1000;
+function _idsCacheSet(key: string, val: { malId?: number; anilistId?: number; kitsuId?: number }) {
+  if (_idsCache.size >= IDS_CACHE_MAX) {
+    const firstKey = _idsCache.keys().next().value;
+    if (firstKey !== undefined) _idsCache.delete(firstKey);
+  }
+  _idsCache.set(key, val);
+}
 
 /** Resolve MAL / AniList IDs for an AnimePahe show.
  *
@@ -194,7 +241,7 @@ export async function getAnimeIds(
           malId:     malMatch ? Number(malMatch[1]) : undefined,
           anilistId: alMatch  ? Number(alMatch[1])  : undefined,
         };
-        _idsCache.set(cacheKey, result);
+        _idsCacheSet(cacheKey, result);
         return result;
       }
     }
@@ -203,21 +250,29 @@ export async function getAnimeIds(
   // ── 2. AnimePahe page meta tags (CF-cleared session) ───────────────────────
   try {
     const win = await getPaheWindow();
-    const resp = await (net.fetch as any)(`${BASE}/anime/${session}`, {
+    const resp = await (net.fetch as any)(`${BASE()}/anime/${session}`, {
       session: win.webContents.session,
-      headers: { Referer: BASE + "/" },
+      headers: { Referer: BASE() + "/" },
     });
     if (resp.ok) {
       const html: string = await resp.text();
-      const mal = html.match(/<meta name="myanimelist"\s+content="(\d+)"/i);
-      const al  = html.match(/<meta name="anilist"\s+content="(\d+)"/i);
-      const ku  = html.match(/<meta name="kitsu"\s+content="(\d+)"/i);
-      const result = {
-        malId:     mal ? Number(mal[1]) : undefined,
-        anilistId: al  ? Number(al[1])  : undefined,
-        kitsuId:   ku  ? Number(ku[1])  : undefined,
+      // Tolerate any attribute order, single or double quotes, extra whitespace.
+      const metaRe = (name: string) =>
+        new RegExp(
+          `<meta[^>]+(?:name=["']${name}["'][^>]+content=["'](\\d+)["']|content=["'](\\d+)["'][^>]+name=["']${name}["'])`,
+          "i",
+        );
+      const grab = (name: string): number | undefined => {
+        const m = html.match(metaRe(name));
+        const v = m?.[1] ?? m?.[2];
+        return v ? Number(v) : undefined;
       };
-      _idsCache.set(cacheKey, result);
+      const result = {
+        malId:     grab("myanimelist"),
+        anilistId: grab("anilist"),
+        kitsuId:   grab("kitsu"),
+      };
+      _idsCacheSet(cacheKey, result);
       return result;
     }
   } catch { /* swallow */ }
@@ -227,6 +282,14 @@ export async function getAnimeIds(
 
 /** In-process cache for reverse ID lookups (AniList/MAL → AnimePahe session). */
 const _reverseCache = new Map<string, PaheAnime | null>();
+const REVERSE_CACHE_MAX = 500;
+function _reverseCacheSet(key: string, val: PaheAnime | null) {
+  if (_reverseCache.size >= REVERSE_CACHE_MAX) {
+    const firstKey = _reverseCache.keys().next().value;
+    if (firstKey !== undefined) _reverseCache.delete(firstKey);
+  }
+  _reverseCache.set(key, val);
+}
 
 /**
  * Reverse lookup: given an AniList or MAL ID, find the AnimePahe show directly.
@@ -276,7 +339,7 @@ export async function findByExternalId(
     let result: PaheAnime | null = null;
     if (anilistId) result = await tryUrl(`https://api.malsync.moe/anilist/anime/${anilistId}`);
     if (!result && malId) result = await tryUrl(`https://api.malsync.moe/mal/anime/${malId}`);
-    _reverseCache.set(cacheKey, result);
+    _reverseCacheSet(cacheKey, result);
     return result;
   } catch {
     return null;
@@ -285,7 +348,7 @@ export async function findByExternalId(
 
 export async function search(query: string): Promise<PaheAnime[]> {
   const data = await paheWindowFetch(
-    BASE + "/api?m=search&q=" + encodeURIComponent(query),
+    BASE() + "/api?m=search&q=" + encodeURIComponent(query),
   );
   return (data.data ?? []) as PaheAnime[];
 }
@@ -295,7 +358,7 @@ export async function getEpisodes(
   page = 1,
 ): Promise<{ data: PaheEpisode[]; total: number; lastPage: number }> {
   const data = await paheWindowFetch(
-    BASE +
+    BASE() +
       "/api?m=release&id=" +
       animeSession +
       "&sort=episode_asc&page=" +
@@ -315,26 +378,33 @@ export async function getStreamLinks(
   episodeSession: string,
   animeSession: string,
 ): Promise<PaheLink[]> {
-  const win = await getPaheWindow();
-  const playUrl = BASE + "/play/" + animeSession + "/" + episodeSession;
+  const playUrl = BASE() + "/play/" + animeSession + "/" + episodeSession;
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const resp = await (net.fetch as any)(playUrl, {
-    session: win.webContents.session,
-    headers: {
-      Accept: "text/html,application/xhtml+xml,*/*",
-      Referer: BASE + "/",
-    },
-  });
-
-  if (!resp.ok) {
-    const body = await resp.text().catch(() => "");
-    throw new Error(
-      `Play page HTTP ${resp.status} ${resp.statusText}: ${body.slice(0, 120)}`,
-    );
+  async function fetchPlayPage(retried = false): Promise<string> {
+    const win = await getPaheWindow();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const resp = await (net.fetch as any)(playUrl, {
+      session: win.webContents.session,
+      headers: {
+        Accept: "text/html,application/xhtml+xml,*/*",
+        Referer: BASE() + "/",
+      },
+    });
+    if (!resp.ok) {
+      // Same CF-recovery as paheWindowFetch — destroy hidden window once on CF block.
+      if (!retried && (resp.status === 403 || resp.status === 503 || resp.status === 429)) {
+        if (_win && !_win.isDestroyed()) { _win.destroy(); }
+        _win = null;
+        _ready = false;
+        _readyPromise = null;
+        return fetchPlayPage(true);
+      }
+      const body = await resp.text().catch(() => "");
+      throw new Error(`Play page HTTP ${resp.status} ${resp.statusText}: ${body.slice(0, 120)}`);
+    }
+    return resp.text();
   }
-
-  const html: string = await resp.text();
+  const html: string = await fetchPlayPage();
   const links: PaheLink[] = [];
 
   // Primary: parse <button data-src="kwik-url" data-resolution="N" data-audio="X">
@@ -408,6 +478,14 @@ export function getKwikCookies(): string { return _lastKwikCookies; }
 // Resolved URL cache — avoids re-resolving the same kwik URL within a session.
 const _kwikUrlCache = new Map<string, { url: string; at: number }>();
 const URL_TTL_MS = 2 * 60 * 60_000; // HLS URLs are valid for ~2 h
+const KWIK_CACHE_MAX = 500;
+function _kwikUrlCacheSet(key: string, val: { url: string; at: number }) {
+  if (_kwikUrlCache.size >= KWIK_CACHE_MAX) {
+    const firstKey = _kwikUrlCache.keys().next().value;
+    if (firstKey !== undefined) _kwikUrlCache.delete(firstKey);
+  }
+  _kwikUrlCache.set(key, val);
+}
 
 // In-flight deduplication map.
 const _kwikPending = new Map<string, Promise<{ url: string; cookies: string }>>();
@@ -453,7 +531,9 @@ function getKwikWindow(): BrowserWindow {
     const cookies = cookieList.map((c) => `${c.name}=${c.value}`).join("; ");
     _lastKwikCookies = cookies;
     _lastKwikCookiesAt = Date.now();
-    console.log("[kwik-browser] intercepted:", url.slice(0, 80), "cookies:", cookies.length, "chars");
+    if (process.env.NODE_ENV === "development") {
+      console.log("[kwik-browser] intercepted:", url.slice(0, 80), "cookies:", cookies.length);
+    }
     cb(url);
   });
 
@@ -479,13 +559,11 @@ export async function resolveKwik(
   // 1. URL cache hit
   const cached = _kwikUrlCache.get(kwikUrl);
   if (cached && Date.now() - cached.at < URL_TTL_MS) {
-    console.log("[kwik] cache hit:", kwikUrl.slice(-30));
     return { url: cached.url, cookies: _lastKwikCookies };
   }
 
   // 2. In-flight deduplication
   if (_kwikPending.has(kwikUrl)) {
-    console.log("[kwik] dedup:", kwikUrl.slice(-30));
     return _kwikPending.get(kwikUrl)!;
   }
 
@@ -494,13 +572,10 @@ export async function resolveKwik(
   const promise = cookiesFresh
     ? resolveKwikFast(kwikUrl)
         .then((url) => {
-          _kwikUrlCache.set(kwikUrl, { url, at: Date.now() });
+          _kwikUrlCacheSet(kwikUrl, { url, at: Date.now() });
           return { url, cookies: _lastKwikCookies };
         })
-        .catch(() => {
-          console.warn("[kwik] fast-path failed, falling back to browser");
-          return _resolveKwikBrowser(kwikUrl);
-        })
+        .catch(() => _resolveKwikBrowser(kwikUrl))
     : _resolveKwikBrowser(kwikUrl);
 
   _kwikPending.set(kwikUrl, promise);
@@ -527,7 +602,6 @@ async function _resolveKwikBrowser(
       if (settled) return;
       settled = true;
       _kwikInterceptCb = null;
-      console.warn("[kwik-browser] timeout — falling back to JS unpack");
       resolveKwikFast(kwikUrl)
         .then((url) => resolve({ url, cookies: _lastKwikCookies }))
         .catch(reject);
@@ -537,12 +611,11 @@ async function _resolveKwikBrowser(
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      _kwikUrlCache.set(kwikUrl, { url, at: Date.now() });
+      _kwikUrlCacheSet(kwikUrl, { url, at: Date.now() });
       resolve({ url, cookies: _lastKwikCookies });
     };
 
-    console.log("[kwik-browser] loading:", kwikUrl);
-    win.loadURL(kwikUrl, { httpReferrer: BASE + "/" }).catch((e) => {
+    win.loadURL(kwikUrl, { httpReferrer: BASE() + "/" }).catch((e) => {
       if (!settled) {
         settled = true;
         clearTimeout(timeout);
@@ -561,7 +634,7 @@ async function resolveKwikFast(kwikUrl: string): Promise<string> {
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
   const resp = await net.fetch(kwikUrl, {
-    headers: { Referer: BASE + "/", Accept: "text/html,*/*", "User-Agent": KWIK_UA },
+    headers: { Referer: BASE() + "/", Accept: "text/html,*/*", "User-Agent": KWIK_UA },
   } as RequestInit);
   if (!resp.ok) throw new Error(`kwik HTTP ${resp.status}`);
   const html = await resp.text();

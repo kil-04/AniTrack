@@ -12,9 +12,13 @@ import {
   Maximize2,
   Minimize2,
   ChevronDown,
+  ArrowLeft,
 } from "lucide-react";
 import Hls from "hls.js";
 import { secondsToTimestamp } from "../lib/format";
+import { useMediaQuery } from "../hooks/useMediaQuery";
+import { isCapacitor } from "../lib/platform";
+import { pushProgress } from "../lib/supabase-sync";
 
 // ── Synthetic anime ID for AnimePahe-only watches ─────────────────────────
 // When a user watches via Latest Episodes there is no AniList ID in the URL.
@@ -51,10 +55,15 @@ export default function StreamPlayer() {
 
   // Episode list
   const [episodes, setEpisodes] = useState<any[]>([]);
-  const [page, setPage] = useState(1);
-  const [lastPage, setLastPage] = useState(1);
+  // Range-based pagination: show 100 episodes per page (instead of AnimePahe's
+  // native 30). `rangeStart` is the first episode of the visible range.
+  const RANGE_SIZE = 100;
+  const PAHE_PAGE_SIZE = 30; // fixed by AnimePahe's API
+  const [rangeStart, setRangeStart] = useState(1);
+  const [totalEpisodes, setTotalEpisodes] = useState(0);
   const [loadingEps, setLoadingEps] = useState(true);
   const [findNum, setFindNum] = useState("");
+  const [rangeOpen, setRangeOpen] = useState(false);
 
   // Stream quality options
   const [links, setLinks] = useState<any[]>([]);
@@ -73,6 +82,7 @@ export default function StreamPlayer() {
 
   // Controls overlay visibility
   const [showControls, setShowControls] = useState(true);
+  const [mouseNearTop, setMouseNearTop] = useState(false);
   const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Settings — persisted in localStorage
@@ -99,8 +109,11 @@ export default function StreamPlayer() {
   const currentEpRef = useRef<any>(null);
   const episodesRef = useRef<any[]>([]);
   const linksRef = useRef<any[]>([]);
-  const pageRef = useRef(page);
-  const lastPageRef = useRef(lastPage);
+  const rangeStartRef = useRef(rangeStart);
+  const totalEpisodesRef = useRef(totalEpisodes);
+  // Cache of fetched episode pages by AnimePahe page number — survives range changes.
+  const paheCacheRef = useRef<Map<number, any[]>>(new Map());
+  const lastPositionUpdate = useRef<number>(0);
 
   // Pending seek position — set before attachStream, applied in onCanPlay.
   // This avoids passing startPosition to hls.js (which stalls AnimePahe CDN).
@@ -112,15 +125,31 @@ export default function StreamPlayer() {
   useEffect(() => {
     const anilistId = Number(params.get("animeId") ?? 0);
     effectiveAnimeIdRef.current = anilistId > 0 ? anilistId : paheSessionId(animeSession);
+
+    // Load initial watched-episode map from DB.
+    if (effectiveAnimeIdRef.current !== 0) {
+      window.api.progress.getForAnime(effectiveAnimeIdRef.current)
+        .then((rows) => {
+          const m = new Map<number, number>();
+          for (const r of rows) {
+            if (r.durationSec > 0) m.set(r.episode, (r.positionSec / r.durationSec) * 100);
+          }
+          setWatchedEps(m);
+        })
+        .catch(() => {});
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Watched episodes map — keyed by episode number, value is percent watched.
+  const [watchedEps, setWatchedEps] = useState<Map<number, number>>(new Map());
 
   useEffect(() => { autoNextRef.current = autoNext; }, [autoNext]);
   useEffect(() => { currentEpRef.current = currentEp; }, [currentEp]);
   useEffect(() => { episodesRef.current = episodes; }, [episodes]);
   useEffect(() => { linksRef.current = links; }, [links]);
-  useEffect(() => { pageRef.current = page; }, [page]);
-  useEffect(() => { lastPageRef.current = lastPage; }, [lastPage]);
+  useEffect(() => { rangeStartRef.current = rangeStart; }, [rangeStart]);
+  useEffect(() => { totalEpisodesRef.current = totalEpisodes; }, [totalEpisodes]);
 
   // ── Controls overlay auto-hide ─────────────────────────────────────────────
 
@@ -130,13 +159,15 @@ export default function StreamPlayer() {
     controlsTimerRef.current = setTimeout(() => setShowControls(false), 3000);
   }
 
-  function handleVideoAreaMouseMove() {
+  function handleVideoAreaMouseMove(e: React.MouseEvent) {
     showControlsNow();
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    setMouseNearTop(e.clientY - rect.top < 70);
   }
 
   function handleVideoAreaMouseLeave() {
     if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current);
-    controlsTimerRef.current = setTimeout(() => setShowControls(false), 800);
+    controlsTimerRef.current = setTimeout(() => { setShowControls(false); setMouseNearTop(false); }, 800);
   }
 
   useEffect(() => {
@@ -145,24 +176,130 @@ export default function StreamPlayer() {
 
   // ── Episode list loading ───────────────────────────────────────────────────
 
+  // Fetch a single AnimePahe page with caching (paheCacheRef survives navigation).
+  const fetchPahePage = useCallback(async (paheePage: number): Promise<{ data: any[]; total: number }> => {
+    const cached = paheCacheRef.current.get(paheePage);
+    if (cached) return { data: cached, total: totalEpisodesRef.current };
+    const r = await window.api.pahe.episodes(animeSession, paheePage);
+    paheCacheRef.current.set(paheePage, r.data);
+    return { data: r.data, total: r.total };
+  }, [animeSession]);
+
+  // Load all AnimePahe pages needed to cover [rangeStart, rangeStart+RANGE_SIZE-1].
   useEffect(() => {
     if (!animeSession) return;
+    let cancelled = false;
     setLoadingEps(true);
-    window.api.pahe
-      .episodes(animeSession, page)
-      .then((r) => {
-        setEpisodes(r.data);
-        setLastPage(r.lastPage);
-        if (startEp && page === 1) {
-          const ep = r.data.find((e: any) => e.episode === startEp);
-          if (ep) playEpisode(ep, animeSession);
+    const rangeEnd = rangeStart + RANGE_SIZE - 1;
+    const firstPaheePage = Math.max(1, Math.ceil(rangeStart / PAHE_PAGE_SIZE));
+    // We don't yet know totalEpisodes on first call — fetch first needed page,
+    // get total, then fetch the rest in parallel.
+    fetchPahePage(firstPaheePage)
+      .then(async ({ data: firstData, total }) => {
+        if (cancelled) return;
+        if (total) setTotalEpisodes(total);
+        const lastPaheePage = Math.min(
+          Math.ceil(Math.min(rangeEnd, total || rangeEnd) / PAHE_PAGE_SIZE),
+          Math.ceil((total || (firstPaheePage * PAHE_PAGE_SIZE)) / PAHE_PAGE_SIZE),
+        );
+        const remaining: Promise<{ data: any[] }>[] = [];
+        for (let p = firstPaheePage + 1; p <= lastPaheePage; p++) {
+          remaining.push(fetchPahePage(p));
+        }
+        const rest = await Promise.all(remaining);
+        if (cancelled) return;
+        const all = [firstData, ...rest.map((r) => r.data)].flat();
+        const filtered = all
+          .filter((e: any) => e.episode >= rangeStart && e.episode <= rangeEnd)
+          .sort((a: any, b: any) => a.episode - b.episode);
+        setEpisodes(filtered);
+        // Auto-play the requested startEp once, only on the initial load.
+        if (startEp && rangeStart === Math.floor((startEp - 1) / RANGE_SIZE) * RANGE_SIZE + 1) {
+          const ep = filtered.find((e: any) => e.episode === startEp);
+          if (ep && !currentEpRef.current) playEpisode(ep, animeSession);
         }
       })
-      .finally(() => setLoadingEps(false));
+      .catch((e) => { if (!cancelled) console.warn("[pahe] episode load failed", e); })
+      .finally(() => { if (!cancelled) setLoadingEps(false); });
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [animeSession, page]);
+  }, [animeSession, rangeStart, fetchPahePage]);
+
+  // Reset cache when anime changes
+  useEffect(() => {
+    paheCacheRef.current.clear();
+    // If startEp is set, open the range that contains it.
+    if (startEp) {
+      const targetRange = Math.floor((startEp - 1) / RANGE_SIZE) * RANGE_SIZE + 1;
+      setRangeStart(targetRange);
+    } else {
+      setRangeStart(1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [animeSession]);
 
   // ── HLS / video setup ─────────────────────────────────────────────────────
+
+  // On Android, hls.js XHR requests get CORS-blocked and native <video> bypasses
+  // shouldInterceptRequest (API 24+ limitation). Instead we route every hls.js
+  // network request through the native OkHttp fetchUrl plugin method, which sends
+  // proper Referer/Cookie headers and is not subject to browser CORS enforcement.
+  function buildCapacitorLoader() {
+    return class CapacitorLoader {
+      // hls.js reads loader.stats and stores it as frag.stats — must be a live reference.
+      stats: any = {
+        aborted: false, loaded: 0, total: 0, retry: 0, chunkCount: 0, bwEstimate: 0,
+        loading: { start: 0, first: 0, end: 0 },
+        parsing: { start: 0, end: 0 },
+        buffering: { start: 0, end: 0, first: 0 },
+      };
+      private aborted = false;
+
+      load(context: any, _config: any, callbacks: any) {
+        this.aborted = false;
+        const { url, responseType } = context;
+        const binary = responseType === "arraybuffer";
+        const trequest = performance.now();
+        this.stats.loading.start = trequest;
+
+        console.log('[CapLoader] fetching', url, 'binary=', binary);
+        window.api.pahe.fetchUrl!(url, binary)
+          .then((result) => {
+            if (this.aborted) return;
+            console.log('[CapLoader] got response status=', result.status, 'size=', result.data?.length, 'url=', url);
+            let data: string | ArrayBuffer;
+            if (binary && result.binary) {
+              const raw = atob(result.data);
+              const buf = new ArrayBuffer(raw.length);
+              const view = new Uint8Array(buf);
+              for (let i = 0; i < raw.length; i++) view[i] = raw.charCodeAt(i);
+              data = buf;
+            } else {
+              data = result.data;
+            }
+            const tload = performance.now();
+            const loaded = binary
+              ? (data as ArrayBuffer).byteLength
+              : (data as string).length;
+            // Mutate this.stats in-place — hls.js holds a reference via frag.stats = loader.stats
+            this.stats.loaded = loaded;
+            this.stats.total = loaded;
+            this.stats.loading.first = trequest;
+            this.stats.loading.end = tload;
+            callbacks.onSuccess({ url, data }, this.stats, context, null);
+          })
+          .catch((err: any) => {
+            if (this.aborted) return;
+            console.error('[CapLoader] fetchUrl ERROR:', String(err), 'url=', url);
+            this.stats.aborted = false;
+            callbacks.onError({ code: 0, text: String(err) }, context, null, this.stats);
+          });
+      }
+
+      abort() { this.aborted = true; this.stats.aborted = true; }
+      destroy() { this.aborted = true; }
+    };
+  }
 
   function attachStream(url: string) {
     const video = videoRef.current;
@@ -176,7 +313,7 @@ export default function StreamPlayer() {
     const isHls = url.includes(".m3u8");
 
     if (isHls && Hls.isSupported()) {
-      buildHls(url, video, { worker: true, startLevel: -1, attempt: 1 });
+      buildHls(url, video, { worker: !isCapacitor, startLevel: -1, attempt: 1 });
     } else if (isHls && video.canPlayType("application/vnd.apple.mpegurl")) {
       video.src = url;
       if (autoPlay) video.play().catch(() => {});
@@ -196,7 +333,7 @@ export default function StreamPlayer() {
       hlsRef.current = null;
     }
 
-    const hls = new Hls({
+    const hlsConfig: Partial<Hls["config"]> = {
       enableWorker: opts.worker,
       lowLatencyMode: false,
       preferManagedMediaSource: false,
@@ -204,7 +341,11 @@ export default function StreamPlayer() {
       startPosition: -1,
       maxBufferLength: 30,
       maxMaxBufferLength: 60,
-    });
+    };
+    if (isCapacitor) {
+      (hlsConfig as any).loader = buildCapacitorLoader();
+    }
+    const hls = new Hls(hlsConfig as any);
     hlsRef.current = hls;
 
     hls.on(Hls.Events.BUFFER_CODECS, (_e, data) => {
@@ -219,10 +360,13 @@ export default function StreamPlayer() {
     hls.attachMedia(video);
 
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      console.log('[HLS] MANIFEST_PARSED — starting playback');
       if (autoPlay) video.play().catch(() => {});
     });
 
     hls.on(Hls.Events.ERROR, (_e, data) => {
+      const errInfo = `type=${data.type} details=${data.details} fatal=${data.fatal} url=${(data as any).url ?? (data as any).frag?.url ?? ''}`;
+      console.error('[HLS ERROR]', errInfo, data);
       if (!data.fatal) return;
 
       if (data.details === Hls.ErrorDetails.BUFFER_ADD_CODEC_ERROR) {
@@ -241,7 +385,7 @@ export default function StreamPlayer() {
         return;
       }
 
-      setStreamError(`HLS error: ${data.details}`);
+      setStreamError(`HLS error: ${data.details} (${data.type})`);
       setLoadingStream(false);
     });
   }
@@ -262,24 +406,26 @@ export default function StreamPlayer() {
       setLinks([]);
       setSelectedLink(0);
       try {
-        const fetchedLinks: any[] = await window.api.pahe.links(ep.session, session);
+        // Run links fetch and saved-progress lookup in parallel — they're
+        // independent and saving even ~50ms of perceived latency matters here.
+        const [fetchedLinks, savedProgress] = await Promise.all([
+          window.api.pahe.links(ep.session, session),
+          window.api.progress.get(effectiveAnimeIdRef.current, ep.episode).catch(() => null),
+        ]);
         if (!fetchedLinks.length) throw new Error("No stream links found for this episode");
+        const bestIdx = fetchedLinks.reduce((best: number, link: any, i: number) =>
+          (Number(link.quality) || 0) > (Number(fetchedLinks[best]?.quality) || 0) ? i : best, 0);
         setLinks(fetchedLinks);
-        setSelectedLink(0);
+        setSelectedLink(bestIdx);
 
-        // Look up saved progress and store it in pendingSeekRef.
-        // We apply the seek in onCanPlay (after the video is ready) rather than
+        // We apply the resume seek in onCanPlay (after the video is ready) rather than
         // passing startPosition to hls.js — hls.js startPosition stalls on
         // AnimePahe CDN because it tries to fetch mid-stream segments cold.
-        const savedProgress = await window.api.progress.get(
-          effectiveAnimeIdRef.current,
-          ep.episode,
-        ).catch(() => null);
         pendingSeekRef.current = (savedProgress && savedProgress.positionSec > 5)
           ? savedProgress.positionSec
           : null;
 
-        const { url } = await window.api.pahe.resolve(fetchedLinks[0].kwik);
+        const { url } = await window.api.pahe.resolve(fetchedLinks[bestIdx].kwik);
         attachStream(url);
 
         // Pre-fetch next episode in background
@@ -328,7 +474,12 @@ export default function StreamPlayer() {
     if (!ep) return;
     const next = eps.find((e) => e.episode === ep.episode + 1);
     if (next) { playEpisode(next); return; }
-    if (pageRef.current < lastPageRef.current) setPage((p) => p + 1);
+    // Next episode is in the following range — jump to it.
+    const nextEpNum = ep.episode + 1;
+    if (nextEpNum <= totalEpisodesRef.current) {
+      const targetRange = Math.floor((nextEpNum - 1) / RANGE_SIZE) * RANGE_SIZE + 1;
+      setRangeStart(targetRange);
+    }
   }
 
   function playPrev() {
@@ -336,15 +487,26 @@ export default function StreamPlayer() {
     const eps = episodesRef.current;
     if (!ep) return;
     const prev = eps.find((e) => e.episode === ep.episode - 1);
-    if (prev) playEpisode(prev);
+    if (prev) { playEpisode(prev); return; }
+    const prevEpNum = ep.episode - 1;
+    if (prevEpNum >= 1) {
+      const targetRange = Math.floor((prevEpNum - 1) / RANGE_SIZE) * RANGE_SIZE + 1;
+      setRangeStart(targetRange);
+    }
   }
 
   function handleFindSubmit(e: React.FormEvent) {
     e.preventDefault();
     const n = parseInt(findNum);
     if (!n) return;
+    // First try the current range; if not found, jump to the range containing it.
     const ep = episodes.find((ep) => ep.episode === n);
-    if (ep) { playEpisode(ep); setFindNum(""); }
+    if (ep) { playEpisode(ep); setFindNum(""); return; }
+    if (n >= 1 && n <= totalEpisodes) {
+      const targetRange = Math.floor((n - 1) / RANGE_SIZE) * RANGE_SIZE + 1;
+      setRangeStart(targetRange);
+      setFindNum("");
+    }
   }
 
   function seek(delta: number) {
@@ -354,6 +516,22 @@ export default function StreamPlayer() {
   }
 
   function toggleFullscreen() {
+    if (isCapacitor && isMobile) {
+      // On Android phone: use ScreenOrientation to lock landscape (YouTube-style).
+      // Dynamic import so ScreenOrientation is never loaded in Electron.
+      if (!isFullscreen) {
+        import("../lib/api-capacitor").then(({ ScreenOrientation }) => {
+          ScreenOrientation.lock({ orientation: "landscape" }).catch(() => {});
+        });
+        setIsFullscreen(true);
+      } else {
+        import("../lib/api-capacitor").then(({ ScreenOrientation }) => {
+          ScreenOrientation.unlock().catch(() => {});
+        });
+        setIsFullscreen(false);
+      }
+      return;
+    }
     const el = videoWrapRef.current;
     if (!el) return;
     if (!document.fullscreenElement) {
@@ -372,7 +550,23 @@ export default function StreamPlayer() {
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
     const onTimeUpdate = () => {
-      if (!seekingRef.current) setPosition(video.currentTime);
+      if (seekingRef.current) return;
+      const now = Date.now();
+      if (now - lastPositionUpdate.current >= 250) {
+        lastPositionUpdate.current = now;
+        setPosition(video.currentTime);
+        // Mark current episode as watched when ≥85% — optimistic update so
+        // the grid turns green immediately without waiting for a DB round-trip.
+        const ep = currentEpRef.current;
+        if (ep && video.duration && video.currentTime / video.duration >= 0.85) {
+          setWatchedEps((prev) => {
+            if ((prev.get(ep.episode) ?? 0) >= 85) return prev;
+            const next = new Map(prev);
+            next.set(ep.episode, (video.currentTime / video.duration) * 100);
+            return next;
+          });
+        }
+      }
     };
     const onDurationChange = () => setDuration(isFinite(video.duration) ? video.duration : 0);
     const onEnded = () => { if (autoNextRef.current) playNext(); };
@@ -448,41 +642,330 @@ export default function StreamPlayer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Progress save (every 10s)
+  // Progress save (every 10s + on episode change / unmount)
   useEffect(() => {
     if (!currentEp) return;
 
-    const timer = setInterval(() => {
+    function saveNow() {
       const video = videoRef.current;
       if (!video || !video.duration || !isFinite(video.duration)) return;
-      window.api.progress
-        .set({
-          animeId: effectiveAnimeIdRef.current,
-          episode: currentEpRef.current?.episode ?? currentEp.episode,
-          positionSec: video.currentTime,
-          durationSec: video.duration,
-          updatedAt: Date.now(),
-          animeTitle: animeTitle,
-          animeCoverUrl: animeCoverUrl,
-          animePaheSession: animeSession || undefined,
-        })
-        .catch(() => {});
-    }, 10_000);
-    return () => clearInterval(timer);
+      const payload = {
+        animeId: effectiveAnimeIdRef.current,
+        episode: currentEpRef.current?.episode ?? currentEp.episode,
+        positionSec: video.currentTime,
+        durationSec: video.duration,
+        updatedAt: Date.now(),
+        animeTitle: animeTitle,
+        animeCoverUrl: animeCoverUrl,
+        animePaheSession: animeSession || undefined,
+      };
+      window.api.progress.set(payload).catch(() => {});
+      pushProgress(payload).catch(() => {});
+    }
+
+    const timer = setInterval(saveNow, 10_000);
+    return () => { clearInterval(timer); saveNow(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentEp]);
 
   // ── Derived ────────────────────────────────────────────────────────────────
 
-  const epRange =
-    episodes.length > 0
-      ? `${String(episodes[0].episode).padStart(3, "0")}-${String(episodes[episodes.length - 1].episode).padStart(3, "0")}`
-      : "---";
+  // Compute available ranges from totalEpisodes — chunks of RANGE_SIZE.
+  const ranges = (() => {
+    const total = totalEpisodes || (episodes.length > 0 ? episodes[episodes.length - 1].episode : 0);
+    if (total <= 0) return [{ start: 1, end: RANGE_SIZE }];
+    const r: { start: number; end: number }[] = [];
+    for (let i = 1; i <= total; i += RANGE_SIZE) {
+      r.push({ start: i, end: Math.min(i + RANGE_SIZE - 1, total) });
+    }
+    return r;
+  })();
+  const currentRange = ranges.find((r) => r.start === rangeStart) ?? ranges[0];
+  const rangeLabel = currentRange
+    ? `${String(currentRange.start).padStart(3, "0")}-${String(currentRange.end).padStart(3, "0")}`
+    : "---";
 
   const progressPct = duration > 0 ? (position / duration) * 100 : 0;
 
+  // ── Responsive layout ───────────────────────────────────────────────────────
+  const isTablet = useMediaQuery("(min-width: 900px)");
+  // On Android phone (portrait) we use the YouTube-style layout.
+  const isMobile = isCapacitor && !isTablet;
+
+  // ── Touch controls (mobile) ─────────────────────────────────────────────────
+  function handleVideoTap() {
+    showControlsNow();
+  }
+
   // ── Render ─────────────────────────────────────────────────────────────────
 
+  // Shared sub-components
+
+  const EpisodePanel = (
+    <div className={`flex flex-col ${isMobile ? "flex-1 overflow-hidden" : "w-[260px] flex-shrink-0 border-r border-white/10"} bg-[#111118]`}>
+      <div className="relative flex gap-2 border-b border-white/10 p-2">
+        <div className="relative">
+          <button
+            onClick={() => setRangeOpen((o) => !o)}
+            disabled={ranges.length <= 1}
+            className="flex h-8 items-center gap-1 rounded border border-white/10 bg-white/5 px-2 text-xs text-white/80 hover:bg-white/10 disabled:opacity-60"
+          >
+            <span>{rangeLabel}</span>
+            {ranges.length > 1 && (
+              <ChevronDown size={12} className={`transition-transform ${rangeOpen ? "rotate-180" : ""}`} />
+            )}
+          </button>
+          {rangeOpen && ranges.length > 1 && (
+            <>
+              <div className="fixed inset-0 z-20" onClick={() => setRangeOpen(false)} />
+              <div className="absolute left-0 top-full z-30 mt-1 max-h-80 w-32 overflow-y-auto rounded-md border border-white/10 bg-[#1a1a24] shadow-xl">
+                {ranges.map((r) => {
+                  const label = `${String(r.start).padStart(3, "0")}-${String(r.end).padStart(3, "0")}`;
+                  const active = r.start === rangeStart;
+                  return (
+                    <button
+                      key={r.start}
+                      onClick={() => { setRangeStart(r.start); setRangeOpen(false); }}
+                      className={`block w-full px-3 py-1.5 text-left text-xs transition hover:bg-white/10 ${active ? "bg-white/10 text-white" : "text-white/70"}`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+        <form onSubmit={handleFindSubmit} className="flex-1">
+          <input
+            value={findNum}
+            onChange={(e) => setFindNum(e.target.value)}
+            placeholder="Find number"
+            className="h-8 w-full rounded border border-white/10 bg-white/5 px-2 text-xs text-white placeholder-white/30 outline-none focus:border-white/30"
+            type="number" min={1}
+          />
+        </form>
+      </div>
+      <div className="flex-1 overflow-y-auto p-2">
+        {loadingEps ? (
+          <div className="flex h-20 items-center justify-center">
+            <Loader2 size={16} className="animate-spin text-white/40" />
+          </div>
+        ) : (
+          <div className="grid grid-cols-5 gap-1">
+            {episodes.map((ep) => {
+              const isCurrent = currentEp?.session === ep.session;
+              const pct = watchedEps.get(ep.episode) ?? 0;
+              const watched = !isCurrent && pct >= 85;
+              return (
+                <button
+                  key={ep.session}
+                  onClick={() => playEpisode(ep)}
+                  className={`flex h-9 items-center justify-center rounded text-xs font-medium transition
+                    ${isCurrent
+                      ? "bg-[#4a9eff] text-white"
+                      : watched
+                        ? "bg-green-500/20 text-green-400 ring-1 ring-green-500/30 hover:bg-green-500/30"
+                        : "bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"}`}
+                >
+                  {ep.episode}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  const VideoControls = (
+    <div className={`absolute inset-0 flex flex-col justify-end transition-opacity duration-300 ${showControls ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-black/90 via-black/40 to-transparent" />
+      <div className="relative px-4 pb-3 pt-2 select-none">
+        {/* Seek bar */}
+        <div className="group mb-3 flex items-center gap-2">
+          <div className="relative h-1 flex-1 cursor-pointer rounded-full bg-white/20"
+            onClick={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              const pct = (e.clientX - rect.left) / rect.width;
+              const v = videoRef.current;
+              if (v && duration) v.currentTime = pct * duration;
+            }}
+          >
+            <div className="absolute inset-y-0 left-0 rounded-full bg-[#f5c518]" style={{ width: `${progressPct}%` }} />
+            <div className="absolute top-1/2 h-3 w-3 -translate-y-1/2 -translate-x-1/2 rounded-full bg-white shadow opacity-0 group-hover:opacity-100 transition-opacity" style={{ left: `${progressPct}%` }} />
+            <input
+              type="range" min={0} max={duration || 1} step={0.5} value={position}
+              disabled={!currentEp || !duration}
+              onMouseDown={() => { seekingRef.current = true; }}
+              onMouseUp={(e) => { seekingRef.current = false; const t = Number((e.target as HTMLInputElement).value); if (videoRef.current) videoRef.current.currentTime = t; }}
+              onTouchStart={() => { seekingRef.current = true; }}
+              onTouchEnd={(e) => { seekingRef.current = false; const t = Number((e.target as HTMLInputElement).value); if (videoRef.current) videoRef.current.currentTime = t; }}
+              onChange={(e) => setPosition(Number(e.target.value))}
+              className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+            />
+          </div>
+          <span className="min-w-[7rem] text-right text-xs tabular-nums text-white/70">
+            {secondsToTimestamp(position)} / {secondsToTimestamp(duration)}
+          </span>
+        </div>
+
+        {/* Button row */}
+        <div className="flex items-center gap-1 flex-wrap">
+          <button onClick={() => { const v = videoRef.current; if (!v) return; v.paused ? v.play().catch(() => {}) : v.pause(); }} disabled={!currentEp} className="flex h-8 w-8 items-center justify-center rounded text-white hover:bg-white/10 disabled:opacity-30 transition">
+            {playing ? <Pause size={16} fill="white" /> : <Play size={16} fill="white" />}
+          </button>
+          <button onClick={() => seek(-10)} disabled={!currentEp} className="flex h-8 items-center gap-0.5 rounded px-2 text-xs text-white/70 hover:bg-white/10 hover:text-white disabled:opacity-30 transition">
+            <Rewind size={13} /><span>{isMobile ? "10" : "5"}</span>
+          </button>
+          <button onClick={() => seek(isMobile ? 10 : 5)} disabled={!currentEp} className="flex h-8 items-center gap-0.5 rounded px-2 text-xs text-white/70 hover:bg-white/10 hover:text-white disabled:opacity-30 transition">
+            <span>{isMobile ? "10" : "5"}</span><FastForward size={13} />
+          </button>
+          <button onClick={() => { const next = !muted; setMuted(next); if (videoRef.current) videoRef.current.muted = next; }} className="flex h-8 w-8 items-center justify-center rounded text-white/70 hover:bg-white/10 hover:text-white transition">
+            {muted ? <VolumeX size={15} /> : <Volume2 size={15} />}
+          </button>
+          {!isMobile && (
+            <input type="range" min={0} max={1} step={0.02} value={muted ? 0 : volume}
+              onChange={(e) => { const v = Number(e.target.value); setVolume(v); setMuted(v === 0); localStorage.setItem("ap-volume", String(v)); if (videoRef.current) { videoRef.current.volume = v; videoRef.current.muted = v === 0; } }}
+              className="w-20 accent-white cursor-pointer"
+            />
+          )}
+          <div className="flex-1" />
+          {!isMobile && (
+            <>
+              <button onClick={() => setAutoPlay((v) => { const n = !v; localStorage.setItem("ap-autoplay", String(n)); return n; })} className={`h-8 rounded px-2 text-xs transition ${autoPlay ? "text-[#4a9eff]" : "text-white/40 hover:text-white/60"}`}>
+                {autoPlay ? "✓ " : ""}Auto Play
+              </button>
+              <button onClick={() => setAutoNext((v) => { const n = !v; localStorage.setItem("ap-autonext", String(n)); return n; })} className={`h-8 rounded px-2 text-xs transition ${autoNext ? "text-[#4a9eff]" : "text-white/40 hover:text-white/60"}`}>
+                {autoNext ? "✓ " : ""}Auto Next
+              </button>
+            </>
+          )}
+          <button onClick={playPrev} disabled={!currentEp} className="h-8 rounded px-2 text-xs text-white/60 hover:bg-white/10 hover:text-white disabled:opacity-30 transition">⏮ Prev</button>
+          <button onClick={playNext} disabled={!currentEp} className="h-8 rounded px-2 text-xs text-white/60 hover:bg-white/10 hover:text-white disabled:opacity-30 transition">Next ⏭</button>
+          {links.length > 1 && (
+            <div className="relative">
+              <button onClick={() => setQualityOpen((o) => !o)} className="flex h-8 items-center gap-1 rounded px-2 text-xs text-white/70 hover:bg-white/10 hover:text-white transition">
+                {links[selectedLink]?.quality ?? "?"}p <ChevronDown size={11} />
+              </button>
+              {qualityOpen && (
+                <div className="absolute bottom-10 right-0 z-20 min-w-[90px] overflow-hidden rounded-lg border border-white/10 bg-[#1a1a24] shadow-xl">
+                  {links.map((l, i) => (
+                    <button key={i} onClick={() => changeQuality(i)} className={`flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition hover:bg-white/10 ${i === selectedLink ? "text-[#4a9eff]" : "text-white/70"}`}>
+                      {i === selectedLink && <span>✓</span>}
+                      <span className={i === selectedLink ? "" : "ml-3"}>{l.quality}p</span>
+                      {l.audio && l.audio !== "jpn" && <span className="ml-auto rounded bg-white/10 px-1 text-[10px]">{l.audio}</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          <button onClick={toggleFullscreen} className="flex h-8 w-8 items-center justify-center rounded text-white/70 hover:bg-white/10 hover:text-white transition" title="Fullscreen (F)">
+            {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  const VideoArea = (fullHeight = false) => (
+    <div
+      ref={videoWrapRef}
+      className={`relative flex ${fullHeight ? "flex-1" : ""} flex-col bg-black overflow-hidden`}
+      style={{ cursor: isMobile ? "default" : (showControls ? "default" : "none") }}
+      onMouseMove={handleVideoAreaMouseMove}
+      onMouseLeave={handleVideoAreaMouseLeave}
+      onTouchStart={handleVideoTap}
+      onClick={(e) => {
+        const t = e.target as HTMLElement;
+        if (t.closest("button") || t.closest("input") || t.closest("select")) return;
+        if (singleClickTimerRef.current) {
+          clearTimeout(singleClickTimerRef.current);
+          singleClickTimerRef.current = null;
+          toggleFullscreen();
+          return;
+        }
+        singleClickTimerRef.current = setTimeout(() => {
+          singleClickTimerRef.current = null;
+          const v = videoRef.current;
+          if (!v) return;
+          v.paused ? v.play().catch(() => {}) : v.pause();
+          showControlsNow();
+        }, 250);
+      }}
+    >
+      <video ref={videoRef} className="h-full w-full object-contain" playsInline />
+      {!currentEp && !loadingStream && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <p className="text-sm text-white/30">Select an episode to start watching</p>
+        </div>
+      )}
+      {loadingStream && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-white/40 pointer-events-none">
+          <Loader2 size={36} className="animate-spin" />
+          <span className="text-sm">Resolving stream…</span>
+        </div>
+      )}
+      {streamError && !loadingStream && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div className="max-w-sm rounded-lg bg-red-500/10 p-4 text-center text-sm text-red-400">{streamError}</div>
+        </div>
+      )}
+      {isFullscreen && (
+        <div className={`absolute top-4 left-1/2 -translate-x-1/2 z-30 transition-opacity duration-300 ${(isMobile || mouseNearTop) ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
+          <button onClick={(e) => { e.stopPropagation(); toggleFullscreen(); }} className="flex h-9 w-9 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur-sm hover:bg-black/80 transition" title="Exit fullscreen">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" className="h-4 w-4">
+              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+      )}
+      {VideoControls}
+      {qualityOpen && <div className="absolute inset-0 z-10" onClick={() => setQualityOpen(false)} />}
+    </div>
+  );
+
+  // ── Mobile layout (YouTube-style) ───────────────────────────────────────────
+  if (isMobile) {
+    // Fullscreen: fill entire screen in landscape (orientation is locked by toggleFullscreen)
+    if (isFullscreen) {
+      return (
+        <div className="flex h-screen w-screen bg-black text-white">
+          {VideoArea(true)}
+        </div>
+      );
+    }
+
+    // Portrait: video (16:9) at top, episode panel below
+    return (
+      <div className="flex h-screen flex-col overflow-hidden bg-[#0d0d12] text-white">
+        {/* Top bar */}
+        <div className="flex h-12 flex-shrink-0 items-center gap-2 bg-[#111118] px-3">
+          <button onClick={() => navigate("/")} className="flex h-9 w-9 items-center justify-center rounded-full hover:bg-white/10">
+            <ArrowLeft size={18} />
+          </button>
+          <div className="flex-1 min-w-0">
+            <div className="truncate text-sm font-semibold">{animeTitle}</div>
+            {currentEp && <div className="text-xs text-white/50">Episode {currentEp.episode}</div>}
+          </div>
+          {loadingStream && <Loader2 size={14} className="animate-spin text-white/40" />}
+        </div>
+
+        {/* Video — 16:9 aspect ratio */}
+        <div className="aspect-video w-full flex-shrink-0 bg-black">
+          {VideoArea(true)}
+        </div>
+
+        {/* Episode list — scrollable below video */}
+        <div className="flex flex-1 flex-col overflow-hidden">
+          {EpisodePanel}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Desktop / tablet layout (split view) ────────────────────────────────────
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-[#0d0d12] text-white">
 
@@ -516,311 +999,10 @@ export default function StreamPlayer() {
         )}
       </div>
 
-      {/* Main content */}
+      {/* Main content — episode panel left, video right */}
       <div className="flex flex-1 overflow-hidden">
-
-        {/* Episode list — 260 px */}
-        <div className="flex w-[260px] flex-shrink-0 flex-col border-r border-white/10 bg-[#111118]">
-          <div className="flex gap-2 border-b border-white/10 p-2">
-            <div className="flex h-8 items-center rounded border border-white/10 bg-white/5 px-2 text-xs text-white/70 gap-1">
-              <span>{epRange}</span>
-              {lastPage > 1 && (
-                <div className="flex gap-0.5 ml-1">
-                  <button disabled={page === 1} onClick={() => setPage((p) => p - 1)}
-                    className="px-1 hover:text-white disabled:opacity-30">&#8249;</button>
-                  <button disabled={page === lastPage} onClick={() => setPage((p) => p + 1)}
-                    className="px-1 hover:text-white disabled:opacity-30">&#8250;</button>
-                </div>
-              )}
-            </div>
-            <form onSubmit={handleFindSubmit} className="flex-1">
-              <input
-                value={findNum}
-                onChange={(e) => setFindNum(e.target.value)}
-                placeholder="Find number"
-                className="h-8 w-full rounded border border-white/10 bg-white/5 px-2 text-xs text-white placeholder-white/30 outline-none focus:border-white/30"
-                type="number" min={1}
-              />
-            </form>
-          </div>
-
-          <div className="flex-1 overflow-y-auto p-2">
-            {loadingEps ? (
-              <div className="flex h-20 items-center justify-center">
-                <Loader2 size={16} className="animate-spin text-white/40" />
-              </div>
-            ) : (
-              <div className="grid grid-cols-5 gap-1">
-                {episodes.map((ep) => {
-                  const isCurrent = currentEp?.session === ep.session;
-                  return (
-                    <button
-                      key={ep.session}
-                      onClick={() => playEpisode(ep)}
-                      className={`flex h-9 items-center justify-center rounded text-xs font-medium transition
-                        ${isCurrent ? "bg-[#4a9eff] text-white" : "bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"}`}
-                    >
-                      {ep.episode}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Video area */}
-        <div
-          ref={videoWrapRef}
-          className="relative flex flex-1 flex-col bg-black overflow-hidden"
-          onMouseMove={handleVideoAreaMouseMove}
-          onMouseLeave={handleVideoAreaMouseLeave}
-          style={{ cursor: showControls ? "default" : "none" }}
-          onClick={(e) => {
-            // Single click = play/pause (after 250ms delay to allow double-click detection).
-            const t = e.target as HTMLElement;
-            if (t.closest("button") || t.closest("input") || t.closest("select")) return;
-            if (singleClickTimerRef.current) {
-              // Second click within 250ms -> double-click -> fullscreen toggle
-              clearTimeout(singleClickTimerRef.current);
-              singleClickTimerRef.current = null;
-              toggleFullscreen();
-              return;
-            }
-            singleClickTimerRef.current = setTimeout(() => {
-              singleClickTimerRef.current = null;
-              const v = videoRef.current;
-              if (!v) return;
-              v.paused ? v.play().catch(() => {}) : v.pause();
-              showControlsNow();
-            }, 250);
-          }}
-        >
-          <video
-            ref={videoRef}
-            className="h-full w-full object-contain"
-            playsInline
-          />
-
-          {/* Empty state */}
-          {!currentEp && !loadingStream && (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <p className="text-sm text-white/30">Select an episode to start watching</p>
-            </div>
-          )}
-
-          {/* Loading overlay */}
-          {loadingStream && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-white/40 pointer-events-none">
-              <Loader2 size={36} className="animate-spin" />
-              <span className="text-sm">Resolving stream…</span>
-            </div>
-          )}
-
-          {/* Error overlay */}
-          {streamError && !loadingStream && (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className="max-w-sm rounded-lg bg-red-500/10 p-4 text-center text-sm text-red-400">
-                {streamError}
-              </div>
-            </div>
-          )}
-
-          {/* Fullscreen exit button — top-center, shown on hover */}
-          {isFullscreen && (
-            <div className={`absolute top-4 left-1/2 -translate-x-1/2 z-30 transition-opacity duration-300 ${showControls ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
-              <button
-                onClick={(e) => { e.stopPropagation(); toggleFullscreen(); }}
-                className="flex h-9 w-9 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur-sm hover:bg-black/80 transition"
-                title="Exit fullscreen"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" className="h-4 w-4">
-                  <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-                </svg>
-              </button>
-            </div>
-          )}
-
-          {/* Controls overlay */}
-          <div
-            className={`absolute inset-0 flex flex-col justify-end transition-opacity duration-300 ${showControls ? "opacity-100" : "opacity-0 pointer-events-none"}`}
-          >
-            {/* Bottom gradient */}
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-black/90 via-black/40 to-transparent" />
-
-            {/* Controls */}
-            <div className="relative px-4 pb-3 pt-2 select-none">
-
-              {/* Seek bar */}
-              <div className="group mb-3 flex items-center gap-2">
-                <div className="relative h-1 flex-1 cursor-pointer rounded-full bg-white/20"
-                  onClick={(e) => {
-                    const rect = e.currentTarget.getBoundingClientRect();
-                    const pct = (e.clientX - rect.left) / rect.width;
-                    const v = videoRef.current;
-                    if (v && duration) v.currentTime = pct * duration;
-                  }}
-                >
-                  {/* Played */}
-                  <div className="absolute inset-y-0 left-0 rounded-full bg-[#f5c518]"
-                    style={{ width: `${progressPct}%` }} />
-                  {/* Thumb */}
-                  <div
-                    className="absolute top-1/2 h-3 w-3 -translate-y-1/2 -translate-x-1/2 rounded-full bg-white shadow opacity-0 group-hover:opacity-100 transition-opacity"
-                    style={{ left: `${progressPct}%` }}
-                  />
-                  {/* Hidden native range for drag */}
-                  <input
-                    type="range" min={0} max={duration || 1} step={0.5} value={position}
-                    disabled={!currentEp || !duration}
-                    onMouseDown={() => { seekingRef.current = true; }}
-                    onMouseUp={(e) => {
-                      seekingRef.current = false;
-                      const t = Number((e.target as HTMLInputElement).value);
-                      if (videoRef.current) videoRef.current.currentTime = t;
-                    }}
-                    onChange={(e) => setPosition(Number(e.target.value))}
-                    className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-                  />
-                </div>
-                <span className="min-w-[7rem] text-right text-xs tabular-nums text-white/70">
-                  {secondsToTimestamp(position)} / {secondsToTimestamp(duration)}
-                </span>
-              </div>
-
-              {/* Button row */}
-              <div className="flex items-center gap-1">
-
-                {/* Play / Pause */}
-                <button
-                  onClick={() => { const v = videoRef.current; if (!v) return; v.paused ? v.play().catch(() => {}) : v.pause(); }}
-                  disabled={!currentEp}
-                  className="flex h-8 w-8 items-center justify-center rounded text-white hover:bg-white/10 disabled:opacity-30 transition"
-                >
-                  {playing ? <Pause size={16} fill="white" /> : <Play size={16} fill="white" />}
-                </button>
-
-                {/* -5s */}
-                <button
-                  onClick={() => seek(-5)}
-                  disabled={!currentEp}
-                  className="flex h-8 items-center gap-0.5 rounded px-2 text-xs text-white/70 hover:bg-white/10 hover:text-white disabled:opacity-30 transition"
-                  title="Rewind 5s (←)"
-                >
-                  <Rewind size={13} />
-                  <span>5</span>
-                </button>
-
-                {/* +5s */}
-                <button
-                  onClick={() => seek(5)}
-                  disabled={!currentEp}
-                  className="flex h-8 items-center gap-0.5 rounded px-2 text-xs text-white/70 hover:bg-white/10 hover:text-white disabled:opacity-30 transition"
-                  title="Forward 5s (→)"
-                >
-                  <span>5</span>
-                  <FastForward size={13} />
-                </button>
-
-                {/* Volume */}
-                <button
-                  onClick={() => { const next = !muted; setMuted(next); if (videoRef.current) videoRef.current.muted = next; }}
-                  className="flex h-8 w-8 items-center justify-center rounded text-white/70 hover:bg-white/10 hover:text-white transition"
-                >
-                  {muted ? <VolumeX size={15} /> : <Volume2 size={15} />}
-                </button>
-                <input
-                  type="range" min={0} max={1} step={0.02} value={muted ? 0 : volume}
-                  onChange={(e) => {
-                    const v = Number(e.target.value);
-                    setVolume(v); setMuted(v === 0);
-                    localStorage.setItem("ap-volume", String(v));
-                    if (videoRef.current) { videoRef.current.volume = v; videoRef.current.muted = v === 0; }
-                  }}
-                  className="w-20 accent-white cursor-pointer"
-                />
-
-                {/* Spacer */}
-                <div className="flex-1" />
-
-                {/* Auto Play toggle */}
-                <button
-                  onClick={() => setAutoPlay((v) => { const n = !v; localStorage.setItem("ap-autoplay", String(n)); return n; })}
-                  className={`h-8 rounded px-2 text-xs transition ${autoPlay ? "text-[#4a9eff]" : "text-white/40 hover:text-white/60"}`}
-                >
-                  {autoPlay ? "✓ " : ""}Auto Play
-                </button>
-
-                {/* Auto Next toggle */}
-                <button
-                  onClick={() => setAutoNext((v) => { const n = !v; localStorage.setItem("ap-autonext", String(n)); return n; })}
-                  className={`h-8 rounded px-2 text-xs transition ${autoNext ? "text-[#4a9eff]" : "text-white/40 hover:text-white/60"}`}
-                >
-                  {autoNext ? "✓ " : ""}Auto Next
-                </button>
-
-                {/* Prev / Next */}
-                <button
-                  onClick={playPrev} disabled={!currentEp}
-                  className="h-8 rounded px-2 text-xs text-white/60 hover:bg-white/10 hover:text-white disabled:opacity-30 transition"
-                >
-                  ⏮ Prev
-                </button>
-                <button
-                  onClick={playNext} disabled={!currentEp}
-                  className="h-8 rounded px-2 text-xs text-white/60 hover:bg-white/10 hover:text-white disabled:opacity-30 transition"
-                >
-                  Next ⏭
-                </button>
-
-                {/* Quality selector */}
-                {links.length > 1 && (
-                  <div className="relative">
-                    <button
-                      onClick={() => setQualityOpen((o) => !o)}
-                      className="flex h-8 items-center gap-1 rounded px-2 text-xs text-white/70 hover:bg-white/10 hover:text-white transition"
-                    >
-                      {links[selectedLink]?.quality ?? "?"}p
-                      <ChevronDown size={11} />
-                    </button>
-                    {qualityOpen && (
-                      <div className="absolute bottom-10 right-0 z-20 min-w-[90px] overflow-hidden rounded-lg border border-white/10 bg-[#1a1a24] shadow-xl">
-                        {links.map((l, i) => (
-                          <button
-                            key={i}
-                            onClick={() => changeQuality(i)}
-                            className={`flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition hover:bg-white/10
-                              ${i === selectedLink ? "text-[#4a9eff]" : "text-white/70"}`}
-                          >
-                            {i === selectedLink && <span>✓</span>}
-                            <span className={i === selectedLink ? "" : "ml-3"}>{l.quality}p</span>
-                            {l.audio && l.audio !== "jpn" && (
-                              <span className="ml-auto rounded bg-white/10 px-1 text-[10px]">{l.audio}</span>
-                            )}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Fullscreen */}
-                <button
-                  onClick={toggleFullscreen}
-                  className="flex h-8 w-8 items-center justify-center rounded text-white/70 hover:bg-white/10 hover:text-white transition"
-                  title="Fullscreen (F)"
-                >
-                  {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Click-outside to close quality dropdown */}
-          {qualityOpen && (
-            <div className="absolute inset-0 z-10" onClick={() => setQualityOpen(false)} />
-          )}
-        </div>
+        {EpisodePanel}
+        {VideoArea(true)}
       </div>
     </div>
   );

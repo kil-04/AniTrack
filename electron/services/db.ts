@@ -24,59 +24,93 @@ export function getDb(): Database {
   return db;
 }
 
+// Bump CURRENT_SCHEMA_VERSION whenever you add a new migration below.
+// Each migration runs exactly once per user and is idempotent.
+const CURRENT_SCHEMA_VERSION = 3;
+
+const MIGRATIONS: Array<(d: Database) => void> = [
+  // v1 — initial schema
+  (d) => {
+    d.run(`CREATE TABLE IF NOT EXISTS anime (
+      id INTEGER PRIMARY KEY,
+      mal_id INTEGER,
+      title TEXT NOT NULL,
+      title_english TEXT,
+      title_romaji TEXT,
+      synopsis TEXT,
+      episodes INTEGER,
+      duration INTEGER,
+      status TEXT,
+      cover_image TEXT,
+      banner_image TEXT,
+      genres TEXT,
+      average_score REAL,
+      year INTEGER,
+      studios TEXT,
+      updated_at INTEGER NOT NULL
+    )`);
+    d.run(`CREATE TABLE IF NOT EXISTS list_entry (
+      anime_id INTEGER PRIMARY KEY,
+      status TEXT NOT NULL,
+      episodes_watched INTEGER NOT NULL DEFAULT 0,
+      score REAL,
+      updated_at INTEGER NOT NULL,
+      mal_dirty INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY(anime_id) REFERENCES anime(id)
+    )`);
+    d.run(`CREATE TABLE IF NOT EXISTS local_episode (
+      anime_id INTEGER NOT NULL,
+      episode INTEGER NOT NULL,
+      file_path TEXT NOT NULL,
+      duration_sec REAL,
+      PRIMARY KEY (anime_id, episode)
+    )`);
+    d.run(`CREATE TABLE IF NOT EXISTS playback (
+      anime_id INTEGER NOT NULL,
+      episode INTEGER NOT NULL,
+      position_sec REAL NOT NULL,
+      duration_sec REAL NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (anime_id, episode)
+    )`);
+    d.run(`CREATE TABLE IF NOT EXISTS library_folder (
+      path TEXT PRIMARY KEY,
+      added_at INTEGER NOT NULL
+    )`);
+    d.run(`CREATE INDEX IF NOT EXISTS idx_playback_updated ON playback(updated_at DESC)`);
+    d.run(`CREATE INDEX IF NOT EXISTS idx_list_status ON list_entry(status)`);
+  },
+  // v2 — playback.pahe_session for tracking AnimePahe-only watches
+  (d) => {
+    try { d.run(`ALTER TABLE playback ADD COLUMN pahe_session TEXT`); } catch {}
+  },
+  // v3 — local_episode.updated_at (was referenced in INSERT but missing from CREATE)
+  (d) => {
+    try { d.run(`ALTER TABLE local_episode ADD COLUMN updated_at INTEGER`); } catch {}
+  },
+];
+
 function initSchema(d: Database) {
-  // Run each statement separately — node-sqlite3-wasm only executes the first
-  // statement when multiple are passed in a single run() call.
-  d.run(`CREATE TABLE IF NOT EXISTS anime (
-    id INTEGER PRIMARY KEY,
-    mal_id INTEGER,
-    title TEXT NOT NULL,
-    title_english TEXT,
-    title_romaji TEXT,
-    synopsis TEXT,
-    episodes INTEGER,
-    duration INTEGER,
-    status TEXT,
-    cover_image TEXT,
-    banner_image TEXT,
-    genres TEXT,
-    average_score REAL,
-    year INTEGER,
-    studios TEXT,
-    updated_at INTEGER NOT NULL
-  )`);
-  d.run(`CREATE TABLE IF NOT EXISTS list_entry (
-    anime_id INTEGER PRIMARY KEY,
-    status TEXT NOT NULL,
-    episodes_watched INTEGER NOT NULL DEFAULT 0,
-    score REAL,
-    updated_at INTEGER NOT NULL,
-    mal_dirty INTEGER NOT NULL DEFAULT 0,
-    FOREIGN KEY(anime_id) REFERENCES anime(id)
-  )`);
-  d.run(`CREATE TABLE IF NOT EXISTS local_episode (
-    anime_id INTEGER NOT NULL,
-    episode INTEGER NOT NULL,
-    file_path TEXT NOT NULL,
-    duration_sec REAL,
-    PRIMARY KEY (anime_id, episode)
-  )`);
-  d.run(`CREATE TABLE IF NOT EXISTS playback (
-    anime_id INTEGER NOT NULL,
-    episode INTEGER NOT NULL,
-    position_sec REAL NOT NULL,
-    duration_sec REAL NOT NULL,
-    updated_at INTEGER NOT NULL,
-    PRIMARY KEY (anime_id, episode)
-  )`);
-  d.run(`CREATE TABLE IF NOT EXISTS library_folder (
-    path TEXT PRIMARY KEY,
-    added_at INTEGER NOT NULL
-  )`);
-  d.run(`CREATE INDEX IF NOT EXISTS idx_playback_updated ON playback(updated_at DESC)`);
-  d.run(`CREATE INDEX IF NOT EXISTS idx_list_status ON list_entry(status)`);
-  // Migration: add pahe_session column if it doesn't exist yet (safe to run multiple times)
-  try { d.run(`ALTER TABLE playback ADD COLUMN pahe_session TEXT`); } catch { /* already exists */ }
+  d.run(`CREATE TABLE IF NOT EXISTS _schema_version (version INTEGER NOT NULL)`);
+  const row: any = d.get(`SELECT version FROM _schema_version LIMIT 1`);
+  let current = row?.version ?? 0;
+
+  // If this is a brand-new DB (no version row), seed it at 0 so the loop
+  // applies every migration including v1.
+  if (!row) d.run(`INSERT INTO _schema_version (version) VALUES (0)`);
+
+  while (current < CURRENT_SCHEMA_VERSION) {
+    const migration = MIGRATIONS[current];
+    if (!migration) break;
+    try {
+      migration(d);
+      current++;
+      d.run(`UPDATE _schema_version SET version = ?`, [current]);
+    } catch (e) {
+      console.error(`Migration to v${current + 1} failed:`, e);
+      throw e;
+    }
+  }
 }
 
 // ---- Anime ----
@@ -225,6 +259,11 @@ export function clearDirty(animeId: number) {
   getDb().run(`UPDATE list_entry SET mal_dirty = 0 WHERE anime_id = ?`, [
     animeId,
   ]);
+}
+
+/** Remove a list entry — used to clean up stub entries after stub→real-id migration. */
+export function deleteListEntry(animeId: number): void {
+  getDb().run(`DELETE FROM list_entry WHERE anime_id = ?`, [animeId]);
 }
 
 // ---- Playback ----
@@ -420,4 +459,46 @@ export function getEpisodesFor(animeId: number): LocalEpisode[] {
 
 export function clearLocalEpisodes() {
   getDb().run(`DELETE FROM local_episode`);
+}
+
+/** Find an existing anime row by title (case-insensitive, checks all title columns). */
+export function findAnimeByTitle(title: string): AnimeMeta | null {
+  const q = title.toLowerCase().trim();
+  const row = getDb().get(
+    `SELECT * FROM anime
+     WHERE LOWER(TRIM(title))         = ?
+        OR LOWER(TRIM(title_english)) = ?
+        OR LOWER(TRIM(title_romaji))  = ?
+     LIMIT 1`,
+    [q, q, q],
+  );
+  return row ? rowToAnime(row) : null;
+}
+
+/** All playback progress rows for a given anime (for watched-episode indicators). */
+export function getProgressForAnime(animeId: number): PlaybackProgress[] {
+  const rows: any[] = getDb().all(
+    `SELECT * FROM playback WHERE anime_id = ? ORDER BY episode`,
+    [animeId],
+  );
+  return rows.map((row) => ({
+    animeId: row.anime_id,
+    episode: row.episode,
+    positionSec: row.position_sec,
+    durationSec: row.duration_sec,
+    updatedAt: row.updated_at,
+  }));
+}
+
+/** Delete local_episode rows whose file_path is not in the provided set. */
+export function removeStaleLocalEpisodes(validPaths: Set<string>): number {
+  const rows = getDb().all(`SELECT rowid, file_path FROM local_episode`) as any[];
+  let removed = 0;
+  for (const row of rows) {
+    if (!validPaths.has(row.file_path)) {
+      getDb().run(`DELETE FROM local_episode WHERE rowid = ?`, [row.rowid]);
+      removed++;
+    }
+  }
+  return removed;
 }

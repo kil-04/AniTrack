@@ -16,6 +16,7 @@ export default function HeroBanner({ anime }: Props) {
           src={bg}
           alt={anime.title}
           className="h-full w-full object-cover"
+          loading="lazy"
         />
       )}
       <div className="absolute inset-0 bg-gradient-to-t from-bg via-bg/40 to-transparent" />

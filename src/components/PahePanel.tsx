@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Play, ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
+import type { PlaybackProgress } from "../../shared/types";
+
+// Keyed by animeId (when a real AniList ID is known) or by title string.
+// Survives navigation so re-opening a show detail page is instant.
+const _searchCache = new Map<string | number, { results: any[]; selected: any }>();
 
 interface Props {
   animeTitle: string;
@@ -54,6 +59,13 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMal
   const [showManualSearch, setShowManualSearch] = useState(false);
   const manualInputRef = useRef<HTMLInputElement>(null);
 
+  // Watched episode indicators — keyed by episode number, value is percent watched
+  const [watchedEps, setWatchedEps] = useState<Map<number, number>>(new Map());
+
+  // Favicon URL derived from the configured AnimePahe base URL so domain hops work.
+  const [paheBaseUrl, setPaheBaseUrl] = useState<string>("https://animepahe.pw");
+  useEffect(() => { window.api.pahe.getUrl().then(setPaheBaseUrl).catch(() => {}); }, []);
+
   function pickByTitle(res: any[], title: string): any | null {
     if (res.length === 0) return null;
     if (res.length === 1) return res[0];
@@ -72,30 +84,44 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMal
     const top = [...res]
       .sort((a, b) => scoreMatch(b, animeTitle, animeYear) - scoreMatch(a, animeTitle, animeYear))
       .slice(0, 3);
-    for (const candidate of top) {
-      try {
-        const ids = await window.api.pahe.getIds(candidate.id, candidate.session);
-        if (realAnilistId && ids.anilistId === realAnilistId) return candidate;
-        if (realMalId && ids.malId === realMalId) return candidate;
-      } catch { /* skip */ }
+    const checks = await Promise.all(
+      top.map(async (candidate) => {
+        const ids = await window.api.pahe.getIds(candidate.id, candidate.session).catch(() => ({}));
+        return { candidate, ids } as { candidate: any; ids: any };
+      }),
+    );
+    for (const { candidate, ids } of checks) {
+      if (realAnilistId && ids.anilistId === realAnilistId) return candidate;
+      if (realMalId && ids.malId === realMalId) return candidate;
     }
     return null;
   }
 
   useEffect(() => {
     if (!animeTitle) return;
+    setShowManualSearch(false);
+    setError(null);
+
+    // Return immediately from cache — no network call, no spinner.
+    const cacheKey: string | number =
+      animeId && animeId < 1_000_000_000 ? animeId : animeTitle;
+    const cached = _searchCache.get(cacheKey);
+    if (cached) {
+      setResults(cached.results);
+      setSelected(cached.selected);
+      return;
+    }
+
     setSelected(null);
     setResults([]);
-    setShowManualSearch(false);
     setSearching(true);
-    setError(null);
 
     async function runSearch() {
       async function tryQuery(query: string, scoreAgainst: string): Promise<boolean> {
         const r: any[] = await window.api.pahe.search(query);
         let b = pickByTitle(r, scoreAgainst);
         if (!b && (animeId || animeMalId) && r.length > 0) b = await pickByIds(r);
-        if (b) { setResults(r); setSelected(b); return true; }
+        if (b) { setResults(r); setSelected(b); _searchCache.set(cacheKey, { results: r, selected: b }); return true; }
         return false;
       }
 
@@ -125,7 +151,7 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMal
         if (r.length > 0) {
           let b = pickByTitle(r, animeTitle);
           if (!b && (animeId || animeMalId)) b = await pickByIds(r);
-          if (b) { setResults(r); setSelected(b); return; }
+          if (b) { setResults(r); setSelected(b); _searchCache.set(cacheKey, { results: r, selected: b }); return; }
         }
       }
 
@@ -136,7 +162,12 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMal
         if (realAnilistId || realMalId) {
           try {
             const found = await window.api.pahe.findById(realAnilistId, realMalId);
-            if (found) { setResults([found]); setSelected(found); return; }
+            if (found) {
+              setResults([found]);
+              setSelected(found);
+              _searchCache.set(cacheKey, { results: [found], selected: found });
+              return;
+            }
           } catch { /* swallow */ }
         }
       }
@@ -180,12 +211,22 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMal
     }).catch((e: any) => setError(String(e))).finally(() => setLoadingEps(false));
   }, [selected, page]);
 
+  useEffect(() => {
+    if (!selected || !animeId || animeId >= 1_000_000_000) return;
+    window.api.progress.getForAnime(animeId).then((rows: PlaybackProgress[]) => {
+      const m = new Map<number, number>();
+      for (const r of rows) {
+        if (r.durationSec > 0) m.set(r.episode, (r.positionSec / r.durationSec) * 100);
+      }
+      setWatchedEps(m);
+    }).catch(() => {});
+  }, [selected, animeId]);
+
   function openStreamPlayer(ep?: any) {
     const p = new URLSearchParams({
       session: selected.session,
       title: selected.title,
     });
-    // Specific ep clicked → use it; otherwise jump to resume point if known
     const targetEp = ep?.episode ?? resumeEpisode;
     if (targetEp) p.set("episode", String(targetEp));
     if (animeId) p.set("animeId", String(animeId));
@@ -256,18 +297,39 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMal
             ) : (
               <>
                 <div className="grid grid-cols-8 gap-1.5 sm:grid-cols-10 md:grid-cols-12 lg:grid-cols-14 xl:grid-cols-16">
-                  {episodes.map((ep) => (
-                    <button
-                      key={ep.session}
-                      onClick={() => openStreamPlayer(ep)}
-                      title={`Episode ${ep.episode}${ep.filler ? " (Filler)" : ""}`}
-                      className={`flex h-10 items-center justify-center rounded text-xs font-medium transition
-                        hover:bg-[#4a9eff] hover:text-white
-                        ${ep.filler ? "bg-yellow-500/10 text-yellow-400/80" : "bg-white/5 text-white/70"}`}
-                    >
-                      {ep.episode}
-                    </button>
-                  ))}
+                  {episodes.map((ep) => {
+                    const pct = watchedEps.get(ep.episode) ?? 0;
+                    const watched = pct >= 85;
+                    const inProgress = pct > 5 && !watched;
+                    return (
+                      <div key={ep.session} className="group relative">
+                        <button
+                          onClick={() => openStreamPlayer(ep)}
+                          title={`Episode ${ep.episode}${ep.filler ? " (Filler)" : ""}`}
+                          className={`relative flex h-10 w-full items-center justify-center rounded text-xs font-medium transition
+                            hover:bg-[#4a9eff] hover:text-white
+                            ${watched ? "bg-green-500/20 text-green-400 ring-1 ring-green-500/30" : ep.filler ? "bg-yellow-500/10 text-yellow-400/80" : "bg-white/5 text-white/70"}`}
+                        >
+                          {ep.episode}
+                          {inProgress && (
+                            <div
+                              className="absolute bottom-0 left-0 h-0.5 rounded-full bg-[#4a9eff]"
+                              style={{ width: `${pct}%` }}
+                            />
+                          )}
+                        </button>
+                        {ep.snapshot && (
+                          <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+                            <img
+                              src={ep.snapshot}
+                              alt={`Ep ${ep.episode}`}
+                              className="h-20 w-32 rounded-md object-cover shadow-lg ring-1 ring-white/20"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
 
                 {lastPage > 1 && (
@@ -301,7 +363,7 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMal
     <div className="rounded-lg border border-white/10 bg-bg-card p-4">
       <div className="mb-3 flex items-center gap-2">
         <img
-          src="https://animepahe.pw/favicon.ico"
+          src={`${paheBaseUrl}/favicon.ico`}
           className="h-4 w-4"
           alt=""
           onError={(e) => (e.currentTarget.style.display = "none")}

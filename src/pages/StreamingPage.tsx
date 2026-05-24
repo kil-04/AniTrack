@@ -141,7 +141,7 @@ export default function StreamingPage() {
         ref={webviewRef}
         src={startUrl}
         partition="persist:streaming"
-        allowpopups=""
+        allowpopups
         style={{ flex: 1, width: "100%", height: "100%" }}
       />
     </div>

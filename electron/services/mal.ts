@@ -20,9 +20,9 @@ import {
 import { getByMalId } from "./anilist";
 import type { MalAuthState, WatchStatus } from "../../shared/types";
 
-// Public MAL client (no secret needed — registered as "other" app type).
-// Override with MAL_CLIENT_ID in .env if you register your own app.
-const MAL_CLIENT_ID = process.env.MAL_CLIENT_ID ?? "10093a3f9f0174b6b5577c40e9accdae";
+// Default public MAL client (no secret needed — registered as "other" app type).
+// Users can override with their own via Settings if this one is rate-limited or revoked.
+const DEFAULT_MAL_CLIENT_ID = process.env.MAL_CLIENT_ID ?? "10093a3f9f0174b6b5577c40e9accdae";
 const REDIRECT_URI = "https://malsync.moe/mal/oauth";
 const AUTH_BASE = "https://myanimelist.net/v1/oauth2";
 const API_BASE = "https://api.myanimelist.net/v2";
@@ -37,9 +37,27 @@ interface MalTokens {
 interface StoreShape {
   malTokens?: MalTokens;
   pkceVerifier?: string;
+  clientId?: string;
 }
 
 const store = new SimpleStore<StoreShape>("anitrack-auth");
+
+function getClientId(): string {
+  const custom = store.get("clientId");
+  return custom && custom.trim() ? custom.trim() : DEFAULT_MAL_CLIENT_ID;
+}
+
+export function setMalClientId(id: string): { ok: boolean; usingCustom: boolean } {
+  const trimmed = id.trim();
+  if (trimmed) store.set("clientId", trimmed);
+  else store.delete("clientId");
+  return { ok: true, usingCustom: !!trimmed };
+}
+
+export function getMalClientInfo(): { usingCustom: boolean; clientId?: string } {
+  const custom = store.get("clientId");
+  return { usingCustom: !!custom, clientId: custom };
+}
 
 // MAL requires `plain` code_challenge_method. The verifier must be
 // 43-128 chars of URL-safe characters — use the same set MALSync uses.
@@ -57,7 +75,7 @@ export function beginAuth(mainWindow: BrowserWindow): { ok: boolean; reason?: st
 
   const url =
     `${AUTH_BASE}/authorize?response_type=code` +
-    `&client_id=${MAL_CLIENT_ID}` +
+    `&client_id=${getClientId()}` +
     `&code_challenge=${verifier}` +
     `&code_challenge_method=plain` +
     `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}`;
@@ -114,7 +132,7 @@ function handleRedirect(
   (async () => {
     try {
       const body = new URLSearchParams({
-        client_id: MAL_CLIENT_ID,
+        client_id: getClientId(),
         code,
         code_verifier: verifier,
         grant_type: "authorization_code",
@@ -178,17 +196,30 @@ async function refreshIfNeeded(): Promise<string | null> {
   if (!t) return null;
   if (Date.now() < t.expires_at - 60_000) return t.access_token;
   const body = new URLSearchParams({
-    client_id: MAL_CLIENT_ID,
+    client_id: getClientId(),
     grant_type: "refresh_token",
     refresh_token: t.refresh_token,
   });
-  const res = await fetch(`${AUTH_BASE}/token`, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${AUTH_BASE}/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body,
+    });
+  } catch (e) {
+    // Network error during refresh — don't invalidate tokens, just fail this call.
+    console.warn("MAL refresh network error", e);
+    return null;
+  }
   if (!res.ok) {
-    console.error("MAL refresh failed", res.status, await res.text());
+    const errBody = await res.text().catch(() => "");
+    console.error("MAL refresh failed", res.status, errBody);
+    // 400/401 = refresh token invalid — clear so the user re-auths instead of
+    // looping forever on a broken token.
+    if (res.status === 400 || res.status === 401) {
+      store.delete("malTokens");
+    }
     return null;
   }
   const j = await res.json() as any;
@@ -348,8 +379,12 @@ export async function markEpisodeWatched(animeId: number, episode: number) {
   const existing = getListEntry(animeId);
   const totalEps = anime.episodes ?? Infinity;
   const newEps = Math.max(episode, existing?.episodesWatched ?? 0);
+  // Compute new status, but respect explicit user choices:
+  // - "dropped" stays dropped (user explicitly stopped — don't reactivate)
+  // - completed series stays completed
+  const computed: WatchStatus = newEps >= totalEps ? "completed" : "watching";
   const status: WatchStatus =
-    newEps >= totalEps ? "completed" : "watching";
+    existing?.status === "dropped" ? "dropped" : computed;
 
   // Detect start / finish transitions so we can send dates to MAL.
   const wasUnstarted = !existing || existing.status === "plan_to_watch";
