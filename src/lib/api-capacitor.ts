@@ -368,10 +368,31 @@ export async function installCapacitorApiBridge() {
       },
     },
 
-    // ── updater (no-op on Android — APK updates are manual for now) ───────────
+    // ── updater (checks GitHub for APK updates) ───────────────────────────────
     updater: {
-      async check() { return { ok: false, version: null, reason: "Not supported on Android" }; },
-      async install() {},
+      async check() {
+        try {
+          const res = await fetch("https://api.github.com/repos/kil-04/AniTrack/releases/latest");
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data = await res.json();
+          const latestVersion = data.tag_name.replace(/^v/, '');
+          
+          // @ts-ignore
+          if (latestVersion.localeCompare(__APP_VERSION__, undefined, { numeric: true, sensitivity: 'base' }) === 1) {
+             emit("update:available", { version: latestVersion });
+             emit("update:downloaded", { version: latestVersion });
+          } else {
+             emit("update:not-available");
+          }
+          return { ok: true, version: latestVersion };
+        } catch (e) {
+          emit("update:error", String(e));
+          return { ok: false, version: null, reason: String(e) };
+        }
+      },
+      async install() {
+        await Browser.open({ url: "https://github.com/kil-04/AniTrack/releases/latest" });
+      },
     },
 
     // ── on (event listener) ───────────────────────────────────────────────────

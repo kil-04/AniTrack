@@ -197,6 +197,14 @@ export default function StreamPlayer() {
     fetchPahePage(firstPaheePage)
       .then(async ({ data: firstData, total }) => {
         if (cancelled) return;
+        if (firstData.length === 0) {
+          // Session expired or failed to load. Redirect back to Anime page to refresh session.
+          const id = Number(params.get("animeId") ?? 0);
+          if (id > 0) {
+            navigate(`/anime/${id}`, { replace: true });
+            return;
+          }
+        }
         if (total) setTotalEpisodes(total);
         const lastPaheePage = Math.min(
           Math.ceil(Math.min(rangeEnd, total || rangeEnd) / PAHE_PAGE_SIZE),

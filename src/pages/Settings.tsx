@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Capacitor } from "@capacitor/core";
 import { useAppStore } from "../store/useAppStore";
 import { Folder, FolderPlus, RefreshCcw, X } from "lucide-react";
 import type { AniListAuthState } from "../../shared/types";
@@ -478,7 +479,7 @@ export default function Settings() {
                 onClick={() => window.api.updater.install()}
                 className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium hover:bg-accent-hover"
               >
-                Restart Now
+                {Capacitor.isNativePlatform() ? "Download Update" : "Restart Now"}
               </button>
               <button
                 onClick={() => setUpdateState({ phase: "idle" })}

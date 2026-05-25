@@ -327,7 +327,20 @@ app.whenReady().then(() => {
   });
 });
 
-app.on("before-quit", () => { isQuitting = true; });
+app.on("before-quit", () => {
+  isQuitting = true;
+  // Move CWD away from the install directory so autoInstallOnAppQuit
+  // doesn't fail with a directory lock when the NSIS installer runs.
+  if (process.platform === "win32") {
+    try { process.chdir(app.getPath("temp")); } catch {}
+  }
+  // Destroy the hidden AnimePahe BrowserWindow (and any others) so their
+  // file handles on DLLs inside the install dir are released.
+  for (const win of BrowserWindow.getAllWindows()) {
+    try { win.destroy(); } catch {}
+  }
+  if (tray) { try { tray.destroy(); } catch {} tray = null; }
+});
 
 app.on("window-all-closed", () => {
   // Keep the app running in the tray on Windows; only quit when explicitly requested.
@@ -578,6 +591,29 @@ function registerIpc() {
   });
   ipcMain.handle(IPC.UPDATE_INSTALL, () => {
     isQuitting = true;
-    autoUpdater.quitAndInstall();
+
+    // --- Bulletproof shutdown before launching the installer ---
+    // 1. Stop background timers so nothing fires mid-shutdown.
+    if (malFlushTimer) { clearInterval(malFlushTimer); malFlushTimer = null; }
+
+    // 2. Destroy ALL BrowserWindows (main window + hidden AnimePahe window).
+    //    This releases file handles on DLLs inside the install directory.
+    for (const win of BrowserWindow.getAllWindows()) {
+      try { win.destroy(); } catch { /* already destroyed */ }
+    }
+
+    // 3. Destroy the system tray so the Electron process can fully exit.
+    if (tray) { try { tray.destroy(); } catch {} tray = null; }
+
+    // 4. Move CWD out of the install directory so the NSIS installer
+    //    can freely delete/replace files without a directory lock.
+    if (process.platform === "win32") {
+      try { process.chdir(app.getPath("temp")); } catch {}
+    }
+
+    // 5. Now it's safe — launch the installer and quit.
+    //    isSilent=false (show progress), isForceRunAfter=true (relaunch app).
+    autoUpdater.quitAndInstall(false, true);
   });
 }
+
