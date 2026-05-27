@@ -1,6 +1,6 @@
 {
   "name": "anitrack",
-  "version": "4.5.7",
+  "version": "5.0.0",
   "description": "Anime tracker + local player with Discord RPC, MAL two-way sync and legal-site launcher",
   "main": "dist-electron/electron/main.js",
   "author": "Sanjay",
@@ -22,12 +22,13 @@
     "android:publish": "npm run android:build && node scripts/upload-apk.js"
   },
   "dependencies": {
+    "@capacitor-community/sqlite": "^6.0.2",
     "@capacitor/android": "^6.2.0",
     "@capacitor/browser": "^6.0.3",
     "@capacitor/core": "^6.2.0",
     "@capacitor/screen-orientation": "^6.0.2",
-    "@capacitor-community/sqlite": "^6.0.2",
     "electron-updater": "^6.8.3",
+    "framer-motion": "^12.40.0",
     "hls.js": "^1.5.15",
     "lucide-react": "^0.451.0",
     "node-sqlite3-wasm": "^0.8.9",
