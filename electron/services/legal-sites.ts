@@ -43,7 +43,7 @@ const services: { name: string; build: (title: string) => string }[] = [
   {
     name: "Anikoto",
     build: (t) =>
-      `https://anikototv.to/filter?keyword=${encodeURIComponent(t)}`,
+      `https://anikoto.cz/filter?keyword=${encodeURIComponent(t)}`,
   },
 ];
 

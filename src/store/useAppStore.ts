@@ -89,6 +89,7 @@ export const useAppStore = create<AppState>((set) => ({
 
   refreshContinue: async () => {
     try {
+      await pullAndMerge().catch(() => {});
       const cw = await window.api.list.continueWatching();
       set({ continueWatching: cw });
     } catch (e) {

@@ -591,10 +591,12 @@ export function prefetchKwik(kwikUrl: string): void {
   resolveKwik(kwikUrl).catch(() => {});
 }
 
+let _kwikBrowserQueue: Promise<any> = Promise.resolve();
+
 async function _resolveKwikBrowser(
   kwikUrl: string,
 ): Promise<{ url: string; cookies: string }> {
-  return new Promise((resolve, reject) => {
+  const run = () => new Promise<{ url: string; cookies: string }>((resolve, reject) => {
     const win = getKwikWindow();
     let settled = false;
 
@@ -624,6 +626,10 @@ async function _resolveKwikBrowser(
       }
     });
   });
+
+  const nextPromise = _kwikBrowserQueue.then(run, run);
+  _kwikBrowserQueue = nextPromise.catch(() => {});
+  return nextPromise;
 }
 
 // ─── Fast JS-unpack fallback (no cookies, used only when browser times out) ──

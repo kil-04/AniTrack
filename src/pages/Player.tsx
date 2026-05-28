@@ -80,6 +80,17 @@ export default function Player() {
     };
   }, [animeId, episode, streamUrl]);
 
+  // Pause playback when app window is hidden to tray
+  useEffect(() => {
+    const unsub = window.api.on("app:window-hidden", () => {
+      const v = videoRef.current;
+      if (v && !v.paused) {
+        v.pause();
+      }
+    });
+    return unsub;
+  }, []);
+
   // Persist progress
   function persist(pos: number, dur: number, force = false) {
     if (!Number.isFinite(pos) || !Number.isFinite(dur) || dur <= 0) return;
@@ -104,12 +115,17 @@ export default function Player() {
     }).catch(() => {});
   }
 
-  // Persist final position on unmount so close-mid-episode doesn't lose progress.
+  // Persist final position on unmount or window reload/closure so close-mid-episode doesn't lose progress.
   useEffect(() => {
-    return () => {
+    const handleBeforeUnload = () => {
       const v = videoRef.current;
-      if (!v) return;
-      persist(v.currentTime, v.duration, true);
+      if (v) persist(v.currentTime, v.duration, true);
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      const v = videoRef.current;
+      if (v) persist(v.currentTime, v.duration, true);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [animeId, episode]);

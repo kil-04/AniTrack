@@ -8,6 +8,19 @@ import Home from "./pages/Home";
 import { useAppStore } from "./store/useAppStore";
 import { useMediaQuery } from "./hooks/useMediaQuery";
 import { isCapacitor } from "./lib/platform";
+import { AnimatePresence, motion } from "framer-motion";
+
+const PageTransition = ({ children }: { children: React.ReactNode }) => (
+  <motion.div
+    initial={{ opacity: 0, y: 10, scale: 0.98 }}
+    animate={{ opacity: 1, y: 0, scale: 1 }}
+    exit={{ opacity: 0, scale: 0.98 }}
+    transition={{ duration: 0.2, ease: "easeOut" }}
+    className="h-full w-full"
+  >
+    {children}
+  </motion.div>
+);
 
 const ShowDetail       = lazy(() => import("./pages/ShowDetail"));
 const Player           = lazy(() => import("./pages/Player"));
@@ -15,6 +28,7 @@ const StreamingPage    = lazy(() => import("./pages/StreamingPage"));
 const StreamPlayer     = lazy(() => import("./pages/StreamPlayer"));
 const Settings         = lazy(() => import("./pages/Settings"));
 const Search           = lazy(() => import("./pages/Search"));
+const Filter           = lazy(() => import("./pages/Filter"));
 const ContinueWatching = lazy(() => import("./pages/ContinueWatching"));
 const Library          = lazy(() => import("./pages/Library"));
 
@@ -88,14 +102,17 @@ export default function App() {
           {showTopBar && <TopBar />}
           <main className="thin-scrollbar flex-1 overflow-y-auto">
             <Suspense fallback={<PageFallback />}>
-              <Routes>
-                <Route path="/"                   element={<Home />} />
-                <Route path="/library"            element={<Library />} />
-                <Route path="/search"             element={<Search />} />
-                <Route path="/anime/:id"          element={<ShowDetail />} />
-                <Route path="/settings"           element={<Settings />} />
-                <Route path="/continue-watching"  element={<ContinueWatching />} />
-              </Routes>
+              <AnimatePresence mode="wait">
+                <Routes location={location} key={location.pathname}>
+                  <Route path="/"                   element={<PageTransition><Home /></PageTransition>} />
+                  <Route path="/library"            element={<PageTransition><Library /></PageTransition>} />
+                  <Route path="/search"             element={<PageTransition><Filter /></PageTransition>} />
+                  <Route path="/filter"             element={<PageTransition><Filter /></PageTransition>} />
+                  <Route path="/anime/:id"          element={<PageTransition><ShowDetail /></PageTransition>} />
+                  <Route path="/settings"           element={<PageTransition><Settings /></PageTransition>} />
+                  <Route path="/continue-watching"  element={<PageTransition><ContinueWatching /></PageTransition>} />
+                </Routes>
+              </AnimatePresence>
             </Suspense>
           </main>
         </div>

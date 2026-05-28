@@ -5,6 +5,7 @@ import {
   findAnimeByTitle,
   listLibraryFolders,
   removeStaleLocalEpisodes,
+  runInTransaction,
   upsertAnime,
   upsertLocalEpisode,
 } from "./db";
@@ -133,15 +134,18 @@ export async function scanAll(
       await new Promise((r) => setTimeout(r, 250));
     }
 
-    for (const it of items) {
-      upsertLocalEpisode({
-        animeId: match.id,
-        episode: it.episode,
-        filePath: it.filePath,
-        durationSec: null,
-      });
-      episodes++;
-    }
+    const finalMatch = match;
+    runInTransaction(() => {
+      for (const it of items) {
+        upsertLocalEpisode({
+          animeId: finalMatch.id,
+          episode: it.episode,
+          filePath: it.filePath,
+          durationSec: null,
+        });
+        episodes++;
+      }
+    });
     shows++;
   }
 

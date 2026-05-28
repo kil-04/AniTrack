@@ -7,7 +7,7 @@
 
 import { BrowserWindow } from "electron";
 import { SimpleStore } from "./store";
-import { getListEntry, setListEntry, upsertAnime } from "./db";
+import { getListEntry, runInTransaction, setListEntry, upsertAnime } from "./db";
 import type { WatchStatus } from "../../shared/types";
 
 const AUTH_BASE    = "https://anilist.co/api/v2/oauth";
@@ -218,33 +218,35 @@ export async function pullList(onProgress?: (n: number) => void): Promise<{ impo
   const lists = (data.data?.MediaListCollection?.lists ?? []) as any[];
   let count   = 0;
 
-  for (const list of lists) {
-    for (const entry of (list.entries ?? []) as any[]) {
-      const m = entry.media;
-      upsertAnime({
-        id:           m.id,
-        malId:        m.idMal ?? null,
-        title:        m.title?.romaji ?? m.title?.english ?? "",
-        titleEnglish: m.title?.english ?? null,
-        episodes:     m.episodes ?? null,
-        coverImage:   m.coverImage?.large ?? null,
-        averageScore: m.meanScore ?? null,
-        status:       m.status ?? null,
-        year:         m.startDate?.year ?? null,
-        genres:       m.genres ?? [],
-        studios:      (m.studios?.nodes ?? []).map((s: any) => s.name),
-      });
-      setListEntry({
-        animeId:         m.id,
-        status:          FROM_AL[entry.status] ?? "plan_to_watch",
-        episodesWatched: entry.progress ?? 0,
-        score:           entry.score || null,
-        updatedAt:       (entry.updatedAt ?? 0) * 1000,
-      });
-      count++;
-      onProgress?.(count);
+  runInTransaction(() => {
+    for (const list of lists) {
+      for (const entry of (list.entries ?? []) as any[]) {
+        const m = entry.media;
+        upsertAnime({
+          id:           m.id,
+          malId:        m.idMal ?? null,
+          title:        m.title?.romaji ?? m.title?.english ?? "",
+          titleEnglish: m.title?.english ?? null,
+          episodes:     m.episodes ?? null,
+          coverImage:   m.coverImage?.large ?? null,
+          averageScore: m.meanScore ?? null,
+          status:       m.status ?? null,
+          year:         m.startDate?.year ?? null,
+          genres:       m.genres ?? [],
+          studios:      (m.studios?.nodes ?? []).map((s: any) => s.name),
+        });
+        setListEntry({
+          animeId:         m.id,
+          status:          FROM_AL[entry.status] ?? "plan_to_watch",
+          episodesWatched: entry.progress ?? 0,
+          score:           entry.score || null,
+          updatedAt:       (entry.updatedAt ?? 0) * 1000,
+        });
+        count++;
+        onProgress?.(count);
+      }
     }
-  }
+  });
   return { imported: count };
 }
 

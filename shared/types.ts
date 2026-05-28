@@ -25,6 +25,24 @@ export interface AnimeMeta {
   studios?: string[];
 }
 
+export interface AdvancedSearchFilters {
+  query?: string;
+  genre?: string[];
+  tag?: string[];
+  season?: string;
+  year?: number;
+  format?: string;
+  status?: string;
+  sort?: string;
+  page?: number;
+}
+
+export interface PaginatedAnime {
+  results: AnimeMeta[];
+  hasNextPage: boolean;
+  lastPage?: number;
+}
+
 export interface ListEntry {
   animeId: number;        // AniList ID
   status: WatchStatus;
@@ -100,6 +118,7 @@ export const IPC = {
   MAL_CLIENT_INFO: "mal:client-info",
   // AniList / metadata
   ANILIST_SEARCH: "anilist:search",
+  ANILIST_ADVANCED_SEARCH: "anilist:advanced-search",
   ANILIST_TRENDING: "anilist:trending",
   ANILIST_GET: "anilist:get",
   // Library

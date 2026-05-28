@@ -1,18 +1,13 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { useAppStore } from "../store/useAppStore";
 import Row from "../components/Row";
 import Card from "../components/Card";
 import { Link } from "react-router-dom";
 import { Play, RefreshCw, Clock, Loader2, X, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { secondsToTimestamp } from "../lib/format";
-import { deleteAnimeProgress } from "../lib/supabase-sync";
-
-function cwStreamUrl(session: string, title: string, episode: number, coverUrl?: string | null, animeId?: number): string {
-  const p: Record<string, string> = { session, title, episode: String(episode) };
-  if (coverUrl) p.coverUrl = coverUrl;
-  if (animeId && animeId > 0) p.animeId = String(animeId);
-  return "/stream-player?" + new URLSearchParams(p).toString();
-}
+import LatestEpCard from "../components/LatestEpCard";
+import ContinueWatchingCard from "../components/ContinueWatchingCard";
 
 export default function Home() {
   const trending = useAppStore((s) => s.trending);
@@ -25,6 +20,84 @@ export default function Home() {
   const refreshAll = useAppStore((s) => s.refreshAll);
   const cw = useAppStore((s) => s.continueWatching);
   const [cwRefreshing, setCwRefreshing] = useState(false);
+
+  const trendingCards = useMemo(
+    () => trending.map((a) => <Card key={a.id} anime={a} />),
+    [trending]
+  );
+
+
+
+  // Hero carousel state
+  const [heroIndex, setHeroIndex] = useState(0);
+  const heroItems = trending.slice(0, 5);
+
+  useEffect(() => {
+    if (heroItems.length <= 1) return;
+    const timer = setInterval(() => {
+      setHeroIndex((prev) => (prev + 1) % heroItems.length);
+    }, 8000); // Rotate every 8 seconds
+    return () => clearInterval(timer);
+  }, [heroItems.length]);
+
+  // Swipe/Drag gesture handlers for Hero Banner
+  const touchStartX = useRef(0);
+  const touchEndX = useRef(0);
+  const isDragging = useRef(false);
+  const dragStartX = useRef(0);
+  const lastSlideTime = useRef(0);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    touchStartX.current = e.targetTouches[0].clientX;
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    touchEndX.current = e.targetTouches[0].clientX;
+  };
+
+  const handleTouchEnd = () => {
+    if (!touchStartX.current || !touchEndX.current) return;
+    const diff = touchStartX.current - touchEndX.current;
+    const threshold = 50;
+    if (diff > threshold) {
+      setHeroIndex((prev) => (prev + 1) % heroItems.length);
+    } else if (diff < -threshold) {
+      setHeroIndex((prev) => (prev - 1 + heroItems.length) % heroItems.length);
+    }
+    touchStartX.current = 0;
+    touchEndX.current = 0;
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    isDragging.current = true;
+    dragStartX.current = e.clientX;
+  };
+
+  const handleMouseUp = (e: React.MouseEvent) => {
+    if (!isDragging.current) return;
+    isDragging.current = false;
+    const diff = dragStartX.current - e.clientX;
+    const threshold = 50;
+    if (diff > threshold) {
+      setHeroIndex((prev) => (prev + 1) % heroItems.length);
+    } else if (diff < -threshold) {
+      setHeroIndex((prev) => (prev - 1 + heroItems.length) % heroItems.length);
+    }
+  };
+
+  const handleWheel = (e: React.WheelEvent) => {
+    if (Math.abs(e.deltaX) < 15) return;
+    const now = Date.now();
+    if (now - lastSlideTime.current < 800) return;
+    if (e.deltaX > 0) {
+      setHeroIndex((prev) => (prev + 1) % heroItems.length);
+      lastSlideTime.current = now;
+    } else if (e.deltaX < 0) {
+      setHeroIndex((prev) => (prev - 1 + heroItems.length) % heroItems.length);
+      lastSlideTime.current = now;
+    }
+  };
 
   // Continue Watching scroll state
   const cwScrollRef = useRef<HTMLDivElement>(null);
@@ -40,6 +113,15 @@ export default function Home() {
 
   useEffect(() => {
     updateCwScroll();
+    
+    // Recalculate after DOM layout settles
+    const timer = setTimeout(updateCwScroll, 150);
+    
+    window.addEventListener("resize", updateCwScroll);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("resize", updateCwScroll);
+    };
   }, [cw, updateCwScroll]);
 
   const cwScroll = (dir: "left" | "right") => {
@@ -67,13 +149,13 @@ export default function Home() {
     for (const [k, v] of Object.entries(stored)) seedMap.set(k, v.total);
     if (seedMap.size) setPaheEpTotals(new Map(seedMap));
 
-    async function getLatestEpNumber(session: string): Promise<number> {
-      const first = await window.api.pahe.episodes(session, 1);
+    async function getLatestEpNumber(providerId: string, animeId: string): Promise<number> {
+      const first = await window.api.pahe.episodes(providerId, animeId, 1);
       const lastPage = first.lastPage ?? 1;
       const last = lastPage > 1
-        ? await window.api.pahe.episodes(session, lastPage)
+        ? await window.api.pahe.episodes(providerId, animeId, lastPage)
         : first;
-      const nums = (last.data as any[]).map((e) => e.episode).filter(Number.isFinite);
+      const nums = (last.data as any[]).map((e) => e.episodeNumber ?? e.episode).filter(Number.isFinite);
       return nums.length ? Math.max(...nums) : first.total;
     }
 
@@ -84,7 +166,8 @@ export default function Home() {
       if (stored[key] && now - stored[key].at < CACHE_TTL) return null;
 
       if (item.animePaheSession) {
-        const total = await getLatestEpNumber(item.animePaheSession);
+        const providerId = item.animePaheSession.includes("-") ? "anikoto" : "animepahe";
+        const total = await getLatestEpNumber(providerId, item.animePaheSession);
         return { key, total };
       }
       const title = item.anime.title;
@@ -93,7 +176,7 @@ export default function Home() {
       const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
       const exact = results.find((r: any) => norm(r.title) === norm(title));
       const best = exact ?? results[0];
-      const total = await getLatestEpNumber(best.session);
+      const total = await getLatestEpNumber(best.providerId ?? "animepahe", best.id ?? best.session);
       return { key, total };
     });
 
@@ -115,21 +198,114 @@ export default function Home() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cw]);
 
+  const cwCards = useMemo(
+    () => cw.map((item) => (
+      <ContinueWatchingCard 
+        key={String(item.anime.id) + "-" + item.episode} 
+        item={item} 
+        paheEpTotals={paheEpTotals} 
+        refreshContinue={refreshContinue} 
+      />
+    )),
+    [cw, paheEpTotals, refreshContinue]
+  );
+
+  const latestCards = useMemo(
+    () => latestEpisodes.map((ep: any) => (
+      <LatestEpCard key={ep.id} ep={ep} />
+    )),
+    [latestEpisodes]
+  );
+
   return (
-    <div className="pb-16">
+    <div className="pb-16 bg-[#09090b] min-h-screen">
+      
+      {/* Massive Hero Section (Top 10 Carousel) */}
+      {heroItems.length > 0 && (
+        <div 
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          onMouseDown={handleMouseDown}
+          onMouseUp={handleMouseUp}
+          onWheel={handleWheel}
+          onDragStart={(e) => e.preventDefault()}
+          className="relative w-full h-[65vh] min-h-[480px] max-h-[700px] mb-12 flex shrink-0 group overflow-hidden bg-[#09090b] cursor-grab active:cursor-grabbing select-none"
+        >
+          {heroItems.map((anime, idx) => (
+            <div 
+              key={anime.id} 
+              className={`absolute inset-0 transition-opacity duration-1000 ease-in-out ${idx === heroIndex ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}
+            >
+              <div className="absolute inset-0">
+                <img draggable="false" src={anime.bannerImage || anime.coverImage || undefined} className={`w-full h-full object-cover transition-transform duration-[20s] ${idx === heroIndex ? 'scale-110' : 'scale-100'}`} />
+                <div className="absolute inset-0 bg-gradient-to-t from-[#09090b] via-[#09090b]/60 to-transparent" />
+                <div className="absolute inset-0 bg-gradient-to-r from-[#09090b] via-[#09090b]/60 to-transparent" />
+              </div>
+              <div className="relative z-10 flex flex-col justify-end p-6 sm:p-12 pb-12 sm:pb-16 h-full max-w-4xl">
+                <div className="text-[#4a9eff] font-bold text-xs sm:text-sm tracking-[0.2em] uppercase mb-2 sm:mb-4 drop-shadow-md">
+                  #{idx + 1} Trending Today
+                </div>
+                <h1 className="text-3xl sm:text-5xl md:text-6xl font-black text-white leading-[1.1] mb-3 sm:mb-4 drop-shadow-lg line-clamp-2">
+                  {anime.title}
+                </h1>
+                <div className="flex items-center gap-4 text-xs sm:text-sm font-semibold text-white/90 mb-4">
+                  <span className="bg-white/10 px-2 py-0.5 rounded shadow-sm border border-white/10">{anime.year || '2024'}</span>
+                  <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"/> {anime.status || 'Airing'}</span>
+                  <span>{anime.episodes ? anime.episodes + ' Episodes' : 'Ongoing'}</span>
+                </div>
+                <div className="text-white/70 line-clamp-2 sm:line-clamp-3 mb-6 text-xs sm:text-sm md:text-base max-w-2xl leading-relaxed drop-shadow-md" dangerouslySetInnerHTML={{ __html: anime.synopsis || '' }} />
+                <div className="flex items-center gap-4">
+                  <Link to={`/anime/${anime.id}`} className="flex items-center gap-2 bg-white text-black px-8 sm:px-10 py-3 sm:py-4 rounded-full font-bold text-base sm:text-lg hover:scale-105 hover:bg-gray-200 transition-all shadow-[0_0_40px_rgba(255,255,255,0.4)]">
+                    <Play size={20} fill="currentColor" /> Play Now
+                  </Link>
+                </div>
+              </div>
+            </div>
+          ))}
+
+          {/* Carousel Indicators */}
+          <div className="absolute bottom-6 left-12 z-20 flex items-center gap-2">
+            {heroItems.map((_, idx) => (
+              <button
+                key={idx}
+                onClick={() => setHeroIndex(idx)}
+                className={`h-1.5 rounded-full transition-all duration-300 ${idx === heroIndex ? 'w-8 bg-[#4a9eff] shadow-[0_0_10px_rgba(74,158,255,0.8)]' : 'w-2 bg-white/30 hover:bg-white/60'}`}
+                aria-label={`Go to slide ${idx + 1}`}
+              />
+            ))}
+          </div>
+
+          {/* Carousel Controls */}
+          <button 
+            onClick={() => setHeroIndex((prev) => (prev - 1 + heroItems.length) % heroItems.length)}
+            className="absolute left-4 top-1/2 -translate-y-1/2 z-20 p-2.5 rounded-full bg-black/40 text-white/80 hover:bg-black/70 hover:text-white hover:scale-110 shadow-lg border border-white/10 transition-all backdrop-blur-md"
+            aria-label="Previous slide"
+          >
+            <ChevronLeft size={28} />
+          </button>
+          <button 
+            onClick={() => setHeroIndex((prev) => (prev + 1) % heroItems.length)}
+            className="absolute right-4 top-1/2 -translate-y-1/2 z-20 p-2.5 rounded-full bg-black/40 text-white/80 hover:bg-black/70 hover:text-white hover:scale-110 shadow-lg border border-white/10 transition-all backdrop-blur-md"
+            aria-label="Next slide"
+          >
+            <ChevronRight size={28} />
+          </button>
+        </div>
+      )}
 
       {/* Continue Watching */}
       {cw.length > 0 && (
-        <section className="mb-10">
-          <div className="mb-4 flex items-center justify-between px-8">
-            <div className="flex items-center gap-2">
-              <Clock size={16} className="text-[#4a9eff]" />
+        <section className="mb-14">
+          <div className="mb-5 flex items-center justify-between px-12">
+            <div className="flex items-center gap-3">
+              <Clock size={20} className="text-[#4a9eff]" />
               <Link
                 to="/continue-watching"
-                className="group flex items-center gap-1 text-lg font-semibold hover:text-[#4a9eff] transition-colors"
+                className="group flex items-center gap-2 text-2xl font-bold hover:text-[#4a9eff] transition-colors"
               >
                 Continue Watching
-                <ChevronRight size={16} className="opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all" />
+                <ChevronRight size={20} className="opacity-0 -translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 transition-all" />
               </Link>
             </div>
             <button
@@ -169,89 +345,18 @@ export default function Home() {
             <div
               ref={cwScrollRef}
               onScroll={updateCwScroll}
-              className="no-scrollbar flex gap-4 overflow-x-auto scroll-smooth px-8 pb-2"
+              className="no-scrollbar flex gap-5 overflow-x-auto scroll-smooth px-12 pb-6 pt-2"
             >
-              {cw.map((item) => {
-                const cwTo = item.animePaheSession
-                  ? cwStreamUrl(item.animePaheSession, item.anime.title, item.episode, item.anime.coverImage, item.anime.id)
-                  : "/anime/" + item.anime.id;
-                return (
-                <div key={String(item.anime.id) + "-" + item.episode} className="group relative w-44 shrink-0">
-                  <button
-                    onClick={(e) => {
-                      e.preventDefault();
-                      window.api.list.dismissContinueWatching(item.anime.id)
-                        .then(() => { deleteAnimeProgress(item.anime.id); refreshContinue(); })
-                        .catch(() => {});
-                    }}
-                    className="absolute right-1.5 top-1.5 z-20 flex h-6 w-6 items-center justify-center rounded-full bg-black/70 text-white opacity-0 transition hover:bg-black/90 group-hover:opacity-100"
-                    title="Remove from Continue Watching"
-                  >
-                    <X size={12} />
-                  </button>
-                <Link to={cwTo} className="block">
-                  <div className="relative h-64 w-44 overflow-hidden rounded-lg bg-white/5 transition duration-200 group-hover:scale-105 group-hover:ring-2 group-hover:ring-white/50">
-                    {(item.anime.coverImage) ? (
-                      <img
-                        src={item.anime.coverImage}
-                        alt={item.anime.title}
-                        className="h-full w-full object-cover"
-                        loading="lazy"
-                      />
-                    ) : (
-                      <div className="flex h-full items-center justify-center text-3xl font-bold text-white/20">
-                        {item.anime.title.slice(0, 2).toUpperCase()}
-                      </div>
-                    )}
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent" />
-                    <div className="absolute left-2 top-2 rounded bg-[#4a9eff] px-1.5 py-0.5 text-xs font-semibold text-white">
-                      EP {item.episode}
-                    </div>
-                    {(() => {
-                      const key = item.animePaheSession ?? item.anime.title;
-                      const total = paheEpTotals.get(key);
-                      if (!total) return null;
-                      const hasNew = total > item.episode;
-                      return (
-                        <div className={`absolute right-2 top-2 rounded px-1.5 py-0.5 text-[10px] font-bold backdrop-blur-sm
-                          ${hasNew ? "bg-green-500/90 text-white" : "bg-black/60 text-white/50"}`}>
-                          {hasNew ? `EP ${total} ▲` : `EP ${total} ✓`}
-                        </div>
-                      );
-                    })()}
-                    <div className="absolute inset-0 flex items-center justify-center opacity-0 transition group-hover:opacity-100">
-                      <div className="rounded-full bg-white/90 p-3 text-black shadow-lg">
-                        <Play size={20} fill="currentColor" />
-                      </div>
-                    </div>
-                    <div className="absolute bottom-4 left-0 right-0 px-3 text-xs text-white/80">
-                      <div className="tabular-nums">
-                        {secondsToTimestamp(item.positionSec)} / {secondsToTimestamp(item.durationSec)}
-                      </div>
-                    </div>
-                    <div className="absolute bottom-0 left-0 right-0 h-1 bg-white/20">
-                      <div
-                        className="h-full bg-[#4a9eff]"
-                        style={{ width: `${Math.min(100, item.percent)}%` }}
-                      />
-                    </div>
-                  </div>
-                  <div className="mt-2 line-clamp-2 text-xs font-medium leading-snug text-white/80">
-                    {item.anime.title}
-                  </div>
-                </Link>
-                </div>
-                );
-              })}
+              {cwCards}
             </div>
           </div>
         </section>
       )}
 
       {/* Latest Episodes */}
-      <section className="mb-10 px-8">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Latest Episodes</h2>
+      <section className="mb-14 px-12">
+        <div className="mb-5 flex items-center justify-between">
+          <h2 className="text-2xl font-bold">Latest Episodes</h2>
           <button
             onClick={() => refreshLatest(latestPage)}
             disabled={latestLoading}
@@ -274,9 +379,7 @@ export default function Home() {
         ) : (
           <>
             <div className={`grid grid-cols-6 gap-3 xl:grid-cols-6 lg:grid-cols-5 md:grid-cols-4 transition-opacity ${latestLoading ? "opacity-40 pointer-events-none" : ""}`}>
-              {latestEpisodes.map((ep: any) => (
-                <LatestEpCard key={ep.id} ep={ep} />
-              ))}
+              {latestCards}
             </div>
 
             {latestLastPage > 1 && (
@@ -346,60 +449,12 @@ export default function Home() {
         )}
       </section>
 
-      {trending.length > 0 && (
+      {trendingCards.length > 0 && (
         <Row title="Trending now">
-          {trending.map((a) => (
-            <Card key={a.id} anime={a} />
-          ))}
+          {trendingCards}
         </Row>
       )}
 
     </div>
-  );
-}
-
-function LatestEpCard({ ep }: { ep: any }) {
-  const streamParams = new URLSearchParams({
-    session: ep.anime_session,
-    title: ep.anime_title,
-    episode: String(ep.episode),
-    ...(ep.snapshot ? { coverUrl: ep.snapshot } : {}),
-  });
-  const streamUrl = "/stream-player?" + streamParams.toString();
-
-  return (
-    <Link to={streamUrl} className="group block">
-      <div className="relative aspect-video overflow-hidden rounded-lg bg-white/5">
-        {ep.snapshot ? (
-          <img
-            src={ep.snapshot}
-            alt={ep.anime_title}
-            className="h-full w-full object-cover transition duration-200 group-hover:scale-105"
-            loading="lazy"
-          />
-        ) : (
-          <div className="flex h-full items-center justify-center text-white/20 text-xs">
-            No preview
-          </div>
-        )}
-        <div className="absolute inset-0 bg-black/40 opacity-0 transition group-hover:opacity-100" />
-        <div className="absolute inset-0 flex items-center justify-center opacity-0 transition group-hover:opacity-100">
-          <div className="rounded-full bg-white/90 p-2 text-black shadow-lg">
-            <Play size={16} fill="currentColor" />
-          </div>
-        </div>
-        <div className="absolute bottom-1.5 left-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-semibold text-white backdrop-blur-sm">
-          EP {ep.episode}
-        </div>
-        {ep.filler === 1 && (
-          <div className="absolute right-1.5 top-1.5 rounded bg-yellow-500/80 px-1 py-0.5 text-[9px] font-bold text-black">
-            FILLER
-          </div>
-        )}
-      </div>
-      <div className="mt-1.5 line-clamp-2 text-xs leading-snug text-white/80 group-hover:text-white transition">
-        {ep.anime_title}
-      </div>
-    </Link>
   );
 }

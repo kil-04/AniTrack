@@ -12,7 +12,7 @@ import {
 export default function StreamingPage() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
-  const startUrl = params.get("url") ?? "https://anikototv.to/";
+  const startUrl = params.get("url") ?? "https://anikoto.cz/";
 
   const webviewRef = useRef<HTMLElement & {
     src: string;
@@ -78,7 +78,7 @@ export default function StreamingPage() {
       // treat as search if no dots, otherwise prepend https
       target = target.includes(".")
         ? `https://${target}`
-        : `https://anikototv.to/filter?keyword=${encodeURIComponent(target)}`;
+        : `https://anikoto.cz/filter?keyword=${encodeURIComponent(target)}`;
     }
     webviewRef.current?.loadURL(target);
     setInputUrl(target);
@@ -110,7 +110,7 @@ export default function StreamingPage() {
           {loading ? <Loader2 size={14} className="animate-spin" /> : <RotateCcw size={14} />}
         </button>
         <button
-          onClick={() => webviewRef.current?.loadURL("https://anikototv.to/")}
+          onClick={() => webviewRef.current?.loadURL("https://anikoto.cz/")}
           className="flex h-7 w-7 items-center justify-center rounded text-white/60 hover:bg-white/10"
         >
           <Home size={14} />

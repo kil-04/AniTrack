@@ -1,10 +1,11 @@
 import { NavLink } from "react-router-dom";
 import { Home, Library, Search, Settings, Tv } from "lucide-react";
 import { useAppStore } from "../store/useAppStore";
+import { motion } from "framer-motion";
 
 const items = [
   { to: "/", label: "Home", icon: Home },
-  { to: "/search", label: "Search", icon: Search },
+  { to: "/filter", label: "Search", icon: Search },
   { to: "/library", label: "My List", icon: Library },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
@@ -18,23 +19,29 @@ export default function Sidebar() {
         <Tv size={24} className="text-accent" />
         <span className="text-lg font-bold tracking-tight">AniTrack</span>
       </div>
-      <nav className="flex-1 px-3">
-        {items.map(({ to, label, icon: Icon }) => (
-          <NavLink
+      <nav className="flex-1 px-3 mt-4">
+        {items.map(({ to, label, icon: Icon }, i) => (
+          <motion.div
             key={to}
-            to={to}
-            end={to === "/"}
-            className={({ isActive }) =>
-              `flex items-center gap-3 rounded-md px-3 py-2 my-1 text-sm transition ${
-                isActive
-                  ? "bg-white/10 text-white"
-                  : "text-muted hover:bg-white/5 hover:text-white"
-              }`
-            }
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: i * 0.1 + 0.1, duration: 0.4, ease: "easeOut" }}
           >
-            <Icon size={18} />
-            <span>{label}</span>
-          </NavLink>
+            <NavLink
+              to={to}
+              end={to === "/"}
+              className={({ isActive }) =>
+                `flex items-center gap-3 rounded-md px-3 py-2 my-1 text-sm transition ${
+                  isActive
+                    ? "bg-white/10 text-white"
+                    : "text-muted hover:bg-white/5 hover:text-white"
+                }`
+              }
+            >
+              <Icon size={18} />
+              <span>{label}</span>
+            </NavLink>
+          </motion.div>
         ))}
       </nav>
       <div className="p-4 text-xs space-y-2">

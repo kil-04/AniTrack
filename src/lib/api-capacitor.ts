@@ -29,15 +29,15 @@ interface PahePlugin {
   ensureSession(): Promise<{ ok: boolean }>;
   latest(opts: { page: number }): Promise<{ value: string }>;
   search(opts: { query: string }): Promise<{ value: string }>;
-  episodes(opts: { session: string; page: number }): Promise<{ value: string }>;
-  links(opts: { epSession: string; animeSession: string }): Promise<{ value: string }>;
-  resolve(opts: { kwikUrl: string }): Promise<{ url: string; cookies: string }>;
+  episodes(opts: { providerId: string; session: string; page: number }): Promise<{ value: string }>;
+  links(opts: { providerId: string; epSession: string; animeSession: string }): Promise<{ value: string }>;
+  resolve(opts: { providerId: string; kwikUrl: string }): Promise<{ url: string; cookies: string }>;
   prefetch(opts: { kwikUrl: string }): Promise<{ ok: boolean }>;
   getIds(opts: { paheId: number; session: string }): Promise<{ value: string }>;
   findById(opts: { anilistId?: number; malId?: number }): Promise<{ value: string | null }>;
   getUrl(): Promise<{ url: string }>;
   setUrl(opts: { url: string }): Promise<{ ok: boolean; url: string; reason?: string }>;
-  fetchUrl(opts: { url: string; binary?: boolean }): Promise<{ data: string; status: number; binary: boolean }>;
+  fetchUrl(opts: { url: string; binary?: boolean; headers?: Record<string, string> }): Promise<{ data: string; status: number; binary: boolean }>;
 }
 
 interface MalPlugin {
@@ -129,7 +129,324 @@ async function getMalClientId(): Promise<string> {
 
 // ── AniList auth (stub — AniList search/trending don't require auth on Android) ─
 
-let _alState = { connected: false, username: null as string | null };
+let _alState: import("../../shared/types").AniListAuthState = {
+  connected: false,
+  username: null,
+  userId: null,
+  expiresAt: null,
+  hasClientId: false
+};
+
+// ── Anikoto Provider (Browserless HTTP Scraper) ────────────────────────────────
+
+const ANIKOTO_BASE_URL = "https://anikoto.cz";
+
+async function anikotoFetch(url: string, options: RequestInit = {}): Promise<any> {
+  const fullUrl = url.startsWith("http") ? url : `${ANIKOTO_BASE_URL}${url}`;
+  
+  let reqHeaders: Record<string, string> = {};
+  if (options.headers) {
+    if (options.headers instanceof Headers) {
+      options.headers.forEach((val, key) => {
+        reqHeaders[key] = val;
+      });
+    } else if (Array.isArray(options.headers)) {
+      for (const [key, val] of options.headers) {
+        reqHeaders[key] = val;
+      }
+    } else {
+      reqHeaders = options.headers as Record<string, string>;
+    }
+  }
+
+  // Route requests via native OkHttp client on Android to bypass WebView CORS restrictions
+  const res = await AniTrackPahe.fetchUrl({
+    url: fullUrl,
+    binary: false,
+    headers: reqHeaders
+  });
+
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(`Anikoto fetch failed: ${res.status}`);
+  }
+
+  return {
+    ok: true,
+    status: res.status,
+    text: async () => res.data,
+    json: async () => JSON.parse(res.data)
+  };
+}
+
+const anikotoProvider = {
+  id: "anikoto",
+  name: "Anikoto",
+
+  async search(query: string) {
+    try {
+      const resp = await anikotoFetch(`/filter?keyword=${encodeURIComponent(query)}`);
+      const html = await resp.text();
+      
+      const results = [];
+      const itemRe = /<div class="item[^>]*>[\s\S]*?href="[^"]*\/watch\/([^/"]+)[^"]*"[\s\S]*?<img src="([^"]+)" alt="([^"]+)"/g;
+      let match;
+      while ((match = itemRe.exec(html)) !== null) {
+        results.push({
+          id: match[1],
+          providerId: this.id,
+          poster: match[2],
+          title: match[3],
+        });
+      }
+      return results;
+    } catch (err) {
+      console.error("[Anikoto Capacitor] Search failed:", err);
+      return [];
+    }
+  },
+
+  async getEpisodes(animeId: string, page = 1) {
+    console.log(`[Anikoto Capacitor] Fetching watch page HTML for showId: ${animeId}`);
+    const resp = await anikotoFetch(`/watch/${animeId}`);
+    const html = await resp.text();
+
+    const idMatch = html.match(/id="watch-main"[^>]*data-id="([^"]+)"/) || html.match(/data-id="([^"]+)"/);
+    if (!idMatch) throw new Error("Failed to extract anime show ID from watch page HTML");
+    const showId = idMatch[1];
+    console.log(`[Anikoto Capacitor] Extracted showId: ${showId} for ${animeId}`);
+
+    const listResp = await anikotoFetch(`/ajax/episode/list/${showId}`, {
+      headers: {
+        'X-Requested-With': 'XMLHttpRequest'
+      }
+    });
+    const listJson = await listResp.json() as any;
+    const listHtml = listJson.result || "";
+
+    const episodes = [];
+    const regex = /<a[^>]+data-id="([^"]+)"[^>]+data-slug="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+    let match;
+    while ((match = regex.exec(listHtml)) !== null) {
+      const dataId = match[1];
+      const dataSlug = match[2];
+      const text = match[3].trim();
+      
+      const tag = match[0];
+      const numM = /data-num="([^"]*)"/.exec(tag);
+      const titleM = /title="([^"]*)"/.exec(tag);
+      
+      const num = numM ? numM[1] : text;
+      const title = titleM ? titleM[1] : `Episode ${num}`;
+      
+      const idsM = /data-ids="([^"]*)"/.exec(tag);
+      const serversParam = idsM ? idsM[1] : "";
+      
+      const slugStr = `ep-${dataSlug}`;
+      const id = `${slugStr}:${dataId}:${serversParam}`;
+      
+      episodes.push({
+        id,
+        episodeNumber: parseFloat(num) || 0,
+        title
+      });
+    }
+
+    console.log(`[Anikoto Capacitor] Parsed ${episodes.length} episodes browserlessly for ${animeId}`);
+    return {
+      data: episodes,
+      total: episodes.length,
+      lastPage: 1
+    };
+  },
+
+  async getStreamLinks(episodeId: string, animeId: string) {
+    return [
+      {
+        id: JSON.stringify({ episodeId, animeId, subType: "soft" }),
+        quality: "Auto (Soft Sub)",
+        audio: "jpn"
+      },
+      {
+        id: JSON.stringify({ episodeId, animeId, subType: "hard" }),
+        quality: "Auto (Hard Sub)",
+        audio: "jpn"
+      }
+    ];
+  },
+
+  async resolveStream(linkId: string) {
+    const { episodeId, animeId, subType = "soft" } = JSON.parse(linkId);
+
+    const parts = episodeId.split(':');
+    const slug = parts[0];
+    const dataId = parts[1];
+    let serversParam = parts[2] || "";
+
+    if (!serversParam) {
+      console.log(`[Anikoto Capacitor] Fallback: serversParam missing from episodeId. Fetching list...`);
+      const resp = await anikotoFetch(`/watch/${animeId}`);
+      const html = await resp.text();
+      const idMatch = html.match(/id="watch-main"[^>]*data-id="([^"]+)"/) || html.match(/data-id="([^"]+)"/);
+      if (idMatch) {
+        const showId = idMatch[1];
+        const listResp = await anikotoFetch(`/ajax/episode/list/${showId}`, {
+          headers: { 'X-Requested-With': 'XMLHttpRequest' }
+        });
+        const listJson = await listResp.json() as any;
+        const listHtml = listJson.result || "";
+        const targetRe = new RegExp(`<a[^>]+data-id="${dataId}"[^>]*>`);
+        const tagMatch = targetRe.exec(listHtml);
+        if (targetRe.test(listHtml)) {
+          const tagMatchExec = targetRe.exec(listHtml);
+          if (tagMatchExec) {
+            const idsM = /data-ids="([^"]*)"/.exec(tagMatchExec[0]);
+            if (idsM) {
+              serversParam = idsM[1];
+            }
+          }
+        }
+      }
+    }
+
+    if (!serversParam) {
+      throw new Error(`Failed to obtain servers token (data-ids) for episode: ${dataId}`);
+    }
+
+    // Ensure we load watch page first to set cookies natively
+    await anikotoFetch(`/watch/${animeId}`);
+
+    console.log(`[Anikoto Capacitor] Fetching servers list for episode: ${dataId}`);
+    const serversResp = await anikotoFetch(`/ajax/server/list?servers=${encodeURIComponent(serversParam)}`, {
+      headers: {
+        'X-Requested-With': 'XMLHttpRequest'
+      }
+    });
+    const serversJson = await serversResp.json() as any;
+    const serversHtml = serversJson.result || "";
+
+    const types = [];
+    const typeRe = /<div class="type"[^>]*>([\s\S]*?)<\/ul>\s*<\/div>/g;
+    let typeMatch;
+    while ((typeMatch = typeRe.exec(serversHtml)) !== null) {
+      const typeHtml = typeMatch[1];
+      const labelM = /<label[^>]*>([\s\S]*?)<\/label>/.exec(typeHtml);
+      const label = labelM ? labelM[1].replace(/<[^>]+>/g, '').trim() : '';
+      
+      const liRe = /<li[^>]+data-link-id="([^"]+)"[^>]*>([\s\S]*?)<\/li>/g;
+      let liMatch;
+      const items = [];
+      while ((liMatch = liRe.exec(typeHtml)) !== null) {
+        items.push({
+          linkId: liMatch[1],
+          name: liMatch[2].replace(/<[^>]+>/g, '').trim()
+        });
+      }
+      types.push({ label, items });
+    }
+
+    const isHardLabel = (labelStr: string) => {
+      const l = labelStr.toUpperCase();
+      return l.includes("H-SUB") || l.includes("H SUB") || l.includes("HARDSUB") || l.includes("HARD SUB") || l.includes("HSUB");
+    };
+
+    const isSoftLabel = (labelStr: string) => {
+      const l = labelStr.toUpperCase();
+      return l.includes("SUB") && !isHardLabel(labelStr);
+    };
+
+    const targetType = types.find(t => {
+      return subType === "hard" ? isHardLabel(t.label) : isSoftLabel(t.label);
+    });
+    
+    let isActualHardSub = false;
+    let ajaxLinkId = "";
+    
+    if (targetType && targetType.items.length > 0) {
+      ajaxLinkId = targetType.items[0].linkId;
+      isActualHardSub = isHardLabel(targetType.label);
+    }
+    
+    if (!ajaxLinkId) {
+      if (types.length > 0 && types[0].items.length > 0) {
+        ajaxLinkId = types[0].items[0].linkId;
+        isActualHardSub = isHardLabel(types[0].label);
+      }
+    }
+
+    if (!ajaxLinkId) {
+      throw new Error(`Failed to find server matching subtitle subtype: ${subType}`);
+    }
+
+    console.log(`[Anikoto Capacitor] Resolving player server url browserlessly for linkId: ${ajaxLinkId.substring(0, 20)}...`);
+    const serverGetResp = await anikotoFetch(`/ajax/server?get=${encodeURIComponent(ajaxLinkId)}`, {
+      headers: {
+        'X-Requested-With': 'XMLHttpRequest'
+      }
+    });
+    const serverGetJson = await serverGetResp.json() as any;
+    let iframeUrl = serverGetJson.result?.url || "";
+    if (!iframeUrl) throw new Error("Server iframe URL not found in AJAX response");
+    console.log(`[Anikoto Capacitor] Found player iframe URL: ${iframeUrl}`);
+
+    // Decode base64 hash if plyr.php or mewcdn
+    if (iframeUrl.includes('plyr.php') || iframeUrl.includes('mewcdn.online/player/')) {
+      const hashParts = iframeUrl.split('#');
+      if (hashParts.length >= 2) {
+        try {
+          const decodedUrl = atob(hashParts[1]);
+          console.log(`[Anikoto Capacitor] Decoded H-SUB stream URL from hash: ${decodedUrl}`);
+          return {
+            url: decodedUrl,
+            subtitles: [],
+            intro: serverGetJson?.result?.skip_data?.intro?.end > 0 ? serverGetJson.result.skip_data.intro : undefined,
+            outro: serverGetJson?.result?.skip_data?.outro?.end > 0 ? serverGetJson.result.skip_data.outro : undefined
+          };
+        } catch (err) {
+          console.error('[Anikoto Capacitor] Failed to decode base64 hash:', err);
+        }
+      }
+    }
+
+    const megaplayResp = await anikotoFetch(iframeUrl, {
+      headers: {
+        'Referer': `${ANIKOTO_BASE_URL}/`
+      }
+    });
+    const megaplayHtml = await megaplayResp.text();
+    const match = megaplayHtml.match(/id="megaplay-player"[^>]*data-id="([^"]+)"/) || megaplayHtml.match(/data-id="([^"]+)"/);
+    if (!match) {
+      throw new Error("Failed to extract data-id from Megaplay iframe HTML");
+    }
+    
+    const megaplayId = match[1];
+    console.log(`[Anikoto Capacitor] Extracted Megaplay player source ID: ${megaplayId}`);
+
+    const resp = await anikotoFetch(`https://megaplay.buzz/stream/getSources?id=${megaplayId}`, {
+      headers: {
+        'Referer': iframeUrl,
+        'X-Requested-With': 'XMLHttpRequest'
+      }
+    });
+    const json = await resp.json() as any;
+    
+    const streamUrl = json.sources?.file || "";
+    const subs = isActualHardSub ? [] : (json.tracks || []).filter((t: any) => t.kind === "captions").map((t: any) => ({
+      ...t,
+      url: t.file,
+      label: t.label || t.name || "English"
+    }));
+    
+    const intro = json.intro?.end > 0 ? json.intro : (serverGetJson?.result?.skip_data?.intro?.end > 0 ? serverGetJson.result.skip_data.intro : undefined);
+    const outro = json.outro?.end > 0 ? json.outro : (serverGetJson?.result?.skip_data?.outro?.end > 0 ? serverGetJson.result.skip_data.outro : undefined);
+
+    return {
+      url: streamUrl,
+      subtitles: subs,
+      intro,
+      outro
+    };
+  }
+};
 
 // ── Shim installation ──────────────────────────────────────────────────────────
 
@@ -154,6 +471,73 @@ export async function installCapacitorApiBridge() {
   AniTrackMal.addListener("mal:auth-error", (data: any) => {
     emit("mal:auth-error", (data as any).error ?? "Auth failed");
   });
+
+  // Listen for deep links (e.g. AniList OAuth redirects)
+  const AppPlugin = (window as any).Capacitor?.Plugins?.App;
+  if (AppPlugin) {
+    const handleOpenUrl = async (url: string) => {
+      console.log("[Capacitor] App opened via URL:", url);
+      if (url.startsWith("anitrack://anilist-callback")) {
+        try {
+          const fragPart = url.split("#")[1];
+          if (!fragPart) return;
+          const frag = new URLSearchParams(fragPart);
+          const token = frag.get("access_token");
+          const expiresIn = Number(frag.get("expires_in") ?? 31536000);
+          if (!token) return;
+
+          // Fetch user info from AniList GQL API
+          const headers = {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${token}`
+          };
+          const gqlQuery = JSON.stringify({ query: "{ Viewer { id name } }" });
+          const res = await fetch(ANILIST_GQL, {
+            method: "POST",
+            headers,
+            body: gqlQuery
+          });
+          if (!res.ok) throw new Error(`AniList Viewer query failed: ${res.status}`);
+          const json = await res.json();
+          if (json.errors?.length) throw new Error(json.errors[0].message);
+          
+          const viewer = json.data?.Viewer;
+          if (viewer) {
+            _alState = {
+              connected: true,
+              username: viewer.name,
+              userId: viewer.id,
+              expiresAt: Date.now() + expiresIn * 1000,
+              hasClientId: true
+            };
+            await AniTrackSettings.set({ key: "al_state", value: JSON.stringify(_alState) });
+            await AniTrackSettings.set({ key: "al_token", value: token });
+            console.log("[Capacitor] AniList authentication complete. Viewer:", viewer.name);
+            emit("al:auth-complete", _alState);
+          }
+        } catch (err) {
+          console.error("[Capacitor] AniList callback handling error:", err);
+          emit("al:auth-error", String(err));
+        }
+      }
+    };
+
+    AppPlugin.addListener("appUrlOpen", (data: { url: string }) => {
+      handleOpenUrl(data.url);
+    });
+
+    // Check for cold-start deep link launch URLs
+    AppPlugin.getLaunchUrl()
+      .then((launchData: any) => {
+        if (launchData?.url) {
+          console.log("[Capacitor] App launched with URL:", launchData.url);
+          handleOpenUrl(launchData.url);
+        }
+      })
+      .catch((err: any) => {
+        console.error("[Capacitor] Failed to get launch URL:", err);
+      });
+  }
 
   (window as any).api = {
 
@@ -226,6 +610,9 @@ export async function installCapacitorApiBridge() {
             }
           }`, { q });
         return (data.Page?.media ?? []).map((m: any) => mapMedia(m));
+      },
+      async advancedSearch(filters: any) {
+        throw new Error("advancedSearch not implemented in capacitor yet");
       },
       async trending() {
         const data = await alGql<any>(`
@@ -331,25 +718,66 @@ export async function installCapacitorApiBridge() {
         return JSON.parse(raw.value);
       },
       async search(q: string) {
-        const raw = await AniTrackPahe.search({ query: q });
+        const pahePromise = AniTrackPahe.search({ query: q })
+          .then(r => {
+            const list = JSON.parse(r.value) as any[];
+            return list.map(item => ({
+              id: item.session ?? item.id,
+              paheId: item.id,
+              session: item.session ?? item.id,
+              providerId: "animepahe",
+              title: item.title,
+              poster: item.poster,
+              episodes: item.episodes,
+              type: item.type,
+              status: item.status,
+              season: item.season,
+              year: item.year,
+              score: item.score
+            }));
+          })
+          .catch(() => []);
+        
+        const anikotoPromise = anikotoProvider.search(q).catch(() => []);
+        const [paheRes, anikotoRes] = await Promise.all([pahePromise, anikotoPromise]);
+        
+        const flat = [...paheRes, ...anikotoRes];
+        return flat.sort((a, b) => {
+          const aId = a.providerId ?? "animepahe";
+          const bId = b.providerId ?? "animepahe";
+          if (aId === "animepahe" && bId !== "animepahe") return -1;
+          if (aId !== "animepahe" && bId === "animepahe") return 1;
+          return 0;
+        });
+      },
+      async episodes(providerId: string, animeId: string, page: number) {
+        if (providerId === "anikoto") {
+          return anikotoProvider.getEpisodes(String(animeId), page);
+        }
+        // Correct native parameter mismatch: Map animeId -> session (stringified to prevent type-coercion bypass)
+        const raw = await AniTrackPahe.episodes({ providerId, session: String(animeId), page });
         return JSON.parse(raw.value);
       },
-      async episodes(session: string, page: number) {
-        const raw = await AniTrackPahe.episodes({ session, page });
+      async links(providerId: string, episodeId: string, animeId: string) {
+        if (providerId === "anikoto") {
+          return anikotoProvider.getStreamLinks(String(episodeId), String(animeId));
+        }
+        // Correct native parameter mismatch: Map episodeId -> epSession and animeId -> animeSession
+        const raw = await AniTrackPahe.links({ providerId, epSession: String(episodeId), animeSession: String(animeId) });
         return JSON.parse(raw.value);
       },
-      async links(epSession: string, animeSession: string) {
-        const raw = await AniTrackPahe.links({ epSession, animeSession });
-        return JSON.parse(raw.value);
-      },
-      async resolve(kwikUrl: string) {
-        return AniTrackPahe.resolve({ kwikUrl });
+      async resolve(providerId: string, linkId: string) {
+        if (providerId === "anikoto") {
+          return anikotoProvider.resolveStream(String(linkId));
+        }
+        // Correct native parameter mismatch: Map linkId -> kwikUrl
+        return AniTrackPahe.resolve({ providerId, kwikUrl: String(linkId) });
       },
       async prefetch(kwikUrl: string) {
-        return AniTrackPahe.prefetch({ kwikUrl });
+        return AniTrackPahe.prefetch({ kwikUrl: String(kwikUrl) });
       },
       async getIds(paheId: number, session: string) {
-        const raw = await AniTrackPahe.getIds({ paheId, session });
+        const raw = await AniTrackPahe.getIds({ paheId, session: String(session) });
         return JSON.parse(raw.value);
       },
       async findById(anilistId?: number, malId?: number) {

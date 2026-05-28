@@ -64,9 +64,18 @@ class AniTrackPahePlugin : Plugin() {
 
     // ── CF session WebView ────────────────────────────────────────────────────
 
+    private fun hasValidCookies(): Boolean {
+        val cookies = CookieManager.getInstance().getCookie(baseUrl()) ?: return false
+        return cookies.contains("__ddgid_") || cookies.contains("cf_clearance") || cookies.contains("__ddg5")
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     private fun ensureCfWebView(): Deferred<Unit> {
         if (cfReady && cfWebView != null) return CompletableDeferred(Unit)
+        if (hasValidCookies()) {
+            cfReady = true
+            return CompletableDeferred(Unit)
+        }
         val existing = cfReadyJob
         if (existing != null && existing.isActive) return existing
 
@@ -83,21 +92,40 @@ class AniTrackPahePlugin : Plugin() {
             }
             wv.webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView, url: String) {
-                    if (!deferred.isCompleted) {
-                        cfReady = true
-                        deferred.complete(Unit)
+                    try {
+                        val parsed = java.net.URL(url)
+                        val redirectedBase = "${parsed.protocol}://${parsed.host}"
+                        val currentBase = baseUrl()
+                        if (parsed.host.contains("animepahe") && redirectedBase != currentBase) {
+                            Log.d("AniTrack", "Pahe domain redirect detected: $redirectedBase (was: $currentBase)")
+                            prefs.edit().putString("pahe_base_url", redirectedBase).apply()
+                        }
+                    } catch (e: Exception) {
+                        Log.e("AniTrack", "Error parsing redirect URL: ${e.message}")
+                    }
+
+                    // Wait 4.5 seconds for Cloudflare/DDOS-GUARD challenge to complete
+                    scope.launch {
+                        delay(4500)
+                        if (!deferred.isCompleted) {
+                            cfReady = true
+                            deferred.complete(Unit)
+                        }
                     }
                 }
                 override fun onReceivedError(view: WebView, req: WebResourceRequest, err: WebResourceError) {
-                    if (!deferred.isCompleted) deferred.complete(Unit) // proceed anyway
+                    // Let the 4.5s delay or 12s timeout resolve to avoid failing on temporary challenge resources
                 }
             }
             cfWebView = wv
             wv.loadUrl(baseUrl() + "/")
             // Timeout safety
             scope.launch {
-                delay(10_000)
-                if (!deferred.isCompleted) deferred.complete(Unit)
+                delay(12_000)
+                if (!deferred.isCompleted) {
+                    cfReady = true
+                    deferred.complete(Unit)
+                }
             }
         }
         return deferred
@@ -424,27 +452,77 @@ class AniTrackPahePlugin : Plugin() {
 
     @PluginMethod
     fun findById(call: PluginCall) {
-        // Not implemented on Android — Electron uses this for AniList→Pahe lookups when no session
-        // is stored. On Android we always go through search() first, so this is unused.
-        val ret = JSObject(); ret.put("value", JSObject.NULL)
-        call.resolve(ret)
+        val anilistId = call.getInt("anilistId")
+        val malId     = call.getInt("malId")
+        scope.launch {
+            try {
+                // Try to resolve animepahe show details via AniList/MAL mappings (simplified stub)
+                val ret = JSObject(); ret.put("value", JSObject.NULL)
+                call.resolve(ret)
+            } catch (e: Exception) {
+                val ret = JSObject(); ret.put("value", JSObject.NULL)
+                call.resolve(ret)
+            }
+        }
     }
 
-    // ── fetchUrl (used by custom hls.js loader in StreamPlayer) ─────────────
+    // ── fetchUrl ──────────────────────────────────────────────────────────────
 
     @PluginMethod
     fun fetchUrl(call: PluginCall) {
-        val url    = call.getString("url")     ?: return call.reject("url required")
+        val url = call.getString("url") ?: return call.reject("url required")
         val binary = call.getBoolean("binary") ?: false
         scope.launch {
             try {
-                val host    = java.net.URL(url).host
-                val referer = if (host.contains("animepahe")) "https://animepahe.pw/" else "$lastKwikOrigin/"
-                val req = Request.Builder().url(url)
-                    .header("Referer",    referer)
-                    .header("Origin",     referer.trimEnd('/'))
+                val urlLower = url.lowercase()
+                val isMegaplayStream = urlLower.contains("/anime/") || 
+                                       urlLower.contains(".vtt") || 
+                                       urlLower.contains("subtitles") || 
+                                       urlLower.contains("/public/stream/") || 
+                                       urlLower.contains("vibeplayer") || 
+                                       urlLower.contains("mewcdn") ||
+                                       urlLower.contains("mewstream") ||
+                                       urlLower.contains("megaplay") ||
+                                       urlLower.contains("vibe") ||
+                                       urlLower.contains("lostproject") ||
+                                       urlLower.contains("streamzone")
+
+                val defaultReferer = if (urlLower.contains("animepahe")) {
+                    "https://animepahe.pw/"
+                } else if (isMegaplayStream) {
+                    val isMew = urlLower.contains("mewcdn") || 
+                                urlLower.contains("vibeplayer") || 
+                                urlLower.contains("vibe")
+                    if (isMew) "https://mewcdn.online/" else "https://megaplay.buzz/"
+                } else {
+                    "$lastKwikOrigin/"
+                }
+
+                val reqBuilder = Request.Builder().url(url)
+                    .header("Referer",    defaultReferer)
+                    .header("Origin",     defaultReferer.trimEnd('/'))
                     .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36")
-                    .build()
+
+                val customHeaders = call.getObject("headers")
+                if (customHeaders != null) {
+                    val keys = customHeaders.keys()
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        val value = customHeaders.getString(key)
+                        if (value != null) {
+                            reqBuilder.header(key, value)
+                            if (key.equals("referer", ignoreCase = true)) {
+                                try {
+                                    val uri = java.net.URI(value)
+                                    val origin = "${uri.scheme}://${uri.host}"
+                                    reqBuilder.header("Origin", origin)
+                                } catch (e: Exception) {}
+                            }
+                        }
+                    }
+                }
+
+                val req = reqBuilder.build()
                 val resp      = client.newCall(req).execute()
                 val bodyBytes = resp.body?.bytes() ?: ByteArray(0)
                 val ret = JSObject()

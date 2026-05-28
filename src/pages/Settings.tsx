@@ -357,57 +357,59 @@ export default function Settings() {
         )}
       </section>
 
-      <section className="mb-10 rounded-lg border border-white/10 bg-bg-card p-6">
-        <div className="mb-4 flex items-center justify-between">
-          <div>
-            <h2 className="text-xl font-semibold">Library folders</h2>
-            <p className="text-sm text-muted">
-              Folders containing your anime video files. Subfolders are scanned recursively.
-            </p>
-          </div>
-          <div className="flex gap-2">
-            <button
-              onClick={async () => setFolders(await window.api.library.addFolder())}
-              className="flex items-center gap-2 rounded-md border border-white/10 px-3 py-2 text-sm hover:bg-white/5"
-            >
-              <FolderPlus size={14} /> Add folder
-            </button>
-            <button
-              disabled={busy || folders.length === 0}
-              onClick={scan}
-              className="flex items-center gap-2 rounded-md bg-accent px-3 py-2 text-sm hover:bg-accent-hover disabled:opacity-50"
-            >
-              <RefreshCcw size={14} /> Scan library
-            </button>
-          </div>
-        </div>
-        <div className="space-y-2">
-          {folders.length === 0 && (
-            <div className="rounded-md border border-dashed border-white/10 p-4 text-sm text-muted">
-              No folders added yet.
+      {!Capacitor.isNativePlatform() && (
+        <section className="mb-10 rounded-lg border border-white/10 bg-bg-card p-6">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h2 className="text-xl font-semibold">Library folders</h2>
+              <p className="text-sm text-muted">
+                Folders containing your anime video files. Subfolders are scanned recursively.
+              </p>
             </div>
-          )}
-          {folders.map((f) => (
-            <div
-              key={f}
-              className="flex items-center justify-between rounded-md bg-bg-elev px-3 py-2"
-            >
-              <div className="flex items-center gap-2 truncate text-sm">
-                <Folder size={14} className="shrink-0 text-muted" />
-                <span className="truncate font-mono">{f}</span>
-              </div>
+            <div className="flex gap-2">
               <button
-                onClick={async () =>
-                  setFolders(await window.api.library.removeFolder(f))
-                }
-                className="text-muted hover:text-white"
+                onClick={async () => setFolders(await window.api.library.addFolder())}
+                className="flex items-center gap-2 rounded-md border border-white/10 px-3 py-2 text-sm hover:bg-white/5"
               >
-                <X size={14} />
+                <FolderPlus size={14} /> Add folder
+              </button>
+              <button
+                disabled={busy || folders.length === 0}
+                onClick={scan}
+                className="flex items-center gap-2 rounded-md bg-accent px-3 py-2 text-sm hover:bg-accent-hover disabled:opacity-50"
+              >
+                <RefreshCcw size={14} /> Scan library
               </button>
             </div>
-          ))}
-        </div>
-      </section>
+          </div>
+          <div className="space-y-2">
+            {folders.length === 0 && (
+              <div className="rounded-md border border-dashed border-white/10 p-4 text-sm text-muted">
+                No folders added yet.
+              </div>
+            )}
+            {folders.map((f) => (
+              <div
+                key={f}
+                className="flex items-center justify-between rounded-md bg-bg-elev px-3 py-2"
+              >
+                <div className="flex items-center gap-2 truncate text-sm">
+                  <Folder size={14} className="shrink-0 text-muted" />
+                  <span className="truncate font-mono">{f}</span>
+                </div>
+                <button
+                  onClick={async () =>
+                    setFolders(await window.api.library.removeFolder(f))
+                  }
+                  className="text-muted hover:text-white"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="mb-10 rounded-lg border border-white/10 bg-bg-card p-6">
         <h2 className="mb-2 text-xl font-semibold">AnimePahe URL</h2>

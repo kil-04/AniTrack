@@ -14,6 +14,8 @@ import {
   ChevronDown,
   ArrowLeft,
 } from "lucide-react";
+import { SkipOverlay } from "../components/player/SkipOverlay";
+import { VideoControls } from "../components/player/VideoControls";
 import Hls from "hls.js";
 import { secondsToTimestamp } from "../lib/format";
 import { useMediaQuery } from "../hooks/useMediaQuery";
@@ -30,6 +32,90 @@ function paheSessionId(session: string): number {
     h = (((h << 5) + h) ^ session.charCodeAt(i)) | 0; // djb2-xor, 32-bit signed
   }
   return -(Math.abs(h) || 1);
+}
+
+function getSeasonNumber(title: string): number | null {
+  const clean = title.toLowerCase();
+  
+  // Pattern 1: "season 4" or "season iv" or "ss 4"
+  const seasonMatch = clean.match(/\b(season|ss|part|cour)\s+(\d+|ii|iii|iv|v|vi|vii|viii|ix|x)\b/);
+  if (seasonMatch) {
+    const val = seasonMatch[2];
+    if (/^\d+$/.test(val)) return parseInt(val, 10);
+    const romanMap: Record<string, number> = {
+      i: 1, ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10
+    };
+    if (romanMap[val] !== undefined) return romanMap[val];
+  }
+
+  // Pattern 2: "4th season" or "2nd season"
+  const ordinalMatch = clean.match(/\b(\d+)(st|nd|rd|th)\s+(season|part|ss|cour)\b/);
+  if (ordinalMatch) {
+    return parseInt(ordinalMatch[1], 10);
+  }
+
+  // Pattern 3: Lone Roman numerals at the end of the title
+  const endRomanMatch = clean.match(/\b(ii|iii|iv|v|vi|vii|viii|ix|x)\b\s*$/);
+  if (endRomanMatch) {
+    const romanMap: Record<string, number> = {
+      ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10
+    };
+    return romanMap[endRomanMatch[1]];
+  }
+
+  // Pattern 4: Lone digits at the end
+  const endDigitMatch = clean.match(/\b(\d+)\b\s*$/);
+  if (endDigitMatch) {
+    return parseInt(endDigitMatch[1], 10);
+  }
+
+  return null;
+}
+
+function scoreMatch(candidate: any, targetTitle: string, targetYear?: number): number {
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, " ").replace(/\s+/g, " ").trim();
+  const t = norm(targetTitle);
+  const c = norm(candidate.title ?? "");
+  let score = 0;
+  if (c === t) {
+    score += 100;
+  } else if (c.includes(t) || t.includes(c)) {
+    const ratio = Math.min(c.length, t.length) / Math.max(c.length, t.length);
+    score += Math.round(40 * ratio);
+  } else {
+    const tw = new Set(t.split(/\s+/));
+    const cw = c.split(/\s+/);
+    const overlap = cw.filter((w: string) => tw.has(w)).length;
+    score += Math.round((overlap / Math.max(tw.size, cw.length)) * 30);
+  }
+
+  // Add a prefix match bonus if the first few words match exactly.
+  // This helps match shows that differ in season suffix (e.g. "Classroom of the Elite IV" and "Classroom of the Elite 4th Season")
+  const tw_arr = t.split(/\s+/);
+  const cw_arr = c.split(/\s+/);
+  let prefixMatch = 0;
+  for (let i = 0; i < Math.min(3, tw_arr.length, cw_arr.length); i++) {
+    if (tw_arr[i] === cw_arr[i]) prefixMatch++;
+    else break;
+  }
+  if (prefixMatch >= 2) {
+    score += prefixMatch * 10;
+  }
+
+  if (targetYear && candidate.year) {
+    if (Number(candidate.year) === targetYear) score += 8;
+    else if (Math.abs(Number(candidate.year) - targetYear) <= 1) score += 2;
+    else score -= 5;
+  }
+
+  // Season number mismatch check
+  const candidateSeason = getSeasonNumber(candidate.title) || 1;
+  const targetSeason = getSeasonNumber(targetTitle) || 1;
+  if (candidateSeason !== targetSeason) {
+    score -= 50; // Heavy penalty for mismatched seasons
+  }
+
+  return score;
 }
 
 // ── MSE codec compatibility shim ───────────────────────────────────────────
@@ -49,9 +135,12 @@ export default function StreamPlayer() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const animeSession = params.get("session") ?? "";
+  const providerId = params.get("providerId") ?? "animepahe";
   const animeTitle = params.get("title") ?? "Anime";
-  const animeCoverUrl = params.get("coverUrl") ?? undefined;
-  const startEp = Number(params.get("episode") ?? 0);
+  const animeCoverUrl = params.get("coverUrl") ?? params.get("img") ?? undefined;
+  const startEp = Number(params.get("episode") ?? params.get("ep") ?? 0);
+  const urlOffset = Number(params.get("episodeOffset") ?? 0);
+  const epOffsetRef = useRef<number>(urlOffset);
 
   // Episode list
   const [episodes, setEpisodes] = useState<any[]>([]);
@@ -70,6 +159,17 @@ export default function StreamPlayer() {
   const [selectedLink, setSelectedLink] = useState(0);
   const [qualityOpen, setQualityOpen] = useState(false);
 
+  // HLS qualities state (for Anikoto / native HLS players)
+  const [hlsLevels, setHlsLevels] = useState<any[]>([]);
+  const [currentHlsLevel, setCurrentHlsLevel] = useState(-1);
+
+  // Soft subtitles state
+  const [subtitlesEnabled, setSubtitlesEnabled] = useState(true);
+  const [availableSubtitles, setAvailableSubtitles] = useState<any[]>([]);
+
+  // Available sources (providers) for this anime
+  const [availableSources, setAvailableSources] = useState<any[]>([]);
+
   // Playback state
   const [currentEp, setCurrentEp] = useState<any | null>(null);
   const [loadingStream, setLoadingStream] = useState(false);
@@ -80,6 +180,12 @@ export default function StreamPlayer() {
   const [duration, setDuration] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
+  // Skip times
+  const [skipTimes, setSkipTimes] = useState<{
+    op?: { start: number; end: number };
+    ed?: { start: number; end: number };
+  }>({});
+
   // Controls overlay visibility
   const [showControls, setShowControls] = useState(true);
   const [mouseNearTop, setMouseNearTop] = useState(false);
@@ -88,6 +194,12 @@ export default function StreamPlayer() {
   // Settings — persisted in localStorage
   const [autoPlay, setAutoPlay] = useState(() => localStorage.getItem("ap-autoplay") !== "false");
   const [autoNext, setAutoNext] = useState(() => localStorage.getItem("ap-autonext") !== "false");
+
+  // Soft Subtitle Caption Customization Settings — persisted in localStorage
+  const [cueFontSize, setCueFontSize] = useState(() => localStorage.getItem("ap-cue-size") ?? "16px");
+  const [cueFontFamily, setCueFontFamily] = useState(() => localStorage.getItem("ap-cue-font") ?? "'Outfit', 'Inter', sans-serif");
+  const [cueBgOpacity, setCueBgOpacity] = useState(() => parseFloat(localStorage.getItem("ap-cue-opacity") ?? "0.85"));
+  const [cueColor, setCueColor] = useState(() => localStorage.getItem("ap-cue-color") ?? "#f5f5f7");
   const [volume, setVolume] = useState(() => {
     const v = parseFloat(localStorage.getItem("ap-volume") ?? "1");
     return isFinite(v) ? Math.max(0, Math.min(1, v)) : 1;
@@ -97,6 +209,17 @@ export default function StreamPlayer() {
   useEffect(() => {
     if (videoRef.current) videoRef.current.volume = volume;
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Pause playback when app window is hidden to tray
+  useEffect(() => {
+    const unsub = window.api.on("app:window-hidden", () => {
+      const v = videoRef.current;
+      if (v && !v.paused) {
+        v.pause();
+      }
+    });
+    return unsub;
   }, []);
 
   // Refs
@@ -112,18 +235,77 @@ export default function StreamPlayer() {
   const rangeStartRef = useRef(rangeStart);
   const totalEpisodesRef = useRef(totalEpisodes);
   // Cache of fetched episode pages by AnimePahe page number — survives range changes.
-  const paheCacheRef = useRef<Map<number, any[]>>(new Map());
+  const paheCacheRef = useRef<Map<number, any>>(new Map());
   const lastPositionUpdate = useRef<number>(0);
 
   // Pending seek position — set before attachStream, applied in onCanPlay.
   // This avoids passing startPosition to hls.js (which stalls AnimePahe CDN).
   const pendingSeekRef = useRef<number | null>(null);
+  const pendingAutoPlayEpNumRef = useRef<number | null>(null);
 
   // Stable effective anime ID — computed once on mount so playEpisode and the
   // progress timer both agree on which ID to use.
   const effectiveAnimeIdRef = useRef<number>(0);
+  const malIdCacheRef = useRef<number | null>(null);
+
+  function resetPlayer() {
+    const video = videoRef.current;
+    if (video) {
+      video.pause();
+      try { video.src = ""; } catch (e) {}
+      try { video.load(); } catch (e) {}
+    }
+    if (hlsRef.current) {
+      hlsRef.current.destroy();
+      hlsRef.current = null;
+    }
+  }
+
+  async function fetchSkipTimes(epNum: number) {
+    setSkipTimes({});
+    const anilistId = effectiveAnimeIdRef.current;
+    if (anilistId <= 0) return; // Cannot fetch without real AniList ID
+
+    try {
+      // 1. Get MAL ID from AniList
+      let malId = malIdCacheRef.current;
+      if (!malId) {
+        const query = `query($id:Int){Media(id:$id){idMal}}`;
+        const res = await fetch("https://graphql.anilist.co", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query, variables: { id: anilistId } }),
+        });
+        const json = await res.json();
+        malId = json?.data?.Media?.idMal;
+        if (malId) malIdCacheRef.current = malId;
+      }
+      if (!malId) return;
+
+      // 2. Fetch skip times from AniSkip
+      const skipUrl = `https://api.aniskip.com/v2/skip-times/${malId}/${epNum}?types[]=op&types[]=ed&episodeLength=0`;
+      const skipResObj = await fetch(skipUrl);
+      if (!skipResObj.ok) return;
+      const skipJson = await skipResObj.json();
+      
+      const newSkips: any = {};
+      if (skipJson.found && skipJson.results) {
+        for (const res of skipJson.results) {
+          if (res.skipType === "op") {
+            newSkips.op = { start: res.interval.startTime, end: res.interval.endTime };
+          } else if (res.skipType === "ed") {
+            newSkips.ed = { start: res.interval.startTime, end: res.interval.endTime };
+          }
+        }
+      }
+      setSkipTimes(newSkips);
+    } catch (e) {
+      console.warn("Failed to fetch skip times", e);
+    }
+  }
+
   useEffect(() => {
-    const anilistId = Number(params.get("animeId") ?? 0);
+    const anilistId = Number(params.get("animeId") ?? params.get("anilistId") ?? 0);
     effectiveAnimeIdRef.current = anilistId > 0 ? anilistId : paheSessionId(animeSession);
 
     // Load initial watched-episode map from DB.
@@ -138,8 +320,100 @@ export default function StreamPlayer() {
         })
         .catch(() => {});
     }
+
+    // Fetch available providers for this anime
+    if (animeTitle && animeTitle !== "Anime") {
+      window.api.pahe.search(animeTitle)
+        .then((res: any[]) => {
+          const targetYear = params.get("year") ? Number(params.get("year")) : undefined;
+          const scored = res
+            .map((r) => ({ r, score: scoreMatch(r, animeTitle, targetYear) }))
+            .filter((x) => x.score >= 20)
+            .sort((a, b) => b.score - a.score)
+            .map((x) => x.r);
+
+          if (scored.length > 0) {
+            // Deduplicate available sources by provider ID, keeping the highest-scored match for each provider
+            const uniqueProviders: any[] = [];
+            const seenProviders = new Set<string>();
+            for (const item of scored) {
+              const pid = item.providerId || "animepahe";
+              if (!seenProviders.has(pid)) {
+                seenProviders.add(pid);
+                uniqueProviders.push(item);
+              }
+            }
+            setAvailableSources(uniqueProviders);
+          } else {
+            setLoadingEps(false);
+          }
+        })
+        .catch(() => {
+          setLoadingEps(false);
+        });
+    } else {
+      setLoadingEps(false);
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ── Auto-correct provider and session from availableSources ───────────────
+  useEffect(() => {
+    if (availableSources.length === 0) return;
+
+    const p = new URLSearchParams(params);
+    let changed = false;
+
+    const paheMatch = availableSources.find((s) => (s.providerId ?? "animepahe") === "animepahe");
+    const anikotoMatch = availableSources.find((s) => (s.providerId ?? "animepahe") === "anikoto");
+
+    if (!animeSession) {
+      // 1. Session is completely missing: find the match for the active providerId (default: animepahe)
+      let match = availableSources.find((s) => (s.providerId ?? "animepahe") === providerId);
+      // Fallback: if active provider has no match, but the other one does, use that
+      if (!match) {
+        match = providerId === "animepahe" ? anikotoMatch : paheMatch;
+        if (match) {
+          p.set("providerId", match.providerId ?? "animepahe");
+        }
+      }
+      if (match) {
+        p.set("session", match.id || match.session);
+        changed = true;
+      }
+    } else {
+      // 2. Session is present: verify if it matches the current providerId
+      const actualSource = availableSources.find((s) => (s.id || s.session) === animeSession);
+      if (actualSource) {
+        const actualProvider = actualSource.providerId ?? "animepahe";
+        if (actualProvider !== providerId) {
+          p.set("providerId", actualProvider);
+          changed = true;
+        }
+      } else {
+        // Fallback checks for incorrect mapping
+        const hasHyphens = animeSession.includes("-");
+        if (providerId === "animepahe" && hasHyphens && anikotoMatch) {
+          p.set("providerId", "anikoto");
+          p.set("session", anikotoMatch.id || anikotoMatch.session);
+          changed = true;
+        } else if (providerId === "animepahe" && !paheMatch && anikotoMatch) {
+          p.set("providerId", "anikoto");
+          p.set("session", anikotoMatch.id || anikotoMatch.session);
+          changed = true;
+        } else if (providerId === "anikoto" && !anikotoMatch && paheMatch) {
+          p.set("providerId", "animepahe");
+          p.set("session", paheMatch.id || paheMatch.session);
+          changed = true;
+        }
+      }
+    }
+
+    if (changed) {
+      console.log(`[StreamPlayer] Auto-correcting query params:`, p.toString());
+      navigate(`/stream-player?${p.toString()}`, { replace: true });
+    }
+  }, [availableSources, animeSession, providerId, params, navigate]);
 
   // Watched episodes map — keyed by episode number, value is percent watched.
   const [watchedEps, setWatchedEps] = useState<Map<number, number>>(new Map());
@@ -176,14 +450,19 @@ export default function StreamPlayer() {
 
   // ── Episode list loading ───────────────────────────────────────────────────
 
-  // Fetch a single AnimePahe page with caching (paheCacheRef survives navigation).
-  const fetchPahePage = useCallback(async (paheePage: number): Promise<{ data: any[]; total: number }> => {
+  // Fetch a single page with caching (paheCacheRef survives navigation).
+  const fetchPahePage = useCallback(async (paheePage: number): Promise<{ data: any[]; total: number; lastPage: number }> => {
     const cached = paheCacheRef.current.get(paheePage);
-    if (cached) return { data: cached, total: totalEpisodesRef.current };
-    const r = await window.api.pahe.episodes(animeSession, paheePage);
-    paheCacheRef.current.set(paheePage, r.data);
-    return { data: r.data, total: r.total };
-  }, [animeSession]);
+    if (cached) return { data: cached, total: totalEpisodesRef.current, lastPage: paheCacheRef.current.get(-1) ?? 999 };
+    try {
+      const r = await window.api.pahe.episodes(providerId, animeSession, paheePage);
+      paheCacheRef.current.set(paheePage, r.data);
+      paheCacheRef.current.set(-1, r.lastPage ?? 999); // cache lastPage under key -1
+      return { data: r.data, total: r.total, lastPage: r.lastPage ?? 999 };
+    } catch {
+      return { data: [], total: 0, lastPage: 1 };
+    }
+  }, [animeSession, providerId]);
 
   // Load all AnimePahe pages needed to cover [rangeStart, rangeStart+RANGE_SIZE-1].
   useEffect(() => {
@@ -195,7 +474,7 @@ export default function StreamPlayer() {
     // We don't yet know totalEpisodes on first call — fetch first needed page,
     // get total, then fetch the rest in parallel.
     fetchPahePage(firstPaheePage)
-      .then(async ({ data: firstData, total }) => {
+      .then(async ({ data: firstData, total, lastPage: providerLastPage }) => {
         if (cancelled) return;
         if (firstData.length === 0) {
           // Session expired or failed to load. Redirect back to Anime page to refresh session.
@@ -206,25 +485,111 @@ export default function StreamPlayer() {
           }
         }
         if (total) setTotalEpisodes(total);
+
+        // Cap page fetching to what the provider actually has.
         const lastPaheePage = Math.min(
+          providerLastPage,
           Math.ceil(Math.min(rangeEnd, total || rangeEnd) / PAHE_PAGE_SIZE),
           Math.ceil((total || (firstPaheePage * PAHE_PAGE_SIZE)) / PAHE_PAGE_SIZE),
         );
+
+        // Calculate episodeOffset from page 1 data if not already explicitly provided in URL
+        let epOffset = epOffsetRef.current;
+        let page1Data = firstData;
+        if (!epOffset && firstPaheePage > 1) {
+          const p1 = await fetchPahePage(1);
+          page1Data = p1.data;
+        }
+        if (!epOffset && page1Data.length > 0) {
+          const firstEp = page1Data[0].episodeNumber ?? page1Data[0].episode ?? 1;
+          epOffset = firstEp - 1;
+          epOffsetRef.current = epOffset;
+        }
+
+        // Map firstData to relative episode numbers
+        const firstMapped = firstData.map((e: any) => {
+          const orig = e.episodeNumber ?? e.episode ?? 0;
+          return {
+            ...e,
+            originalEpisodeNumber: orig,
+            episodeNumber: orig - epOffset,
+            episode: orig - epOffset,
+          };
+        });
+
+        // 1. Instantly play the starting episode if it exists on the first loaded page
+        if (startEp && rangeStart === Math.floor((startEp - 1) / RANGE_SIZE) * RANGE_SIZE + 1) {
+          let ep = firstMapped.find((e: any) => e.episodeNumber === startEp);
+          if (!ep) {
+            ep = firstMapped.find((e: any) => e.originalEpisodeNumber === startEp);
+          }
+          if (!ep && startEp >= 1 && startEp <= firstMapped.length) {
+            ep = firstMapped[startEp - 1];
+          }
+          if (ep && !currentEpRef.current) {
+            playEpisode(ep, animeSession);
+          }
+        }
+
+        // Display the first page episodes immediately to make UI interactive
+        const firstFiltered = firstMapped
+          .filter((e: any) => e.episodeNumber >= rangeStart && e.episodeNumber <= rangeEnd)
+          .sort((a: any, b: any) => a.episodeNumber - b.episodeNumber);
+        setEpisodes(firstFiltered);
+
+        // 2. Fetch the remaining pages of the range in the background
         const remaining: Promise<{ data: any[] }>[] = [];
         for (let p = firstPaheePage + 1; p <= lastPaheePage; p++) {
           remaining.push(fetchPahePage(p));
         }
-        const rest = await Promise.all(remaining);
-        if (cancelled) return;
-        const all = [firstData, ...rest.map((r) => r.data)].flat();
-        const filtered = all
-          .filter((e: any) => e.episode >= rangeStart && e.episode <= rangeEnd)
-          .sort((a: any, b: any) => a.episode - b.episode);
-        setEpisodes(filtered);
-        // Auto-play the requested startEp once, only on the initial load.
-        if (startEp && rangeStart === Math.floor((startEp - 1) / RANGE_SIZE) * RANGE_SIZE + 1) {
-          const ep = filtered.find((e: any) => e.episode === startEp);
-          if (ep && !currentEpRef.current) playEpisode(ep, animeSession);
+
+        if (remaining.length > 0) {
+          Promise.all(remaining).then((rest) => {
+            if (cancelled) return;
+            const all = [firstData, ...rest.map((r) => r.data)].flat();
+            
+            const mapped = all.map((e: any) => {
+              const orig = e.episodeNumber ?? e.episode ?? 0;
+              return {
+                ...e,
+                originalEpisodeNumber: orig,
+                episodeNumber: orig - epOffset,
+                episode: orig - epOffset,
+              };
+            });
+
+            const filtered = mapped
+              .filter((e: any) => e.episodeNumber >= rangeStart && e.episodeNumber <= rangeEnd)
+              .sort((a: any, b: any) => a.episodeNumber - b.episodeNumber);
+
+            setEpisodes(filtered);
+
+            // 3. Fallback: If starting episode wasn't in firstData, try to play it from the fully loaded list
+            if (startEp && !currentEpRef.current && rangeStart === Math.floor((startEp - 1) / RANGE_SIZE) * RANGE_SIZE + 1) {
+              let ep = filtered.find((e: any) => e.episodeNumber === startEp);
+              if (!ep) ep = filtered.find((e: any) => e.originalEpisodeNumber === startEp);
+              if (!ep && startEp >= 1 && startEp <= filtered.length) ep = filtered[startEp - 1];
+              if (ep) playEpisode(ep, animeSession);
+            }
+
+            // Also check if there is a pending auto-play episode (e.g. from cross-range playNext/playPrev)
+            if (pendingAutoPlayEpNumRef.current) {
+              const ep = filtered.find((e: any) => e.episodeNumber === pendingAutoPlayEpNumRef.current);
+              if (ep) {
+                pendingAutoPlayEpNumRef.current = null;
+                playEpisode(ep, animeSession);
+              }
+            }
+          }).catch((err) => console.warn("[pahe] background episode load failed", err));
+        } else {
+          // No more pages to load — check if we have a pending auto-play from state
+          if (pendingAutoPlayEpNumRef.current) {
+            const ep = firstFiltered.find((e: any) => e.episodeNumber === pendingAutoPlayEpNumRef.current);
+            if (ep) {
+              pendingAutoPlayEpNumRef.current = null;
+              playEpisode(ep, animeSession);
+            }
+          }
         }
       })
       .catch((e) => { if (!cancelled) console.warn("[pahe] episode load failed", e); })
@@ -235,6 +600,7 @@ export default function StreamPlayer() {
 
   // Reset cache when anime changes
   useEffect(() => {
+    resetPlayer();
     paheCacheRef.current.clear();
     // If startEp is set, open the range that contains it.
     if (startEp) {
@@ -275,6 +641,11 @@ export default function StreamPlayer() {
           .then((result) => {
             if (this.aborted) return;
             console.log('[CapLoader] got response status=', result.status, 'size=', result.data?.length, 'url=', url);
+            if (result.status < 200 || result.status >= 300) {
+              console.error('[CapLoader] fetchUrl HTTP error status:', result.status, 'url=', url);
+              callbacks.onError({ code: result.status, text: `HTTP ${result.status}` }, context, null, this.stats);
+              return;
+            }
             let data: string | ArrayBuffer;
             if (binary && result.binary) {
               const raw = atob(result.data);
@@ -309,15 +680,38 @@ export default function StreamPlayer() {
     };
   }
 
-  function attachStream(url: string) {
+  function attachStream(url: string, subtitles?: any[]) {
     const video = videoRef.current;
     if (!video) return;
 
+    setStreamError(null);
+
+    // Reset HLS qualities state for the new stream
+    setHlsLevels([]);
+    setCurrentHlsLevel(-1);
+
+    // Clear old HLS player to prevent resource leaks and avoid double-binding media elements
     if (hlsRef.current) {
       hlsRef.current.destroy();
       hlsRef.current = null;
     }
 
+    // Clear old subtitle tracks from DOM
+    const oldTracks = video.querySelectorAll("track");
+    oldTracks.forEach(t => t.remove());
+
+    // Listen for dynamically added tracks (e.g. from HLS.js or browser's native manifest parser)
+    video.textTracks.onaddtrack = (e) => {
+      const trackObj = e.track;
+      if (!trackObj) return;
+      const isCustom = Array.from(video.querySelectorAll("track")).some(t => t.label === trackObj.label);
+      if (!isCustom) {
+        trackObj.mode = "disabled";
+        console.log("[Subtitles] Automatically disabled HLS/non-custom track:", trackObj.label);
+      }
+    };
+
+    // Setup new video source first (so track injection happens after source binding and avoids resetting)
     const isHls = url.includes(".m3u8");
 
     if (isHls && Hls.isSupported()) {
@@ -328,6 +722,77 @@ export default function StreamPlayer() {
     } else {
       video.src = url;
       if (autoPlay) video.play().catch(() => {});
+    }
+
+    // Filter to English subtitles to avoid irrelevant subtitles in other languages
+    let filteredSubs = (subtitles || []).filter((sub: any) => {
+      const label = (sub.label || "").toLowerCase();
+      return label.includes("english") || label.includes("eng");
+    });
+    if (filteredSubs.length === 0 && subtitles && subtitles.length > 0) {
+      filteredSubs = [subtitles[0]];
+    }
+
+    // Inject new subtitles after source setup
+    if (filteredSubs.length > 0) {
+      setAvailableSubtitles(filteredSubs);
+      filteredSubs.forEach((sub: any) => {
+        const track = document.createElement("track");
+        track.kind = sub.kind || "captions";
+        track.label = sub.label || "English";
+        track.srclang = "en";
+
+        if (isCapacitor) {
+          window.api.pahe.fetchUrl!(sub.file, false)
+            .then((result) => {
+              const blob = new Blob([result.data], { type: "text/vtt" });
+              track.src = URL.createObjectURL(blob);
+              console.log("[Subtitles] Successfully loaded subtitle blob URL for Capacitor:", track.src);
+              try { track.track.mode = subtitlesEnabled ? "showing" : "hidden"; } catch (e) {}
+            })
+            .catch((err) => {
+              console.error("[Subtitles] Failed to fetch subtitle file:", err, "url=", sub.file);
+              track.src = sub.file;
+              try { track.track.mode = subtitlesEnabled ? "showing" : "hidden"; } catch (e) {}
+            });
+        } else {
+          track.src = sub.file;
+        }
+
+        if (sub.default) track.default = true;
+        video.appendChild(track);
+
+        // Set mode immediately after appending (synchronous binding)
+        try {
+          track.track.mode = subtitlesEnabled ? "showing" : "hidden";
+        } catch (e) {}
+      });
+
+      // Defer track mode settings to a safer timeout to override async browser state resets
+      setTimeout(() => {
+        const tracks = video.textTracks;
+        console.log(`[Subtitles] Safely initialized track modes for ${tracks.length} tracks to: ${subtitlesEnabled ? "showing" : "hidden"}`);
+        let firstCustomShown = false;
+        for (let i = 0; i < tracks.length; i++) {
+          const isCustom = Array.from(video.querySelectorAll("track")).some(t => t.label === tracks[i].label);
+          if (isCustom) {
+            if (subtitlesEnabled && !firstCustomShown) {
+              tracks[i].mode = "showing";
+              firstCustomShown = true;
+            } else {
+              tracks[i].mode = "hidden";
+            }
+          } else {
+            tracks[i].mode = "disabled";
+          }
+        }
+      }, 200);
+    } else {
+      setAvailableSubtitles([]);
+      const tracks = video.textTracks;
+      for (let i = 0; i < tracks.length; i++) {
+        tracks[i].mode = "disabled";
+      }
     }
   }
 
@@ -369,7 +834,27 @@ export default function StreamPlayer() {
 
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
       console.log('[HLS] MANIFEST_PARSED — starting playback');
+      
+      // Extract available HLS qualities
+      if (hls.levels && hls.levels.length > 0) {
+        const levels = hls.levels.map((lvl, index) => ({
+          index,
+          quality: lvl.height || parseInt(lvl.name) || 720,
+          bitrate: lvl.bitrate,
+        }));
+        // Sort quality high-to-low
+        levels.sort((a, b) => b.quality - a.quality);
+        setHlsLevels(levels);
+        setCurrentHlsLevel(hls.currentLevel);
+      } else {
+        setHlsLevels([]);
+      }
+
       if (autoPlay) video.play().catch(() => {});
+    });
+
+    hls.on(Hls.Events.LEVEL_SWITCHED, (_e, data) => {
+      console.log('[HLS] LEVEL_SWITCHED — active index:', data.level);
     });
 
     hls.on(Hls.Events.ERROR, (_e, data) => {
@@ -404,7 +889,8 @@ export default function StreamPlayer() {
 
   const playEpisode = useCallback(
     async (ep: any, session = animeSession) => {
-      if (loadingStreamRef.current && currentEpRef.current?.session === ep.session) return;
+      if (loadingStreamRef.current && (currentEpRef.current?.session ?? currentEpRef.current?.id) === (ep.session ?? ep.id)) return;
+      resetPlayer();
       loadingStreamRef.current = true;
       setCurrentEp(ep);
       setStreamError(null);
@@ -412,36 +898,70 @@ export default function StreamPlayer() {
       setPosition(0);
       setDuration(0);
       setLinks([]);
-      setSelectedLink(0);
+      
+      const preferredIdx = providerId === "anikoto" 
+        ? (localStorage.getItem("anitrack-anikoto-subtype") === "hard" ? 1 : 0)
+        : 0;
+      setSelectedLink(preferredIdx);
+
       try {
         // Run links fetch and saved-progress lookup in parallel — they're
         // independent and saving even ~50ms of perceived latency matters here.
         const [fetchedLinks, savedProgress] = await Promise.all([
-          window.api.pahe.links(ep.session, session),
-          window.api.progress.get(effectiveAnimeIdRef.current, ep.episode).catch(() => null),
+          window.api.pahe.links(providerId, ep.session ?? ep.id, animeSession),
+          window.api.progress.get(effectiveAnimeIdRef.current, ep.episodeNumber).catch(() => null),
         ]);
-        if (!fetchedLinks.length) throw new Error("No stream links found for this episode");
-        const bestIdx = fetchedLinks.reduce((best: number, link: any, i: number) =>
-          (Number(link.quality) || 0) > (Number(fetchedLinks[best]?.quality) || 0) ? i : best, 0);
-        setLinks(fetchedLinks);
-        setSelectedLink(bestIdx);
 
+        fetchSkipTimes(ep.episodeNumber).catch(() => {});
+
+        if (!fetchedLinks.length) throw new Error("No stream links found for this episode");
+        setLinks(fetchedLinks);
+        
         // We apply the resume seek in onCanPlay (after the video is ready) rather than
         // passing startPosition to hls.js — hls.js startPosition stalls on
         // AnimePahe CDN because it tries to fetch mid-stream segments cold.
         pendingSeekRef.current = (savedProgress && savedProgress.positionSec > 5)
           ? savedProgress.positionSec
           : null;
+        
+        const bestIdx = preferredIdx < fetchedLinks.length ? preferredIdx : 0;
+        const { url, subtitles, intro, outro } = await window.api.pahe.resolve(providerId, fetchedLinks[bestIdx].id ?? fetchedLinks[bestIdx].kwik);
+        if (!url) {
+          throw new Error("Resolved stream URL is empty. The stream server may be down, or we failed to fetch it.");
+        }
+        
+        if (intro || outro) {
+          setSkipTimes({ op: intro, ed: outro });
+        }
+        
+        let activeSubs = subtitles;
+        try {
+          const linkParsed = JSON.parse(fetchedLinks[bestIdx].id);
+          if (linkParsed.subType === "hard") {
+            activeSubs = [];
+          }
+        } catch (e) {}
 
-        const { url } = await window.api.pahe.resolve(fetchedLinks[bestIdx].kwik);
-        attachStream(url);
+        attachStream(url, activeSubs);
 
-        // Pre-fetch next episode in background
-        const nextEp = episodesRef.current.find((e) => e.episode === ep.episode + 1);
+        // 1. Pre-fetch other qualities for the current episode in the background
+        for (let idx = 0; idx < fetchedLinks.length; idx++) {
+          if (idx !== bestIdx) {
+            const targetLink = fetchedLinks[idx];
+            const linkIdToResolve = targetLink.id ?? targetLink.kwik;
+            window.api.pahe.prefetch(providerId, linkIdToResolve);
+          }
+        }
+
+        // 2. Pre-fetch next episode and its qualities in the background
+        const nextEp = episodesRef.current.find((e) => e.episodeNumber === ep.episodeNumber + 1);
         if (nextEp) {
-          window.api.pahe.links(nextEp.session, session)
+          window.api.pahe.links(providerId, nextEp.session ?? nextEp.id, animeSession)
             .then((nextLinks: any[]) => {
-              if (nextLinks[0]?.kwik) window.api.pahe.prefetch(nextLinks[0].kwik);
+              for (const targetLink of nextLinks) {
+                const linkIdToResolve = targetLink.id ?? targetLink.kwik;
+                window.api.pahe.prefetch(providerId, linkIdToResolve);
+              }
             })
             .catch(() => {});
         }
@@ -453,26 +973,75 @@ export default function StreamPlayer() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [animeSession, autoPlay],
+    [animeSession, autoPlay, providerId],
   );
 
   async function changeQuality(idx: number) {
     const link = linksRef.current[idx];
     if (!link) return;
     setSelectedLink(idx);
+    if (providerId === "anikoto") {
+      localStorage.setItem("anitrack-anikoto-subtype", idx === 1 ? "hard" : "soft");
+    }
     setQualityOpen(false);
     setLoadingStream(true);
     setStreamError(null);
+    resetPlayer();
     try {
-      const { url } = await window.api.pahe.resolve(link.kwik);
+      const { url, subtitles } = await window.api.pahe.resolve(providerId, link.id ?? link.kwik);
+      if (!url) {
+        throw new Error("Resolved stream URL is empty. The stream server may be down, or we failed to fetch it.");
+      }
       // Store the current position in pendingSeekRef so onCanPlay applies it
       // after the new stream is ready — same pattern as episode resume.
       const pos = videoRef.current?.currentTime ?? 0;
       pendingSeekRef.current = pos > 1 ? pos : null;
-      attachStream(url);
+
+      let activeSubs = subtitles;
+      try {
+        const linkParsed = JSON.parse(link.id);
+        if (linkParsed.subType === "hard") {
+          activeSubs = [];
+        }
+      } catch (e) {}
+
+      attachStream(url, activeSubs);
     } catch (e: any) {
       setStreamError(e.message ?? String(e));
       setLoadingStream(false);
+    }
+  }
+
+  function changeHlsLevel(idx: number) {
+    console.log('[changeHlsLevel] idx:', idx, 'hlsRef.current:', !!hlsRef.current);
+    if (hlsRef.current) {
+      hlsRef.current.nextLevel = idx;
+      hlsRef.current.loadLevel = idx;
+      setCurrentHlsLevel(idx);
+    }
+    setQualityOpen(false);
+  }
+
+  function toggleSubtitles() {
+    const next = !subtitlesEnabled;
+    setSubtitlesEnabled(next);
+    const video = videoRef.current;
+    if (video) {
+      const tracks = video.textTracks;
+      let firstCustomShown = false;
+      for (let i = 0; i < tracks.length; i++) {
+        const isCustom = Array.from(video.querySelectorAll("track")).some(t => t.label === tracks[i].label);
+        if (isCustom) {
+          if (next && !firstCustomShown) {
+            tracks[i].mode = "showing";
+            firstCustomShown = true;
+          } else {
+            tracks[i].mode = "hidden";
+          }
+        } else {
+          tracks[i].mode = "disabled";
+        }
+      }
     }
   }
 
@@ -480,11 +1049,12 @@ export default function StreamPlayer() {
     const ep = currentEpRef.current;
     const eps = episodesRef.current;
     if (!ep) return;
-    const next = eps.find((e) => e.episode === ep.episode + 1);
+    const next = eps.find((e) => e.episodeNumber === ep.episodeNumber + 1);
     if (next) { playEpisode(next); return; }
     // Next episode is in the following range — jump to it.
-    const nextEpNum = ep.episode + 1;
+    const nextEpNum = ep.episodeNumber + 1;
     if (nextEpNum <= totalEpisodesRef.current) {
+      pendingAutoPlayEpNumRef.current = nextEpNum;
       const targetRange = Math.floor((nextEpNum - 1) / RANGE_SIZE) * RANGE_SIZE + 1;
       setRangeStart(targetRange);
     }
@@ -494,10 +1064,11 @@ export default function StreamPlayer() {
     const ep = currentEpRef.current;
     const eps = episodesRef.current;
     if (!ep) return;
-    const prev = eps.find((e) => e.episode === ep.episode - 1);
+    const prev = eps.find((e) => e.episodeNumber === ep.episodeNumber - 1);
     if (prev) { playEpisode(prev); return; }
-    const prevEpNum = ep.episode - 1;
+    const prevEpNum = ep.episodeNumber - 1;
     if (prevEpNum >= 1) {
+      pendingAutoPlayEpNumRef.current = prevEpNum;
       const targetRange = Math.floor((prevEpNum - 1) / RANGE_SIZE) * RANGE_SIZE + 1;
       setRangeStart(targetRange);
     }
@@ -508,7 +1079,7 @@ export default function StreamPlayer() {
     const n = parseInt(findNum);
     if (!n) return;
     // First try the current range; if not found, jump to the range containing it.
-    const ep = episodes.find((ep) => ep.episode === n);
+    const ep = episodes.find((ep) => ep.episodeNumber === n);
     if (ep) { playEpisode(ep); setFindNum(""); return; }
     if (n >= 1 && n <= totalEpisodes) {
       const targetRange = Math.floor((n - 1) / RANGE_SIZE) * RANGE_SIZE + 1;
@@ -568,9 +1139,9 @@ export default function StreamPlayer() {
         const ep = currentEpRef.current;
         if (ep && video.duration && video.currentTime / video.duration >= 0.85) {
           setWatchedEps((prev) => {
-            if ((prev.get(ep.episode) ?? 0) >= 85) return prev;
+            if ((prev.get(ep.episodeNumber) ?? 0) >= 85) return prev;
             const next = new Map(prev);
-            next.set(ep.episode, (video.currentTime / video.duration) * 100);
+            next.set(ep.episodeNumber, (video.currentTime / video.duration) * 100);
             return next;
           });
         }
@@ -588,6 +1159,12 @@ export default function StreamPlayer() {
     };
     const onError = () => {
       const err = video.error;
+      // Ignore errors caused by intentionally resetting the source to empty string
+      const cleanSrc = video.src ? video.src.split("?")[0].split("#")[0] : "";
+      const cleanLoc = window.location.href.split("?")[0].split("#")[0];
+      if (!video.src || cleanSrc === cleanLoc || video.src.includes("about:blank")) {
+        return;
+      }
       if (err) setStreamError(`Video error: ${err.message || err.code}`);
       setLoadingStream(false);
     };
@@ -620,7 +1197,7 @@ export default function StreamPlayer() {
 
   useEffect(() => {
     return () => {
-      if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
+      resetPlayer();
       if (singleClickTimerRef.current) { clearTimeout(singleClickTimerRef.current); singleClickTimerRef.current = null; }
     };
   }, []);
@@ -659,7 +1236,7 @@ export default function StreamPlayer() {
       if (!video || !video.duration || !isFinite(video.duration)) return;
       const payload = {
         animeId: effectiveAnimeIdRef.current,
-        episode: currentEpRef.current?.episode ?? currentEp.episode,
+        episode: currentEpRef.current?.episodeNumber ?? currentEpRef.current?.episode ?? currentEp.episodeNumber ?? currentEp.episode,
         positionSec: video.currentTime,
         durationSec: video.duration,
         updatedAt: Date.now(),
@@ -672,7 +1249,16 @@ export default function StreamPlayer() {
     }
 
     const timer = setInterval(saveNow, 10_000);
-    return () => { clearInterval(timer); saveNow(); };
+    const handleBeforeUnload = () => {
+      saveNow();
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      saveNow();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentEp]);
 
@@ -680,7 +1266,7 @@ export default function StreamPlayer() {
 
   // Compute available ranges from totalEpisodes — chunks of RANGE_SIZE.
   const ranges = (() => {
-    const total = totalEpisodes || (episodes.length > 0 ? episodes[episodes.length - 1].episode : 0);
+    const total = totalEpisodes || (episodes.length > 0 ? (episodes[episodes.length - 1].episodeNumber ?? episodes[episodes.length - 1].episode) : 0);
     if (total <= 0) return [{ start: 1, end: RANGE_SIZE }];
     const r: { start: number; end: number }[] = [];
     for (let i = 1; i <= total; i += RANGE_SIZE) {
@@ -711,6 +1297,76 @@ export default function StreamPlayer() {
 
   const EpisodePanel = (
     <div className={`flex flex-col ${isMobile ? "flex-1 overflow-hidden" : "w-[260px] flex-shrink-0 border-r border-white/10"} bg-[#111118]`}>
+      {availableSources.length > 0 && (
+        <div className="border-b border-white/10 p-2">
+          <div className="mb-2 text-[10px] uppercase tracking-wider text-white/50 font-semibold">Servers</div>
+          <div className="flex flex-wrap gap-2">
+            {availableSources.map(s => {
+              const pid = s.providerId || "animepahe";
+              const isActive = pid === providerId;
+              const name = pid === "anikoto" ? "Anikoto" : "AnimePahe";
+              return (
+                <button
+                  key={pid}
+                  onClick={() => {
+                    if (isActive) return;
+                    // Reset current stream state so it forces a full reload
+                    setCurrentEp(null);
+                    setEpisodes([]);
+                    setLoadingEps(true);
+                    setStreamError(null);
+                    setLoadingStream(false);
+                    paheCacheRef.current.clear();
+                    
+                    const p = new URLSearchParams(params);
+                    p.set("providerId", pid);
+                    p.set("session", s.id || s.session);
+                    // Preserve the current episode number we were watching
+                    const epNum = currentEpRef.current?.episodeNumber ?? currentEpRef.current?.episode ?? startEp;
+                    if (epNum) p.set("episode", String(epNum));
+                    
+                    navigate(`/stream-player?${p.toString()}`, { replace: true });
+                  }}
+                  className={`flex h-8 items-center gap-2 rounded px-3 text-xs font-medium transition-colors ${
+                    isActive
+                      ? "bg-[#4a9eff] text-white"
+                      : "bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"
+                  }`}
+                >
+                  {name}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      {providerId === "anikoto" && links.length > 1 && (
+        <div className="border-b border-white/10 p-2">
+          <div className="mb-2 text-[10px] uppercase tracking-wider text-white/50 font-semibold">Sub Type</div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => changeQuality(0)}
+              className={`flex h-8 flex-1 items-center justify-center rounded text-xs font-semibold transition-all duration-200 ${
+                selectedLink === 0
+                  ? "bg-[#4a9eff] text-white shadow-[0_0_12px_rgba(74,158,255,0.4)]"
+                  : "bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"
+              }`}
+            >
+              Soft Sub
+            </button>
+            <button
+              onClick={() => changeQuality(1)}
+              className={`flex h-8 flex-1 items-center justify-center rounded text-xs font-semibold transition-all duration-200 ${
+                selectedLink === 1
+                  ? "bg-[#4a9eff] text-white shadow-[0_0_12px_rgba(74,158,255,0.4)]"
+                  : "bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"
+              }`}
+            >
+              Hard Sub
+            </button>
+          </div>
+        </div>
+      )}
       <div className="relative flex gap-2 border-b border-white/10 p-2">
         <div className="relative">
           <button
@@ -762,12 +1418,12 @@ export default function StreamPlayer() {
         ) : (
           <div className="grid grid-cols-5 gap-1">
             {episodes.map((ep) => {
-              const isCurrent = currentEp?.session === ep.session;
-              const pct = watchedEps.get(ep.episode) ?? 0;
+              const isCurrent = (currentEp?.id ?? currentEp?.session) === (ep.id ?? ep.session);
+              const pct = watchedEps.get(ep.episodeNumber ?? ep.episode) ?? 0;
               const watched = !isCurrent && pct >= 85;
               return (
                 <button
-                  key={ep.session}
+                  key={ep.id ?? ep.session}
                   onClick={() => playEpisode(ep)}
                   className={`flex h-9 items-center justify-center rounded text-xs font-medium transition
                     ${isCurrent
@@ -776,7 +1432,7 @@ export default function StreamPlayer() {
                         ? "bg-green-500/20 text-green-400 ring-1 ring-green-500/30 hover:bg-green-500/30"
                         : "bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"}`}
                 >
-                  {ep.episode}
+                  {ep.episodeNumber ?? ep.episode}
                 </button>
               );
             })}
@@ -786,96 +1442,7 @@ export default function StreamPlayer() {
     </div>
   );
 
-  const VideoControls = (
-    <div className={`absolute inset-0 flex flex-col justify-end transition-opacity duration-300 ${showControls ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-black/90 via-black/40 to-transparent" />
-      <div className="relative px-4 pb-3 pt-2 select-none">
-        {/* Seek bar */}
-        <div className="group mb-3 flex items-center gap-2">
-          <div className="relative h-1 flex-1 cursor-pointer rounded-full bg-white/20"
-            onClick={(e) => {
-              const rect = e.currentTarget.getBoundingClientRect();
-              const pct = (e.clientX - rect.left) / rect.width;
-              const v = videoRef.current;
-              if (v && duration) v.currentTime = pct * duration;
-            }}
-          >
-            <div className="absolute inset-y-0 left-0 rounded-full bg-[#f5c518]" style={{ width: `${progressPct}%` }} />
-            <div className="absolute top-1/2 h-3 w-3 -translate-y-1/2 -translate-x-1/2 rounded-full bg-white shadow opacity-0 group-hover:opacity-100 transition-opacity" style={{ left: `${progressPct}%` }} />
-            <input
-              type="range" min={0} max={duration || 1} step={0.5} value={position}
-              disabled={!currentEp || !duration}
-              onMouseDown={() => { seekingRef.current = true; }}
-              onMouseUp={(e) => { seekingRef.current = false; const t = Number((e.target as HTMLInputElement).value); if (videoRef.current) videoRef.current.currentTime = t; }}
-              onTouchStart={() => { seekingRef.current = true; }}
-              onTouchEnd={(e) => { seekingRef.current = false; const t = Number((e.target as HTMLInputElement).value); if (videoRef.current) videoRef.current.currentTime = t; }}
-              onChange={(e) => setPosition(Number(e.target.value))}
-              className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-            />
-          </div>
-          <span className="min-w-[7rem] text-right text-xs tabular-nums text-white/70">
-            {secondsToTimestamp(position)} / {secondsToTimestamp(duration)}
-          </span>
-        </div>
 
-        {/* Button row */}
-        <div className="flex items-center gap-1 flex-wrap">
-          <button onClick={() => { const v = videoRef.current; if (!v) return; v.paused ? v.play().catch(() => {}) : v.pause(); }} disabled={!currentEp} className="flex h-8 w-8 items-center justify-center rounded text-white hover:bg-white/10 disabled:opacity-30 transition">
-            {playing ? <Pause size={16} fill="white" /> : <Play size={16} fill="white" />}
-          </button>
-          <button onClick={() => seek(-10)} disabled={!currentEp} className="flex h-8 items-center gap-0.5 rounded px-2 text-xs text-white/70 hover:bg-white/10 hover:text-white disabled:opacity-30 transition">
-            <Rewind size={13} /><span>{isMobile ? "10" : "5"}</span>
-          </button>
-          <button onClick={() => seek(isMobile ? 10 : 5)} disabled={!currentEp} className="flex h-8 items-center gap-0.5 rounded px-2 text-xs text-white/70 hover:bg-white/10 hover:text-white disabled:opacity-30 transition">
-            <span>{isMobile ? "10" : "5"}</span><FastForward size={13} />
-          </button>
-          <button onClick={() => { const next = !muted; setMuted(next); if (videoRef.current) videoRef.current.muted = next; }} className="flex h-8 w-8 items-center justify-center rounded text-white/70 hover:bg-white/10 hover:text-white transition">
-            {muted ? <VolumeX size={15} /> : <Volume2 size={15} />}
-          </button>
-          {!isMobile && (
-            <input type="range" min={0} max={1} step={0.02} value={muted ? 0 : volume}
-              onChange={(e) => { const v = Number(e.target.value); setVolume(v); setMuted(v === 0); localStorage.setItem("ap-volume", String(v)); if (videoRef.current) { videoRef.current.volume = v; videoRef.current.muted = v === 0; } }}
-              className="w-20 accent-white cursor-pointer"
-            />
-          )}
-          <div className="flex-1" />
-          {!isMobile && (
-            <>
-              <button onClick={() => setAutoPlay((v) => { const n = !v; localStorage.setItem("ap-autoplay", String(n)); return n; })} className={`h-8 rounded px-2 text-xs transition ${autoPlay ? "text-[#4a9eff]" : "text-white/40 hover:text-white/60"}`}>
-                {autoPlay ? "✓ " : ""}Auto Play
-              </button>
-              <button onClick={() => setAutoNext((v) => { const n = !v; localStorage.setItem("ap-autonext", String(n)); return n; })} className={`h-8 rounded px-2 text-xs transition ${autoNext ? "text-[#4a9eff]" : "text-white/40 hover:text-white/60"}`}>
-                {autoNext ? "✓ " : ""}Auto Next
-              </button>
-            </>
-          )}
-          <button onClick={playPrev} disabled={!currentEp} className="h-8 rounded px-2 text-xs text-white/60 hover:bg-white/10 hover:text-white disabled:opacity-30 transition">⏮ Prev</button>
-          <button onClick={playNext} disabled={!currentEp} className="h-8 rounded px-2 text-xs text-white/60 hover:bg-white/10 hover:text-white disabled:opacity-30 transition">Next ⏭</button>
-          {links.length > 1 && (
-            <div className="relative">
-              <button onClick={() => setQualityOpen((o) => !o)} className="flex h-8 items-center gap-1 rounded px-2 text-xs text-white/70 hover:bg-white/10 hover:text-white transition">
-                {links[selectedLink]?.quality ?? "?"}p <ChevronDown size={11} />
-              </button>
-              {qualityOpen && (
-                <div className="absolute bottom-10 right-0 z-20 min-w-[90px] overflow-hidden rounded-lg border border-white/10 bg-[#1a1a24] shadow-xl">
-                  {links.map((l, i) => (
-                    <button key={i} onClick={() => changeQuality(i)} className={`flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition hover:bg-white/10 ${i === selectedLink ? "text-[#4a9eff]" : "text-white/70"}`}>
-                      {i === selectedLink && <span>✓</span>}
-                      <span className={i === selectedLink ? "" : "ml-3"}>{l.quality}p</span>
-                      {l.audio && l.audio !== "jpn" && <span className="ml-auto rounded bg-white/10 px-1 text-[10px]">{l.audio}</span>}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-          <button onClick={toggleFullscreen} className="flex h-8 w-8 items-center justify-center rounded text-white/70 hover:bg-white/10 hover:text-white transition" title="Fullscreen (F)">
-            {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
 
   const VideoArea = (fullHeight = false) => (
     <div
@@ -903,7 +1470,15 @@ export default function StreamPlayer() {
         }, 250);
       }}
     >
-      <video ref={videoRef} className="h-full w-full object-contain" playsInline />
+      <style>{`
+        video::cue {
+          background-color: rgba(11, 11, 15, ${cueBgOpacity}) !important;
+          color: ${cueColor} !important;
+          font-family: ${cueFontFamily} !important;
+          font-size: ${cueFontSize} !important;
+        }
+      `}</style>
+      <video ref={videoRef} className="h-full w-full object-contain" playsInline crossOrigin="anonymous" />
       {!currentEp && !loadingStream && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <p className="text-sm text-white/30">Select an episode to start watching</p>
@@ -929,8 +1504,65 @@ export default function StreamPlayer() {
           </button>
         </div>
       )}
-      {VideoControls}
-      {qualityOpen && <div className="absolute inset-0 z-10" onClick={() => setQualityOpen(false)} />}
+      {/* Skip Intro / Outro Overlays */}
+      <SkipOverlay 
+        duration={duration} 
+        position={position} 
+        skipTimes={skipTimes} 
+        showControls={showControls} 
+        onSkip={(endTime) => { if (videoRef.current) videoRef.current.currentTime = endTime; }} 
+      />
+      <VideoControls
+        showControls={showControls}
+        progressPct={progressPct}
+        position={position}
+        duration={duration}
+        playing={playing}
+        muted={muted}
+        volume={volume}
+        autoPlay={autoPlay}
+        autoNext={autoNext}
+        currentEp={currentEp}
+        links={links}
+        selectedLink={selectedLink}
+        isMobile={isMobile}
+        qualityOpen={qualityOpen}
+        isFullscreen={isFullscreen}
+        onSeekToPct={(pct) => { const v = videoRef.current; if (v && duration) v.currentTime = pct * duration; }}
+        onSeekBy={seek}
+        onSeekStart={() => { seekingRef.current = true; }}
+        onSeekEnd={(time) => { seekingRef.current = false; if (videoRef.current) videoRef.current.currentTime = time; }}
+        onPositionChange={setPosition}
+        onTogglePlay={() => { const v = videoRef.current; if (!v) return; v.paused ? v.play().catch(() => {}) : v.pause(); }}
+        onToggleMute={() => { const next = !muted; setMuted(next); if (videoRef.current) videoRef.current.muted = next; }}
+        onVolumeChange={(v) => { setVolume(v); setMuted(v === 0); localStorage.setItem("ap-volume", String(v)); if (videoRef.current) { videoRef.current.volume = v; videoRef.current.muted = v === 0; } }}
+        onToggleAutoPlay={() => setAutoPlay((v) => { const n = !v; localStorage.setItem("ap-autoplay", String(n)); return n; })}
+        onToggleAutoNext={() => setAutoNext((v) => { const n = !v; localStorage.setItem("ap-autonext", String(n)); return n; })}
+        onPlayPrev={playPrev}
+        onPlayNext={playNext}
+        onToggleFullscreen={toggleFullscreen}
+        onToggleQualityMenu={() => setQualityOpen((o) => !o)}
+        onChangeQuality={changeQuality}
+        onCloseQualityMenu={() => setQualityOpen(false)}
+        
+        // HLS qualities and subtitles toggle
+        hlsLevels={hlsLevels}
+        currentHlsLevel={currentHlsLevel}
+        onChangeHlsLevel={changeHlsLevel}
+        subtitlesEnabled={subtitlesEnabled}
+        availableSubtitles={availableSubtitles}
+        onToggleSubtitles={toggleSubtitles}
+        providerId={providerId}
+        cueFontSize={cueFontSize}
+        setCueFontSize={setCueFontSize}
+        cueFontFamily={cueFontFamily}
+        setCueFontFamily={setCueFontFamily}
+        cueBgOpacity={cueBgOpacity}
+        setCueBgOpacity={setCueBgOpacity}
+        cueColor={cueColor}
+        setCueColor={setCueColor}
+      />
+
     </div>
   );
 
@@ -955,7 +1587,7 @@ export default function StreamPlayer() {
           </button>
           <div className="flex-1 min-w-0">
             <div className="truncate text-sm font-semibold">{animeTitle}</div>
-            {currentEp && <div className="text-xs text-white/50">Episode {currentEp.episode}</div>}
+            {currentEp && <div className="text-xs text-white/50">Episode {currentEp.episodeNumber ?? currentEp.episode}</div>}
           </div>
           {loadingStream && <Loader2 size={14} className="animate-spin text-white/40" />}
         </div>
@@ -1000,7 +1632,7 @@ export default function StreamPlayer() {
         >
           {animeTitle}
         </button>
-        {currentEp && <span className="text-sm text-white/50">— Episode {currentEp.episode}</span>}
+        {currentEp && <span className="text-sm text-white/50">— Episode {currentEp.episodeNumber ?? currentEp.episode}</span>}
         {loadingStream && <Loader2 size={13} className="ml-auto animate-spin text-white/40" />}
         {streamError && !loadingStream && (
           <span className="ml-auto max-w-xs truncate text-xs text-red-400">{streamError}</span>

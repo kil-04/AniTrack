@@ -29,6 +29,7 @@ interface ApiBridge {
   };
   anilist: {
     search(q: string): Promise<AnimeMeta[]>;
+    advancedSearch(filters: import("../shared/types").AdvancedSearchFilters): Promise<import("../shared/types").PaginatedAnime>;
     trending(): Promise<AnimeMeta[]>;
     get(id: number): Promise<AnimeMeta | null>;
     relations(id: number): Promise<RelatedAnime[]>;
@@ -62,10 +63,10 @@ interface ApiBridge {
   pahe: {
     latest(page?: number): Promise<{ data: any[]; total: number; lastPage: number }>;
     search(q: string): Promise<any[]>;
-    episodes(session: string, page: number): Promise<{ data: any[]; total: number; lastPage: number }>;
-    links(epSession: string, animeSession: string): Promise<any[]>;
-    resolve(kwikUrl: string): Promise<{ url: string; cookies: string }>;
-    prefetch(kwikUrl: string): Promise<{ ok: boolean }>;
+    episodes(providerId: string, animeId: string, page: number): Promise<{ data: any[]; total: number; lastPage: number }>;
+    links(providerId: string, episodeId: string, animeId: string): Promise<any[]>;
+    resolve(providerId: string, linkId: string): Promise<{ url: string; cookies?: string; subtitles?: any[]; intro?: any; outro?: any }>;
+    prefetch(providerIdOrKwikUrl: string, linkId?: string): Promise<{ ok: boolean }>;
     getIds(paheId: number, session: string): Promise<{ malId?: number; anilistId?: number; kitsuId?: number }>;
     findById(anilistId: number | undefined, malId?: number): Promise<any>;
     getUrl(): Promise<string>;

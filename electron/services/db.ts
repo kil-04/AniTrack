@@ -24,9 +24,39 @@ export function getDb(): Database {
   return db;
 }
 
+let transactionActive = false;
+
+export function runInTransaction<T>(fn: () => T): T {
+  const d = getDb();
+  const wasActive = transactionActive;
+  if (!wasActive) {
+    d.run("BEGIN TRANSACTION");
+    transactionActive = true;
+  }
+  try {
+    const result = fn();
+    if (!wasActive) {
+      d.run("COMMIT");
+      transactionActive = false;
+    }
+    return result;
+  } catch (e) {
+    if (!wasActive) {
+      try {
+        d.run("ROLLBACK");
+      } catch (rollbackErr) {
+        console.error("Rollback failed:", rollbackErr);
+      }
+      transactionActive = false;
+    }
+    throw e;
+  }
+}
+
+
 // Bump CURRENT_SCHEMA_VERSION whenever you add a new migration below.
 // Each migration runs exactly once per user and is idempotent.
-const CURRENT_SCHEMA_VERSION = 3;
+const CURRENT_SCHEMA_VERSION = 4;
 
 const MIGRATIONS: Array<(d: Database) => void> = [
   // v1 — initial schema
@@ -87,6 +117,13 @@ const MIGRATIONS: Array<(d: Database) => void> = [
   // v3 — local_episode.updated_at (was referenced in INSERT but missing from CREATE)
   (d) => {
     try { d.run(`ALTER TABLE local_episode ADD COLUMN updated_at INTEGER`); } catch {}
+  },
+  // v4 — case-insensitive title indexes + mal_id index for fast lookup/imports
+  (d) => {
+    try { d.run(`CREATE INDEX IF NOT EXISTS idx_anime_mal_id ON anime(mal_id)`); } catch {}
+    try { d.run(`CREATE INDEX IF NOT EXISTS idx_anime_title ON anime(title COLLATE NOCASE)`); } catch {}
+    try { d.run(`CREATE INDEX IF NOT EXISTS idx_anime_title_english ON anime(title_english COLLATE NOCASE)`); } catch {}
+    try { d.run(`CREATE INDEX IF NOT EXISTS idx_anime_title_romaji ON anime(title_romaji COLLATE NOCASE)`); } catch {}
   },
 ];
 
@@ -269,7 +306,8 @@ export function deleteListEntry(animeId: number): void {
 // ---- Playback ----
 
 export function setProgress(p: PlaybackProgress) {
-  getDb().run(
+  const d = getDb();
+  d.run(
     `INSERT INTO playback (anime_id, episode, position_sec, duration_sec, updated_at, pahe_session)
      VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT(anime_id, episode) DO UPDATE SET
@@ -278,6 +316,31 @@ export function setProgress(p: PlaybackProgress) {
        updated_at=excluded.updated_at,
        pahe_session=COALESCE(excluded.pahe_session, playback.pahe_session)`,
     [p.animeId, p.episode, p.positionSec, p.durationSec, p.updatedAt, p.animePaheSession ?? null],
+  );
+
+  // Clean up duplicate negative ID stubs
+  d.run(
+    `DELETE FROM playback
+     WHERE anime_id < 0
+       AND EXISTS (
+           SELECT 1 FROM playback p2
+           LEFT JOIN anime a2 ON a2.id = p2.anime_id
+           LEFT JOIN anime a1 ON a1.id = playback.anime_id
+           WHERE p2.anime_id > 0
+             AND p2.episode = playback.episode
+             AND (
+               (p2.pahe_session IS NOT NULL AND p2.pahe_session = playback.pahe_session)
+               OR
+               (COALESCE(a2.title, '') != '' AND LOWER(TRIM(a2.title)) = LOWER(TRIM(COALESCE(a1.title, ''))))
+             )
+       )`
+  );
+
+  d.run(
+    `DELETE FROM anime
+     WHERE id < 0
+       AND NOT EXISTS (SELECT 1 FROM playback WHERE anime_id = anime.id)
+       AND NOT EXISTS (SELECT 1 FROM list_entry WHERE anime_id = anime.id)`
   );
 }
 
@@ -317,15 +380,16 @@ export function getProgress(
 }
 
 export function getContinueWatching(limit = 20, offset = 0): ContinueWatchingItem[] {
-  // CTE picks the single most-recently-watched episode per anime (no completion
-  // filter here — we always want to show the latest episode the user touched,
+  // CTE picks the single most-recently-watched episode per unique anime title (case-insensitive)
+  // (no completion filter here — we always want to show the latest episode the user touched,
   // even if they finished it).  The outer query then joins anime + local_episode
   // for display data.
   const rows: any[] = getDb().all(
-    `WITH latest_per_anime AS (
-       SELECT anime_id, MAX(updated_at) AS max_updated
-       FROM playback
-       GROUP BY anime_id
+    `WITH latest_per_title AS (
+       SELECT LOWER(TRIM(a2.title)) AS clean_title, MAX(p2.updated_at) AS max_updated
+       FROM playback p2
+       JOIN anime a2 ON a2.id = p2.anime_id
+       GROUP BY LOWER(TRIM(a2.title))
      )
      SELECT
        p.anime_id     AS pb_anime_id,
@@ -341,8 +405,8 @@ export function getContinueWatching(limit = 20, offset = 0): ContinueWatchingIte
        a.genres, a.average_score, a.year, a.studios,
        le.file_path   AS le_file_path
      FROM playback p
-     JOIN latest_per_anime lpa ON lpa.anime_id = p.anime_id AND lpa.max_updated = p.updated_at
      JOIN anime a ON a.id = p.anime_id
+     JOIN latest_per_title lpt ON LOWER(TRIM(a.title)) = lpt.clean_title AND p.updated_at = lpt.max_updated
      LEFT JOIN local_episode le ON le.anime_id = p.anime_id AND le.episode = p.episode
      ORDER BY p.updated_at DESC
      LIMIT ? OFFSET ?`,
@@ -396,7 +460,9 @@ export function getContinueWatching(limit = 20, offset = 0): ContinueWatchingIte
 /** Total distinct anime in the continue-watching list (for pagination). */
 export function countContinueWatching(): number {
   const row: any = getDb().get(
-    `SELECT COUNT(DISTINCT anime_id) AS cnt FROM playback`,
+    `SELECT COUNT(DISTINCT LOWER(TRIM(a.title))) AS cnt
+     FROM playback p
+     JOIN anime a ON a.id = p.anime_id`,
   );
   return row?.cnt ?? 0;
 }
@@ -461,14 +527,13 @@ export function clearLocalEpisodes() {
   getDb().run(`DELETE FROM local_episode`);
 }
 
-/** Find an existing anime row by title (case-insensitive, checks all title columns). */
 export function findAnimeByTitle(title: string): AnimeMeta | null {
-  const q = title.toLowerCase().trim();
+  const q = title.trim();
   const row = getDb().get(
     `SELECT * FROM anime
-     WHERE LOWER(TRIM(title))         = ?
-        OR LOWER(TRIM(title_english)) = ?
-        OR LOWER(TRIM(title_romaji))  = ?
+     WHERE title         = ? COLLATE NOCASE
+        OR title_english = ? COLLATE NOCASE
+        OR title_romaji  = ? COLLATE NOCASE
      LIMIT 1`,
     [q, q, q],
   );
@@ -492,13 +557,55 @@ export function getProgressForAnime(animeId: number): PlaybackProgress[] {
 
 /** Delete local_episode rows whose file_path is not in the provided set. */
 export function removeStaleLocalEpisodes(validPaths: Set<string>): number {
-  const rows = getDb().all(`SELECT rowid, file_path FROM local_episode`) as any[];
-  let removed = 0;
-  for (const row of rows) {
-    if (!validPaths.has(row.file_path)) {
-      getDb().run(`DELETE FROM local_episode WHERE rowid = ?`, [row.rowid]);
-      removed++;
+  return runInTransaction(() => {
+    const rows = getDb().all(`SELECT rowid, file_path FROM local_episode`) as any[];
+    let removed = 0;
+    for (const row of rows) {
+      if (!validPaths.has(row.file_path)) {
+        getDb().run(`DELETE FROM local_episode WHERE rowid = ?`, [row.rowid]);
+        removed++;
+      }
     }
-  }
-  return removed;
+    return removed;
+  });
+}
+
+/** Migrate playback progress, local episodes, and watch lists from an old/stub ID to a new/real ID. */
+export function migrateAnimeId(oldId: number, newId: number): void {
+  runInTransaction(() => {
+    const d = getDb();
+    // 1. Move playback rows. If conflict, take the one with larger updated_at.
+    const oldPlayback = d.all(`SELECT * FROM playback WHERE anime_id = ?`, [oldId]) as any[];
+    for (const pb of oldPlayback) {
+      d.run(
+        `INSERT INTO playback (anime_id, episode, position_sec, duration_sec, updated_at, pahe_session)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(anime_id, episode) DO UPDATE SET
+           position_sec = CASE WHEN excluded.updated_at > playback.updated_at THEN excluded.position_sec ELSE playback.position_sec END,
+           duration_sec = CASE WHEN excluded.updated_at > playback.updated_at THEN excluded.duration_sec ELSE playback.duration_sec END,
+           updated_at = MAX(excluded.updated_at, playback.updated_at),
+           pahe_session = COALESCE(excluded.pahe_session, playback.pahe_session)`,
+        [newId, pb.episode, pb.position_sec, pb.duration_sec, pb.updated_at, pb.pahe_session]
+      );
+    }
+    d.run(`DELETE FROM playback WHERE anime_id = ?`, [oldId]);
+
+    // 2. Move local_episode rows.
+    d.run(`UPDATE OR REPLACE local_episode SET anime_id = ? WHERE anime_id = ?`, [newId, oldId]);
+
+    // 3. Move list_entry.
+    const stubEntry = getListEntry(oldId);
+    if (stubEntry) {
+      setListEntry(
+        { ...stubEntry, animeId: newId },
+        { markDirty: true }
+      );
+      deleteListEntry(oldId);
+    }
+
+    // 4. Optionally clean up the old stub anime row if it was a synthetic ID (negative).
+    if (oldId < 0) {
+      d.run(`DELETE FROM anime WHERE id = ?`, [oldId]);
+    }
+  });
 }

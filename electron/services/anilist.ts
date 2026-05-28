@@ -77,26 +77,66 @@ function toAnime(m: MediaNode): AnimeMeta {
   };
 }
 
-async function gql<T>(query: string, variables: Record<string, unknown> = {}, attempt = 1): Promise<T> {
-  const res = await fetch(ENDPOINT, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ query, variables }),
+// Serial queue: only one AniList request in-flight at a time to prevent 429 storms.
+// On app startup, 20+ components fire requests concurrently. Without serialisation,
+// all of them hit AniList within seconds and trigger rate-limiting.
+let queueTail: Promise<void> = Promise.resolve();
+let isStartup = true;
+setTimeout(() => { isStartup = false; }, 6000); // 6 seconds for initial app bootup
+
+const MAX_RETRIES = 3;
+
+async function gql<T>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
+  // Chain onto the queue so requests run one-at-a-time.
+  return new Promise<T>((resolve, reject) => {
+    queueTail = queueTail.then(async () => {
+      try {
+        const result = await _doGql<T>(query, variables);
+        resolve(result);
+      } catch (err) {
+        reject(err);
+      }
+      // Spaced gap to protect rate-limit: 700ms during startup storm, 300ms for blazing-fast interactive searches.
+      const gap = isStartup ? 700 : 300;
+      await new Promise(r => setTimeout(r, gap));
+    });
   });
-  // Retry on 429 only — capped at 1 retry, max 1.5s wait.
-  if (res.status === 429 && attempt < 2) {
-    // retry-after header is seconds; convert to ms and cap.
-    const retryAfterSec = Number(res.headers.get("retry-after"));
-    const waitMs = Math.min(1500, isFinite(retryAfterSec) ? retryAfterSec * 1000 : 800);
-    await new Promise((r) => setTimeout(r, waitMs));
-    return gql<T>(query, variables, attempt + 1);
-  }
-  if (!res.ok) throw new Error(`AniList ${res.status}: ${await res.text()}`);
-  const json = await res.json() as any;
-  if (json.errors)
-    throw new Error(`AniList error: ${JSON.stringify(json.errors)}`);
-  return json.data as T;
 }
+
+async function _doGql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    console.log(`[AniList] request attempt ${attempt}/${MAX_RETRIES}`);
+    const res = await fetch(ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ query, variables }),
+    });
+
+    if (res.status === 429) {
+      if (attempt < MAX_RETRIES) {
+        const retryAfterSec = Number(res.headers.get("retry-after"));
+        // Cap wait at 5s regardless of what the server says
+        const waitMs = Math.min(5000, isFinite(retryAfterSec) && retryAfterSec > 0
+          ? retryAfterSec * 1000
+          : 1500 * attempt);
+        console.warn(`[AniList] 429 rate-limited, retrying in ${waitMs}ms (attempt ${attempt}/${MAX_RETRIES})`);
+        await new Promise((r) => setTimeout(r, waitMs));
+        continue;
+      }
+      console.error(`[AniList] 429 after ${MAX_RETRIES} attempts, giving up`);
+      throw new Error(`AniList 429: Too Many Requests. Please wait a moment and try again.`);
+    }
+
+    if (!res.ok) throw new Error(`AniList ${res.status}: ${await res.text()}`);
+    const json = await res.json() as any;
+    if (json.errors)
+      throw new Error(`AniList error: ${JSON.stringify(json.errors)}`);
+    console.log(`[AniList] request succeeded on attempt ${attempt}`);
+    return json.data as T;
+  }
+  throw new Error("AniList: exhausted all retries");
+}
+
 
 export async function searchAnime(q: string): Promise<AnimeMeta[]> {
   if (!q.trim()) return [];
@@ -112,6 +152,80 @@ export async function searchAnime(q: string): Promise<AnimeMeta[]> {
     { q },
   );
   const result = data.Page.media.map(toAnime);
+  cacheSet(key, result);
+  return result;
+}
+
+export async function advancedSearchAnime(filters: import("../../shared/types").AdvancedSearchFilters): Promise<import("../../shared/types").PaginatedAnime> {
+  const page = filters.page || 1;
+  const key = `advsearch:${page}:${JSON.stringify(filters)}`;
+  const hit = cacheGet<import("../../shared/types").PaginatedAnime>(key);
+  if (hit) return hit;
+
+  let queryArgs = [];
+  let mediaArgs = [];
+  const variables: Record<string, any> = {};
+
+  if (filters.query?.trim()) {
+    queryArgs.push("$q: String");
+    mediaArgs.push("search: $q");
+    variables.q = filters.query.trim();
+  }
+  if (filters.genre && filters.genre.length > 0) {
+    queryArgs.push("$genre: [String]");
+    mediaArgs.push("genre_in: $genre");
+    variables.genre = filters.genre;
+  }
+  if (filters.tag && filters.tag.length > 0) {
+    queryArgs.push("$tag: [String]");
+    mediaArgs.push("tag_in: $tag");
+    mediaArgs.push("minimumTagRank: 50");
+    variables.tag = filters.tag;
+  }
+  if (filters.season) {
+    queryArgs.push("$season: MediaSeason");
+    mediaArgs.push("season: $season");
+    variables.season = filters.season;
+  }
+  if (filters.year) {
+    queryArgs.push("$year: Int");
+    mediaArgs.push("seasonYear: $year");
+    variables.year = filters.year;
+  }
+  if (filters.format) {
+    queryArgs.push("$format: MediaFormat");
+    mediaArgs.push("format: $format");
+    variables.format = filters.format;
+  }
+  if (filters.status) {
+    queryArgs.push("$status: MediaStatus");
+    mediaArgs.push("status: $status");
+    variables.status = filters.status;
+  }
+  
+  queryArgs.push("$sort: [MediaSort]");
+  mediaArgs.push("sort: $sort");
+  variables.sort = filters.sort ? [filters.sort] : (filters.query?.trim() ? ["SEARCH_MATCH"] : ["TRENDING_DESC", "POPULARITY_DESC"]);
+
+  queryArgs.push("$page: Int");
+  const qArgsStr = queryArgs.length > 0 ? `(${queryArgs.join(", ")})` : "";
+  const mArgsStr = mediaArgs.length > 0 ? `(${mediaArgs.join(", ")}, type: ANIME)` : "(type: ANIME)";
+
+  const data = await gql<{ Page: { pageInfo: { hasNextPage: boolean, lastPage?: number, total?: number }, media: MediaNode[] } }>(
+    `query${qArgsStr} {
+      Page(page: $page, perPage: 36) {
+        pageInfo { hasNextPage lastPage total }
+        media${mArgsStr} { ${MEDIA_FIELDS} }
+      }
+    }`,
+    { ...variables, page },
+  );
+  
+  const result = {
+    results: data.Page.media.map(toAnime),
+    hasNextPage: data.Page.pageInfo.hasNextPage,
+    lastPage: data.Page.pageInfo.lastPage ?? (data.Page.pageInfo.total ? Math.ceil(data.Page.pageInfo.total / 36) : undefined),
+  };
   cacheSet(key, result);
   return result;
 }

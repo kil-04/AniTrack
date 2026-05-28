@@ -196,9 +196,12 @@ class AniTrackDbPlugin : Plugin() {
     }
 
     private fun buildContinueWatching(rdb: SQLiteDatabase, page: Int, pageSize: Int): JSONObject {
+        pruneDuplicateStubs(rdb)
         val offset = (page - 1) * pageSize
         val countC = rdb.rawQuery("""
-            SELECT COUNT(DISTINCT p.anime_id) FROM playback p
+            SELECT COUNT(DISTINCT LOWER(TRIM(COALESCE(p.anime_title, a.title))))
+            FROM playback p
+            LEFT JOIN anime a ON a.id = p.anime_id
             WHERE p.duration_sec > 0 AND (p.position_sec / p.duration_sec) < 0.95
         """.trimIndent(), null)
         val total = if (countC.moveToFirst()) countC.getInt(0) else 0
@@ -206,20 +209,33 @@ class AniTrackDbPlugin : Plugin() {
 
         val items = JSONArray()
         val c = rdb.rawQuery("""
+            WITH latest AS (
+                SELECT LOWER(TRIM(COALESCE(p2.anime_title, a2.title))) AS clean_title,
+                       MAX(p2.updated_at) AS max_updated
+                FROM playback p2
+                LEFT JOIN anime a2 ON a2.id = p2.anime_id
+                WHERE p2.duration_sec > 0 AND (p2.position_sec / p2.duration_sec) < 0.95
+                GROUP BY LOWER(TRIM(COALESCE(p2.anime_title, a2.title)))
+            )
             SELECT p.anime_id, p.episode, p.position_sec, p.duration_sec,
                    p.anime_title, p.anime_cover_url, p.animepahe_session, p.updated_at,
                    a.title, a.cover_image
             FROM playback p
             LEFT JOIN anime a ON a.id = p.anime_id
-            WHERE p.duration_sec > 0 AND (p.position_sec / p.duration_sec) < 0.95
+            JOIN latest l ON LOWER(TRIM(COALESCE(p.anime_title, a.title))) = l.clean_title AND p.updated_at = l.max_updated
             ORDER BY p.updated_at DESC
             LIMIT ? OFFSET ?
         """.trimIndent(), arrayOf(pageSize.toString(), offset.toString()))
+        val seen = hashSetOf<String>()
         while (c.moveToNext()) {
+            val animeTitle  = c.getString(4) ?: c.getString(8) ?: "Unknown"
+            val dedupKey = animeTitle.trim().lowercase()
+            if (seen.contains(dedupKey)) continue
+            seen.add(dedupKey)
+
             val animeId     = c.getInt(0)
             val posSec      = c.getDouble(2)
             val durSec      = c.getDouble(3)
-            val animeTitle  = c.getString(4) ?: c.getString(8) ?: "Unknown"
             val coverUrl    = c.getString(5) ?: c.getString(9)
             val paheSession = c.getString(6)
             val pct         = if (durSec > 0) (posSec / durSec) * 100.0 else 0.0
@@ -318,6 +334,8 @@ class AniTrackDbPlugin : Plugin() {
                 }
             }
 
+            pruneDuplicateStubs(db.writableDatabase)
+
             val ret = JSObject(); ret.put("ok", true)
             call.resolve(ret)
         } catch (e: Exception) {
@@ -347,5 +365,33 @@ class AniTrackDbPlugin : Plugin() {
         c.close()
         val ret = JSObject(); ret.put("value", result.toString())
         call.resolve(ret)
+    }
+
+    private fun pruneDuplicateStubs(ldb: SQLiteDatabase) {
+        try {
+            ldb.execSQL("""
+                DELETE FROM playback
+                WHERE anime_id < 0
+                  AND EXISTS (
+                      SELECT 1 FROM playback p2
+                      WHERE p2.anime_id > 0
+                        AND p2.episode = playback.episode
+                        AND (
+                          (p2.animepahe_session IS NOT NULL AND p2.animepahe_session = playback.animepahe_session)
+                          OR
+                          (p2.anime_title IS NOT NULL AND LOWER(TRIM(p2.anime_title)) = LOWER(TRIM(playback.anime_title)))
+                        )
+                  )
+            """.trimIndent())
+
+            ldb.execSQL("""
+                DELETE FROM anime
+                WHERE id < 0
+                  AND NOT EXISTS (SELECT 1 FROM playback WHERE anime_id = anime.id)
+                  AND NOT EXISTS (SELECT 1 FROM list_entry WHERE anime_id = anime.id)
+            """.trimIndent())
+        } catch (e: Exception) {
+            // best-effort
+        }
     }
 }

@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import React, { useRef } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
 interface Props {
@@ -6,7 +6,7 @@ interface Props {
   children: React.ReactNode;
 }
 
-export default function Row({ title, children }: Props) {
+const Row = React.memo(function Row({ title, children }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const scroll = (dir: 1 | -1) => {
     if (!ref.current) return;
@@ -37,4 +37,6 @@ export default function Row({ title, children }: Props) {
       </div>
     </section>
   );
-}
+});
+
+export default Row;

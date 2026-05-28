@@ -13,6 +13,7 @@ import {
 } from "electron";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { IPC } from "../shared/types";
 import {
   addLibraryFolder,
   deleteListEntry,
@@ -41,7 +42,7 @@ import {
   pullList,
   setMalClientId,
 } from "./services/mal";
-import { getById, getRelations, searchAnime, trending } from "./services/anilist";
+import { getById, getRelations, searchAnime, advancedSearchAnime, trending } from "./services/anilist";
 import {
   beginAuth as alBeginAuth,
   disconnect as alDisconnect,
@@ -53,23 +54,22 @@ import {
 import { scanAll } from "./services/library";
 import { linksFor, openLink } from "./services/legal-sites";
 import {
-  search as paheSearch,
-  getEpisodes as paheEpisodes,
-  getStreamLinks as paheLinks,
-  getLatestEpisodes as paheLatest,
-  getAnimeIds as paheGetIds,
-  findByExternalId as paheFindById,
-  resolveKwik,
-  prefetchKwik,
   prewarm as pahePrewarm,
   getKwikCookies,
   getPaheBaseUrl,
   setPaheBaseUrl,
-} from "./services/animepahe";
-import { IPC } from "../shared/types";
+} from "./services/providers/animepahe";
 import { autoUpdater } from "electron-updater";
+import { registerPaheIpc } from "./ipc/pahe";
+import { registerAuthIpc } from "./ipc/auth";
+import { registerDbIpc } from "./ipc/db";
+import { prewarmAnikoto } from "./services/providers/anikoto";
 
 const isDev = process.env.NODE_ENV === "development";
+
+// Disable Chromium Sandbox to prevent EXCEPTION_BREAKPOINT (0x80000003) crashes on certain Windows setups.
+app.commandLine.appendSwitch("no-sandbox");
+
 let mainWindow: BrowserWindow | null = null;
 let malFlushTimer: NodeJS.Timeout | null = null;
 let tray: Tray | null = null;
@@ -82,16 +82,6 @@ function registerWebRequestHandlers() {
   // don't need a release.
   let paheHost = "animepahe.pw";
   try { paheHost = new URL(getPaheBaseUrl()).hostname; } catch {}
-
-  // CDN domains that serve the actual video segments/manifests.
-  // AnimePahe rotates between several CDN backends — add any new ones here.
-  const CDN_URLS = [
-    "*://*.owocdn.top/*",
-    "*://*.owocdn.com/*",
-    "*://*.uwucdn.top/*",
-    "*://*.llnwi.net/*",
-    `*://*.cdn.${paheHost}/*`,
-  ];
 
   // Snapshot thumbnails — derive from the current host, plus known historical
   // hosts so old DB references keep working after a domain switch.
@@ -115,35 +105,133 @@ function registerWebRequestHandlers() {
 
   // Spoof Referer + Origin on outgoing requests to the stream CDN.
   session.defaultSession.webRequest.onBeforeSendHeaders(
-    { urls: [...CDN_URLS, "*://*.kwik.si/*", "*://*.kwik.cx/*", "*://kwik.si/*", "*://kwik.cx/*"] },
+    {
+      urls: ["*://*/*"],
+    },
     (details, callback) => {
-      const headers: Record<string, string> = {};
-      for (const [k, v] of Object.entries(details.requestHeaders)) {
-        if (k.toLowerCase() === "origin") continue;
-        headers[k] = v as string;
+      const isPaheCdn = 
+        details.url.includes("owocdn.top") || 
+        details.url.includes("owocdn.com") || 
+        details.url.includes("uwucdn.top") || 
+        details.url.includes("llnwi.net") ||
+        details.url.includes(`cdn.${paheHost}`);
+
+      const isKwik = details.url.includes("kwik.si") || details.url.includes("kwik.cx");
+
+      const isApiHost = 
+        details.url.includes("myanimelist.net") ||
+        details.url.includes("malsync.moe") ||
+        details.url.includes("anilist.co") ||
+        details.url.includes("anikoto.cz") ||
+        details.url.includes("anikototv.to") ||
+        details.url.includes("animepahe");
+
+      // Megaplay / Kiwi-Stream rotating CDN domains
+      const isMegaplayStream = 
+        !isApiHost && (
+          details.url.includes("/anime/") || 
+          details.url.includes(".vtt") || 
+          details.url.includes("subtitles") || 
+          details.url.includes("/public/stream/") || 
+          details.url.includes("vibeplayer") || 
+          details.url.includes("mewcdn") ||
+          details.url.includes("mewstream") ||
+          details.url.includes("megaplay") ||
+          details.url.includes("vibe") ||
+          details.url.includes("lostproject") ||
+          details.url.includes("streamzone")
+        );
+
+      if (isPaheCdn || isKwik || isMegaplayStream) {
+        const headers: Record<string, string> = {};
+        for (const [k, v] of Object.entries(details.requestHeaders)) {
+          if (k.toLowerCase() === "origin") continue;
+          
+          // Cloudflare WAF bypass: Spoof Client Hints to hide Electron
+          if (k.toLowerCase() === "sec-ch-ua") {
+            headers[k] = '"Google Chrome";v="120", "Chromium";v="120", "Not_A Brand";v="8"';
+            continue;
+          }
+          if (k.toLowerCase() === "sec-ch-ua-mobile") {
+            headers[k] = "?0";
+            continue;
+          }
+          if (k.toLowerCase() === "sec-ch-ua-platform") {
+            headers[k] = '"Windows"';
+            continue;
+          }
+          
+          headers[k] = v as string;
+        }
+
+        if (isMegaplayStream) {
+          const isMew = details.url.includes("mewcdn") || details.url.includes("vibeplayer") || details.url.includes("vibe");
+          headers["Referer"] = isMew ? "https://mewcdn.online/" : "https://megaplay.buzz/";
+          headers["Origin"] = isMew ? "https://mewcdn.online" : "https://megaplay.buzz";
+        } else {
+          headers["Referer"] = "https://kwik.cx/";
+          headers["Origin"] = "https://kwik.cx";
+          const kwikCookies = getKwikCookies();
+          if (kwikCookies) headers["Cookie"] = kwikCookies;
+        }
+
+        callback({ requestHeaders: headers });
+      } else {
+        callback({ requestHeaders: details.requestHeaders });
       }
-      headers["Referer"] = "https://kwik.cx/";
-      headers["Origin"] = "https://kwik.cx";
-      const kwikCookies = getKwikCookies();
-      if (kwikCookies) headers["Cookie"] = kwikCookies;
-      callback({ requestHeaders: headers });
     },
   );
 
   // Inject CORS headers into CDN responses for hls.js.
   session.defaultSession.webRequest.onHeadersReceived(
-    { urls: CDN_URLS },
+    {
+      urls: ["*://*/*"],
+    },
     (details, callback) => {
-      const headers: Record<string, string[]> = {};
-      for (const [k, v] of Object.entries(details.responseHeaders ?? {})) {
-        if (k.toLowerCase().startsWith("access-control-")) continue;
-        headers[k] = Array.isArray(v) ? v : [v as string];
+      const isPaheCdn = 
+        details.url.includes("owocdn.top") || 
+        details.url.includes("owocdn.com") || 
+        details.url.includes("uwucdn.top") || 
+        details.url.includes("llnwi.net") ||
+        details.url.includes(`cdn.${paheHost}`);
+
+      const isApiHost = 
+        details.url.includes("myanimelist.net") ||
+        details.url.includes("malsync.moe") ||
+        details.url.includes("anilist.co") ||
+        details.url.includes("anikoto.cz") ||
+        details.url.includes("anikototv.to") ||
+        details.url.includes("animepahe");
+
+      const isMegaplayStream = 
+        !isApiHost && (
+          details.url.includes("/anime/") || 
+          details.url.includes(".vtt") || 
+          details.url.includes("subtitles") || 
+          details.url.includes("/public/stream/") || 
+          details.url.includes("vibeplayer") || 
+          details.url.includes("mewcdn") ||
+          details.url.includes("mewstream") ||
+          details.url.includes("megaplay") ||
+          details.url.includes("vibe") ||
+          details.url.includes("lostproject") ||
+          details.url.includes("streamzone")
+        );
+
+      if (isPaheCdn || isMegaplayStream) {
+        const headers: Record<string, string[]> = {};
+        for (const [k, v] of Object.entries(details.responseHeaders ?? {})) {
+          if (k.toLowerCase().startsWith("access-control-")) continue;
+          headers[k] = Array.isArray(v) ? v : [v as string];
+        }
+        headers["Access-Control-Allow-Origin"] = ["*"];
+        headers["Access-Control-Allow-Methods"] = ["GET, HEAD, OPTIONS"];
+        headers["Access-Control-Allow-Headers"] = ["*"];
+        headers["Access-Control-Expose-Headers"] = ["*"];
+        callback({ responseHeaders: headers });
+      } else {
+        callback({ responseHeaders: details.responseHeaders });
       }
-      headers["Access-Control-Allow-Origin"] = ["*"];
-      headers["Access-Control-Allow-Methods"] = ["GET, HEAD, OPTIONS"];
-      headers["Access-Control-Allow-Headers"] = ["*"];
-      headers["Access-Control-Expose-Headers"] = ["*"];
-      callback({ responseHeaders: headers });
     },
   );
 }
@@ -200,6 +288,7 @@ function createWindow() {
   mainWindow.on("close", (e) => {
     if (!isQuitting) {
       e.preventDefault();
+      mainWindow?.webContents.send("app:window-hidden");
       mainWindow?.hide();
     }
   });
@@ -291,6 +380,7 @@ app.whenReady().then(() => {
   // Pre-warm the AnimePahe hidden window so the Cloudflare session is
   // established before the user opens a show detail page.
   pahePrewarm();
+  prewarmAnikoto();
 
   // Auto-updater
   autoUpdater.autoDownload = true;
@@ -353,222 +443,16 @@ app.on("window-all-closed", () => {
 // ----------------- IPC handlers -----------------
 
 function registerIpc() {
-  // MAL
-  ipcMain.handle(IPC.MAL_BEGIN_AUTH, () => {
-    if (!mainWindow) return { ok: false, reason: "no window" };
-    return beginAuth(mainWindow);
-  });
-  ipcMain.handle(IPC.MAL_STATE, () => getState());
-  ipcMain.handle(IPC.MAL_DISCONNECT, () => {
-    malDisconnect();
-    return getState();
-  });
-  ipcMain.handle(IPC.MAL_PULL, async () => {
-    const r = await pullList((n) =>
-      mainWindow?.webContents.send("mal:pull-progress", n),
-    );
-    return r;
-  });
-  ipcMain.handle(IPC.MAL_PUSH_PROGRESS, async () => flushDirty());
-  ipcMain.handle(IPC.MAL_SET_CLIENT_ID, (_e, id: string) => setMalClientId(id));
-  ipcMain.handle(IPC.MAL_CLIENT_INFO, () => getMalClientInfo());
+  const getMainWindow = () => mainWindow;
 
-
-  // AniList sync
-  ipcMain.handle(IPC.AL_BEGIN_AUTH, () => {
-    if (!mainWindow) return { ok: false, reason: "no window" };
-    return alBeginAuth(mainWindow);
-  });
-  ipcMain.handle(IPC.AL_STATE, () => alGetState());
-  ipcMain.handle(IPC.AL_DISCONNECT, () => { alDisconnect(); return alGetState(); });
-  ipcMain.handle(IPC.AL_PULL, async () => {
-    return alPullList((n) => mainWindow?.webContents.send("al:pull-progress", n));
-  });
-  ipcMain.handle(IPC.AL_SET_CLIENT_ID, (_e, id: string) => {
-    alSetClientId(id);
-    return alGetState();
-  });
-
-  // AniList metadata
-  ipcMain.handle(IPC.ANILIST_SEARCH, (_e, q: string) => searchAnime(q));
-  ipcMain.handle(IPC.ANILIST_TRENDING, () => trending());
-  ipcMain.handle(IPC.ANILIST_RELATIONS, (_e, id: number) => getRelations(id));
-  ipcMain.handle(IPC.ANILIST_GET, async (_e, id: number) => {
-    // Skip AniList for synthetic IDs:
-    //   - Negative IDs: paheSession hashes (StreamPlayer) + library title hashes
-    //   - id > 1_000_000_000: MAL-only stubs
-    // For these, only the local DB has any meaningful data.
-    if (id <= 0 || id > 1_000_000_000) {
-      return getAnime(id);
-    }
-    // Try local cache first so we don't hit AniList unnecessarily.
-    const cached = getAnime(id);
-    // If we have a cover image it's likely a fully-hydrated record — return it.
-    if (cached?.coverImage) return cached;
-    // Otherwise fetch fresh from AniList and cache.
-    try {
-      const anime = await getById(id);
-      if (anime) upsertAnime(anime);
-      return anime ?? cached ?? null;
-    } catch {
-      return cached ?? null;
-    }
-  });
-
-  // Library
-  ipcMain.handle(IPC.LIBRARY_ADD_FOLDER, async () => {
-    if (!mainWindow) return [];
-    const r = await dialog.showOpenDialog(mainWindow, {
-      properties: ["openDirectory", "multiSelections"],
-    });
-    if (r.canceled) return listLibraryFolders();
-    for (const p of r.filePaths) addLibraryFolder(p);
-    return listLibraryFolders();
-  });
-  ipcMain.handle(IPC.LIBRARY_REMOVE_FOLDER, (_e, p: string) => {
-    removeLibraryFolder(p);
-    return listLibraryFolders();
-  });
-  ipcMain.handle(IPC.LIBRARY_LIST_FOLDERS, () => listLibraryFolders());
-  ipcMain.handle(IPC.LIBRARY_SCAN, async () => {
-    const r = await scanAll((c, t, label) =>
-      mainWindow?.webContents.send("library:scan-progress", { c, t, label }),
-    );
-    return r;
-  });
-  ipcMain.handle(IPC.LIBRARY_EPISODES_FOR, (_e, id: number) =>
-    getEpisodesFor(id),
-  );
-
-  // List + progress
-  ipcMain.handle(IPC.LIST_GET_ALL, () => {
-    const entries = getAllListEntries();
-    return entries.map((e) => ({ entry: e, anime: getAnime(e.animeId) }));
-  });
-  ipcMain.handle(IPC.LIST_SET, (_e, entry: any) => {
-    setListEntry(entry, { markDirty: true });
-    return getAllListEntries();
-  });
-  ipcMain.handle(IPC.CONTINUE_WATCHING, () => getContinueWatching());
-  ipcMain.handle(IPC.CW_PAGED, (_e, page: number, pageSize: number) =>
-    getContinueWatchingPaged(page, pageSize),
-  );
-  ipcMain.handle(IPC.CW_DISMISS, (_e, animeId: number) => {
-    dismissFromContinueWatching(animeId);
-    return { ok: true };
-  });
-  ipcMain.handle(IPC.PROGRESS_GET, (_e, id: number, ep: number) =>
-    getProgress(id, ep),
-  );
-  ipcMain.handle(IPC.PROGRESS_GET_FOR_ANIME, (_e, id: number) =>
-    getProgressForAnime(id),
-  );
-  ipcMain.handle(IPC.PROGRESS_SET, async (_e, p: any) => {
-    // Ensure the anime row exists so getContinueWatching()'s JOIN succeeds.
-    if (p.animeTitle) {
-      const existing = getAnime(p.animeId);
-      if (!existing) {
-        // Create a stub immediately so continue-watching works right away.
-        upsertAnime({ id: p.animeId, title: p.animeTitle, coverImage: p.animeCoverUrl ?? null });
-
-        // Fire-and-forget: resolve to the real AniList entry so MAL sync works.
-        // This runs for both pahe-only (negative animeId) and real-ID watches.
-        if (p.animePaheSession) {
-          (async () => {
-            try {
-              const results = await searchAnime(p.animeTitle);
-              const hit = results.find(
-                (a) =>
-                  a.title.toLowerCase() === p.animeTitle.toLowerCase() ||
-                  (a.titleEnglish ?? "").toLowerCase() === p.animeTitle.toLowerCase(),
-              );
-              if (!hit) return;
-
-              // Save the full AniList record (includes malId, episodes, etc.)
-              upsertAnime(hit);
-
-              // If we were tracking under a stub/negative ID, migrate the list
-              // entry to the real AniList ID so flushDirty can push to MAL.
-              if (hit.id !== p.animeId) {
-                const stubEntry = getListEntry(p.animeId);
-                if (stubEntry) {
-                  setListEntry(
-                    { ...stubEntry, animeId: hit.id },
-                    { markDirty: !!hit.malId },
-                  );
-                  // Remove the stale stub list entry so it doesn't linger.
-                  deleteListEntry(p.animeId);
-                }
-              }
-            } catch { /* best-effort */ }
-          })();
-        }
-      } else if (!existing.coverImage && p.animeCoverUrl) {
-        upsertAnime({ ...existing, coverImage: p.animeCoverUrl });
-      }
-    }
-
-    // Read existing progress BEFORE writing so we can detect the threshold crossing.
-    const prev = getProgress(p.animeId, p.episode);
-    setProgress(p);
-
-    // Auto-mark watched on the FIRST crossing of 85%. Avoids firing MAL/AL push
-    // on every 10-second timer tick once past the threshold.
-    if (p.animeId !== 0 && p.durationSec) {
-      const prevPct = prev && prev.durationSec ? prev.positionSec / prev.durationSec : 0;
-      const newPct = p.positionSec / p.durationSec;
-      const justCrossed = prevPct < 0.85 && newPct >= 0.85;
-      if (justCrossed) {
-        try {
-          await markEpisodeWatched(p.animeId, p.episode);
-        } catch (e) {
-          console.warn("markEpisodeWatched failed", e);
-        }
-        try {
-          await alMarkEpisodeWatched(p.animeId, p.episode);
-        } catch (e) {
-          console.warn("alMarkEpisodeWatched failed", e);
-        }
-      }
-    }
-    return { ok: true };
-  });
+  registerAuthIpc(getMainWindow);
+  registerDbIpc(getMainWindow);
+  registerPaheIpc(registerWebRequestHandlers);
 
   // Player
   ipcMain.handle(IPC.PLAYER_RESOLVE_FILE, (_e, filePath: string) => {
     // Returns a URL the renderer can <video src=...> with.
     return `local-video:///${encodeURI(filePath.replace(/\\/g, "/"))}`;
-  });
-
-  // AnimePahe
-  ipcMain.handle(IPC.PAHE_LATEST, (_e, page = 1) => paheLatest(30, page));
-  ipcMain.handle(IPC.PAHE_SEARCH, (_e, q: string) => paheSearch(q));
-  ipcMain.handle(IPC.PAHE_EPISODES, (_e, session: string, page: number) =>
-    paheEpisodes(session, page),
-  );
-  ipcMain.handle(IPC.PAHE_LINKS, (_e, epSession: string, animeSession: string) =>
-    paheLinks(epSession, animeSession),
-  );
-  ipcMain.handle(IPC.PAHE_RESOLVE, (_e, kwikUrl: string) =>
-    resolveKwik(kwikUrl),
-  );
-  ipcMain.handle(IPC.PAHE_PREFETCH, (_e, kwikUrl: string) => {
-    prefetchKwik(kwikUrl);
-    return { ok: true };
-  });
-  ipcMain.handle(IPC.PAHE_GET_IDS, (_e, paheId: number, session: string) => paheGetIds(paheId, session));
-  ipcMain.handle(IPC.PAHE_FIND_BY_ID, (_e, anilistId: number | undefined, malId: number | undefined) =>
-    paheFindById(anilistId, malId),
-  );
-  ipcMain.handle(IPC.PAHE_GET_URL, () => getPaheBaseUrl());
-  ipcMain.handle(IPC.PAHE_SET_URL, (_e, url: string) => {
-    try {
-      setPaheBaseUrl(url);
-      registerWebRequestHandlers(); // re-derive CDN/snapshot hosts from new URL
-      return { ok: true, url: getPaheBaseUrl() };
-    } catch (e: any) {
-      return { ok: false, url: getPaheBaseUrl(), reason: e.message };
-    }
   });
 
   // Legal
@@ -591,28 +475,14 @@ function registerIpc() {
   });
   ipcMain.handle(IPC.UPDATE_INSTALL, () => {
     isQuitting = true;
-
-    // --- Bulletproof shutdown before launching the installer ---
-    // 1. Stop background timers so nothing fires mid-shutdown.
     if (malFlushTimer) { clearInterval(malFlushTimer); malFlushTimer = null; }
-
-    // 2. Destroy ALL BrowserWindows (main window + hidden AnimePahe window).
-    //    This releases file handles on DLLs inside the install directory.
     for (const win of BrowserWindow.getAllWindows()) {
-      try { win.destroy(); } catch { /* already destroyed */ }
+      try { win.destroy(); } catch { }
     }
-
-    // 3. Destroy the system tray so the Electron process can fully exit.
     if (tray) { try { tray.destroy(); } catch {} tray = null; }
-
-    // 4. Move CWD out of the install directory so the NSIS installer
-    //    can freely delete/replace files without a directory lock.
     if (process.platform === "win32") {
       try { process.chdir(app.getPath("temp")); } catch {}
     }
-
-    // 5. Now it's safe — launch the installer and quit.
-    //    isSilent=false (show progress), isForceRunAfter=true (relaunch app).
     autoUpdater.quitAndInstall(false, true);
   });
 }

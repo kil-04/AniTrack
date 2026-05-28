@@ -18,8 +18,46 @@ interface Props {
   resumeEpisode?: number;
 }
 
+function getSeasonNumber(title: string): number | null {
+  const clean = title.toLowerCase();
+  
+  // Pattern 1: "season 4" or "season iv" or "ss 4"
+  const seasonMatch = clean.match(/\b(season|ss|part|cour)\s+(\d+|ii|iii|iv|v|vi|vii|viii|ix|x)\b/);
+  if (seasonMatch) {
+    const val = seasonMatch[2];
+    if (/^\d+$/.test(val)) return parseInt(val, 10);
+    const romanMap: Record<string, number> = {
+      i: 1, ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10
+    };
+    if (romanMap[val] !== undefined) return romanMap[val];
+  }
+
+  // Pattern 2: "4th season" or "2nd season"
+  const ordinalMatch = clean.match(/\b(\d+)(st|nd|rd|th)\s+(season|part|ss|cour)\b/);
+  if (ordinalMatch) {
+    return parseInt(ordinalMatch[1], 10);
+  }
+
+  // Pattern 3: Lone Roman numerals at the end of the title
+  const endRomanMatch = clean.match(/\b(ii|iii|iv|v|vi|vii|viii|ix|x)\b\s*$/);
+  if (endRomanMatch) {
+    const romanMap: Record<string, number> = {
+      ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10
+    };
+    return romanMap[endRomanMatch[1]];
+  }
+
+  // Pattern 4: Lone digits at the end
+  const endDigitMatch = clean.match(/\b(\d+)\b\s*$/);
+  if (endDigitMatch) {
+    return parseInt(endDigitMatch[1], 10);
+  }
+
+  return null;
+}
+
 function scoreMatch(candidate: any, targetTitle: string, targetYear?: number): number {
-  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, "").trim();
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, " ").replace(/\s+/g, " ").trim();
   const t = norm(targetTitle);
   const c = norm(candidate.title ?? "");
   let score = 0;
@@ -34,11 +72,33 @@ function scoreMatch(candidate: any, targetTitle: string, targetYear?: number): n
     const overlap = cw.filter((w: string) => tw.has(w)).length;
     score += Math.round((overlap / Math.max(tw.size, cw.length)) * 30);
   }
+
+  // Add a prefix match bonus if the first few words match exactly.
+  // This helps match shows that differ in season suffix (e.g. "Classroom of the Elite IV" and "Classroom of the Elite 4th Season")
+  const tw_arr = t.split(/\s+/);
+  const cw_arr = c.split(/\s+/);
+  let prefixMatch = 0;
+  for (let i = 0; i < Math.min(3, tw_arr.length, cw_arr.length); i++) {
+    if (tw_arr[i] === cw_arr[i]) prefixMatch++;
+    else break;
+  }
+  if (prefixMatch >= 2) {
+    score += prefixMatch * 10;
+  }
+
   if (targetYear && candidate.year) {
     if (Number(candidate.year) === targetYear) score += 8;
     else if (Math.abs(Number(candidate.year) - targetYear) <= 1) score += 2;
     else score -= 5;
   }
+
+  // Season number mismatch check
+  const candidateSeason = getSeasonNumber(candidate.title) || 1;
+  const targetSeason = getSeasonNumber(targetTitle) || 1;
+  if (candidateSeason !== targetSeason) {
+    score -= 50; // Heavy penalty for mismatched seasons
+  }
+
   return score;
 }
 
@@ -61,6 +121,7 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMal
 
   // Watched episode indicators — keyed by episode number, value is percent watched
   const [watchedEps, setWatchedEps] = useState<Map<number, number>>(new Map());
+  const [epOffset, setEpOffset] = useState(0);
 
   // Favicon URL derived from the configured AnimePahe base URL so domain hops work.
   const [paheBaseUrl, setPaheBaseUrl] = useState<string>("https://animepahe.pw");
@@ -86,7 +147,7 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMal
       .slice(0, 3);
     const checks = await Promise.all(
       top.map(async (candidate) => {
-        const ids = await window.api.pahe.getIds(candidate.id, candidate.session).catch(() => ({}));
+        const ids = await window.api.pahe.getIds(candidate.paheId ?? candidate.id, candidate.session ?? candidate.id).catch(() => ({}));
         return { candidate, ids } as { candidate: any; ids: any };
       }),
     );
@@ -202,11 +263,39 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMal
   }
 
   useEffect(() => {
+    setEpOffset(0);
+    setPage(1);
+    setEpisodes([]);
+  }, [selected]);
+
+  useEffect(() => {
     if (!selected) return;
     setLoadingEps(true);
     setError(null);
-    window.api.pahe.episodes(selected.session, page).then((r) => {
-      setEpisodes(r.data);
+    window.api.pahe.episodes(selected.providerId ?? "animepahe", selected.id, page).then(async (r) => {
+      let currentOffset = epOffset;
+      if (page === 1 && r.data.length > 0) {
+        const firstEp = r.data[0].episodeNumber ?? r.data[0].episode ?? 1;
+        currentOffset = firstEp - 1;
+        setEpOffset(currentOffset);
+      } else if (page > 1 && currentOffset === 0) {
+        try {
+          const p1 = await window.api.pahe.episodes(selected.providerId ?? "animepahe", selected.id, 1);
+          if (p1.data.length > 0) {
+            const firstEp = p1.data[0].episodeNumber ?? p1.data[0].episode ?? 1;
+            currentOffset = firstEp - 1;
+            setEpOffset(currentOffset);
+          }
+        } catch {}
+      }
+
+      const mapped = r.data.map((ep: any) => ({
+        ...ep,
+        originalEpisodeNumber: ep.episodeNumber ?? ep.episode,
+        episodeNumber: (ep.episodeNumber ?? ep.episode) - currentOffset,
+        episode: (ep.episodeNumber ?? ep.episode) - currentOffset,
+      }));
+      setEpisodes(mapped);
       setLastPage(r.lastPage);
     }).catch((e: any) => setError(String(e))).finally(() => setLoadingEps(false));
   }, [selected, page]);
@@ -224,13 +313,15 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMal
 
   function openStreamPlayer(ep?: any) {
     const p = new URLSearchParams({
-      session: selected.session,
+      providerId: selected.providerId ?? "animepahe",
+      session: selected.id,
       title: selected.title,
     });
-    const targetEp = ep?.episode ?? resumeEpisode;
+    const targetEp = ep?.episodeNumber ?? ep?.episode ?? resumeEpisode;
     if (targetEp) p.set("episode", String(targetEp));
     if (animeId) p.set("animeId", String(animeId));
     if (selected.poster) p.set("coverUrl", selected.poster);
+    if (epOffset) p.set("episodeOffset", String(epOffset));
     navigate(`/stream-player?${p.toString()}`);
   }
 
@@ -298,19 +389,20 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMal
               <>
                 <div className="grid grid-cols-8 gap-1.5 sm:grid-cols-10 md:grid-cols-12 lg:grid-cols-14 xl:grid-cols-16">
                   {episodes.map((ep) => {
-                    const pct = watchedEps.get(ep.episode) ?? 0;
+                    const epNum = ep.episodeNumber ?? ep.episode;
+                    const pct = watchedEps.get(epNum) ?? 0;
                     const watched = pct >= 85;
                     const inProgress = pct > 5 && !watched;
                     return (
-                      <div key={ep.session} className="group relative">
+                      <div key={ep.id ?? ep.session} className="group relative">
                         <button
                           onClick={() => openStreamPlayer(ep)}
-                          title={`Episode ${ep.episode}${ep.filler ? " (Filler)" : ""}`}
+                          title={`Episode ${epNum}${ep.filler ? " (Filler)" : ""}`}
                           className={`relative flex h-10 w-full items-center justify-center rounded text-xs font-medium transition
                             hover:bg-[#4a9eff] hover:text-white
                             ${watched ? "bg-green-500/20 text-green-400 ring-1 ring-green-500/30" : ep.filler ? "bg-yellow-500/10 text-yellow-400/80" : "bg-white/5 text-white/70"}`}
                         >
-                          {ep.episode}
+                          {epNum}
                           {inProgress && (
                             <div
                               className="absolute bottom-0 left-0 h-0.5 rounded-full bg-[#4a9eff]"
@@ -368,7 +460,9 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMal
           alt=""
           onError={(e) => (e.currentTarget.style.display = "none")}
         />
-        <span className="text-sm font-semibold">Stream via AnimePahe</span>
+        <span className="text-sm font-semibold">
+          Stream via {selected ? (selected.providerId === 'anikoto' ? 'Anikoto' : 'AnimePahe') : 'AnimePahe/Anikoto'}
+        </span>
       </div>
 
       {error && (
@@ -388,7 +482,7 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMal
               <div className="mb-1 text-xs text-muted">Select the correct title:</div>
               {results.map((r) => (
                 <button
-                  key={r.session}
+                  key={r.id ?? r.session}
                   onClick={() => setSelected(r)}
                   className="flex w-full items-center gap-2 rounded-md bg-bg-elev px-3 py-2 text-left text-sm hover:bg-white/10"
                 >
@@ -397,7 +491,7 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMal
                   )}
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-xs font-medium">{r.title}</div>
-                    <div className="text-xs text-muted">{r.year} · {r.episodes} eps</div>
+                    <div className="text-xs text-muted">{r.providerId === 'anikoto' ? 'Anikoto' : 'AnimePahe'} · {r.year || '?'} · {r.episodes || '?'} eps</div>
                   </div>
                 </button>
               ))}
@@ -412,6 +506,25 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMal
             <div className="mb-2 flex items-center justify-between">
               <span className="text-xs text-muted truncate">{selected.title}</span>
               <button onClick={() => { setSelected(null); setEpisodes([]); }} className="text-xs text-muted hover:text-white">Change</button>
+            </div>
+          )}
+          {results.filter(r => r.title === selected.title).length > 1 && (
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs text-muted">Source:</span>
+              <select 
+                value={selected.providerId ?? "animepahe"}
+                onChange={e => {
+                  const chosen = results.find(r => r.title === selected.title && (r.providerId ?? "animepahe") === e.target.value);
+                  if (chosen) setSelected(chosen);
+                }}
+                className="bg-bg-elev text-xs text-muted border border-white/10 rounded px-2 py-1 outline-none"
+              >
+                {results.filter(r => r.title === selected.title).map(r => (
+                  <option key={r.providerId ?? "animepahe"} value={r.providerId ?? "animepahe"}>
+                    {r.providerId === 'anikoto' ? 'Anikoto' : 'AnimePahe'}
+                  </option>
+                ))}
+              </select>
             </div>
           )}
 
@@ -430,12 +543,12 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMal
               <div className="grid grid-cols-4 gap-1.5 sm:grid-cols-5">
                 {episodes.map((ep) => (
                   <button
-                    key={ep.session}
+                    key={ep.id ?? ep.session}
                     onClick={() => openStreamPlayer(ep)}
                     className="flex h-10 items-center justify-center rounded bg-bg-elev text-xs font-medium hover:bg-[#4a9eff]/30 hover:text-white transition"
                   >
                     <Play size={9} className="mr-0.5 opacity-50" fill="currentColor" />
-                    {ep.episode}
+                    {ep.episodeNumber ?? ep.episode}
                   </button>
                 ))}
               </div>

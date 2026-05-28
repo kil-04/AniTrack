@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld("api", {
   },
   anilist: {
     search: (q: string) => ipcRenderer.invoke(IPC.ANILIST_SEARCH, q),
+    advancedSearch: (filters: unknown) => ipcRenderer.invoke(IPC.ANILIST_ADVANCED_SEARCH, filters),
     trending: () => ipcRenderer.invoke(IPC.ANILIST_TRENDING),
     get: (id: number) => ipcRenderer.invoke(IPC.ANILIST_GET, id),
     relations: (id: number) => ipcRenderer.invoke(IPC.ANILIST_RELATIONS, id),
@@ -59,12 +60,12 @@ contextBridge.exposeInMainWorld("api", {
   pahe: {
     latest: (page = 1) => ipcRenderer.invoke(IPC.PAHE_LATEST, page),
     search: (q: string) => ipcRenderer.invoke(IPC.PAHE_SEARCH, q),
-    episodes: (session: string, page: number) =>
-      ipcRenderer.invoke(IPC.PAHE_EPISODES, session, page),
-    links: (epSession: string, animeSession: string) =>
-      ipcRenderer.invoke(IPC.PAHE_LINKS, epSession, animeSession),
-    resolve: (kwikUrl: string) => ipcRenderer.invoke(IPC.PAHE_RESOLVE, kwikUrl),
-    prefetch: (kwikUrl: string) => ipcRenderer.invoke(IPC.PAHE_PREFETCH, kwikUrl),
+    episodes: (providerId: string, animeId: string, page: number) =>
+      ipcRenderer.invoke(IPC.PAHE_EPISODES, providerId, animeId, page),
+    links: (providerId: string, episodeId: string, animeId: string) =>
+      ipcRenderer.invoke(IPC.PAHE_LINKS, providerId, episodeId, animeId),
+    resolve: (providerId: string, linkId: string) => ipcRenderer.invoke(IPC.PAHE_RESOLVE, providerId, linkId),
+    prefetch: (providerIdOrKwikUrl: string, linkId?: string) => ipcRenderer.invoke(IPC.PAHE_PREFETCH, providerIdOrKwikUrl, linkId),
     getIds: (paheId: number, session: string) => ipcRenderer.invoke(IPC.PAHE_GET_IDS, paheId, session),
     findById: (anilistId: number | undefined, malId?: number) => ipcRenderer.invoke(IPC.PAHE_FIND_BY_ID, anilistId, malId),
     getUrl: () => ipcRenderer.invoke(IPC.PAHE_GET_URL),
