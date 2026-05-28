@@ -138,7 +138,7 @@ export default function StreamPlayer() {
   const providerId = params.get("providerId") ?? "animepahe";
   const animeTitle = params.get("title") ?? "Anime";
   const animeCoverUrl = params.get("coverUrl") ?? params.get("img") ?? undefined;
-  const startEp = Number(params.get("episode") ?? params.get("ep") ?? 0);
+  const startEp = Math.max(0, Number(params.get("episode") ?? params.get("ep") ?? 0));
   const urlOffset = Number(params.get("episodeOffset") ?? 0);
   const epOffsetRef = useRef<number>(urlOffset);
 
@@ -598,10 +598,11 @@ export default function StreamPlayer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [animeSession, rangeStart, fetchPahePage]);
 
-  // Reset cache when anime changes
+  // Reset cache when anime or provider changes
   useEffect(() => {
     resetPlayer();
     paheCacheRef.current.clear();
+    epOffsetRef.current = urlOffset;
     // If startEp is set, open the range that contains it.
     if (startEp) {
       const targetRange = Math.floor((startEp - 1) / RANGE_SIZE) * RANGE_SIZE + 1;
@@ -610,7 +611,7 @@ export default function StreamPlayer() {
       setRangeStart(1);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [animeSession]);
+  }, [animeSession, providerId, urlOffset]);
 
   // ── HLS / video setup ─────────────────────────────────────────────────────
 
