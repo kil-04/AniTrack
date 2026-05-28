@@ -265,11 +265,6 @@ const anikotoProvider = {
         id: JSON.stringify({ episodeId, animeId, subType: "soft" }),
         quality: "Auto (Soft Sub)",
         audio: "jpn"
-      },
-      {
-        id: JSON.stringify({ episodeId, animeId, subType: "hard" }),
-        quality: "Auto (Hard Sub)",
-        audio: "jpn"
       }
     ];
   },
