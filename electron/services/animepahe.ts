@@ -58,8 +58,26 @@ function BASE() { return getPaheBaseUrl(); }
 let _win: BrowserWindow | null = null;
 let _ready = false;
 let _readyPromise: Promise<void> | null = null;
+let _paheTimeout: NodeJS.Timeout | null = null;
+
+function resetPaheTimeout() {
+  if (_paheTimeout) {
+    clearTimeout(_paheTimeout);
+  }
+  _paheTimeout = setTimeout(() => {
+    if (_win && !_win.isDestroyed()) {
+      console.log("[AnimePahe] Destroying idle prewarmed window to save memory");
+      _win.destroy();
+    }
+    _win = null;
+    _ready = false;
+    _readyPromise = null;
+    _paheTimeout = null;
+  }, 120_000); // 2 minutes
+}
 
 function getPaheWindow(): Promise<BrowserWindow> {
+  resetPaheTimeout();
   if (_win && !_win.isDestroyed() && _ready) {
     return Promise.resolve(_win);
   }
@@ -500,8 +518,24 @@ const _kwikPending = new Map<string, Promise<{ url: string; cookies: string }>>(
 let _kwikWin: BrowserWindow | null = null;
 // Callback installed by the currently-running _resolveKwikBrowser call.
 let _kwikInterceptCb: ((url: string) => void) | null = null;
+let _kwikTimeout: NodeJS.Timeout | null = null;
+
+function resetKwikTimeout() {
+  if (_kwikTimeout) {
+    clearTimeout(_kwikTimeout);
+  }
+  _kwikTimeout = setTimeout(() => {
+    if (_kwikWin && !_kwikWin.isDestroyed()) {
+      console.log("[Kwik] Destroying idle resolving window to save memory");
+      _kwikWin.destroy();
+    }
+    _kwikWin = null;
+    _kwikTimeout = null;
+  }, 60_000); // 1 minute
+}
 
 function getKwikWindow(): BrowserWindow {
+  resetKwikTimeout();
   if (_kwikWin && !_kwikWin.isDestroyed()) return _kwikWin;
 
   _kwikWin = new BrowserWindow({

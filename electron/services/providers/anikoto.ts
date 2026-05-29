@@ -6,8 +6,26 @@ const BASE_URL = "https://anikoto.cz";
 let _anikotoWin: BrowserWindow | null = null;
 let _anikotoReady = false;
 let _anikotoReadyPromise: Promise<void> | null = null;
+let _anikotoTimeout: NodeJS.Timeout | null = null;
+
+function resetAnikotoTimeout() {
+  if (_anikotoTimeout) {
+    clearTimeout(_anikotoTimeout);
+  }
+  _anikotoTimeout = setTimeout(() => {
+    if (_anikotoWin && !_anikotoWin.isDestroyed()) {
+      console.log("[Anikoto] Destroying idle prewarmed window to save memory");
+      _anikotoWin.destroy();
+    }
+    _anikotoWin = null;
+    _anikotoReady = false;
+    _anikotoReadyPromise = null;
+    _anikotoTimeout = null;
+  }, 120_000); // 2 minutes
+}
 
 export function getAnikotoWindow(): Promise<BrowserWindow> {
+  resetAnikotoTimeout();
   if (_anikotoWin && !_anikotoWin.isDestroyed() && _anikotoReady) {
     return Promise.resolve(_anikotoWin);
   }
