@@ -208,9 +208,15 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMal
     async function runSearch() {
       async function tryQuery(query: string, scoreAgainst: string): Promise<boolean> {
         const r: any[] = await window.api.pahe.search(query);
-        let b = pickByTitle(r, scoreAgainst);
-        if (!b && (animeId || animeMalId) && r.length > 0) b = await pickByIds(r);
-        if (b) { setResults(r); setSelected(b); _searchCache.set(cacheKey, { results: r, selected: b }); return true; }
+        const filtered = r.filter(candidate => {
+          if (animeYear && candidate.year) {
+            return Math.abs(Number(candidate.year) - animeYear) <= 1;
+          }
+          return true;
+        });
+        let b = pickByTitle(filtered, scoreAgainst);
+        if (!b && (animeId || animeMalId) && filtered.length > 0) b = await pickByIds(filtered);
+        if (b) { setResults(filtered); setSelected(b); _searchCache.set(cacheKey, { results: filtered, selected: b }); return true; }
         return false;
       }
 
@@ -238,9 +244,15 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMal
       if (oneWord.length > 3) {
         const r: any[] = await window.api.pahe.search(oneWord);
         if (r.length > 0) {
-          let b = pickByTitle(r, animeTitle);
-          if (!b && (animeId || animeMalId)) b = await pickByIds(r);
-          if (b) { setResults(r); setSelected(b); _searchCache.set(cacheKey, { results: r, selected: b }); return; }
+          const filtered = r.filter(candidate => {
+            if (animeYear && candidate.year) {
+              return Math.abs(Number(candidate.year) - animeYear) <= 1;
+            }
+            return true;
+          });
+          let b = pickByTitle(filtered, animeTitle);
+          if (!b && (animeId || animeMalId)) b = await pickByIds(filtered);
+          if (b) { setResults(filtered); setSelected(b); _searchCache.set(cacheKey, { results: filtered, selected: b }); return; }
         }
       }
 
@@ -268,7 +280,7 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMal
 
     runSearch().catch((e: any) => setError(String(e))).finally(() => setSearching(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [animeTitle, animeTitleAlt, animeId, animeEpisodes, animeStatus]);
+  }, [animeTitle, animeTitleAlt, animeId, animeYear, animeEpisodes, animeStatus]);
 
   async function doManualSearch() {
     if (!manualQuery.trim()) return;
@@ -276,11 +288,17 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMal
     setError(null);
     try {
       const res = await window.api.pahe.search(manualQuery.trim());
-      setResults(res);
-      const best = pickByTitle(res, manualQuery.trim());
+      const filtered = res.filter(candidate => {
+        if (animeYear && candidate.year) {
+          return Math.abs(Number(candidate.year) - animeYear) <= 1;
+        }
+        return true;
+      });
+      setResults(filtered);
+      const best = pickByTitle(filtered, manualQuery.trim());
       if (best) { setSelected(best); setShowManualSearch(false); }
-      else if (res.length > 0) {
-        setSelected(res[0]);
+      else if (filtered.length > 0) {
+        setSelected(filtered[0]);
         setShowManualSearch(false);
       }
     } catch (e: any) {

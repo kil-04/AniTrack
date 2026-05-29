@@ -368,7 +368,13 @@ export default function StreamPlayer() {
         }
 
         const res = await window.api.pahe.search(animeTitle);
-        const scored = res
+        const filtered = res.filter(candidate => {
+          if (targetYear && candidate.year) {
+            return Math.abs(Number(candidate.year) - targetYear) <= 1;
+          }
+          return true;
+        });
+        const scored = filtered
           .map((r) => ({ r, score: scoreMatch(r, animeTitle, targetYear, targetEpisodes, targetStatus) }))
           .filter((x) => x.score >= 20)
           .sort((a, b) => b.score - a.score)
