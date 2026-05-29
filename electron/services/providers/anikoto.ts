@@ -97,60 +97,69 @@ export class AnikotoProvider implements StreamProvider {
   private resolvePending = new Map<string, Promise<StreamData>>();
 
   async search(query: string): Promise<AnimeInfo[]> {
-    const resp = await anikotoFetch(`${BASE_URL}/filter?keyword=${encodeURIComponent(query)}`);
-    if (!resp.ok) return [];
-    const html = await resp.text();
-    
     const results: AnimeInfo[] = [];
-    const blocks = html.split(/<div class="item\s*/);
-    for (let i = 1; i < blocks.length; i++) {
-      const block = blocks[i];
-      
-      const hrefM = /href="[^"]*\/watch\/([^/"]+)/.exec(block);
-      const href = hrefM ? hrefM[1] : null;
-      if (!href) continue;
-      
-      const imgM = /<img src="([^"]+)" alt="([^"]+)"/.exec(block);
-      const imgSrc = imgM ? imgM[1] : null;
-      const imgAlt = imgM ? imgM[2] : null;
-      
-      const jpM = /data-jp="([^"]+)"/.exec(block);
-      const dataJp = jpM ? jpM[1].replace(/&#039;/g, "'") : null;
-      
-      const totalM = /class="ep-status total"[^>]*>\s*<span>\s*(\d+)\s*<\/span>/.exec(block);
-      const totalEps = totalM ? parseInt(totalM[1], 10) : undefined;
-      
-      const title = dataJp || imgAlt || "Untitled";
-      
-      // Extract year from title if possible
-      let parsedYear: number | undefined;
-      const clean = title.trim();
-      const y4Match = clean.match(/\b(19\d\d|20[0-2]\d)\b/);
-      if (y4Match) {
-        parsedYear = parseInt(y4Match[1], 10);
-      } else {
-        const y2Match = clean.match(/'(\d{2})\b/);
-        if (y2Match) {
-          const yy = parseInt(y2Match[1], 10);
-          parsedYear = yy >= 50 ? 1900 + yy : 2000 + yy;
-        } else {
-          const end2Match = clean.match(/\b([5-9]\d|0\d|1\d|2[0-5])\b\s*$/);
-          if (end2Match) {
-            const yy = parseInt(end2Match[1], 10);
-            parsedYear = yy >= 50 ? 1900 + yy : 2000 + yy;
+    
+    const fetchPage = async (pageNo: number) => {
+      try {
+        const resp = await anikotoFetch(`${BASE_URL}/filter?keyword=${encodeURIComponent(query)}&page=${pageNo}`);
+        if (!resp.ok) return;
+        const html = await resp.text();
+        
+        const blocks = html.split(/<div class="item\s*/);
+        for (let i = 1; i < blocks.length; i++) {
+          const block = blocks[i];
+          
+          const hrefM = /href="[^"]*\/watch\/([^/"]+)/.exec(block);
+          const href = hrefM ? hrefM[1] : null;
+          if (!href) continue;
+          
+          const imgM = /<img src="([^"]+)" alt="([^"]+)"/.exec(block);
+          const imgSrc = imgM ? imgM[1] : null;
+          const imgAlt = imgM ? imgM[2] : null;
+          
+          const jpM = /data-jp="([^"]+)"/.exec(block);
+          const dataJp = jpM ? jpM[1].replace(/&#039;/g, "'") : null;
+          
+          const totalM = /class="ep-status total"[^>]*>\s*<span>\s*(\d+)\s*<\/span>/.exec(block);
+          const totalEps = totalM ? parseInt(totalM[1], 10) : undefined;
+          
+          const title = dataJp || imgAlt || "Untitled";
+          
+          // Extract year from title if possible
+          let parsedYear: number | undefined;
+          const clean = title.trim();
+          const y4Match = clean.match(/\b(19\d\d|20[0-2]\d)\b/);
+          if (y4Match) {
+            parsedYear = parseInt(y4Match[1], 10);
+          } else {
+            const y2Match = clean.match(/'(\d{2})\b/);
+            if (y2Match) {
+              const yy = parseInt(y2Match[1], 10);
+              parsedYear = yy >= 50 ? 1900 + yy : 2000 + yy;
+            } else {
+              const end2Match = clean.match(/\b([5-9]\d|0\d|1\d|2[0-5])\b\s*$/);
+              if (end2Match) {
+                const yy = parseInt(end2Match[1], 10);
+                parsedYear = yy >= 50 ? 1900 + yy : 2000 + yy;
+              }
+            }
           }
+          
+          results.push({
+            id: href,
+            providerId: this.id,
+            poster: imgSrc || "",
+            title: title,
+            episodes: totalEps,
+            year: parsedYear,
+          });
         }
+      } catch (err) {
+        console.error(`[Anikoto] Fetching page ${pageNo} failed:`, err);
       }
-      
-      results.push({
-        id: href,
-        providerId: this.id,
-        poster: imgSrc || "",
-        title: title,
-        episodes: totalEps,
-        year: parsedYear,
-      });
-    }
+    };
+
+    await Promise.all([fetchPage(1), fetchPage(2)]);
     return results;
   }
 
