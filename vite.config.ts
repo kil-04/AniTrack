@@ -15,6 +15,7 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
+    entries: ["index.html"],
     include: ["hls.js"],
   },
   server: { port: 5173, strictPort: true },

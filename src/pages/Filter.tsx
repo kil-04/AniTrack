@@ -394,7 +394,7 @@ export default function Filter() {
         ) : (
           <div className="flex flex-col gap-3">
             {topRated.map(anime => (
-              <Link to={`/anime/${anime.id}`} key={anime.id} className="flex gap-3 bg-[#111118] border border-white/5 p-2 rounded-lg hover:bg-white/5 transition-colors">
+              <Link to={`/anime/${anime.id}`} state={{ anime }} key={anime.id} className="flex gap-3 bg-[#111118] border border-white/5 p-2 rounded-lg hover:bg-white/5 transition-colors">
                 {anime.coverImage ? (
                   <img src={anime.coverImage} className="w-14 h-20 object-cover rounded shadow-sm" alt="" />
                 ) : (

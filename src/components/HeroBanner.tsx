@@ -39,6 +39,7 @@ export default function HeroBanner({ anime }: Props) {
         <div className="mt-6 flex items-center gap-3">
           <Link
             to={`/anime/${anime.id}`}
+            state={{ anime }}
             className="flex items-center gap-2 rounded-md bg-white px-5 sm:px-6 py-2 sm:py-2.5 text-xs sm:text-sm font-semibold text-black transition hover:bg-white/90"
           >
             <Play size={16} fill="currentColor" />
@@ -46,6 +47,7 @@ export default function HeroBanner({ anime }: Props) {
           </Link>
           <Link
             to={`/anime/${anime.id}`}
+            state={{ anime }}
             className="flex items-center gap-2 rounded-md bg-white/20 px-5 sm:px-6 py-2 sm:py-2.5 text-xs sm:text-sm font-semibold text-white backdrop-blur transition hover:bg-white/30"
           >
             <Info size={16} />

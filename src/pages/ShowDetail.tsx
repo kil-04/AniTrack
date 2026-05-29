@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { createPortal } from "react-dom";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
 import { ArrowLeft, Plus, Check } from "lucide-react";
 import type { AnimeMeta, ListEntry, RelatedAnime, WatchStatus } from "../../shared/types";
@@ -88,7 +88,7 @@ function RelatedCard({ rel, relationType }: { rel: AnimeMeta; relationType: stri
     <>
       <button
         ref={cardRef}
-        onClick={() => navigate(`/anime/${rel.id}`)}
+        onClick={() => navigate(`/anime/${rel.id}`, { state: { anime: displayAnime } })}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
         className="flex-shrink-0 w-28 text-left group"
@@ -118,7 +118,9 @@ export default function ShowDetail() {
   const { id } = useParams();
   const animeId = Number(id);
   const navigate = useNavigate();
-  const [anime, setAnime] = useState<AnimeMeta | null>(null);
+  const location = useLocation();
+  const stateAnime = location.state?.anime as AnimeMeta | undefined;
+  const [anime, setAnime] = useState<AnimeMeta | null>(stateAnime || null);
   const [related, setRelated] = useState<RelatedAnime[]>([]);
   const list = useAppStore((s) => s.list);
   const refreshList = useAppStore((s) => s.refreshList);
@@ -128,15 +130,23 @@ export default function ShowDetail() {
 
   useEffect(() => {
     let cancelled = false;
-    setAnime(null);
+    if (stateAnime) {
+      setAnime(stateAnime);
+    } else {
+      setAnime(null);
+    }
     setRelated([]);
     window.api.anilist.get(animeId).then((a) => {
       if (cancelled) return;
       if (a) { setAnime(a); return; }
       const fromStore = list.find((x) => x.entry.animeId === animeId)?.anime;
       if (fromStore) setAnime(fromStore);
-      else setAnime({ id: animeId, title: "Unknown", coverImage: null } as any);
-    }).catch(() => {});
+      else if (!stateAnime) setAnime({ id: animeId, title: "Unknown", coverImage: null } as any);
+    }).catch(() => {
+      if (!stateAnime && !cancelled) {
+        setAnime({ id: animeId, title: "Unknown", coverImage: null } as any);
+      }
+    });
     if (animeId > 0 && animeId < 1_000_000_000) {
       window.api.anilist.relations(animeId)
         .then((r) => {
@@ -147,7 +157,7 @@ export default function ShowDetail() {
     }
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [animeId]);
+  }, [animeId, stateAnime]);
 
   if (!anime) return <div className="p-8 text-white/40">Loading…</div>;
 
@@ -324,6 +334,7 @@ export default function ShowDetail() {
           <PahePanel
             animeTitle={anime.titleEnglish || anime.title}
             animeTitleAlt={anime.titleEnglish ? anime.title : undefined}
+            animeTitleRomaji={anime.titleRomaji ?? undefined}
             animeId={anime.id}
             animeMalId={anime.malId ?? undefined}
             animeYear={anime.year ?? undefined}

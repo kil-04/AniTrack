@@ -64,17 +64,23 @@ export function registerAuthIpc(getMainWindow: () => BrowserWindow | null) {
   ipcMain.handle(IPC.ANILIST_TRENDING, () => trending());
   ipcMain.handle(IPC.ANILIST_RELATIONS, (_e, id: number) => getRelations(id));
   ipcMain.handle(IPC.ANILIST_GET, async (_e, id: number) => {
+    console.log(`[IPC.ANILIST_GET] Received id:`, id, `type:`, typeof id);
     // Skip AniList for synthetic IDs
     if (id <= 0 || id > 1_000_000_000) {
+      console.log(`[IPC.ANILIST_GET] Synthetic/invalid ID, fallback to getAnime`);
       return getAnime(id);
     }
     const cached = getAnime(id);
+    console.log(`[IPC.ANILIST_GET] Cached lookup:`, cached ? `Found (${cached.title})` : `Not found`);
     if (cached?.coverImage) return cached;
     try {
+      console.log(`[IPC.ANILIST_GET] Fetching from AniList getById(${id})`);
       const anime = await getById(id);
+      console.log(`[IPC.ANILIST_GET] AniList fetch result:`, anime ? `Success (${anime.title})` : `Null`);
       if (anime) upsertAnime(anime);
       return anime ?? cached ?? null;
-    } catch {
+    } catch (err) {
+      console.error(`[IPC.ANILIST_GET] Error fetching getById(${id}):`, err);
       return cached ?? null;
     }
   });

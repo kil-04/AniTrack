@@ -96,6 +96,7 @@ const Card = React.memo(function Card({ anime, progressPercent, episode, size = 
       >
         <Link 
           to={`/anime/${anime.id}`} 
+          state={{ anime: displayAnime }}
           ref={cardRef}
           onMouseEnter={() => setIsHovered(true)}
           onMouseLeave={() => setIsHovered(false)}

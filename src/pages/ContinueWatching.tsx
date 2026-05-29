@@ -150,15 +150,17 @@ export default function ContinueWatching() {
 }
 
 function ContinueWatchingPageCard({ item, dismiss }: { item: any, dismiss: (id: number) => void }) {
+  const [isHovered, setIsHovered] = useState(false);
+  const [fetchedMeta, setFetchedMeta] = useState<any>(null);
+  const [isFetching, setIsFetching] = useState(false);
+  const displayAnime = fetchedMeta || item.anime;
+
   const cwTo = item.animePaheSession
     ? cwStreamUrl(item.animePaheSession, item.anime.title, item.episode, item.anime.coverImage, item.anime.id)
     : item.filePath
     ? `/player/${item.anime.id}/${item.episode}`
-    : "/anime/" + item.anime.id;
+    : { pathname: "/anime/" + item.anime.id, state: { anime: displayAnime } };
 
-  const [isHovered, setIsHovered] = useState(false);
-  const [fetchedMeta, setFetchedMeta] = useState<any>(null);
-  const [isFetching, setIsFetching] = useState(false);
   const cardRef = useRef<HTMLAnchorElement>(null);
   const [rect, setRect] = useState<DOMRect | null>(null);
 
@@ -192,8 +194,6 @@ function ContinueWatchingPageCard({ item, dismiss }: { item: any, dismiss: (id: 
       }
     }
   }, [isHovered, item.anime.id, item.anime.title, item.anime.synopsis, item.anime.coverImage, fetchedMeta, isFetching]);
-
-  const displayAnime = fetchedMeta || item.anime;
 
   const tooltipPortal = isHovered && rect ? createPortal(
     <div 

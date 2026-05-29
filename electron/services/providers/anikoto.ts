@@ -274,13 +274,74 @@ export class AnikotoProvider implements StreamProvider {
   }
 
   async getStreamLinks(episodeId: string, animeId: string): Promise<StreamLink[]> {
-    return [
-      {
-        id: JSON.stringify({ episodeId, animeId, subType: "soft" }),
-        quality: "Auto (Soft Sub)",
-        audio: "jpn"
+    const parts = episodeId.split(':');
+    const serversParam = parts[2] || "";
+    if (!serversParam) {
+      return [
+        {
+          id: JSON.stringify({ episodeId, animeId, subType: "soft" }),
+          quality: "Auto (Soft Sub)",
+          audio: "jpn"
+        }
+      ];
+    }
+
+    try {
+      const serversResp = await anikotoFetch(`${BASE_URL}/ajax/server/list?servers=${encodeURIComponent(serversParam)}`, {
+        headers: {
+          'X-Requested-With': 'XMLHttpRequest'
+        }
+      });
+      if (!serversResp.ok) throw new Error(`Status ${serversResp.status}`);
+      const serversJson = await serversResp.json() as any;
+      const serversHtml = serversJson.result || "";
+
+      const labels: string[] = [];
+      const labelRe = /<label[^>]*>([\s\S]*?)<\/label>/g;
+      let match;
+      while ((match = labelRe.exec(serversHtml)) !== null) {
+        labels.push(match[1].replace(/<[^+]+/g, '').replace(/<[^>]+>/g, '').trim().toUpperCase());
       }
-    ];
+
+      const links: StreamLink[] = [];
+      
+      const hasSub = labels.some(l => l.includes("SUB") && !l.includes("H-SUB") && !l.includes("HSUB") && !l.includes("HARDSUB") && !l.includes("HARD SUB"));
+      const hasHSub = labels.some(l => l.includes("H-SUB") || l.includes("HSUB") || l.includes("HARDSUB") || l.includes("HARD SUB"));
+      const hasDub = labels.some(l => l.includes("DUB"));
+
+      if (hasSub || (!hasHSub && !hasDub)) {
+        links.push({
+          id: JSON.stringify({ episodeId, animeId, subType: "soft" }),
+          quality: "Auto (Soft Sub)",
+          audio: "jpn"
+        });
+      }
+      if (hasHSub) {
+        links.push({
+          id: JSON.stringify({ episodeId, animeId, subType: "hard" }),
+          quality: "Auto (Hard Sub)",
+          audio: "jpn"
+        });
+      }
+      if (hasDub) {
+        links.push({
+          id: JSON.stringify({ episodeId, animeId, subType: "dub" }),
+          quality: "Auto (Dub)",
+          audio: "jpn"
+        });
+      }
+
+      return links;
+    } catch (err) {
+      console.error("[Anikoto] Failed to fetch server options in getStreamLinks:", err);
+      return [
+        {
+          id: JSON.stringify({ episodeId, animeId, subType: "soft" }),
+          quality: "Auto (Soft Sub)",
+          audio: "jpn"
+        }
+      ];
+    }
   }
 
   async resolveStream(linkId: string): Promise<StreamData> {
@@ -381,9 +442,16 @@ export class AnikotoProvider implements StreamProvider {
         return l.includes("SUB") && !isHardLabel(labelStr);
       };
 
+      const isDubLabel = (labelStr: string) => {
+        const l = labelStr.toUpperCase();
+        return l.includes("DUB");
+      };
+
       // Find best server matching subtype selection
       const targetType = types.find(t => {
-        return subType === "hard" ? isHardLabel(t.label) : isSoftLabel(t.label);
+        if (subType === "hard") return isHardLabel(t.label);
+        if (subType === "dub") return isDubLabel(t.label);
+        return isSoftLabel(t.label);
       });
       
       let isActualHardSub = false;

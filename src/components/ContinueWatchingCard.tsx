@@ -26,15 +26,17 @@ function cwStreamUrl(session: string, title: string, ep: number, img: string, an
 }
 
 const ContinueWatchingCard = React.memo(function ContinueWatchingCard({ item, paheEpTotals, refreshContinue }: { item: any, paheEpTotals: Map<string, number>, refreshContinue: () => void }) {
+  const [isHovered, setIsHovered] = useState(false);
+  const [fetchedMeta, setFetchedMeta] = useState<AnimeMeta | null>(null);
+  const [isFetching, setIsFetching] = useState(false);
+  const displayAnime = fetchedMeta || item.anime;
+
   const cwTo = item.animePaheSession
     ? cwStreamUrl(item.animePaheSession, item.anime.title, item.episode, item.anime.coverImage, item.anime.id)
     : item.filePath
     ? `/player/${item.anime.id}/${item.episode}`
-    : "/anime/" + item.anime.id;
+    : { pathname: "/anime/" + item.anime.id, state: { anime: displayAnime } };
 
-  const [isHovered, setIsHovered] = useState(false);
-  const [fetchedMeta, setFetchedMeta] = useState<AnimeMeta | null>(null);
-  const [isFetching, setIsFetching] = useState(false);
   const cardRef = useRef<HTMLAnchorElement>(null);
   const [rect, setRect] = useState<DOMRect | null>(null);
 
@@ -62,14 +64,12 @@ const ContinueWatchingCard = React.memo(function ContinueWatchingCard({ item, pa
         }).then((meta: AnimeMeta | null) => {
            if (meta) setFetchedMeta(meta);
            setIsFetching(false);
-        }).catch(() => setIsFetching(false));
+         }).catch(() => setIsFetching(false));
       } else {
         setIsFetching(false);
       }
     }
   }, [isHovered, item.anime.id, item.anime.title, item.anime.synopsis, item.anime.coverImage, fetchedMeta, isFetching]);
-
-  const displayAnime = fetchedMeta || item.anime;
 
   const tooltipPortal = isHovered && rect ? createPortal(
     <div 

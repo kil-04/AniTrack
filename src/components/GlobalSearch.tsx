@@ -63,7 +63,7 @@ export default function GlobalSearch() {
     } else if (e.key === 'Enter') {
       e.preventDefault();
       if (selectedIndex >= 0 && selectedIndex < results.length) {
-        navigate('/anime/' + results[selectedIndex].id);
+        navigate('/anime/' + results[selectedIndex].id, { state: { anime: results[selectedIndex] } });
         setFocused(false);
       } else {
         navigate('/filter?q=' + encodeURIComponent(q.trim()));
@@ -117,6 +117,7 @@ export default function GlobalSearch() {
                 <Link
                   key={anime.id}
                   to={'/anime/' + anime.id}
+                  state={{ anime }}
                   onClick={() => setFocused(false)}
                   className={`flex items-center gap-3 px-4 py-2 hover:bg-white/5 transition-colors ${selectedIndex === idx ? 'bg-white/10' : ''}`}
                 >

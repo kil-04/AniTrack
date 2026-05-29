@@ -256,7 +256,7 @@ export default function Home() {
                 </div>
                 <div className="text-white/70 line-clamp-2 sm:line-clamp-3 mb-6 text-xs sm:text-sm md:text-base max-w-2xl leading-relaxed drop-shadow-md" dangerouslySetInnerHTML={{ __html: anime.synopsis || '' }} />
                 <div className="flex items-center gap-4">
-                  <Link to={`/anime/${anime.id}`} className="flex items-center gap-2 bg-white text-black px-8 sm:px-10 py-3 sm:py-4 rounded-full font-bold text-base sm:text-lg hover:scale-105 hover:bg-gray-200 transition-all shadow-[0_0_40px_rgba(255,255,255,0.4)]">
+                  <Link to={`/anime/${anime.id}`} state={{ anime }} className="flex items-center gap-2 bg-white text-black px-8 sm:px-10 py-3 sm:py-4 rounded-full font-bold text-base sm:text-lg hover:scale-105 hover:bg-gray-200 transition-all shadow-[0_0_40px_rgba(255,255,255,0.4)]">
                     <Play size={20} fill="currentColor" /> Play Now
                   </Link>
                 </div>

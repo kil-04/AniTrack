@@ -10,6 +10,7 @@ const _searchCache = new Map<string | number, { results: any[]; selected: any }>
 interface Props {
   animeTitle: string;
   animeTitleAlt?: string;
+  animeTitleRomaji?: string;
   animeId?: number;
   animeMalId?: number;
   animeYear?: number;
@@ -130,7 +131,7 @@ function scoreMatch(candidate: any, targetTitle: string, targetYear?: number, ta
   return score;
 }
 
-export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMalId, animeYear, animeEpisodes, animeStatus, inline = false, resumeEpisode }: Props) {
+export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji, animeId, animeMalId, animeYear, animeEpisodes, animeStatus, inline = false, resumeEpisode }: Props) {
   const navigate = useNavigate();
 
   const [results, setResults] = useState<any[]>([]);
@@ -206,18 +207,12 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMal
     setSearching(true);
 
     async function runSearch() {
-      async function tryQuery(query: string, scoreAgainst: string): Promise<boolean> {
-        const r: any[] = await window.api.pahe.search(query);
-        const filtered = r.filter(candidate => {
-          if (animeYear && candidate.year) {
-            return Math.abs(Number(candidate.year) - animeYear) <= 1;
-          }
-          return true;
-        });
-        let b = pickByTitle(filtered, scoreAgainst);
-        if (!b && (animeId || animeMalId) && filtered.length > 0) b = await pickByIds(filtered);
-        if (b) { setResults(filtered); setSelected(b); _searchCache.set(cacheKey, { results: filtered, selected: b }); return true; }
-        return false;
+      const searchQueries = [animeTitle];
+      if (animeTitleAlt && !searchQueries.some(q => q.toLowerCase() === animeTitleAlt.toLowerCase())) {
+        searchQueries.push(animeTitleAlt);
+      }
+      if (animeTitleRomaji && !searchQueries.some(q => q.toLowerCase() === animeTitleRomaji.toLowerCase())) {
+        searchQueries.push(animeTitleRomaji);
       }
 
       const PARTICLES = new Set(["no", "na", "wa", "ga", "wo", "ni", "de", "to", "mo", "ya", "ka", "mo"]);
@@ -225,62 +220,121 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMal
         return title.split(/\s+/).filter(w => !PARTICLES.has(w.toLowerCase())).slice(0, n).join(" ");
       }
 
-      if (await tryQuery(animeTitle, animeTitle)) return;
-      if (animeTitleAlt && await tryQuery(animeTitleAlt, animeTitleAlt)) return;
-
       const twoWords = meaningfulWords(animeTitle, 2);
-      if (twoWords !== animeTitle && twoWords.length > 3) {
-        if (await tryQuery(twoWords, animeTitle)) return;
+      if (twoWords !== animeTitle && twoWords.length > 3 && !searchQueries.some(q => q.toLowerCase() === twoWords.toLowerCase())) {
+        searchQueries.push(twoWords);
       }
 
       if (animeTitleAlt) {
         const twoWordsAlt = meaningfulWords(animeTitleAlt, 2);
-        if (twoWordsAlt !== animeTitleAlt && twoWordsAlt.length > 3) {
-          if (await tryQuery(twoWordsAlt, animeTitleAlt)) return;
+        if (twoWordsAlt !== animeTitleAlt && twoWordsAlt.length > 3 && !searchQueries.some(q => q.toLowerCase() === twoWordsAlt.toLowerCase())) {
+          searchQueries.push(twoWordsAlt);
         }
       }
 
       const oneWord = meaningfulWords(animeTitle, 1);
-      if (oneWord.length > 3) {
-        const r: any[] = await window.api.pahe.search(oneWord);
-        if (r.length > 0) {
-          const filtered = r.filter(candidate => {
-            if (animeYear && candidate.year) {
-              return Math.abs(Number(candidate.year) - animeYear) <= 1;
-            }
-            return true;
-          });
-          let b = pickByTitle(filtered, animeTitle);
-          if (!b && (animeId || animeMalId)) b = await pickByIds(filtered);
-          if (b) { setResults(filtered); setSelected(b); _searchCache.set(cacheKey, { results: filtered, selected: b }); return; }
+      if (oneWord.length > 3 && !searchQueries.some(q => q.toLowerCase() === oneWord.toLowerCase())) {
+        searchQueries.push(oneWord);
+      }
+
+      // Fetch results for all queries in parallel
+      const searchResultsList = await Promise.all(
+        searchQueries.map(q => window.api.pahe.search(q).catch(() => []))
+      );
+
+      // Combine and deduplicate candidates
+      const combinedMap = new Map<string, { candidate: any; matchedQuery: string }>();
+      for (let idx = 0; idx < searchQueries.length; idx++) {
+        const query = searchQueries[idx];
+        const list = searchResultsList[idx];
+        for (const item of list) {
+          const key = `${item.providerId ?? "animepahe"}:${item.id}`;
+          if (!combinedMap.has(key)) {
+            combinedMap.set(key, { candidate: item, matchedQuery: query });
+          }
         }
       }
 
-      {
-        const realAnilistId = animeId && animeId < 1_000_000_000 ? animeId : undefined;
-        const realMalId = animeMalId
-          ?? (animeId && animeId >= 1_000_000_000 ? animeId - 1_000_000_000 : undefined);
+      // ID fallback check
+      const realAnilistId = animeId && animeId < 1_000_000_000 ? animeId : undefined;
+      const realMalId = animeMalId
+        ?? (animeId && animeId >= 1_000_000_000 ? animeId - 1_000_000_000 : undefined);
+      if (realAnilistId || realMalId) {
+        try {
+          const found = await window.api.pahe.findById(realAnilistId, realMalId);
+          if (found) {
+            const key = `${found.providerId ?? "animepahe"}:${found.id}`;
+            if (!combinedMap.has(key)) {
+              combinedMap.set(key, { candidate: found, matchedQuery: animeTitle });
+            }
+          }
+        } catch { /* swallow */ }
+      }
+
+      const allCandidates = Array.from(combinedMap.values());
+
+      // Filter by year
+      const filtered = allCandidates.filter(({ candidate }) => {
+        if (animeYear && candidate.year) {
+          return Math.abs(Number(candidate.year) - animeYear) <= 1;
+        }
+        return true;
+      });
+
+      // Score candidates
+      const scored = await Promise.all(
+        filtered.map(async ({ candidate, matchedQuery }) => {
+          let score = scoreMatch(candidate, matchedQuery, animeYear, animeEpisodes, animeStatus);
+          for (const otherQuery of searchQueries) {
+            if (otherQuery !== matchedQuery) {
+              const otherScore = scoreMatch(candidate, otherQuery, animeYear, animeEpisodes, animeStatus);
+              if (otherScore > score) score = otherScore;
+            }
+          }
+          return { candidate, score };
+        })
+      );
+
+      // Filter and sort scored results
+      const validResults = scored
+        .filter(x => x.score >= 20)
+        .sort((a, b) => b.score - a.score)
+        .map(x => x.candidate);
+
+      if (validResults.length > 0) {
+        setResults(validResults);
+        
+        let best = null;
         if (realAnilistId || realMalId) {
-          try {
-            const found = await window.api.pahe.findById(realAnilistId, realMalId);
-            if (found) {
-              setResults([found]);
-              setSelected(found);
-              _searchCache.set(cacheKey, { results: [found], selected: found });
-              return;
-            }
-          } catch { /* swallow */ }
+          const topThree = validResults.slice(0, 3);
+          const checks = await Promise.all(
+            topThree.map(async (candidate) => {
+              const ids = (await window.api.pahe.getIds(candidate.paheId ?? candidate.id, candidate.session ?? candidate.id).catch(() => ({}))) as any;
+              return { candidate, ids };
+            })
+          );
+          for (const { candidate, ids } of checks) {
+            if (realAnilistId && ids.anilistId === realAnilistId) { best = candidate; break; }
+            if (realMalId && ids.malId === realMalId) { best = candidate; break; }
+          }
         }
-      }
 
-      setResults([]);
-      setManualQuery(animeTitle);
-      if (inline) setShowManualSearch(true);
+        if (!best) {
+          best = validResults[0];
+        }
+
+        setSelected(best);
+        _searchCache.set(cacheKey, { results: validResults, selected: best });
+      } else {
+        setResults([]);
+        setManualQuery(animeTitle);
+        if (inline) setShowManualSearch(true);
+      }
     }
 
     runSearch().catch((e: any) => setError(String(e))).finally(() => setSearching(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [animeTitle, animeTitleAlt, animeId, animeYear, animeEpisodes, animeStatus]);
+  }, [animeTitle, animeTitleAlt, animeTitleRomaji, animeId, animeYear, animeEpisodes, animeStatus]);
 
   async function doManualSearch() {
     if (!manualQuery.trim()) return;
@@ -556,20 +610,20 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMal
               <button onClick={() => { setSelected(null); setEpisodes([]); }} className="text-xs text-muted hover:text-white">Change</button>
             </div>
           )}
-          {results.filter(r => r.title === selected.title).length > 1 && (
+          {results.some(r => (r.providerId ?? "animepahe") !== (selected.providerId ?? "animepahe")) && (
             <div className="mb-2 flex items-center justify-between">
               <span className="text-xs text-muted">Source:</span>
               <select 
                 value={selected.providerId ?? "animepahe"}
                 onChange={e => {
-                  const chosen = results.find(r => r.title === selected.title && (r.providerId ?? "animepahe") === e.target.value);
+                  const chosen = results.find(r => (r.providerId ?? "animepahe") === e.target.value);
                   if (chosen) setSelected(chosen);
                 }}
                 className="bg-bg-elev text-xs text-muted border border-white/10 rounded px-2 py-1 outline-none"
               >
-                {results.filter(r => r.title === selected.title).map(r => (
-                  <option key={r.providerId ?? "animepahe"} value={r.providerId ?? "animepahe"}>
-                    {r.providerId === 'anikoto' ? 'Anikoto' : 'AnimePahe'}
+                {Array.from(new Set(results.map(r => r.providerId ?? "animepahe"))).map(pid => (
+                  <option key={pid} value={pid}>
+                    {pid === 'anikoto' ? 'Anikoto' : 'AnimePahe'}
                   </option>
                 ))}
               </select>

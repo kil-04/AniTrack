@@ -353,6 +353,7 @@ export default function StreamPlayer() {
         let targetYear = params.get("year") ? Number(params.get("year")) : undefined;
         let targetEpisodes = params.get("episodes") ? Number(params.get("episodes")) : undefined;
         let targetStatus = params.get("status") ? params.get("status")! : undefined;
+        const searchQueries = [animeTitle];
         const anilistId = Number(params.get("animeId") ?? params.get("anilistId") ?? 0);
         if (anilistId > 0 && anilistId < 1_000_000_000) {
           try {
@@ -361,24 +362,53 @@ export default function StreamPlayer() {
               if (meta.year) targetYear = meta.year;
               if (meta.episodes) targetEpisodes = meta.episodes;
               if (meta.status) targetStatus = meta.status;
+              if (meta.titleRomaji && meta.titleRomaji.toLowerCase() !== animeTitle.toLowerCase()) {
+                searchQueries.push(meta.titleRomaji);
+              }
+              if (meta.title && meta.title.toLowerCase() !== animeTitle.toLowerCase() && (!meta.titleRomaji || meta.title.toLowerCase() !== meta.titleRomaji.toLowerCase())) {
+                searchQueries.push(meta.title);
+              }
             }
           } catch (e) {
             console.warn("[StreamPlayer] Failed to load AniList metadata:", e);
           }
         }
 
-        const res = await window.api.pahe.search(animeTitle);
-        const filtered = res.filter(candidate => {
-          if (targetYear && candidate.year) {
-            return Math.abs(Number(candidate.year) - targetYear) <= 1;
+        // Run searches in parallel
+        const searchResultsList = await Promise.all(searchQueries.map(q => window.api.pahe.search(q).catch(() => [])));
+        const combinedMap = new Map<string, { item: any; matchedQuery: string }>();
+        for (let idx = 0; idx < searchQueries.length; idx++) {
+          const list = searchResultsList[idx];
+          const query = searchQueries[idx];
+          for (const item of list) {
+            const uniqKey = `${item.providerId ?? "animepahe"}:${item.id}`;
+            if (!combinedMap.has(uniqKey)) {
+              combinedMap.set(uniqKey, { item, matchedQuery: query });
+            }
+          }
+        }
+
+        const filtered = Array.from(combinedMap.values()).filter(({ item }) => {
+          if (targetYear && item.year) {
+            return Math.abs(Number(item.year) - targetYear) <= 1;
           }
           return true;
         });
+
         const scored = filtered
-          .map((r) => ({ r, score: scoreMatch(r, animeTitle, targetYear, targetEpisodes, targetStatus) }))
+          .map(({ item, matchedQuery }) => {
+            let score = scoreMatch(item, matchedQuery, targetYear, targetEpisodes, targetStatus);
+            for (const otherQuery of searchQueries) {
+              if (otherQuery !== matchedQuery) {
+                const otherScore = scoreMatch(item, otherQuery, targetYear, targetEpisodes, targetStatus);
+                if (otherScore > score) score = otherScore;
+              }
+            }
+            return { item, score };
+          })
           .filter((x) => x.score >= 20)
           .sort((a, b) => b.score - a.score)
-          .map((x) => x.r);
+          .map((x) => x.item);
 
         if (scored.length > 0) {
           // Deduplicate available sources by provider ID, keeping the highest-scored match for each provider
@@ -1674,7 +1704,7 @@ export default function StreamPlayer() {
             if (id > 0) { navigate(`/anime/${id}`); return; }
             try {
               const results = await window.api.anilist.search(animeTitle);
-              if (results.length > 0) navigate(`/anime/${results[0].id}`);
+              if (results.length > 0) navigate(`/anime/${results[0].id}`, { state: { anime: results[0] } });
             } catch { /* ignore */ }
           }}
         >
