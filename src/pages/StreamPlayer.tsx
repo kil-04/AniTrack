@@ -392,8 +392,8 @@ export default function StreamPlayer() {
         }
       } else {
         // Fallback checks for incorrect mapping
-        const hasHyphens = animeSession.includes("-");
-        if (providerId === "animepahe" && hasHyphens && anikotoMatch) {
+        const isPaheSession = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(animeSession);
+        if (providerId === "animepahe" && !isPaheSession && anikotoMatch) {
           p.set("providerId", "anikoto");
           p.set("session", anikotoMatch.id || anikotoMatch.session);
           changed = true;
@@ -401,7 +401,7 @@ export default function StreamPlayer() {
           p.set("providerId", "anikoto");
           p.set("session", anikotoMatch.id || anikotoMatch.session);
           changed = true;
-        } else if (providerId === "anikoto" && !anikotoMatch && paheMatch) {
+        } else if (providerId === "anikoto" && isPaheSession && paheMatch) {
           p.set("providerId", "animepahe");
           p.set("session", paheMatch.id || paheMatch.session);
           changed = true;
