@@ -72,7 +72,7 @@ function getSeasonNumber(title: string): number | null {
   return null;
 }
 
-function scoreMatch(candidate: any, targetTitle: string, targetYear?: number): number {
+function scoreMatch(candidate: any, targetTitle: string, targetYear?: number, targetEpisodes?: number, targetStatus?: string): number {
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, " ").replace(/\s+/g, " ").trim();
   const t = norm(targetTitle);
   const c = norm(candidate.title ?? "");
@@ -113,6 +113,32 @@ function scoreMatch(candidate: any, targetTitle: string, targetYear?: number): n
   const targetSeason = getSeasonNumber(targetTitle) || 1;
   if (candidateSeason !== targetSeason) {
     score -= 50; // Heavy penalty for mismatched seasons
+  }
+
+  // Episode mismatch check
+  if (targetEpisodes && candidate.episodes) {
+    const diff = Math.abs(candidate.episodes - targetEpisodes);
+    if (diff > 0) {
+      const isTargetAiring = targetStatus === "RELEASING" || targetStatus === "RELEASING".toLowerCase();
+      const isCandidateAiring = candidate.status && (
+        candidate.status.toLowerCase().includes("airing") ||
+        candidate.status.toLowerCase().includes("releasing") ||
+        candidate.status.toLowerCase().includes("current")
+      );
+      const isAiring = isTargetAiring || isCandidateAiring;
+
+      if (isAiring && candidate.episodes < targetEpisodes) {
+        // No penalty if the show is currently airing and has fewer episodes on the provider
+      } else {
+        if (diff <= 1) {
+          score -= 2;
+        } else if (diff <= 3) {
+          score -= 5;
+        } else {
+          score -= 40; // Heavy penalty for mismatch
+        }
+      }
+    }
   }
 
   return score;
@@ -323,34 +349,49 @@ export default function StreamPlayer() {
 
     // Fetch available providers for this anime
     if (animeTitle && animeTitle !== "Anime") {
-      window.api.pahe.search(animeTitle)
-        .then((res: any[]) => {
-          const targetYear = params.get("year") ? Number(params.get("year")) : undefined;
-          const scored = res
-            .map((r) => ({ r, score: scoreMatch(r, animeTitle, targetYear) }))
-            .filter((x) => x.score >= 20)
-            .sort((a, b) => b.score - a.score)
-            .map((x) => x.r);
-
-          if (scored.length > 0) {
-            // Deduplicate available sources by provider ID, keeping the highest-scored match for each provider
-            const uniqueProviders: any[] = [];
-            const seenProviders = new Set<string>();
-            for (const item of scored) {
-              const pid = item.providerId || "animepahe";
-              if (!seenProviders.has(pid)) {
-                seenProviders.add(pid);
-                uniqueProviders.push(item);
-              }
+      (async () => {
+        let targetYear = params.get("year") ? Number(params.get("year")) : undefined;
+        let targetEpisodes = params.get("episodes") ? Number(params.get("episodes")) : undefined;
+        let targetStatus = params.get("status") ? params.get("status")! : undefined;
+        const anilistId = Number(params.get("animeId") ?? params.get("anilistId") ?? 0);
+        if (anilistId > 0 && anilistId < 1_000_000_000) {
+          try {
+            const meta = await window.api.anilist.get(anilistId);
+            if (meta) {
+              if (meta.year) targetYear = meta.year;
+              if (meta.episodes) targetEpisodes = meta.episodes;
+              if (meta.status) targetStatus = meta.status;
             }
-            setAvailableSources(uniqueProviders);
-          } else {
-            setLoadingEps(false);
+          } catch (e) {
+            console.warn("[StreamPlayer] Failed to load AniList metadata:", e);
           }
-        })
-        .catch(() => {
+        }
+
+        const res = await window.api.pahe.search(animeTitle);
+        const scored = res
+          .map((r) => ({ r, score: scoreMatch(r, animeTitle, targetYear, targetEpisodes, targetStatus) }))
+          .filter((x) => x.score >= 20)
+          .sort((a, b) => b.score - a.score)
+          .map((x) => x.r);
+
+        if (scored.length > 0) {
+          // Deduplicate available sources by provider ID, keeping the highest-scored match for each provider
+          const uniqueProviders: any[] = [];
+          const seenProviders = new Set<string>();
+          for (const item of scored) {
+            const pid = item.providerId || "animepahe";
+            if (!seenProviders.has(pid)) {
+              seenProviders.add(pid);
+              uniqueProviders.push(item);
+            }
+          }
+          setAvailableSources(uniqueProviders);
+        } else {
           setLoadingEps(false);
-        });
+        }
+      })().catch(() => {
+        setLoadingEps(false);
+      });
     } else {
       setLoadingEps(false);
     }

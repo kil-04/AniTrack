@@ -327,6 +327,8 @@ export default function ShowDetail() {
             animeId={anime.id}
             animeMalId={anime.malId ?? undefined}
             animeYear={anime.year ?? undefined}
+            animeEpisodes={anime.episodes ?? undefined}
+            animeStatus={anime.status ?? undefined}
             resumeEpisode={entry ? entry.episodesWatched + 1 : 1}
             inline
           />

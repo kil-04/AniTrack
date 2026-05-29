@@ -13,6 +13,8 @@ interface Props {
   animeId?: number;
   animeMalId?: number;
   animeYear?: number;
+  animeEpisodes?: number;
+  animeStatus?: string;
   inline?: boolean;
   /** Episode to jump to when "Open Player" is clicked without a specific ep selected */
   resumeEpisode?: number;
@@ -56,7 +58,7 @@ function getSeasonNumber(title: string): number | null {
   return null;
 }
 
-function scoreMatch(candidate: any, targetTitle: string, targetYear?: number): number {
+function scoreMatch(candidate: any, targetTitle: string, targetYear?: number, targetEpisodes?: number, targetStatus?: string): number {
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, " ").replace(/\s+/g, " ").trim();
   const t = norm(targetTitle);
   const c = norm(candidate.title ?? "");
@@ -99,10 +101,36 @@ function scoreMatch(candidate: any, targetTitle: string, targetYear?: number): n
     score -= 50; // Heavy penalty for mismatched seasons
   }
 
+  // Episode mismatch check
+  if (targetEpisodes && candidate.episodes) {
+    const diff = Math.abs(candidate.episodes - targetEpisodes);
+    if (diff > 0) {
+      const isTargetAiring = targetStatus === "RELEASING" || targetStatus === "RELEASING".toLowerCase();
+      const isCandidateAiring = candidate.status && (
+        candidate.status.toLowerCase().includes("airing") ||
+        candidate.status.toLowerCase().includes("releasing") ||
+        candidate.status.toLowerCase().includes("current")
+      );
+      const isAiring = isTargetAiring || isCandidateAiring;
+
+      if (isAiring && candidate.episodes < targetEpisodes) {
+        // No penalty if the show is currently airing and has fewer episodes on the provider
+      } else {
+        if (diff <= 1) {
+          score -= 2;
+        } else if (diff <= 3) {
+          score -= 5;
+        } else {
+          score -= 40; // Heavy penalty for mismatch
+        }
+      }
+    }
+  }
+
   return score;
 }
 
-export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMalId, animeYear, inline = false, resumeEpisode }: Props) {
+export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMalId, animeYear, animeEpisodes, animeStatus, inline = false, resumeEpisode }: Props) {
   const navigate = useNavigate();
 
   const [results, setResults] = useState<any[]>([]);
@@ -131,7 +159,7 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMal
     if (res.length === 0) return null;
     if (res.length === 1) return res[0];
     const scored = res
-      .map((r: any) => ({ r, score: scoreMatch(r, title, animeYear) }))
+      .map((r: any) => ({ r, score: scoreMatch(r, title, animeYear, animeEpisodes, animeStatus) }))
       .sort((a: any, b: any) => b.score - a.score);
     return scored[0].score >= 20 ? scored[0].r : null;
   }
@@ -143,7 +171,7 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMal
       ?? (animeId && animeId >= 1_000_000_000 ? animeId - 1_000_000_000 : undefined);
     if (!realAnilistId && !realMalId) return null;
     const top = [...res]
-      .sort((a, b) => scoreMatch(b, animeTitle, animeYear) - scoreMatch(a, animeTitle, animeYear))
+      .sort((a, b) => scoreMatch(b, animeTitle, animeYear, animeEpisodes, animeStatus) - scoreMatch(a, animeTitle, animeYear, animeEpisodes, animeStatus))
       .slice(0, 3);
     const checks = await Promise.all(
       top.map(async (candidate) => {
@@ -322,6 +350,8 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMal
     if (animeId) p.set("animeId", String(animeId));
     if (selected.poster) p.set("coverUrl", selected.poster);
     if (epOffset) p.set("episodeOffset", String(epOffset));
+    if (animeEpisodes) p.set("episodes", String(animeEpisodes));
+    if (animeStatus) p.set("status", animeStatus);
     navigate(`/stream-player?${p.toString()}`);
   }
 
