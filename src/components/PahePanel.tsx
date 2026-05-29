@@ -91,7 +91,7 @@ function scoreMatch(candidate: any, targetTitle: string, targetYear?: number, ta
   if (targetYear && candidate.year) {
     if (Number(candidate.year) === targetYear) score += 8;
     else if (Math.abs(Number(candidate.year) - targetYear) <= 1) score += 2;
-    else score -= 5;
+    else score -= 30; // Heavy year mismatch penalty
   }
 
   // Season number mismatch check
