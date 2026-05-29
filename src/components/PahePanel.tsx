@@ -268,7 +268,7 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeId, animeMal
 
     runSearch().catch((e: any) => setError(String(e))).finally(() => setSearching(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [animeTitle, animeTitleAlt, animeId]);
+  }, [animeTitle, animeTitleAlt, animeId, animeEpisodes, animeStatus]);
 
   async function doManualSearch() {
     if (!manualQuery.trim()) return;
