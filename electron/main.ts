@@ -74,6 +74,7 @@ let mainWindow: BrowserWindow | null = null;
 let malFlushTimer: NodeJS.Timeout | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
+let isUpdating = false;
 
 // Web request interceptors — installed once at startup, re-installed when the
 // AnimePahe base URL changes (so the snapshot/CDN host derivations stay current).
@@ -434,7 +435,7 @@ app.on("before-quit", () => {
 
 app.on("window-all-closed", () => {
   // Keep the app running in the tray on Windows; only quit when explicitly requested.
-  if (isQuitting) {
+  if (isQuitting && !isUpdating) {
     if (malFlushTimer) clearInterval(malFlushTimer);
     if (process.platform !== "darwin") app.quit();
   }
@@ -475,11 +476,8 @@ function registerIpc() {
   });
   ipcMain.handle(IPC.UPDATE_INSTALL, () => {
     isQuitting = true;
+    isUpdating = true;
     if (malFlushTimer) { clearInterval(malFlushTimer); malFlushTimer = null; }
-    for (const win of BrowserWindow.getAllWindows()) {
-      try { win.destroy(); } catch { }
-    }
-    if (tray) { try { tray.destroy(); } catch {} tray = null; }
     if (process.platform === "win32") {
       try { process.chdir(app.getPath("temp")); } catch {}
     }
