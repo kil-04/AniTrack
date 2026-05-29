@@ -120,12 +120,35 @@ export class AnikotoProvider implements StreamProvider {
       const totalM = /class="ep-status total"[^>]*>\s*<span>\s*(\d+)\s*<\/span>/.exec(block);
       const totalEps = totalM ? parseInt(totalM[1], 10) : undefined;
       
+      const title = dataJp || imgAlt || "Untitled";
+      
+      // Extract year from title if possible
+      let parsedYear: number | undefined;
+      const clean = title.trim();
+      const y4Match = clean.match(/\b(19\d\d|20[0-2]\d)\b/);
+      if (y4Match) {
+        parsedYear = parseInt(y4Match[1], 10);
+      } else {
+        const y2Match = clean.match(/'(\d{2})\b/);
+        if (y2Match) {
+          const yy = parseInt(y2Match[1], 10);
+          parsedYear = yy >= 50 ? 1900 + yy : 2000 + yy;
+        } else {
+          const end2Match = clean.match(/\b([5-9]\d|0\d|1\d|2[0-5])\b\s*$/);
+          if (end2Match) {
+            const yy = parseInt(end2Match[1], 10);
+            parsedYear = yy >= 50 ? 1900 + yy : 2000 + yy;
+          }
+        }
+      }
+      
       results.push({
         id: href,
         providerId: this.id,
         poster: imgSrc || "",
-        title: dataJp || imgAlt || "Untitled",
+        title: title,
         episodes: totalEps,
+        year: parsedYear,
       });
     }
     return results;
