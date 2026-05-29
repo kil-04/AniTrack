@@ -655,7 +655,71 @@ export async function installCapacitorApiBridge() {
         return (data.Page?.media ?? []).map((m: any) => mapMedia(m));
       },
       async advancedSearch(filters: any) {
-        throw new Error("advancedSearch not implemented in capacitor yet");
+        const page = filters.page || 1;
+        const queryArgs = [];
+        const mediaArgs = [];
+        const variables: Record<string, any> = {};
+
+        if (filters.query?.trim()) {
+          queryArgs.push("$q: String");
+          mediaArgs.push("search: $q");
+          variables.q = filters.query.trim();
+        }
+        if (filters.genre && filters.genre.length > 0) {
+          queryArgs.push("$genre: [String]");
+          mediaArgs.push("genre_in: $genre");
+          variables.genre = filters.genre;
+        }
+        if (filters.tag && filters.tag.length > 0) {
+          queryArgs.push("$tag: [String]");
+          mediaArgs.push("tag_in: $tag");
+          mediaArgs.push("minimumTagRank: 50");
+          variables.tag = filters.tag;
+        }
+        if (filters.season) {
+          queryArgs.push("$season: MediaSeason");
+          mediaArgs.push("season: $season");
+          variables.season = filters.season;
+        }
+        if (filters.year) {
+          queryArgs.push("$year: Int");
+          mediaArgs.push("seasonYear: $year");
+          variables.year = filters.year;
+        }
+        if (filters.format) {
+          queryArgs.push("$format: MediaFormat");
+          mediaArgs.push("format: $format");
+          variables.format = filters.format;
+        }
+        if (filters.status) {
+          queryArgs.push("$status: MediaStatus");
+          mediaArgs.push("status: $status");
+          variables.status = filters.status;
+        }
+
+        queryArgs.push("$sort: [MediaSort]");
+        mediaArgs.push("sort: $sort");
+        variables.sort = filters.sort ? [filters.sort] : (filters.query?.trim() ? ["SEARCH_MATCH"] : ["TRENDING_DESC", "POPULARITY_DESC"]);
+
+        queryArgs.push("$page: Int");
+        const qArgsStr = queryArgs.length > 0 ? `(${queryArgs.join(", ")})` : "";
+        const mArgsStr = mediaArgs.length > 0 ? `(${mediaArgs.join(", ")}, type: ANIME)` : "(type: ANIME)";
+
+        const data = await alGql<any>(
+          `query${qArgsStr} {
+            Page(page: $page, perPage: 36) {
+              pageInfo { hasNextPage lastPage total }
+              media${mArgsStr} { ${MEDIA_FIELDS} }
+            }
+          }`,
+          { ...variables, page }
+        );
+
+        return {
+          results: (data.Page?.media ?? []).map((m: any) => mapMedia(m)),
+          hasNextPage: data.Page?.pageInfo?.hasNextPage ?? false,
+          lastPage: data.Page?.pageInfo?.lastPage ?? (data.Page?.pageInfo?.total ? Math.ceil(data.Page.pageInfo.total / 36) : undefined),
+        };
       },
       async trending() {
         const data = await alGql<any>(`
