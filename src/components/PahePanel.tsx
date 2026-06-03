@@ -90,9 +90,11 @@ function scoreMatch(candidate: any, targetTitle: string, targetYear?: number, ta
   }
 
   if (targetYear && candidate.year) {
-    if (Number(candidate.year) === targetYear) score += 8;
-    else if (Math.abs(Number(candidate.year) - targetYear) <= 1) score += 2;
-    else return -100; // Ignore completely if year differs by more than 1
+    const diff = Math.abs(Number(candidate.year) - targetYear);
+    if (diff === 0) score += 8;
+    else if (diff === 1) score += 2;
+    else if (diff <= 3) score -= 30; // 2 or 3 years difference gets a penalty
+    else return -100; // 4+ years difference is rejected
   }
 
   // Season number mismatch check
@@ -276,7 +278,7 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
       // Filter by year
       const filtered = allCandidates.filter(({ candidate }) => {
         if (animeYear && candidate.year) {
-          return Math.abs(Number(candidate.year) - animeYear) <= 1;
+          return Math.abs(Number(candidate.year) - animeYear) <= 3;
         }
         return true;
       });
@@ -344,7 +346,7 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
       const res = await window.api.pahe.search(manualQuery.trim());
       const filtered = res.filter(candidate => {
         if (animeYear && candidate.year) {
-          return Math.abs(Number(candidate.year) - animeYear) <= 1;
+          return Math.abs(Number(candidate.year) - animeYear) <= 3;
         }
         return true;
       });
@@ -373,28 +375,43 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
     setLoadingEps(true);
     setError(null);
     window.api.pahe.episodes(selected.providerId ?? "animepahe", selected.id, page).then(async (r) => {
+      const rawData = [...(r.data || [])].sort((a: any, b: any) => {
+        const aNum = a.episodeNumber ?? a.episode ?? 0;
+        const bNum = b.episodeNumber ?? b.episode ?? 0;
+        return aNum - bNum;
+      });
+
       let currentOffset = epOffset;
-      if (page === 1 && r.data.length > 0) {
-        const firstEp = r.data[0].episodeNumber ?? r.data[0].episode ?? 1;
-        currentOffset = firstEp - 1;
+      if (page === 1 && rawData.length > 0) {
+        const firstEp = rawData[0].episodeNumber ?? rawData[0].episode ?? 1;
+        currentOffset = Math.max(0, firstEp - 1);
         setEpOffset(currentOffset);
       } else if (page > 1 && currentOffset === 0) {
         try {
           const p1 = await window.api.pahe.episodes(selected.providerId ?? "animepahe", selected.id, 1);
           if (p1.data.length > 0) {
-            const firstEp = p1.data[0].episodeNumber ?? p1.data[0].episode ?? 1;
-            currentOffset = firstEp - 1;
+            const sortedP1 = [...p1.data].sort((a: any, b: any) => {
+              const aNum = a.episodeNumber ?? a.episode ?? 0;
+              const bNum = b.episodeNumber ?? b.episode ?? 0;
+              return aNum - bNum;
+            });
+            const firstEp = sortedP1[0].episodeNumber ?? sortedP1[0].episode ?? 1;
+            currentOffset = Math.max(0, firstEp - 1);
             setEpOffset(currentOffset);
           }
         } catch {}
       }
 
-      const mapped = r.data.map((ep: any) => ({
-        ...ep,
-        originalEpisodeNumber: ep.episodeNumber ?? ep.episode,
-        episodeNumber: (ep.episodeNumber ?? ep.episode) - currentOffset,
-        episode: (ep.episodeNumber ?? ep.episode) - currentOffset,
-      }));
+      const mapped = rawData.map((ep: any) => {
+        const orig = ep.episodeNumber ?? ep.episode ?? 0;
+        const relativeEp = Math.max(1, orig - currentOffset);
+        return {
+          ...ep,
+          originalEpisodeNumber: orig,
+          episodeNumber: relativeEp,
+          episode: relativeEp,
+        };
+      });
       setEpisodes(mapped);
       setLastPage(r.lastPage);
     }).catch((e: any) => setError(String(e))).finally(() => setLoadingEps(false));

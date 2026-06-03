@@ -7,11 +7,14 @@ import { secondsToTimestamp } from "../lib/format";
 const PAGE_SIZE = 24;
 
 function cwStreamUrl(session: string, title: string, episode: number, coverUrl?: string | null, animeId?: number): string {
+  const isUuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(session);
+  const providerId = isUuid ? "animepahe" : "anikoto";
   const p: Record<string, string> = { 
     session, 
     title, 
     episode: String(episode),
-    ep: String(episode) 
+    ep: String(episode),
+    providerId
   };
   if (coverUrl) {
     p.coverUrl = coverUrl;

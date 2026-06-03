@@ -1,7 +1,7 @@
 import { BrowserWindow, net, session } from "electron";
 import { StreamProvider, AnimeInfo, EpisodeInfo, StreamLink, StreamData } from "./types";
 
-const BASE_URL = "https://anikoto.cz";
+const BASE_URL = "https://anikototv.to";
 
 let _anikotoWin: BrowserWindow | null = null;
 let _anikotoReady = false;

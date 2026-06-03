@@ -103,9 +103,11 @@ function scoreMatch(candidate: any, targetTitle: string, targetYear?: number, ta
   }
 
   if (targetYear && candidate.year) {
-    if (Number(candidate.year) === targetYear) score += 8;
-    else if (Math.abs(Number(candidate.year) - targetYear) <= 1) score += 2;
-    else return -100; // Ignore completely if year differs by more than 1
+    const diff = Math.abs(Number(candidate.year) - targetYear);
+    if (diff === 0) score += 8;
+    else if (diff === 1) score += 2;
+    else if (diff <= 3) score -= 30; // 2 or 3 years difference gets a penalty
+    else return -100; // 4+ years difference is rejected
   }
 
   // Season number mismatch check
@@ -390,7 +392,7 @@ export default function StreamPlayer() {
 
         const filtered = Array.from(combinedMap.values()).filter(({ item }) => {
           if (targetYear && item.year) {
-            return Math.abs(Number(item.year) - targetYear) <= 1;
+            return Math.abs(Number(item.year) - targetYear) <= 3;
           }
           return true;
         });
@@ -578,19 +580,31 @@ export default function StreamPlayer() {
           page1Data = p1.data;
         }
         if (!epOffset && page1Data.length > 0) {
-          const firstEp = page1Data[0].episodeNumber ?? page1Data[0].episode ?? 1;
-          epOffset = firstEp - 1;
+          const sortedPage1 = [...page1Data].sort((a: any, b: any) => {
+            const aNum = a.episodeNumber ?? a.episode ?? 0;
+            const bNum = b.episodeNumber ?? b.episode ?? 0;
+            return aNum - bNum;
+          });
+          const firstEp = sortedPage1[0].episodeNumber ?? sortedPage1[0].episode ?? 1;
+          epOffset = Math.max(0, firstEp - 1);
           epOffsetRef.current = epOffset;
         }
 
-        // Map firstData to relative episode numbers
-        const firstMapped = firstData.map((e: any) => {
+        // Map firstData to relative episode numbers after sorting firstData
+        const sortedFirstData = [...firstData].sort((a: any, b: any) => {
+          const aNum = a.episodeNumber ?? a.episode ?? 0;
+          const bNum = b.episodeNumber ?? b.episode ?? 0;
+          return aNum - bNum;
+        });
+
+        const firstMapped = sortedFirstData.map((e: any) => {
           const orig = e.episodeNumber ?? e.episode ?? 0;
+          const relativeEp = Math.max(1, orig - epOffset);
           return {
             ...e,
             originalEpisodeNumber: orig,
-            episodeNumber: orig - epOffset,
-            episode: orig - epOffset,
+            episodeNumber: relativeEp,
+            episode: relativeEp,
           };
         });
 

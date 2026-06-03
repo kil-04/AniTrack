@@ -8,11 +8,14 @@ import { deleteAnimeProgress } from "../lib/supabase-sync";
 import type { AnimeMeta } from "../../shared/types";
 
 function cwStreamUrl(session: string, title: string, ep: number, img: string, anilistId?: number) {
+  const isUuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(session);
+  const providerId = isUuid ? "animepahe" : "anikoto";
   const p: Record<string, string> = { 
     session, 
     title, 
     episode: String(ep),
-    ep: String(ep) 
+    ep: String(ep),
+    providerId
   };
   if (img) {
     p.coverUrl = img;
