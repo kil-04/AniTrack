@@ -40,6 +40,12 @@ android {
         }
     }
     buildTypes {
+        debug {
+            // Coexist with the release app so a debuggable build can be installed
+            // without uninstalling (no data loss) — used for diagnostics.
+            applicationIdSuffix ".debug"
+            versionNameSuffix "-debug"
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'

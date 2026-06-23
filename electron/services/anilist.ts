@@ -29,10 +29,13 @@ const MEDIA_FIELDS = `
   id
   idMal
   title { romaji english native }
+  synonyms
   description(asHtml: false)
   episodes
   duration
   status
+  format
+  popularity
   coverImage { extraLarge large color }
   bannerImage
   genres
@@ -45,10 +48,13 @@ interface MediaNode {
   id: number;
   idMal: number | null;
   title: { romaji?: string; english?: string; native?: string };
+  synonyms?: string[];
   description?: string | null;
   episodes?: number | null;
   duration?: number | null;
   status?: string | null;
+  format?: string | null;
+  popularity?: number | null;
   coverImage?: { extraLarge?: string; large?: string; color?: string };
   bannerImage?: string | null;
   genres?: string[];
@@ -74,7 +80,51 @@ function toAnime(m: MediaNode): AnimeMeta {
     averageScore: m.averageScore ?? null,
     year: m.seasonYear ?? null,
     studios: m.studios?.nodes.map((n) => n.name) ?? [],
+    format: m.format ?? null,
+    popularity: m.popularity ?? null,
   };
+}
+
+// AniList's SEARCH_MATCH sort frequently ranks an obscure entry whose
+// title/synonym happens to equal the query ABOVE the obvious popular series
+// (e.g. "demon slayer" -> a random short, "aot" -> a TV special). We re-rank
+// the raw result set by a relevance TIER (exact/prefix > substring > word
+// overlap) and break ties within a tier by popularity, so the show a user
+// actually means surfaces first. Exact and prefix collapse into one top tier
+// on purpose: a synonym-exact match on junk must not beat a prefix match on
+// the real franchise title.
+const normTitle = (s: string | undefined | null) =>
+  (s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+function relevanceTier(query: string, m: MediaNode): number {
+  const nq = normTitle(query);
+  if (!nq) return 0;
+  const cands = [m.title.english, m.title.romaji, m.title.native, ...(m.synonyms ?? [])]
+    .map(normTitle)
+    .filter(Boolean);
+  let tier = 0;
+  for (const c of cands) {
+    if (c === nq || c.startsWith(nq)) tier = Math.max(tier, 3);
+    else if (c.includes(nq)) tier = Math.max(tier, 2);
+    else {
+      const qw = nq.split(" ");
+      const cw = new Set(c.split(" "));
+      if (qw.filter((w) => cw.has(w)).length / qw.length >= 0.5) tier = Math.max(tier, 1);
+    }
+  }
+  return tier;
+}
+
+function rankByRelevance(query: string, media: MediaNode[]): MediaNode[] {
+  return media
+    .map((m, i) => ({
+      m,
+      // tier dominates; log-popularity orders within tier; original AniList
+      // order is the final, stable tiebreak.
+      score: relevanceTier(query, m) * 1000 + Math.log10((m.popularity ?? 0) + 1) * 10 - i * 0.001,
+    }))
+    .sort((a, b) => b.score - a.score)
+    .map((x) => x.m);
 }
 
 // Serial queue: only one AniList request in-flight at a time to prevent 429 storms.
@@ -145,13 +195,13 @@ export async function searchAnime(q: string): Promise<AnimeMeta[]> {
   if (hit) return hit;
   const data = await gql<{ Page: { media: MediaNode[] } }>(
     `query($q: String) {
-      Page(perPage: 24) {
-        media(search: $q, type: ANIME, sort: SEARCH_MATCH) { ${MEDIA_FIELDS} }
+      Page(perPage: 25) {
+        media(search: $q, type: ANIME, sort: SEARCH_MATCH, isAdult: false) { ${MEDIA_FIELDS} }
       }
     }`,
     { q },
   );
-  const result = data.Page.media.map(toAnime);
+  const result = rankByRelevance(q, data.Page.media).map(toAnime);
   cacheSet(key, result);
   return result;
 }
@@ -202,9 +252,27 @@ export async function advancedSearchAnime(filters: import("../../shared/types").
     mediaArgs.push("status: $status");
     variables.status = filters.status;
   }
-  
+  if (filters.source) {
+    queryArgs.push("$source: MediaSource");
+    mediaArgs.push("source: $source");
+    variables.source = filters.source;
+  }
+  if (filters.episodesGreater != null) {
+    queryArgs.push("$epGt: Int");
+    // episodes_greater is exclusive in AniList; subtract 1 to make it inclusive.
+    mediaArgs.push("episodes_greater: $epGt");
+    variables.epGt = Math.max(0, filters.episodesGreater - 1);
+  }
+  if (filters.episodesLesser != null) {
+    queryArgs.push("$epLt: Int");
+    mediaArgs.push("episodes_lesser: $epLt");
+    variables.epLt = filters.episodesLesser + 1;
+  }
+
   queryArgs.push("$sort: [MediaSort]");
   mediaArgs.push("sort: $sort");
+  // A relevance search = a keyword with no explicit sort. Only those get re-ranked.
+  const isRelevanceSearch = !!filters.query?.trim() && !filters.sort;
   variables.sort = filters.sort ? [filters.sort] : (filters.query?.trim() ? ["SEARCH_MATCH"] : ["TRENDING_DESC", "POPULARITY_DESC"]);
 
   queryArgs.push("$page: Int");
@@ -221,8 +289,11 @@ export async function advancedSearchAnime(filters: import("../../shared/types").
     { ...variables, page },
   );
   
+  const media = isRelevanceSearch
+    ? rankByRelevance(filters.query!.trim(), data.Page.media)
+    : data.Page.media;
   const result = {
-    results: data.Page.media.map(toAnime),
+    results: media.map(toAnime),
     hasNextPage: data.Page.pageInfo.hasNextPage,
     lastPage: data.Page.pageInfo.lastPage ?? (data.Page.pageInfo.total ? Math.ceil(data.Page.pageInfo.total / 36) : undefined),
   };

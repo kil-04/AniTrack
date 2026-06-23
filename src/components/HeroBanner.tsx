@@ -22,7 +22,7 @@ export default function HeroBanner({ anime }: Props) {
       <div className="absolute inset-0 bg-gradient-to-t from-bg via-bg/40 to-transparent" />
       <div className="absolute inset-0 bg-gradient-to-r from-bg/95 via-bg/40 to-transparent" />
       <div className="absolute bottom-10 sm:bottom-20 left-6 sm:left-8 max-w-2xl animate-fade-in p-4 sm:p-0">
-        <div className="text-xs uppercase tracking-widest text-accent">
+        <div className="text-xs uppercase tracking-widest text-white">
           Trending now
         </div>
         <h1 className="mt-2 text-3xl sm:text-4xl md:text-5xl font-extrabold leading-tight">

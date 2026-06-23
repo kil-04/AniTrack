@@ -43,13 +43,13 @@ const LatestEpCard = React.memo(function LatestEpCard({ ep }: { ep: any }) {
 
   const tooltipPortal = isHovered && rect ? createPortal(
     <div 
-      className="fixed z-[9999] w-72 bg-[#15151f] rounded-xl border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.8)] p-5 flex flex-col pointer-events-none animate-in fade-in zoom-in-95 duration-200"
+      className="fixed z-[9999] w-72 bg-[#1f1f1f] rounded-xl border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.8)] p-5 flex flex-col pointer-events-none animate-in fade-in zoom-in-95 duration-200"
       style={{
         left: rect.right + 15 + 288 > window.innerWidth ? rect.left - 288 - 15 : rect.right + 15,
         top: Math.max(10, Math.min(window.innerHeight - 320, rect.top + rect.height / 2 - 160)),
       }}
     >
-      <h3 className="font-bold text-[#4a9eff] text-lg leading-tight mb-2">{displayAnime.title}</h3>
+      <h3 className="font-bold text-white text-lg leading-tight mb-2">{displayAnime.title}</h3>
       {displayAnime.averageScore && (
         <div className="text-sm font-bold text-green-400 mb-3">★ {(displayAnime.averageScore / 10).toFixed(1)} / 10</div>
       )}
@@ -67,7 +67,7 @@ const LatestEpCard = React.memo(function LatestEpCard({ ep }: { ep: any }) {
       {displayAnime.synopsis ? (
         <p className="text-xs text-white/80 line-clamp-5 leading-relaxed" dangerouslySetInnerHTML={{ __html: displayAnime.synopsis }} />
       ) : isFetching ? (
-        <p className="text-xs text-[#4a9eff] animate-pulse italic">Loading details from network...</p>
+        <p className="text-xs text-white animate-pulse italic">Loading details from network...</p>
       ) : (
         <p className="text-xs text-white/40 italic">No synopsis available.</p>
       )}
@@ -88,12 +88,12 @@ const LatestEpCard = React.memo(function LatestEpCard({ ep }: { ep: any }) {
           ref={cardRef}
           onMouseEnter={() => setIsHovered(true)}
           onMouseLeave={() => setIsHovered(false)}
-          className="group relative block aspect-[16/9] w-full overflow-hidden rounded-lg bg-[#111118] transition-all duration-300 ease-out hover:z-10 hover:scale-110 hover:shadow-[0_12px_40px_rgb(0,0,0,0.8)] hover:shadow-[#4a9eff]/30 hover:ring-2 hover:ring-[#4a9eff]/50 outline-none"
+          className="group relative block aspect-[16/9] w-full overflow-hidden rounded-lg bg-[#1b1b1b] transition-all duration-300 ease-out hover:z-10 hover:scale-110 hover:shadow-[0_12px_40px_rgb(0,0,0,0.8)] hover:shadow-[#e50914]/30 hover:ring-2 hover:ring-[#e50914]/50 outline-none"
         >
           {ep.snapshot ? (
             <img src={ep.snapshot} alt={ep.anime_title} className="h-full w-full object-cover opacity-80 transition-transform duration-500 group-hover:scale-105" loading="lazy" />
           ) : (
-            <div className="flex h-full w-full items-center justify-center bg-[#1a1a24] text-xs text-white/30">No Image</div>
+            <div className="flex h-full w-full items-center justify-center bg-[#222222] text-xs text-white/30">No Image</div>
           )}
           
           <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent opacity-90 transition-opacity duration-300 group-hover:opacity-100" />
@@ -103,8 +103,8 @@ const LatestEpCard = React.memo(function LatestEpCard({ ep }: { ep: any }) {
             <div className="line-clamp-1 text-xs font-bold leading-tight text-white drop-shadow-md">
               {ep.anime_title}
             </div>
-            <div className="mt-1 flex items-center gap-1.5 text-[10px] font-medium text-[#4a9eff] opacity-80 transition-opacity duration-300 group-hover:opacity-100">
-              <span className="bg-[#4a9eff]/20 text-[#4a9eff] px-1.5 py-0.5 rounded">Ep {ep.episodeNumber ?? ep.episode}</span>
+            <div className="mt-1 flex items-center gap-1.5 text-[10px] font-medium text-white opacity-80 transition-opacity duration-300 group-hover:opacity-100">
+              <span className="bg-[#e50914]/20 text-white px-1.5 py-0.5 rounded">Ep {ep.episodeNumber ?? ep.episode}</span>
               <span className="text-white/40">{ep.created_at}</span>
             </div>
           </div>

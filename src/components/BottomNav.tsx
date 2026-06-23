@@ -18,7 +18,7 @@ export default function BottomNav() {
           end={to === "/"}
           className={({ isActive }) =>
             `flex flex-1 flex-col items-center justify-center gap-1 text-[10px] transition ${
-              isActive ? "text-accent" : "text-muted hover:text-white"
+              isActive ? "text-white" : "text-muted hover:text-white"
             }`
           }
         >

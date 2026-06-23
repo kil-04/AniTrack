@@ -1,6 +1,5 @@
 import { lazy, Suspense, useEffect } from "react";
 import { Route, Routes, useLocation } from "react-router-dom";
-import Sidebar from "./components/Sidebar";
 import TopBar from "./components/TopBar";
 import BottomNav from "./components/BottomNav";
 import UpdateBanner from "./components/UpdateBanner";
@@ -71,7 +70,6 @@ export default function App() {
       <Suspense fallback={<PageFallback />}>
         <Routes>
           <Route path="/player/:animeId/:episode" element={<Player />} />
-          <Route path="/player/pahe/:episode" element={<Player />} />
         </Routes>
       </Suspense>
     );
@@ -88,35 +86,29 @@ export default function App() {
     );
   }
 
-  // Shell layout — sidebar on wide tablet, bottom nav on phone
-  const showSidebar  = isTablet;
+  // Shell layout — Netflix-style top nav on desktop, bottom nav on phone.
   const showBottomNav = !isTablet && isCapacitor; // only on Android phone/portrait
-  const showTopBar    = !showBottomNav; // TopBar is Electron-style titlebar; hide on mobile
+  const showTopBar    = !showBottomNav; // top nav carries the links on desktop; hide on mobile
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-bg text-white">
-      <div className="flex flex-1 overflow-hidden">
-        {showSidebar && <Sidebar />}
-        <div className="flex flex-1 flex-col overflow-hidden">
-          <UpdateBanner />
-          {showTopBar && <TopBar />}
-          <main className="thin-scrollbar flex-1 overflow-y-auto">
-            <Suspense fallback={<PageFallback />}>
-              <AnimatePresence mode="wait">
-                <Routes location={location} key={location.pathname}>
-                  <Route path="/"                   element={<PageTransition><Home /></PageTransition>} />
-                  <Route path="/library"            element={<PageTransition><Library /></PageTransition>} />
-                  <Route path="/search"             element={<PageTransition><Filter /></PageTransition>} />
-                  <Route path="/filter"             element={<PageTransition><Filter /></PageTransition>} />
-                  <Route path="/anime/:id"          element={<PageTransition><ShowDetail /></PageTransition>} />
-                  <Route path="/settings"           element={<PageTransition><Settings /></PageTransition>} />
-                  <Route path="/continue-watching"  element={<PageTransition><ContinueWatching /></PageTransition>} />
-                </Routes>
-              </AnimatePresence>
-            </Suspense>
-          </main>
-        </div>
-      </div>
+      <UpdateBanner />
+      {showTopBar && <TopBar />}
+      <main className="thin-scrollbar flex-1 overflow-y-auto">
+        <Suspense fallback={<PageFallback />}>
+          <AnimatePresence mode="wait">
+            <Routes location={location} key={location.pathname}>
+              <Route path="/"                   element={<PageTransition><Home /></PageTransition>} />
+              <Route path="/library"            element={<PageTransition><Library /></PageTransition>} />
+              <Route path="/search"             element={<PageTransition><Filter /></PageTransition>} />
+              <Route path="/filter"             element={<PageTransition><Filter /></PageTransition>} />
+              <Route path="/anime/:id"          element={<PageTransition><ShowDetail /></PageTransition>} />
+              <Route path="/settings"           element={<PageTransition><Settings /></PageTransition>} />
+              <Route path="/continue-watching"  element={<PageTransition><ContinueWatching /></PageTransition>} />
+            </Routes>
+          </AnimatePresence>
+        </Suspense>
+      </main>
       {showBottomNav && <BottomNav />}
     </div>
   );

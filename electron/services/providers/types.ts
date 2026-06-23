@@ -4,6 +4,8 @@ export interface AnimeInfo {
   title: string;
   poster: string;
   episodes?: number;
+  subCount?: number; // episodes available subbed on this provider (if known)
+  dubCount?: number; // episodes available dubbed on this provider (if known)
   type?: string;
   status?: string;
   season?: string;

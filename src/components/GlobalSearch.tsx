@@ -46,7 +46,7 @@ export default function GlobalSearch() {
         const resultsArray = Array.isArray(res) ? res : res.results || [];
         setResults(resultsArray.slice(0, 8)); // limit to 8 for dropdown
         setSelectedIndex(-1);
-      }).finally(() => setLoading(false));
+      }).catch(() => {}).finally(() => setLoading(false));
     }, 300);
     return () => clearTimeout(delay);
   }, [q]);
@@ -76,7 +76,7 @@ export default function GlobalSearch() {
   }
 
   return (
-    <div ref={containerRef} className="titlebar-no-drag relative flex w-96 items-center">
+    <div ref={containerRef} className="titlebar-no-drag relative flex w-72 items-center">
       <div className="relative w-full flex items-center">
         <Search size={16} className="pointer-events-none absolute left-3 text-muted" />
         <input
@@ -108,7 +108,7 @@ export default function GlobalSearch() {
       </div>
 
       {focused && q.trim().length > 0 && (
-        <div className="absolute top-full mt-2 w-full left-0 bg-[#111118] border border-white/10 rounded-xl shadow-2xl overflow-hidden z-[9999] animate-in fade-in zoom-in-95 duration-150">
+        <div className="absolute top-full mt-2 w-full left-0 bg-[#1b1b1b] border border-white/10 rounded-xl shadow-2xl overflow-hidden z-[9999] animate-in fade-in zoom-in-95 duration-150">
           {loading && results.length === 0 ? (
             <div className="p-4 text-center text-sm text-muted">Searching...</div>
           ) : results.length > 0 ? (
@@ -139,7 +139,7 @@ export default function GlobalSearch() {
               <div className="mt-1 border-t border-white/5 pt-1 px-2">
                 <button
                   onClick={() => { navigate('/filter?q=' + encodeURIComponent(q)); setFocused(false); }}
-                  className="w-full text-left px-3 py-2 text-xs font-semibold text-accent hover:bg-white/5 rounded transition-colors flex justify-between items-center"
+                  className="w-full text-left px-3 py-2 text-xs font-semibold text-white hover:bg-white/5 rounded transition-colors flex justify-between items-center"
                 >
                   <span>View all results for "{q}"</span>
                   <span>→</span>

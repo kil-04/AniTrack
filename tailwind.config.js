@@ -5,15 +5,15 @@ export default {
     extend: {
       colors: {
         bg: {
-          DEFAULT: "#0b0b0f",
-          elev: "#15151c",
-          card: "#1c1c26",
+          DEFAULT: "#000000",
+          elev: "#1a1a1a",
+          card: "#181818",
         },
         accent: {
           DEFAULT: "#e50914",
           hover: "#f6121d",
         },
-        muted: "#8a8a99",
+        muted: "#8c8c8c",
       },
       fontFamily: {
         sans: ['Outfit', 'system-ui', '-apple-system', 'sans-serif'],

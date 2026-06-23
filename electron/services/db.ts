@@ -1,4 +1,5 @@
 import { Database } from "node-sqlite3-wasm";
+import fs from "node:fs";
 import path from "node:path";
 import { app } from "electron";
 import type {
@@ -15,6 +16,12 @@ let db: Database | null = null;
 export function getDb(): Database {
   if (db) return db;
   const file = path.join(app.getPath("userData"), "anitrack.db");
+  // node-sqlite3-wasm locks the DB via a sibling ".lock" file. If a previous
+  // run was terminated hard (dev reload, crash, task kill), the file is left
+  // behind and every query fails with "database is locked". The app's
+  // single-instance lock guarantees no other AniTrack is running, so any lock
+  // file present at first open is stale — remove it.
+  try { fs.rmSync(`${file}.lock`, { force: true, recursive: true }); } catch {}
   db = new Database(file);
   db.run("PRAGMA journal_mode = WAL");
   db.run("PRAGMA foreign_keys = ON");
@@ -318,7 +325,12 @@ export function setProgress(p: PlaybackProgress) {
     [p.animeId, p.episode, p.positionSec, p.durationSec, p.updatedAt, p.animePaheSession ?? null],
   );
 
-  // Clean up duplicate negative ID stubs
+  // Clean up duplicate negative ID stubs. The dedup scan below joins anime
+  // twice per playback row — skip it entirely unless stub rows actually exist
+  // (setProgress fires every ~5s during playback and in bulk from Supabase merge).
+  const hasStubs: any = d.get(`SELECT 1 AS x FROM playback WHERE anime_id < 0 LIMIT 1`);
+  if (!hasStubs) return;
+
   d.run(
     `DELETE FROM playback
      WHERE anime_id < 0

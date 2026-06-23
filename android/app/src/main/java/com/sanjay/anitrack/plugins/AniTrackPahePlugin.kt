@@ -37,8 +37,12 @@ class AniTrackPahePlugin : Plugin() {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var cfWebView: WebView? = null
+    private var cfOverlay: android.view.View? = null
+    @Volatile private var cfUserCancelled = false
     private var cfReady = false
     private var cfReadyJob: Deferred<Unit>? = null
+    // Pending in-page fetches (play page), keyed by a request id the JS bridge echoes back.
+    private val inPageResults = java.util.concurrent.ConcurrentHashMap<String, CompletableDeferred<String>>()
 
     private val prefs get() = context.getSharedPreferences("anitrack_settings", Context.MODE_PRIVATE)
 
@@ -66,25 +70,49 @@ class AniTrackPahePlugin : Plugin() {
 
     private fun hasValidCookies(): Boolean {
         val cookies = CookieManager.getInstance().getCookie(baseUrl()) ?: return false
-        return cookies.contains("__ddgid_") || cookies.contains("cf_clearance") || cookies.contains("__ddg5")
+        // Only POST-challenge cookies prove the challenge was actually solved.
+        // __ddgid_ is set BEFORE solving — including it caused a false positive that
+        // completed the poll at 0ms and tore down the solve overlay prematurely.
+        return cookies.contains("cf_clearance") || cookies.contains("__ddg5_")
+    }
+
+    // The actual clearance cookie pair value — used to detect a FRESH solve (the value
+    // changes) vs a stale-but-present clearance that Cloudflare rejects.
+    private fun clearanceValue(): String? {
+        val cookies = CookieManager.getInstance().getCookie(baseUrl()) ?: return null
+        return cookies.split(";").map { it.trim() }
+            .firstOrNull { it.startsWith("cf_clearance=") || it.startsWith("__ddg5_") }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
-    private fun ensureCfWebView(): Deferred<Unit> {
-        if (cfReady && cfWebView != null) return CompletableDeferred(Unit)
-        if (hasValidCookies()) {
+    private fun ensureCfWebView(forceSolve: Boolean = false, interactive: Boolean = true): Deferred<Unit> {
+        // forceSolve (used on a 403 retry) bypasses the cookie short-circuit so a
+        // stale/expired cf_clearance can't keep us from re-solving the challenge.
+        if (!forceSolve && cfReady && cfWebView != null) return CompletableDeferred(Unit)
+        if (!forceSolve && hasValidCookies()) {
             cfReady = true
             return CompletableDeferred(Unit)
         }
+        // Once the user dismisses the challenge, stop showing it (until app restart).
+        if (interactive && cfUserCancelled) return CompletableDeferred(Unit)
         val existing = cfReadyJob
         if (existing != null && existing.isActive) return existing
 
         val deferred = CompletableDeferred<Unit>()
         cfReadyJob = deferred
 
+        // On a re-solve (after a 403), the stale cf_clearance is still in the jar and
+        // hasValidCookies() would pass at 0ms — tearing down the overlay before the user
+        // can solve. Remember it so the poll waits for a DIFFERENT (fresh) clearance.
+        val priorClearance = if (forceSolve) clearanceValue() else null
+
         activity.runOnUiThread {
-            cfWebView?.destroy()
+            cfOverlay?.let { (it.parent as? android.view.ViewGroup)?.removeView(it) }
+            cfOverlay = null
+            cfWebView?.let { old -> (old.parent as? android.view.ViewGroup)?.removeView(old); old.destroy() }
             val wv = WebView(activity)
+            CookieManager.getInstance().setAcceptCookie(true)
+            CookieManager.getInstance().setAcceptThirdPartyCookies(wv, true)
             wv.settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
@@ -103,26 +131,88 @@ class AniTrackPahePlugin : Plugin() {
                     } catch (e: Exception) {
                         Log.e("AniTrack", "Error parsing redirect URL: ${e.message}")
                     }
-
-                    // Wait 4.5 seconds for Cloudflare/DDOS-GUARD challenge to complete
-                    scope.launch {
-                        delay(4500)
-                        if (!deferred.isCompleted) {
-                            cfReady = true
-                            deferred.complete(Unit)
-                        }
-                    }
                 }
                 override fun onReceivedError(view: WebView, req: WebResourceRequest, err: WebResourceError) {
-                    // Let the 4.5s delay or 12s timeout resolve to avoid failing on temporary challenge resources
+                    // Let the cookie poll / timeout resolve to avoid failing on temporary challenge resources
                 }
             }
+            wv.addJavascriptInterface(PaheBridge(), "AndroidPahe")
+            val root = activity.findViewById<android.view.ViewGroup>(android.R.id.content)
             cfWebView = wv
+
+            fun teardown(keepWv: Boolean) {
+                // Detach the WebView first so removing the overlay container doesn't take it down.
+                (wv.parent as? android.view.ViewGroup)?.removeView(wv)
+                cfOverlay?.let { (it.parent as? android.view.ViewGroup)?.removeView(it) }
+                cfOverlay = null
+                // Always keep the WebView alive (1x1, invisible) so the /play/ page can be
+                // fetched INSIDE it. It's replaced (old one destroyed) on the next solve, so
+                // it never leaks — and in-page fetch never hits "WebView unavailable".
+                wv.layoutParams = android.view.ViewGroup.LayoutParams(1, 1)
+                root?.addView(wv)
+            }
+
+            if (interactive) {
+                // Cloudflare now serves an interactive Turnstile a hidden WebView can't pass,
+                // so show the challenge full-screen for a one-time manual solve.
+                val container = android.widget.LinearLayout(activity)
+                container.orientation = android.widget.LinearLayout.VERTICAL
+                container.setBackgroundColor(0xFF141414.toInt())
+                val bar = android.widget.LinearLayout(activity)
+                bar.orientation = android.widget.LinearLayout.HORIZONTAL
+                bar.gravity = android.view.Gravity.CENTER_VERTICAL
+                bar.setPadding(32, 24, 32, 24)
+                val hint = android.widget.TextView(activity)
+                hint.text = "Verify you're human to load AnimePahe"
+                hint.setTextColor(0xFFFFFFFF.toInt())
+                hint.textSize = 14f
+                hint.layoutParams = android.widget.LinearLayout.LayoutParams(0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                bar.addView(hint)
+                val closeBtn = android.widget.Button(activity)
+                closeBtn.text = "Close"
+                closeBtn.setOnClickListener {
+                    cfUserCancelled = true
+                    teardown(false)
+                    if (!deferred.isCompleted) { cfReady = true; deferred.complete(Unit) }
+                }
+                bar.addView(closeBtn)
+                container.addView(bar, android.widget.LinearLayout.LayoutParams(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT))
+                container.addView(wv, android.widget.LinearLayout.LayoutParams(android.view.ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+                root?.addView(container, android.view.ViewGroup.LayoutParams(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT))
+                cfOverlay = container
+            } else {
+                // Silent off-screen attempt for background calls (Latest Episodes).
+                wv.layoutParams = android.view.ViewGroup.LayoutParams(1, 1)
+                try { root?.addView(wv) } catch (e: Exception) { Log.e("AniTrack", "attach CF wv failed: ${e.message}") }
+            }
+
             wv.loadUrl(baseUrl() + "/")
-            // Timeout safety
+
+            // Poll for the real clearance cookie (works for both the silent attempt and
+            // the interactive overlay — completes as soon as the user passes the check).
             scope.launch {
-                delay(12_000)
+                var waited = 0
+                val cap = if (interactive) 120_000 else 20_000
+                while (waited < cap && !deferred.isCompleted) {
+                    // On a re-solve, require a NEW clearance value (the stale one is rejected);
+                    // otherwise just require any valid clearance cookie.
+                    val solved = if (forceSolve) {
+                        val now = clearanceValue()
+                        now != null && now != priorClearance
+                    } else hasValidCookies()
+                    if (solved) {
+                        cfUserCancelled = false
+                        Log.d("AniTrack", "CF clearance acquired after ${waited}ms (interactive=$interactive, force=$forceSolve)")
+                        activity.runOnUiThread { teardown(true) }
+                        cfReady = true
+                        deferred.complete(Unit)
+                        break
+                    }
+                    delay(700); waited += 700
+                }
                 if (!deferred.isCompleted) {
+                    Log.w("AniTrack", "CF clearance not detected within ${cap}ms (interactive=$interactive)")
+                    activity.runOnUiThread { teardown(false) }
                     cfReady = true
                     deferred.complete(Unit)
                 }
@@ -131,7 +221,130 @@ class AniTrackPahePlugin : Plugin() {
         return deferred
     }
 
-    private suspend fun waitForCf() = ensureCfWebView().await()
+    private suspend fun waitForCf(forceSolve: Boolean = false, interactive: Boolean = true) = ensureCfWebView(forceSolve, interactive).await()
+
+    // ── In-page fetch (CF-fingerprint-bound endpoints like /play/) ────────────
+    // okhttp can't pass Cloudflare for the play-page document even with cf_clearance,
+    // because the cookie is bound to the browser's TLS fingerprint. So we run fetch()
+    // INSIDE the solved WebView (same origin, full browser fingerprint) and bridge the
+    // result back via @JavascriptInterface. Mirrors the desktop paheInPageFetch.
+
+    inner class PaheBridge {
+        @android.webkit.JavascriptInterface
+        fun onResult(id: String, ok: Boolean, data: String) {
+            val d = inPageResults.remove(id) ?: return
+            if (ok) d.complete(data) else d.completeExceptionally(IOException(data))
+        }
+    }
+
+    private suspend fun paheInPageFetch(path: String): String {
+        // Ensure a live WebView sitting on the AnimePahe origin with cf_clearance.
+        // This runs for an explicit play, so re-prompt even if the user dismissed before.
+        if (cfWebView == null) {
+            cfUserCancelled = false
+            ensureCfWebView(forceSolve = true, interactive = true).await()
+        } else waitForCf()
+        val wv = cfWebView ?: throw IOException("CF WebView unavailable")
+        val url = if (path.startsWith("http")) path else baseUrl() + path
+        val id  = java.util.UUID.randomUUID().toString()
+        val def = CompletableDeferred<String>()
+        inPageResults[id] = def
+        val js = "fetch('$url',{credentials:'include'})" +
+                 ".then(function(r){return r.text();})" +
+                 ".then(function(t){AndroidPahe.onResult('$id',true,t);})" +
+                 ".catch(function(e){AndroidPahe.onResult('$id',false,String(e));});"
+        activity.runOnUiThread { wv.evaluateJavascript(js, null) }
+        return try {
+            withTimeout(25_000) { def.await() }
+        } catch (e: Exception) {
+            inPageResults.remove(id)
+            throw IOException("in-page fetch failed: ${e.message}")
+        }
+    }
+
+    // Navigate a WebView straight to the target page (e.g. /play/...). Cloudflare presents
+    // its Turnstile ON that page — the homepage often isn't challenged, so no checkbox shows
+    // there. The WebView starts hidden (1x1); if the page resolves to real content we read it
+    // silently, but if it's the challenge we expand to a full-screen overlay so the user can
+    // solve it. Mirrors the desktop paheNavFetchHtml.
+    private suspend fun paheNavFetchHtml(path: String, marker: String): String =
+        kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+            activity.runOnUiThread {
+                val url = if (path.startsWith("http")) path else baseUrl() + path
+                cfOverlay?.let { (it.parent as? android.view.ViewGroup)?.removeView(it) }; cfOverlay = null
+                cfWebView?.let { (it.parent as? android.view.ViewGroup)?.removeView(it); it.destroy() }
+
+                val wv = WebView(activity)
+                CookieManager.getInstance().setAcceptCookie(true)
+                CookieManager.getInstance().setAcceptThirdPartyCookies(wv, true)
+                wv.settings.apply {
+                    javaScriptEnabled = true; domStorageEnabled = true
+                    userAgentString = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+                }
+                cfWebView = wv
+                val root = activity.findViewById<android.view.ViewGroup>(android.R.id.content)
+
+                // Container holds the WebView; starts 1x1 (hidden) and expands on challenge.
+                val container = android.widget.LinearLayout(activity)
+                container.orientation = android.widget.LinearLayout.VERTICAL
+                container.setBackgroundColor(0xFF000000.toInt())
+                val bar = android.widget.LinearLayout(activity)
+                bar.gravity = android.view.Gravity.CENTER_VERTICAL
+                bar.setPadding(32, 24, 32, 24)
+                val hint = android.widget.TextView(activity)
+                hint.text = "Verify you're human to load this episode"
+                hint.setTextColor(0xFFFFFFFF.toInt()); hint.textSize = 14f
+                hint.layoutParams = android.widget.LinearLayout.LayoutParams(0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                bar.addView(hint)
+                val closeBtn = android.widget.Button(activity); closeBtn.text = "Close"
+                bar.addView(closeBtn)
+                container.addView(bar, android.widget.LinearLayout.LayoutParams(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT))
+                container.addView(wv, android.widget.LinearLayout.LayoutParams(android.view.ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+                root?.addView(container, android.view.ViewGroup.LayoutParams(1, 1))
+                cfOverlay = container
+
+                var done = false
+                fun finish(html: String?) {
+                    if (done) return; done = true
+                    (wv.parent as? android.view.ViewGroup)?.removeView(wv)
+                    cfOverlay?.let { (it.parent as? android.view.ViewGroup)?.removeView(it) }; cfOverlay = null
+                    wv.layoutParams = android.view.ViewGroup.LayoutParams(1, 1)
+                    try { root?.addView(wv) } catch (e: Exception) {}
+                    if (html != null) cont.resumeWith(Result.success(html))
+                    else cont.resumeWith(Result.failure(IOException("nav fetch failed/timeout")))
+                }
+                fun expand() {
+                    cfUserCancelled = false
+                    container.layoutParams = android.view.ViewGroup.LayoutParams(
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT)
+                    container.requestLayout()
+                }
+                closeBtn.setOnClickListener { cfUserCancelled = true; finish(null) }
+
+                wv.webViewClient = object : WebViewClient() {
+                    override fun onPageFinished(view: WebView, u: String) {
+                        if (done) return
+                        // Real page contains the kwik marker; challenge page does not.
+                        view.evaluateJavascript(
+                            "(function(){var h=document.documentElement.outerHTML;return h.indexOf('$marker')>-1?h:'__CHALLENGE__'})()"
+                        ) { result ->
+                            if (done || result == null) return@evaluateJavascript
+                            if (result == "\"__CHALLENGE__\"" || result == "null") {
+                                activity.runOnUiThread { expand() }   // needs a manual solve
+                            } else {
+                                try {
+                                    val html = org.json.JSONObject("{\"h\":$result}").getString("h")
+                                    if (html.contains(marker)) finish(html) else activity.runOnUiThread { expand() }
+                                } catch (e: Exception) { activity.runOnUiThread { expand() } }
+                            }
+                        }
+                    }
+                }
+                wv.loadUrl(url)
+                scope.launch { delay(120_000); activity.runOnUiThread { finish(null) } }
+            }
+        }
 
     // ── Cookie bridge: WebView CookieManager → okhttp3 ───────────────────────
 
@@ -152,8 +365,8 @@ class AniTrackPahePlugin : Plugin() {
 
     // ── HTTP helper ───────────────────────────────────────────────────────────
 
-    private suspend fun paheGet(path: String, retried: Boolean = false): JSONObject {
-        waitForCf()
+    private suspend fun paheGet(path: String, retried: Boolean = false, interactive: Boolean = true): JSONObject {
+        waitForCf(forceSolve = retried, interactive = interactive)
         val url = if (path.startsWith("http")) path else baseUrl() + path
         val req = Request.Builder().url(url)
             .header("Accept", "application/json, text/plain, */*")
@@ -168,22 +381,31 @@ class AniTrackPahePlugin : Plugin() {
                 cfReady = false
                 cfReadyJob = null
                 activity.runOnUiThread { cfWebView?.destroy(); cfWebView = null }
-                return paheGet(path, true)
+                return paheGet(path, true, interactive)
             }
             throw IOException("HTTP ${resp.code}: ${resp.body?.string()?.take(120)}")
         }
         return JSONObject(resp.body!!.string())
     }
 
-    private suspend fun paheGetHtml(path: String): String {
-        waitForCf()
+    private suspend fun paheGetHtml(path: String, interactive: Boolean = true): String {
+        // The /play/ document is Cloudflare-protected and okhttp can't pass it (403/429).
+        // Navigate a WebView straight to it so CF shows its Turnstile on THIS page (the
+        // homepage often isn't challenged) — the user solves it, then we read the page.
+        try {
+            return paheNavFetchHtml(path, "kwik")
+        } catch (e: Exception) {
+            Log.w("AniTrack", "nav play fetch failed (${e.message}); trying okhttp")
+        }
+        // Last resort: plain okhttp (usually 403, but try anyway).
+        waitForCf(interactive = interactive)
         val url = if (path.startsWith("http")) path else baseUrl() + path
         val req = Request.Builder().url(url)
             .header("Referer", baseUrl() + "/")
             .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36")
             .build()
         val resp = withContext(Dispatchers.IO) { client.newCall(req).execute() }
-        if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
+        if (!resp.isSuccessful) { val c = resp.code; resp.close(); throw IOException("HTTP ${resp.code}") }
         return resp.body!!.string()
     }
 
@@ -209,7 +431,7 @@ class AniTrackPahePlugin : Plugin() {
         val page = call.getInt("page") ?: 1
         scope.launch {
             try {
-                val data = paheGet("/api?m=airing&l=30&sort=session_id_desc&page=$page")
+                val data = paheGet("/api?m=airing&l=30&sort=session_id_desc&page=$page", interactive = true)
                 val result = JSONObject().apply {
                     put("data",     data.optJSONArray("data") ?: JSONArray())
                     put("total",    data.optInt("total", 0))
@@ -498,35 +720,60 @@ class AniTrackPahePlugin : Plugin() {
                     "$lastKwikOrigin/"
                 }
 
-                val reqBuilder = Request.Builder().url(url)
-                    .header("Referer",    defaultReferer)
-                    .header("Origin",     defaultReferer.trimEnd('/'))
-                    .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36")
-
+                // Separate the caller's Referer from other custom headers so we can vary it.
+                var customRef: String? = null
+                val extraHeaders = mutableMapOf<String, String>()
                 val customHeaders = call.getObject("headers")
                 if (customHeaders != null) {
                     val keys = customHeaders.keys()
                     while (keys.hasNext()) {
                         val key = keys.next()
-                        val value = customHeaders.getString(key)
-                        if (value != null) {
-                            reqBuilder.header(key, value)
-                            if (key.equals("referer", ignoreCase = true)) {
-                                try {
-                                    val uri = java.net.URI(value)
-                                    val origin = "${uri.scheme}://${uri.host}"
-                                    reqBuilder.header("Origin", origin)
-                                } catch (e: Exception) {}
-                            }
+                        val value = customHeaders.getString(key) ?: continue
+                        when {
+                            key.equals("referer", ignoreCase = true) -> customRef = value
+                            key.equals("origin", ignoreCase = true) -> {}
+                            else -> extraHeaders[key] = value
                         }
                     }
                 }
 
-                val req = reqBuilder.build()
-                val resp      = client.newCall(req).execute()
-                val bodyBytes = resp.body?.bytes() ?: ByteArray(0)
+                // The segment CDNs rotate (nekostream / mewstream / mewcdn / megaplay …) and
+                // each hotlink-checks Referer differently, so a single Referer 403s on some.
+                // Try the caller's player origin first, then CDN-specific fallbacks.
+                val candidates = LinkedHashSet<String>()
+                if (customRef != null) candidates.add(customRef!!)
+                candidates.add(defaultReferer)
+                if (isMegaplayStream) {
+                    try {
+                        val host = java.net.URI(url).host
+                        if (host != null) {
+                            candidates.add("https://$host/")
+                            val parts = host.split(".")
+                            if (parts.size >= 2) candidates.add("https://${parts.takeLast(2).joinToString(".")}/")
+                        }
+                    } catch (e: Exception) {}
+                    candidates.add("https://mewcdn.online/")
+                    candidates.add("https://megaplay.buzz/")
+                }
+
+                var status = 0
+                var bodyBytes = ByteArray(0)
+                for (ref in candidates) {
+                    val rb = Request.Builder().url(url)
+                        .header("Referer",    ref)
+                        .header("Origin",     ref.trimEnd('/'))
+                        .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36")
+                    for ((k, v) in extraHeaders) rb.header(k, v)
+                    val resp = client.newCall(rb.build()).execute()
+                    status = resp.code
+                    bodyBytes = resp.body?.bytes() ?: ByteArray(0)
+                    resp.close()
+                    if (status != 403 && status != 503) break
+                    Log.w("AniTrack", "fetchUrl $status with Referer '$ref' — trying next")
+                }
+
                 val ret = JSObject()
-                ret.put("status", resp.code)
+                ret.put("status", status)
                 ret.put("binary", binary)
                 ret.put("data", if (binary)
                     android.util.Base64.encodeToString(bodyBytes, android.util.Base64.NO_WRAP)

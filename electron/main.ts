@@ -1,11 +1,9 @@
 import {
   app,
   BrowserWindow,
-  dialog,
   ipcMain,
   protocol,
   session,
-  shell,
   net,
   Tray,
   Menu,
@@ -14,61 +12,32 @@ import {
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { IPC } from "../shared/types";
-import {
-  addLibraryFolder,
-  deleteListEntry,
-  dismissFromContinueWatching,
-  getAllListEntries,
-  getAnime,
-  getContinueWatching,
-  getContinueWatchingPaged,
-  getEpisodesFor,
-  getListEntry,
-  getProgress,
-  getProgressForAnime,
-  listLibraryFolders,
-  removeLibraryFolder,
-  setListEntry,
-  setProgress,
-  upsertAnime,
-} from "./services/db";
-import {
-  beginAuth,
-  disconnect as malDisconnect,
-  flushDirty,
-  getState,
-  getMalClientInfo,
-  markEpisodeWatched,
-  pullList,
-  setMalClientId,
-} from "./services/mal";
-import { getById, getRelations, searchAnime, advancedSearchAnime, trending } from "./services/anilist";
-import {
-  beginAuth as alBeginAuth,
-  disconnect as alDisconnect,
-  getState as alGetState,
-  pullList as alPullList,
-  setClientId as alSetClientId,
-  alMarkEpisodeWatched,
-} from "./services/anilist-sync";
-import { scanAll } from "./services/library";
+import { getAnime } from "./services/db";
+import { flushDirty } from "./services/mal";
 import { linksFor, openLink } from "./services/legal-sites";
 import {
   prewarm as pahePrewarm,
   getKwikCookies,
   getPaheBaseUrl,
-  setPaheBaseUrl,
 } from "./services/providers/animepahe";
 import { autoUpdater } from "electron-updater";
 import { registerPaheIpc } from "./ipc/pahe";
 import { registerAuthIpc } from "./ipc/auth";
 import { registerDbIpc } from "./ipc/db";
-import { prewarmAnikoto } from "./services/providers/anikoto";
+import { prewarmAnikoto, getAnikotoPlayerOrigin } from "./services/providers/anikoto";
 
 const isDev = process.env.NODE_ENV === "development";
 
 // Disable Chromium Sandbox to prevent EXCEPTION_BREAKPOINT (0x80000003) crashes on certain Windows setups.
 app.commandLine.appendSwitch("no-sandbox");
+
+// Strip "Electron/x.y" and the app name from the User-Agent. Cloudflare
+// fingerprints the Electron token and challenge-blocks AnimePahe API calls;
+// the cf_clearance cookie is also validated against the UA, so the hidden
+// challenge window and net.fetch must present the same clean Chrome UA.
+app.userAgentFallback = app.userAgentFallback
+  .replace(/\s?Electron\/[\d.]+/i, "")
+  .replace(/\s?anitrack\/[\d.]+/i, "");
 
 let mainWindow: BrowserWindow | null = null;
 let malFlushTimer: NodeJS.Timeout | null = null;
@@ -92,24 +61,26 @@ function registerWebRequestHandlers() {
     "i.animepahe.si",
     "i.animepahe.cx",
   ]);
-  const SNAPSHOT_URLS = Array.from(snapshotHosts).map((h) => `*://${h}/*`);
-
-  session.defaultSession.webRequest.onBeforeSendHeaders(
-    { urls: SNAPSHOT_URLS },
-    (details, callback) => {
-      const headers: Record<string, string> = { ...details.requestHeaders as Record<string, string> };
-      headers["Referer"] = `https://${paheHost}/`;
-      callback({ requestHeaders: headers });
-    },
-  );
-
   // Spoof Referer + Origin on outgoing requests to the stream CDN.
+  // NOTE: Electron's webRequest API supports only ONE listener per event per
+  // session — registering twice replaces the first listener. Snapshot
+  // thumbnail handling therefore lives inside this single handler.
   session.defaultSession.webRequest.onBeforeSendHeaders(
     {
       urls: ["*://*/*"],
     },
     (details, callback) => {
-      const isPaheCdn = 
+      // Snapshot thumbnails need a Referer from the AnimePahe site.
+      let urlHost = "";
+      try { urlHost = new URL(details.url).hostname; } catch {}
+      if (snapshotHosts.has(urlHost)) {
+        const headers: Record<string, string> = { ...details.requestHeaders as Record<string, string> };
+        headers["Referer"] = `https://${paheHost}/`;
+        callback({ requestHeaders: headers });
+        return;
+      }
+
+      const isPaheCdn =
         details.url.includes("owocdn.top") || 
         details.url.includes("owocdn.com") || 
         details.url.includes("uwucdn.top") || 
@@ -127,16 +98,18 @@ function registerWebRequestHandlers() {
         details.url.includes("animepahe");
 
       // Megaplay / Kiwi-Stream rotating CDN domains
-      const isMegaplayStream = 
+      const isMegaplayStream =
         !isApiHost && (
-          details.url.includes("/anime/") || 
-          details.url.includes(".vtt") || 
-          details.url.includes("subtitles") || 
-          details.url.includes("/public/stream/") || 
-          details.url.includes("vibeplayer") || 
+          details.url.includes("/anime/") ||
+          details.url.includes(".vtt") ||
+          details.url.includes("subtitles") ||
+          details.url.includes("/public/stream/") ||
+          details.url.includes("vibeplayer") ||
           details.url.includes("mewcdn") ||
           details.url.includes("mewstream") ||
+          details.url.includes("nekostream") ||
           details.url.includes("megaplay") ||
+          details.url.includes("vidtube") ||
           details.url.includes("vibe") ||
           details.url.includes("lostproject") ||
           details.url.includes("streamzone")
@@ -146,7 +119,7 @@ function registerWebRequestHandlers() {
         const headers: Record<string, string> = {};
         for (const [k, v] of Object.entries(details.requestHeaders)) {
           if (k.toLowerCase() === "origin") continue;
-          
+
           // Cloudflare WAF bypass: Spoof Client Hints to hide Electron
           if (k.toLowerCase() === "sec-ch-ua") {
             headers[k] = '"Google Chrome";v="120", "Chromium";v="120", "Not_A Brand";v="8"';
@@ -160,14 +133,28 @@ function registerWebRequestHandlers() {
             headers[k] = '"Windows"';
             continue;
           }
-          
+
           headers[k] = v as string;
         }
 
         if (isMegaplayStream) {
-          const isMew = details.url.includes("mewcdn") || details.url.includes("vibeplayer") || details.url.includes("vibe");
-          headers["Referer"] = isMew ? "https://mewcdn.online/" : "https://megaplay.buzz/";
-          headers["Origin"] = isMew ? "https://mewcdn.online" : "https://megaplay.buzz";
+          // The Anikoto player host rotates (megaplay.buzz → vidtube.site → …)
+          // and so do its segment CDNs (mewstream.buzz, nekostream.site, …).
+          // These CDNs hotlink-check Referer against the player iframe that
+          // embedded the stream — which we captured at resolve time. Use it so
+          // the spoofed Referer stays correct across domain hops; fall back to
+          // per-family defaults if no resolve has happened yet this session.
+          const playerOrigin = getAnikotoPlayerOrigin();
+          if (playerOrigin) {
+            headers["Referer"] = playerOrigin + "/";
+            headers["Origin"] = playerOrigin;
+          } else if (details.url.includes("mewcdn") || details.url.includes("mewstream") || details.url.includes("vibeplayer") || details.url.includes("vibe")) {
+            headers["Referer"] = "https://mewcdn.online/";
+            headers["Origin"] = "https://mewcdn.online";
+          } else {
+            headers["Referer"] = "https://megaplay.buzz/";
+            headers["Origin"] = "https://megaplay.buzz";
+          }
         } else {
           headers["Referer"] = "https://kwik.cx/";
           headers["Origin"] = "https://kwik.cx";
@@ -203,16 +190,18 @@ function registerWebRequestHandlers() {
         details.url.includes("anikototv.to") ||
         details.url.includes("animepahe");
 
-      const isMegaplayStream = 
+      const isMegaplayStream =
         !isApiHost && (
-          details.url.includes("/anime/") || 
-          details.url.includes(".vtt") || 
-          details.url.includes("subtitles") || 
-          details.url.includes("/public/stream/") || 
-          details.url.includes("vibeplayer") || 
+          details.url.includes("/anime/") ||
+          details.url.includes(".vtt") ||
+          details.url.includes("subtitles") ||
+          details.url.includes("/public/stream/") ||
+          details.url.includes("vibeplayer") ||
           details.url.includes("mewcdn") ||
           details.url.includes("mewstream") ||
+          details.url.includes("nekostream") ||
           details.url.includes("megaplay") ||
+          details.url.includes("vidtube") ||
           details.url.includes("vibe") ||
           details.url.includes("lostproject") ||
           details.url.includes("streamzone")

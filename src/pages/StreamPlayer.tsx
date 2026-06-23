@@ -21,6 +21,7 @@ import { secondsToTimestamp } from "../lib/format";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { isCapacitor } from "../lib/platform";
 import { pushProgress } from "../lib/supabase-sync";
+import { scoreMatch } from "../lib/match";
 
 // ── Synthetic anime ID for AnimePahe-only watches ─────────────────────────
 // When a user watches via Latest Episodes there is no AniList ID in the URL.
@@ -32,118 +33,6 @@ function paheSessionId(session: string): number {
     h = (((h << 5) + h) ^ session.charCodeAt(i)) | 0; // djb2-xor, 32-bit signed
   }
   return -(Math.abs(h) || 1);
-}
-
-function getSeasonNumber(title: string): number | null {
-  const clean = title.toLowerCase();
-  
-  // Pattern 1: "season 4" or "season iv" or "ss 4"
-  const seasonMatch = clean.match(/\b(season|ss|part|cour)\s+(\d+|ii|iii|iv|v|vi|vii|viii|ix|x)\b/);
-  if (seasonMatch) {
-    const val = seasonMatch[2];
-    if (/^\d+$/.test(val)) return parseInt(val, 10);
-    const romanMap: Record<string, number> = {
-      i: 1, ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10
-    };
-    if (romanMap[val] !== undefined) return romanMap[val];
-  }
-
-  // Pattern 2: "4th season" or "2nd season"
-  const ordinalMatch = clean.match(/\b(\d+)(st|nd|rd|th)\s+(season|part|ss|cour)\b/);
-  if (ordinalMatch) {
-    return parseInt(ordinalMatch[1], 10);
-  }
-
-  // Pattern 3: Lone Roman numerals at the end of the title
-  const endRomanMatch = clean.match(/\b(ii|iii|iv|v|vi|vii|viii|ix|x)\b\s*$/);
-  if (endRomanMatch) {
-    const romanMap: Record<string, number> = {
-      ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10
-    };
-    return romanMap[endRomanMatch[1]];
-  }
-
-  // Pattern 4: Lone digits at the end
-  const endDigitMatch = clean.match(/\b(\d+)\b\s*$/);
-  if (endDigitMatch) {
-    return parseInt(endDigitMatch[1], 10);
-  }
-
-  return null;
-}
-
-function scoreMatch(candidate: any, targetTitle: string, targetYear?: number, targetEpisodes?: number, targetStatus?: string): number {
-  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, " ").replace(/\s+/g, " ").trim();
-  const t = norm(targetTitle);
-  const c = norm(candidate.title ?? "");
-  let score = 0;
-  if (c === t) {
-    score += 100;
-  } else if (c.includes(t) || t.includes(c)) {
-    const ratio = Math.min(c.length, t.length) / Math.max(c.length, t.length);
-    score += Math.round(40 * ratio);
-  } else {
-    const tw = new Set(t.split(/\s+/));
-    const cw = c.split(/\s+/);
-    const overlap = cw.filter((w: string) => tw.has(w)).length;
-    score += Math.round((overlap / Math.max(tw.size, cw.length)) * 30);
-  }
-
-  // Add a prefix match bonus if the first few words match exactly.
-  // This helps match shows that differ in season suffix (e.g. "Classroom of the Elite IV" and "Classroom of the Elite 4th Season")
-  const tw_arr = t.split(/\s+/);
-  const cw_arr = c.split(/\s+/);
-  let prefixMatch = 0;
-  for (let i = 0; i < Math.min(3, tw_arr.length, cw_arr.length); i++) {
-    if (tw_arr[i] === cw_arr[i]) prefixMatch++;
-    else break;
-  }
-  if (prefixMatch >= 2) {
-    score += prefixMatch * 10;
-  }
-
-  if (targetYear && candidate.year) {
-    const diff = Math.abs(Number(candidate.year) - targetYear);
-    if (diff === 0) score += 8;
-    else if (diff === 1) score += 2;
-    else if (diff <= 3) score -= 30; // 2 or 3 years difference gets a penalty
-    else return -100; // 4+ years difference is rejected
-  }
-
-  // Season number mismatch check
-  const candidateSeason = getSeasonNumber(candidate.title) || 1;
-  const targetSeason = getSeasonNumber(targetTitle) || 1;
-  if (candidateSeason !== targetSeason) {
-    score -= 50; // Heavy penalty for mismatched seasons
-  }
-
-  // Episode mismatch check
-  if (targetEpisodes && candidate.episodes) {
-    const diff = Math.abs(candidate.episodes - targetEpisodes);
-    if (diff > 0) {
-      const isTargetAiring = targetStatus === "RELEASING" || targetStatus === "RELEASING".toLowerCase();
-      const isCandidateAiring = candidate.status && (
-        candidate.status.toLowerCase().includes("airing") ||
-        candidate.status.toLowerCase().includes("releasing") ||
-        candidate.status.toLowerCase().includes("current")
-      );
-      const isAiring = isTargetAiring || isCandidateAiring;
-
-      if (isAiring && candidate.episodes < targetEpisodes) {
-        // No penalty if the show is currently airing and has fewer episodes on the provider
-      } else {
-        if (diff <= 1) {
-          score -= 2;
-        } else if (diff <= 3) {
-          score -= 5;
-        } else {
-          score -= 40; // Heavy penalty for mismatch
-        }
-      }
-    }
-  }
-
-  return score;
 }
 
 // ── MSE codec compatibility shim ───────────────────────────────────────────
@@ -254,6 +143,9 @@ export default function StreamPlayer() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const videoWrapRef = useRef<HTMLDivElement>(null);
   const hlsRef = useRef<Hls | null>(null);
+  // Player origin (e.g. https://vidtube.site) captured at resolve time. On Android
+  // the CapacitorLoader sends it as Referer so the segment CDN's hotlink check passes.
+  const refererRef = useRef<string | null>(null);
   const seekingRef = useRef(false);
   const singleClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoNextRef = useRef(autoNext);
@@ -357,22 +249,30 @@ export default function StreamPlayer() {
         let targetStatus = params.get("status") ? params.get("status")! : undefined;
         const searchQueries = [animeTitle];
         const anilistId = Number(params.get("animeId") ?? params.get("anilistId") ?? 0);
-        if (anilistId > 0 && anilistId < 1_000_000_000) {
-          try {
-            const meta = await window.api.anilist.get(anilistId);
-            if (meta) {
-              if (meta.year) targetYear = meta.year;
-              if (meta.episodes) targetEpisodes = meta.episodes;
-              if (meta.status) targetStatus = meta.status;
-              if (meta.titleRomaji && meta.titleRomaji.toLowerCase() !== animeTitle.toLowerCase()) {
-                searchQueries.push(meta.titleRomaji);
-              }
-              if (meta.title && meta.title.toLowerCase() !== animeTitle.toLowerCase() && (!meta.titleRomaji || meta.title.toLowerCase() !== meta.titleRomaji.toLowerCase())) {
-                searchQueries.push(meta.title);
-              }
-            }
-          } catch (e) {
-            console.warn("[StreamPlayer] Failed to load AniList metadata:", e);
+        let meta: any = null;
+        try {
+          if (anilistId > 0 && anilistId < 1_000_000_000) {
+            meta = await window.api.anilist.get(anilistId);
+          } else {
+            // Latest Episodes (and other AnimePahe-only entries) pass no AniList id.
+            // Resolve it from the title so we get romaji/English variants — without them
+            // the Anikoto search uses only AnimePahe's title and usually fails to match,
+            // so no Anikoto source is offered.
+            const results = await window.api.anilist.search(animeTitle);
+            if (results && results.length > 0) meta = results[0];
+          }
+        } catch (e) {
+          console.warn("[StreamPlayer] Failed to load AniList metadata:", e);
+        }
+        if (meta) {
+          if (meta.year) targetYear = meta.year;
+          if (meta.episodes) targetEpisodes = meta.episodes;
+          if (meta.status) targetStatus = meta.status;
+          if (meta.titleRomaji && meta.titleRomaji.toLowerCase() !== animeTitle.toLowerCase()) {
+            searchQueries.push(meta.titleRomaji);
+          }
+          if (meta.title && meta.title.toLowerCase() !== animeTitle.toLowerCase() && (!meta.titleRomaji || meta.title.toLowerCase() !== meta.titleRomaji.toLowerCase())) {
+            searchQueries.push(meta.title);
           }
         }
 
@@ -575,18 +475,24 @@ export default function StreamPlayer() {
         // Calculate episodeOffset from page 1 data if not already explicitly provided in URL
         let epOffset = epOffsetRef.current;
         let page1Data = firstData;
-        if (!epOffset && firstPaheePage > 1) {
-          const p1 = await fetchPahePage(1);
-          page1Data = p1.data;
+        // We need page-1 data to learn the provider's true first episode number,
+        // both to auto-compute the offset and to sanity-check a URL-provided one.
+        if (firstPaheePage > 1) {
+          try { page1Data = (await fetchPahePage(1)).data; } catch { /* keep firstData */ }
         }
-        if (!epOffset && page1Data.length > 0) {
+        if (page1Data.length > 0) {
           const sortedPage1 = [...page1Data].sort((a: any, b: any) => {
             const aNum = a.episodeNumber ?? a.episode ?? 0;
             const bNum = b.episodeNumber ?? b.episode ?? 0;
             return aNum - bNum;
           });
           const firstEp = sortedPage1[0].episodeNumber ?? sortedPage1[0].episode ?? 1;
-          epOffset = Math.max(0, firstEp - 1);
+          const maxOffset = Math.max(0, firstEp - 1);
+          // Use the auto-computed offset, or clamp a URL-provided one so it can't
+          // push episodes below 1. Providers number episodes differently (Anikoto
+          // is relative 1-N, AnimePahe can be absolute), so a season-based offset
+          // meant for one would otherwise collapse every episode of the other to "1".
+          epOffset = epOffset ? Math.min(epOffset, maxOffset) : maxOffset;
           epOffsetRef.current = epOffset;
         }
 
@@ -729,7 +635,9 @@ export default function StreamPlayer() {
         this.stats.loading.start = trequest;
 
         console.log('[CapLoader] fetching', url, 'binary=', binary);
-        window.api.pahe.fetchUrl!(url, binary)
+        const ref = refererRef.current;
+        const hdrs = ref ? { Referer: ref.replace(/\/?$/, "/"), Origin: ref } : undefined;
+        window.api.pahe.fetchUrl!(url, binary, hdrs)
           .then((result) => {
             if (this.aborted) return;
             console.log('[CapLoader] got response status=', result.status, 'size=', result.data?.length, 'url=', url);
@@ -835,7 +743,9 @@ export default function StreamPlayer() {
         track.srclang = "en";
 
         if (isCapacitor) {
-          window.api.pahe.fetchUrl!(sub.file, false)
+          const subRef = refererRef.current;
+          const subHdrs = subRef ? { Referer: subRef.replace(/\/?$/, "/"), Origin: subRef } : undefined;
+          window.api.pahe.fetchUrl!(sub.file, false, subHdrs)
             .then((result) => {
               const blob = new Blob([result.data], { type: "text/vtt" });
               track.src = URL.createObjectURL(blob);
@@ -913,6 +823,10 @@ export default function StreamPlayer() {
     const hls = new Hls(hlsConfig as any);
     hlsRef.current = hls;
 
+    // Fatal network errors (cold manifest/segment fetch, CDN warm-up race) are
+    // usually transient — retry via hls.startLoad() before surfacing an error.
+    let networkRetries = 0;
+
     hls.on(Hls.Events.BUFFER_CODECS, (_e, data) => {
       const audioCodec = (data as any).audio?.codec ?? "";
       if (audioCodec) {
@@ -970,6 +884,14 @@ export default function StreamPlayer() {
         return;
       }
 
+      // Transient network error — retry the load a few times before giving up.
+      if (data.type === Hls.ErrorTypes.NETWORK_ERROR && networkRetries < 3) {
+        networkRetries++;
+        console.warn(`[HLS] network error (${data.details}); retry ${networkRetries}/3`);
+        setTimeout(() => { try { hls.startLoad(); } catch { /* destroyed */ } }, 800 * networkRetries);
+        return;
+      }
+
       setStreamError(`HLS error: ${data.details} (${data.type})`);
       setLoadingStream(false);
     });
@@ -991,10 +913,9 @@ export default function StreamPlayer() {
       setDuration(0);
       setLinks([]);
       
-      const preferredIdx = providerId === "anikoto" 
-        ? (localStorage.getItem("anitrack-anikoto-subtype") === "hard" ? 1 : 0)
-        : 0;
-      setSelectedLink(preferredIdx);
+      const preferredSubType = providerId === "anikoto"
+        ? (localStorage.getItem("anitrack-anikoto-subtype") || "soft")
+        : null;
 
       try {
         // Run links fetch and saved-progress lookup in parallel — they're
@@ -1016,8 +937,30 @@ export default function StreamPlayer() {
           ? savedProgress.positionSec
           : null;
         
-        const bestIdx = preferredIdx < fetchedLinks.length ? preferredIdx : 0;
-        const { url, subtitles, intro, outro } = await window.api.pahe.resolve(providerId, fetchedLinks[bestIdx].id ?? fetchedLinks[bestIdx].kwik);
+        // Map the user's preferred sub-type to the actual link index. Available
+        // types vary per show (some lack soft, some lack hard), and getStreamLinks
+        // builds the array conditionally — so a fixed index can resolve the wrong
+        // track (e.g. dub when the user picked sub). Match by subType instead.
+        let bestIdx = 0;
+        if (providerId === "anikoto" && preferredSubType) {
+          const i = fetchedLinks.findIndex((l: any) => {
+            try { return JSON.parse(l.id).subType === preferredSubType; } catch { return false; }
+          });
+          if (i >= 0) bestIdx = i;
+        } else if (providerId !== "anikoto") {
+          // AnimePahe serves a separate link per resolution — default to the highest
+          // quality (preferring Japanese audio when two share the top resolution).
+          const qOf = (l: any) => parseInt(String(l.quality ?? "").replace(/[^0-9]/g, ""), 10) || 0;
+          const isJpn = (l: any) => !String(l.audio ?? "").toLowerCase().includes("eng");
+          let bestScore = -1;
+          fetchedLinks.forEach((l: any, i: number) => {
+            const score = qOf(l) * 10 + (isJpn(l) ? 1 : 0);
+            if (score > bestScore) { bestScore = score; bestIdx = i; }
+          });
+        }
+        setSelectedLink(bestIdx);
+        const { url, subtitles, intro, outro, referer } = await window.api.pahe.resolve(providerId, fetchedLinks[bestIdx].id ?? fetchedLinks[bestIdx].kwik);
+        refererRef.current = referer ?? null;
         if (!url) {
           throw new Error("Resolved stream URL is empty. The stream server may be down, or we failed to fetch it.");
         }
@@ -1073,14 +1016,15 @@ export default function StreamPlayer() {
     if (!link) return;
     setSelectedLink(idx);
     if (providerId === "anikoto") {
-      localStorage.setItem("anitrack-anikoto-subtype", idx === 1 ? "hard" : "soft");
+      try { localStorage.setItem("anitrack-anikoto-subtype", JSON.parse(link.id).subType || "soft"); } catch {}
     }
     setQualityOpen(false);
     setLoadingStream(true);
     setStreamError(null);
     resetPlayer();
     try {
-      const { url, subtitles } = await window.api.pahe.resolve(providerId, link.id ?? link.kwik);
+      const { url, subtitles, referer } = await window.api.pahe.resolve(providerId, link.id ?? link.kwik);
+      refererRef.current = referer ?? null;
       if (!url) {
         throw new Error("Resolved stream URL is empty. The stream server may be down, or we failed to fetch it.");
       }
@@ -1388,7 +1332,7 @@ export default function StreamPlayer() {
   // Shared sub-components
 
   const EpisodePanel = (
-    <div className={`flex flex-col ${isMobile ? "flex-1 overflow-hidden" : "w-[260px] flex-shrink-0 border-r border-white/10"} bg-[#111118]`}>
+    <div className={`flex flex-col ${isMobile ? "flex-1 overflow-hidden" : "w-[260px] flex-shrink-0 border-r border-white/10"} bg-[#000000]`}>
       {availableSources.length > 0 && (
         <div className="border-b border-white/10 p-2">
           <div className="mb-2 text-[10px] uppercase tracking-wider text-white/50 font-semibold">Servers</div>
@@ -1421,7 +1365,7 @@ export default function StreamPlayer() {
                   }}
                   className={`flex h-8 items-center gap-2 rounded px-3 text-xs font-medium transition-colors ${
                     isActive
-                      ? "bg-[#4a9eff] text-white"
+                      ? "bg-[#e50914] text-white"
                       : "bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"
                   }`}
                 >
@@ -1436,26 +1380,29 @@ export default function StreamPlayer() {
         <div className="border-b border-white/10 p-2">
           <div className="mb-2 text-[10px] uppercase tracking-wider text-white/50 font-semibold">Sub Type</div>
           <div className="flex gap-2">
-            <button
-              onClick={() => changeQuality(0)}
-              className={`flex h-8 flex-1 items-center justify-center rounded text-xs font-semibold transition-all duration-200 ${
-                selectedLink === 0
-                  ? "bg-[#4a9eff] text-white shadow-[0_0_12px_rgba(74,158,255,0.4)]"
-                  : "bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"
-              }`}
-            >
-              Soft Sub
-            </button>
-            <button
-              onClick={() => changeQuality(1)}
-              className={`flex h-8 flex-1 items-center justify-center rounded text-xs font-semibold transition-all duration-200 ${
-                selectedLink === 1
-                  ? "bg-[#4a9eff] text-white shadow-[0_0_12px_rgba(74,158,255,0.4)]"
-                  : "bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"
-              }`}
-            >
-              Hard Sub
-            </button>
+            {links.map((link, idx) => {
+              // Derive the label from the link's real subType — the order/presence
+              // of soft/hard/dub varies per show, so a fixed label per index would
+              // mislabel (and mis-resolve) the track.
+              let label = "Sub";
+              try {
+                const st = JSON.parse(link.id).subType;
+                label = st === "hard" ? "Hard Sub" : st === "dub" ? "Dub" : "Soft Sub";
+              } catch {}
+              return (
+                <button
+                  key={idx}
+                  onClick={() => changeQuality(idx)}
+                  className={`flex h-8 flex-1 items-center justify-center rounded text-xs font-semibold transition-all duration-200 ${
+                    selectedLink === idx
+                      ? "bg-[#e50914] text-white shadow-[0_0_12px_rgba(229, 9, 20,0.4)]"
+                      : "bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"
+                  }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
         </div>
       )}
@@ -1474,7 +1421,7 @@ export default function StreamPlayer() {
           {rangeOpen && ranges.length > 1 && (
             <>
               <div className="fixed inset-0 z-20" onClick={() => setRangeOpen(false)} />
-              <div className="absolute left-0 top-full z-30 mt-1 max-h-80 w-32 overflow-y-auto rounded-md border border-white/10 bg-[#1a1a24] shadow-xl">
+              <div className="absolute left-0 top-full z-30 mt-1 max-h-80 w-32 overflow-y-auto rounded-md border border-white/10 bg-[#222222] shadow-xl">
                 {ranges.map((r) => {
                   const label = `${String(r.start).padStart(3, "0")}-${String(r.end).padStart(3, "0")}`;
                   const active = r.start === rangeStart;
@@ -1519,7 +1466,7 @@ export default function StreamPlayer() {
                   onClick={() => playEpisode(ep)}
                   className={`flex h-9 items-center justify-center rounded text-xs font-medium transition
                     ${isCurrent
-                      ? "bg-[#4a9eff] text-white"
+                      ? "bg-[#e50914] text-white"
                       : watched
                         ? "bg-green-500/20 text-green-400 ring-1 ring-green-500/30 hover:bg-green-500/30"
                         : "bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"}`}
@@ -1671,9 +1618,9 @@ export default function StreamPlayer() {
 
     // Portrait: video (16:9) at top, episode panel below
     return (
-      <div className="flex h-screen flex-col overflow-hidden bg-[#0d0d12] text-white">
+      <div className="flex h-screen flex-col overflow-hidden bg-[#000000] text-white">
         {/* Top bar */}
-        <div className="flex h-12 flex-shrink-0 items-center gap-2 bg-[#111118] px-3">
+        <div className="flex h-12 flex-shrink-0 items-center gap-2 bg-[#000000] px-3">
           <button onClick={() => navigate("/")} className="flex h-9 w-9 items-center justify-center rounded-full hover:bg-white/10">
             <ArrowLeft size={18} />
           </button>
@@ -1699,10 +1646,10 @@ export default function StreamPlayer() {
 
   // ── Desktop / tablet layout (split view) ────────────────────────────────────
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-[#0d0d12] text-white">
+    <div className="flex h-screen flex-col overflow-hidden bg-[#000000] text-white">
 
       {/* Top bar */}
-      <div className="flex h-10 flex-shrink-0 items-center gap-3 border-b border-white/10 bg-[#111118] px-3">
+      <div className="flex h-10 flex-shrink-0 items-center gap-3 border-b border-white/10 bg-[#000000] px-3">
         <button
           onClick={() => navigate("/")}
           className="flex items-center gap-1 rounded px-2 py-1 text-sm text-white/60 hover:bg-white/10 hover:text-white"
@@ -1711,7 +1658,7 @@ export default function StreamPlayer() {
           <Home size={14} /> Home
         </button>
         <button
-          className="truncate text-sm font-semibold hover:text-[#4a9eff] transition-colors text-left"
+          className="truncate text-sm font-semibold hover:text-white transition-colors text-left"
           title="Go to anime page"
           onClick={async () => {
             const id = Number(params.get("animeId") ?? 0);

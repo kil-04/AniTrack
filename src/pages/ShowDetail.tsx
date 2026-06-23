@@ -52,13 +52,13 @@ function RelatedCard({ rel, relationType }: { rel: AnimeMeta; relationType: stri
 
   const tooltipPortal = isHovered && rect ? createPortal(
     <div 
-      className="fixed z-[9999] w-72 bg-[#15151f] rounded-xl border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.8)] p-5 flex flex-col pointer-events-none animate-in fade-in zoom-in-95 duration-200"
+      className="fixed z-[9999] w-72 bg-[#1f1f1f] rounded-xl border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.8)] p-5 flex flex-col pointer-events-none animate-in fade-in zoom-in-95 duration-200"
       style={{
         left: rect.right + 15 + 288 > window.innerWidth ? rect.left - 288 - 15 : rect.right + 15,
         top: Math.max(10, Math.min(window.innerHeight - 320, rect.top + rect.height / 2 - 160)),
       }}
     >
-      <h3 className="font-bold text-[#4a9eff] text-lg leading-tight mb-2">{displayAnime.title}</h3>
+      <h3 className="font-bold text-white text-lg leading-tight mb-2">{displayAnime.title}</h3>
       {displayAnime.averageScore && (
         <div className="text-sm font-bold text-green-400 mb-3">★ {(displayAnime.averageScore / 10).toFixed(1)} / 10</div>
       )}
@@ -76,7 +76,7 @@ function RelatedCard({ rel, relationType }: { rel: AnimeMeta; relationType: stri
       {displayAnime.synopsis ? (
         <p className="text-xs text-white/80 line-clamp-5 leading-relaxed" dangerouslySetInnerHTML={{ __html: displayAnime.synopsis }} />
       ) : isFetching ? (
-        <p className="text-xs text-[#4a9eff] animate-pulse italic">Loading details from network...</p>
+        <p className="text-xs text-white animate-pulse italic">Loading details from network...</p>
       ) : (
         <p className="text-xs text-white/40 italic">No synopsis available.</p>
       )}
@@ -194,7 +194,7 @@ export default function ShowDetail() {
         {bannerSrc && (
           <img src={bannerSrc} alt="" className="h-full w-full object-cover object-top" />
         )}
-        <div className="absolute inset-0 bg-gradient-to-t from-[#0b0b0f] via-[#0b0b0f]/60 to-transparent" />
+        <div className="absolute inset-0 bg-gradient-to-t from-[#000000] via-[#000000]/60 to-transparent" />
         <button
           onClick={() => navigate(-1)}
           className="absolute left-4 top-4 flex h-8 w-8 items-center justify-center rounded-full bg-black/50 backdrop-blur-sm hover:bg-black/80 transition"

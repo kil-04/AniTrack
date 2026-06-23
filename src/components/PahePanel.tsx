@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Play, ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
+import { Play, ChevronLeft, ChevronRight, Loader2, Captions, Mic } from "lucide-react";
 import type { PlaybackProgress } from "../../shared/types";
+import { scoreMatch } from "../lib/match";
 
 // Keyed by animeId (when a real AniList ID is known) or by title string.
 // Survives navigation so re-opening a show detail page is instant.
@@ -19,118 +20,6 @@ interface Props {
   inline?: boolean;
   /** Episode to jump to when "Open Player" is clicked without a specific ep selected */
   resumeEpisode?: number;
-}
-
-function getSeasonNumber(title: string): number | null {
-  const clean = title.toLowerCase();
-  
-  // Pattern 1: "season 4" or "season iv" or "ss 4"
-  const seasonMatch = clean.match(/\b(season|ss|part|cour)\s+(\d+|ii|iii|iv|v|vi|vii|viii|ix|x)\b/);
-  if (seasonMatch) {
-    const val = seasonMatch[2];
-    if (/^\d+$/.test(val)) return parseInt(val, 10);
-    const romanMap: Record<string, number> = {
-      i: 1, ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10
-    };
-    if (romanMap[val] !== undefined) return romanMap[val];
-  }
-
-  // Pattern 2: "4th season" or "2nd season"
-  const ordinalMatch = clean.match(/\b(\d+)(st|nd|rd|th)\s+(season|part|ss|cour)\b/);
-  if (ordinalMatch) {
-    return parseInt(ordinalMatch[1], 10);
-  }
-
-  // Pattern 3: Lone Roman numerals at the end of the title
-  const endRomanMatch = clean.match(/\b(ii|iii|iv|v|vi|vii|viii|ix|x)\b\s*$/);
-  if (endRomanMatch) {
-    const romanMap: Record<string, number> = {
-      ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10
-    };
-    return romanMap[endRomanMatch[1]];
-  }
-
-  // Pattern 4: Lone digits at the end
-  const endDigitMatch = clean.match(/\b(\d+)\b\s*$/);
-  if (endDigitMatch) {
-    return parseInt(endDigitMatch[1], 10);
-  }
-
-  return null;
-}
-
-function scoreMatch(candidate: any, targetTitle: string, targetYear?: number, targetEpisodes?: number, targetStatus?: string): number {
-  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, " ").replace(/\s+/g, " ").trim();
-  const t = norm(targetTitle);
-  const c = norm(candidate.title ?? "");
-  let score = 0;
-  if (c === t) {
-    score += 100;
-  } else if (c.includes(t) || t.includes(c)) {
-    const ratio = Math.min(c.length, t.length) / Math.max(c.length, t.length);
-    score += Math.round(40 * ratio);
-  } else {
-    const tw = new Set(t.split(/\s+/));
-    const cw = c.split(/\s+/);
-    const overlap = cw.filter((w: string) => tw.has(w)).length;
-    score += Math.round((overlap / Math.max(tw.size, cw.length)) * 30);
-  }
-
-  // Add a prefix match bonus if the first few words match exactly.
-  // This helps match shows that differ in season suffix (e.g. "Classroom of the Elite IV" and "Classroom of the Elite 4th Season")
-  const tw_arr = t.split(/\s+/);
-  const cw_arr = c.split(/\s+/);
-  let prefixMatch = 0;
-  for (let i = 0; i < Math.min(3, tw_arr.length, cw_arr.length); i++) {
-    if (tw_arr[i] === cw_arr[i]) prefixMatch++;
-    else break;
-  }
-  if (prefixMatch >= 2) {
-    score += prefixMatch * 10;
-  }
-
-  if (targetYear && candidate.year) {
-    const diff = Math.abs(Number(candidate.year) - targetYear);
-    if (diff === 0) score += 8;
-    else if (diff === 1) score += 2;
-    else if (diff <= 3) score -= 30; // 2 or 3 years difference gets a penalty
-    else return -100; // 4+ years difference is rejected
-  }
-
-  // Season number mismatch check
-  const candidateSeason = getSeasonNumber(candidate.title) || 1;
-  const targetSeason = getSeasonNumber(targetTitle) || 1;
-  if (candidateSeason !== targetSeason) {
-    score -= 50; // Heavy penalty for mismatched seasons
-  }
-
-  // Episode mismatch check
-  if (targetEpisodes && candidate.episodes) {
-    const diff = Math.abs(candidate.episodes - targetEpisodes);
-    if (diff > 0) {
-      const isTargetAiring = targetStatus === "RELEASING" || targetStatus === "RELEASING".toLowerCase();
-      const isCandidateAiring = candidate.status && (
-        candidate.status.toLowerCase().includes("airing") ||
-        candidate.status.toLowerCase().includes("releasing") ||
-        candidate.status.toLowerCase().includes("current")
-      );
-      const isAiring = isTargetAiring || isCandidateAiring;
-
-      if (isAiring && candidate.episodes < targetEpisodes) {
-        // No penalty if the show is currently airing and has fewer episodes on the provider
-      } else {
-        if (diff <= 1) {
-          score -= 2;
-        } else if (diff <= 3) {
-          score -= 5;
-        } else {
-          score -= 40; // Heavy penalty for mismatch
-        }
-      }
-    }
-  }
-
-  return score;
 }
 
 export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji, animeId, animeMalId, animeYear, animeEpisodes, animeStatus, inline = false, resumeEpisode }: Props) {
@@ -447,10 +336,29 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
   if (inline) {
     return (
       <div>
-        <div className="mb-4 flex items-center gap-2">
+        <div className="mb-4 flex flex-wrap items-center gap-2">
           <h2 className="text-lg font-semibold">Episodes</h2>
           {selected && selected.title !== animeTitle && (
-            <span className="ml-2 text-sm text-white/40">— {selected.title}</span>
+            <span className="ml-1 text-sm text-white/40">— {selected.title}</span>
+          )}
+          {/* Real per-provider availability (from the search the panel already ran — no extra request). */}
+          {selected && (selected.subCount != null || selected.dubCount != null || selected.episodes != null) && (
+            <div className="ml-1 flex items-center gap-1.5">
+              {selected.subCount != null ? (
+                <span className="flex items-center gap-1 rounded-md bg-emerald-500/90 px-1.5 py-0.5 text-[11px] font-bold text-black">
+                  <Captions size={12} /> SUB {selected.subCount}
+                </span>
+              ) : selected.episodes != null ? (
+                <span className="flex items-center gap-1 rounded-md bg-emerald-500/90 px-1.5 py-0.5 text-[11px] font-bold text-black">
+                  <Captions size={12} /> {selected.episodes} eps
+                </span>
+              ) : null}
+              {selected.dubCount != null && selected.dubCount > 0 && (
+                <span className="flex items-center gap-1 rounded-md bg-sky-500/90 px-1.5 py-0.5 text-[11px] font-bold text-black">
+                  <Mic size={12} /> DUB {selected.dubCount}
+                </span>
+              )}
+            </div>
           )}
         </div>
 
@@ -495,7 +403,7 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
           <>
             <button
               onClick={() => openStreamPlayer()}
-              className="mb-4 flex items-center gap-2 rounded-lg bg-[#4a9eff] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#3a8eef] transition"
+              className="mb-4 flex items-center gap-2 rounded-lg bg-white px-5 py-2.5 text-sm font-semibold text-black hover:bg-white/80 transition"
             >
               <Play size={14} fill="currentColor" /> Open Player
             </button>
@@ -518,13 +426,13 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
                           onClick={() => openStreamPlayer(ep)}
                           title={`Episode ${epNum}${ep.filler ? " (Filler)" : ""}`}
                           className={`relative flex h-10 w-full items-center justify-center rounded text-xs font-medium transition
-                            hover:bg-[#4a9eff] hover:text-white
+                            hover:bg-[#e50914] hover:text-white
                             ${watched ? "bg-green-500/20 text-green-400 ring-1 ring-green-500/30" : ep.filler ? "bg-yellow-500/10 text-yellow-400/80" : "bg-white/5 text-white/70"}`}
                         >
                           {epNum}
                           {inProgress && (
                             <div
-                              className="absolute bottom-0 left-0 h-0.5 rounded-full bg-[#4a9eff]"
+                              className="absolute bottom-0 left-0 h-0.5 rounded-full bg-[#e50914]"
                               style={{ width: `${pct}%` }}
                             />
                           )}
@@ -534,7 +442,9 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
                             <img
                               src={ep.snapshot}
                               alt={`Ep ${ep.episode}`}
+                              loading="lazy"
                               className="h-20 w-32 rounded-md object-cover shadow-lg ring-1 ring-white/20"
+                              onError={(e) => { (e.currentTarget.closest("div") as HTMLElement | null)?.style.setProperty("display", "none"); }}
                             />
                           </div>
                         )}
@@ -655,7 +565,7 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
             <>
               <button
                 onClick={() => openStreamPlayer()}
-                className="mb-2 flex w-full items-center justify-center gap-2 rounded-md bg-[#4a9eff] px-3 py-2 text-sm font-semibold text-white hover:bg-[#3a8eef] transition"
+                className="mb-2 flex w-full items-center justify-center gap-2 rounded-md bg-white px-3 py-2 text-sm font-semibold text-black hover:bg-white/80 transition"
               >
                 <Play size={14} fill="currentColor" /> Open Player
               </button>
@@ -664,7 +574,7 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
                   <button
                     key={ep.id ?? ep.session}
                     onClick={() => openStreamPlayer(ep)}
-                    className="flex h-10 items-center justify-center rounded bg-bg-elev text-xs font-medium hover:bg-[#4a9eff]/30 hover:text-white transition"
+                    className="flex h-10 items-center justify-center rounded bg-bg-elev text-xs font-medium hover:bg-[#e50914]/30 hover:text-white transition"
                   >
                     <Play size={9} className="mr-0.5 opacity-50" fill="currentColor" />
                     {ep.episodeNumber ?? ep.episode}

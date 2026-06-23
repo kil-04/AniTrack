@@ -65,7 +65,10 @@ function getPaheWindow(): Promise<BrowserWindow> {
     return Promise.resolve(_win);
   }
   if (_readyPromise && _win && !_win.isDestroyed()) {
-    return _readyPromise.then(() => _win!);
+    return _readyPromise.then(() => {
+      if (!_win || _win.isDestroyed()) throw new Error("AnimePahe window closed during init");
+      return _win;
+    });
   }
 
   _ready = false;
@@ -81,29 +84,151 @@ function getPaheWindow(): Promise<BrowserWindow> {
 
   _readyPromise = new Promise<void>((resolve) => {
     let resolved = false;
+    let shown = false;
     function done() {
       if (resolved) return;
       resolved = true;
       _ready = true;
+      // Hide the window again if we surfaced it for a manual CF solve.
+      if (shown && _win && !_win.isDestroyed()) {
+        try { _win.hide(); } catch { /* ignore */ }
+      }
       resolve();
     }
-    _win!.webContents.on("did-finish-load", done);
-    setTimeout(done, 10_000);
+    // Cloudflare serves an interstitial ("Just a moment...") that runs a JS
+    // challenge and then reloads the page — did-finish-load fires for the
+    // interstitial too. Only mark the session ready once the loaded page is
+    // NOT a challenge page; otherwise API calls go out without cf_clearance
+    // and 403.
+    //
+    // Modern CF often serves an INTERACTIVE challenge (Turnstile checkbox)
+    // that a hidden window can never pass. If auto-clearance hasn't happened
+    // after 10s, show the window so the user can click through it once —
+    // cf_clearance persists in the session cookies afterwards. Hard cap at
+    // 90s so a never-cleared page can't hang callers forever.
+    const showTimer = setTimeout(() => {
+      if (resolved || !_win || _win.isDestroyed()) return;
+      shown = true;
+      console.log("[pahe] CF challenge needs interaction — showing window for manual solve");
+      try {
+        _win.setTitle("AnimePahe — complete the verification check");
+        _win.show();
+        _win.focus();
+      } catch { /* ignore */ }
+    }, 10_000);
+    const hardTimeout = setTimeout(() => {
+      clearTimeout(showTimer);
+      done();
+    }, 90_000);
+    const checkLoad = async () => {
+      if (resolved || !_win || _win.isDestroyed()) return;
+      try {
+        const title: string = await _win.webContents.executeJavaScript("document.title", true);
+        if (/just a moment|attention required|checking your browser|verify you are human/i.test(title)) {
+          console.log("[pahe] CF challenge page detected, waiting for clearance…");
+          return; // challenge reloads the page → did-finish-load fires again
+        }
+        console.log("[pahe] CF session ready:", title.slice(0, 60));
+        clearTimeout(showTimer);
+        clearTimeout(hardTimeout);
+        done();
+      } catch { /* page mid-navigation — wait for the next load */ }
+    };
+    _win!.webContents.on("did-finish-load", checkLoad);
     _win!.loadURL(BASE() + "/");
     _win!.on("closed", () => {
+      clearTimeout(showTimer);
+      clearTimeout(hardTimeout);
+      // Resolve so pending callers fail fast on the destroyed-window guard
+      // instead of hanging until the hard timeout.
+      done();
       _win = null;
       _ready = false;
       _readyPromise = null;
     });
   });
 
-  return _readyPromise.then(() => _win!);
+  return _readyPromise.then(() => {
+    if (!_win || _win.isDestroyed()) throw new Error("AnimePahe window closed during init");
+    return _win;
+  });
 }
 
 // ─── Shared net.fetch helper (JSON API calls) ─────────────────────────────────
 //
 // Uses net.fetch with the hidden window's session so cf_clearance is included.
 // More reliable than executeJavaScript for JSON endpoints in Electron 32.
+
+/**
+ * Run a fetch INSIDE the hidden window's page context. Unlike net.fetch, an
+ * in-page request carries the full browser fingerprint (sec-fetch-* headers,
+ * cookie ordering, etc.), so Cloudflare treats it like the site's own AJAX.
+ * Returns { status, text } or null if the page context is unavailable.
+ */
+async function paheInPageFetch(
+  win: BrowserWindow,
+  url: string,
+): Promise<{ status: number; text: string } | null> {
+  try {
+    const res = await win.webContents.executeJavaScript(
+      `(async () => {
+        try {
+          const r = await fetch(${JSON.stringify(url)}, {
+            headers: { "Accept": "application/json, text/html, text/plain, */*", "X-Requested-With": "XMLHttpRequest" },
+            credentials: "include",
+          });
+          return { status: r.status, text: await r.text() };
+        } catch (e) { return { status: 0, text: String(e) }; }
+      })()`,
+      true,
+    );
+    if (res && typeof res.status === "number") return res;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// Serialize hidden-window navigations so concurrent calls don't race on the
+// shared window.
+let _paheNavQueue: Promise<unknown> = Promise.resolve();
+
+/**
+ * Fetch an HTML page (e.g. the /play/ page) by NAVIGATING the hidden window to
+ * it and returning the rendered page's full HTML, or null. A top-level document
+ * navigation carries the full browser fingerprint, which Cloudflare passes even
+ * when an XHR / net.fetch is challenged. (This works only for real document
+ * pages — AnimePahe's /api endpoint is XHR-only and 404s on document nav, so the
+ * JSON API path relies on the in-page XHR fetch instead.) Navigations serialized.
+ */
+async function paheNavFetchHtml(url: string): Promise<string | null> {
+  const run = async (): Promise<string | null> => {
+    const win = await getPaheWindow().catch(() => null);
+    if (!win || win.isDestroyed()) return null;
+    try {
+      await win.loadURL(url);
+    } catch {
+      // page may still have loaded despite a redirect/abort rejection
+    }
+    for (let i = 0; i < 12; i++) {
+      if (win.isDestroyed()) return null;
+      const title: string = await win.webContents
+        .executeJavaScript("document.title", true)
+        .catch(() => "");
+      if (title && !/just a moment|verify you are human|attention required|checking your browser/i.test(title)) {
+        const html: string = await win.webContents
+          .executeJavaScript("document.documentElement.outerHTML", true)
+          .catch(() => "");
+        if (html) return html;
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    return null;
+  };
+  const p = _paheNavQueue.then(run, run);
+  _paheNavQueue = p.catch(() => {});
+  return p;
+}
 
 async function paheWindowFetch(url: string, retried = false): Promise<any> {
   const win = await getPaheWindow();
@@ -118,15 +243,23 @@ async function paheWindowFetch(url: string, retried = false): Promise<any> {
     },
   });
   if (!resp.ok) {
-    // CF cookie can expire silently. On the typical CF-block status codes,
-    // destroy the hidden window once and retry — that re-runs the CF challenge
-    // and gets us a fresh cookie. Without this, every API call 403s until app restart.
-    if (!retried && (resp.status === 403 || resp.status === 503 || resp.status === 429)) {
-      if (_win && !_win.isDestroyed()) { _win.destroy(); }
-      _win = null;
-      _ready = false;
-      _readyPromise = null;
-      return paheWindowFetch(url, true);
+    if (resp.status === 403 || resp.status === 503 || resp.status === 429) {
+      // 1. CF blocked the net.fetch fingerprint — retry from inside the page (XHR).
+      //    The /api endpoint is XHR-only (document navigation 404s), so the
+      //    in-page fetch is the only viable bypass here.
+      const inPage = await paheInPageFetch(win, url);
+      if (inPage && inPage.status >= 200 && inPage.status < 300) {
+        try { return JSON.parse(inPage.text); } catch { /* fall through */ }
+      }
+      // 2. CF cookie may have expired. Destroy the hidden window once and retry
+      //    — that re-runs the CF challenge and gets us a fresh cookie.
+      if (!retried) {
+        if (_win && !_win.isDestroyed()) { _win.destroy(); }
+        _win = null;
+        _ready = false;
+        _readyPromise = null;
+        return paheWindowFetch(url, true);
+      }
     }
     const body = await resp.text().catch(() => "");
     throw new Error(`HTTP ${resp.status} ${resp.statusText}: ${body.slice(0, 120)}`);
@@ -162,13 +295,6 @@ export interface PaheEpisode {
   duration: string;
   session: string;
   filler: number;
-}
-
-export interface PaheLink {
-  quality: string;
-  audio: string;
-  kwik: string;
-  kwik_pahewin: string;
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -347,104 +473,6 @@ export async function findByExternalId(
   }
 }
 
-export async function search(query: string): Promise<PaheAnime[]> {
-  const data = await paheWindowFetch(
-    BASE() + "/api?m=search&q=" + encodeURIComponent(query),
-  );
-  return (data.data ?? []) as PaheAnime[];
-}
-
-export async function getEpisodes(
-  animeSession: string,
-  page = 1,
-): Promise<{ data: PaheEpisode[]; total: number; lastPage: number }> {
-  const data = await paheWindowFetch(
-    BASE() +
-      "/api?m=release&id=" +
-      animeSession +
-      "&sort=episode_asc&page=" +
-      page,
-  );
-  return {
-    data: (data.data ?? []) as PaheEpisode[],
-    total: data.total ?? 0,
-    lastPage: data.last_page ?? 1,
-  };
-}
-
-// Fetch the HTML play page and scrape resolution buttons — same approach as the
-// reference Python downloader (animepahe.py → get_kwik_links).
-// The /api?m=links endpoint returns "not enough arguments" for this use-case.
-export async function getStreamLinks(
-  episodeSession: string,
-  animeSession: string,
-): Promise<PaheLink[]> {
-  const playUrl = BASE() + "/play/" + animeSession + "/" + episodeSession;
-
-  async function fetchPlayPage(retried = false): Promise<string> {
-    const win = await getPaheWindow();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const resp = await (net.fetch as any)(playUrl, {
-      session: win.webContents.session,
-      headers: {
-        Accept: "text/html,application/xhtml+xml,*/*",
-        Referer: BASE() + "/",
-      },
-    });
-    if (!resp.ok) {
-      // Same CF-recovery as paheWindowFetch — destroy hidden window once on CF block.
-      if (!retried && (resp.status === 403 || resp.status === 503 || resp.status === 429)) {
-        if (_win && !_win.isDestroyed()) { _win.destroy(); }
-        _win = null;
-        _ready = false;
-        _readyPromise = null;
-        return fetchPlayPage(true);
-      }
-      const body = await resp.text().catch(() => "");
-      throw new Error(`Play page HTTP ${resp.status} ${resp.statusText}: ${body.slice(0, 120)}`);
-    }
-    return resp.text();
-  }
-  const html: string = await fetchPlayPage();
-  const links: PaheLink[] = [];
-
-  // Primary: parse <button data-src="kwik-url" data-resolution="N" data-audio="X">
-  // Attributes may appear in any order inside the tag, so extract each separately.
-  const tagRe = /<button[^>]*>/gi;
-  let tagM: RegExpExecArray | null;
-  while ((tagM = tagRe.exec(html)) !== null) {
-    const tag = tagM[0];
-    const srcM = /data-src="([^"]+)"/.exec(tag);
-    if (!srcM || !srcM[1].includes("kwik")) continue;
-    const resM = /data-resolution="([^"]*)"/.exec(tag);
-    const audM = /data-audio="([^"]*)"/.exec(tag);
-    links.push({
-      kwik: srcM[1],
-      kwik_pahewin: "",
-      quality: resM?.[1] ?? "?",
-      audio: audM?.[1] ?? "jpn",
-    });
-  }
-
-  // Fallback: any raw kwik link in the page source
-  if (links.length === 0) {
-    const kwikRe = /https?:\/\/kwik\.[^\s"'<>]+/g;
-    let km: RegExpExecArray | null;
-    while ((km = kwikRe.exec(html)) !== null) {
-      links.push({ kwik: km[0], kwik_pahewin: "", quality: "?", audio: "jpn" });
-    }
-  }
-
-  if (links.length === 0) {
-    throw new Error(
-      "No stream links found on play page. Page may require a newer CF session.",
-    );
-  }
-
-  links.sort((a, b) => Number(b.quality) - Number(a.quality));
-  return links;
-}
-
 // ─── Kwik resolver ───────────────────────────────────────────────────────────
 //
 // Strategy (mirrors the Python Playwright approach in animepahe.py):
@@ -580,7 +608,9 @@ export async function resolveKwik(
     : _resolveKwikBrowser(kwikUrl);
 
   _kwikPending.set(kwikUrl, promise);
-  promise.finally(() => _kwikPending.delete(kwikUrl));
+  // .catch on the derived chain so a rejected resolve doesn't surface as an
+  // unhandled rejection — the caller still receives the original rejection.
+  promise.finally(() => _kwikPending.delete(kwikUrl)).catch(() => {});
   return promise;
 }
 
@@ -778,12 +808,21 @@ export class AnimePaheProvider implements StreamProvider {
         },
       });
       if (!resp.ok) {
-        if (!retried && (resp.status === 403 || resp.status === 503 || resp.status === 429)) {
-          if (_win && !_win.isDestroyed()) { _win.destroy(); }
-          _win = null;
-          _ready = false;
-          _readyPromise = null;
-          return fetchPlayPage(true);
+        if (resp.status === 403 || resp.status === 503 || resp.status === 429) {
+          // 1. XHR from inside the page.
+          const inPage = await paheInPageFetch(win, playUrl);
+          if (inPage && inPage.status >= 200 && inPage.status < 300) return inPage.text;
+          // 2. Top-level navigation (passes CF where XHR doesn't).
+          const navHtml = await paheNavFetchHtml(playUrl);
+          if (navHtml) return navHtml;
+          // 3. Fresh CF challenge via window recreate.
+          if (!retried) {
+            if (_win && !_win.isDestroyed()) { _win.destroy(); }
+            _win = null;
+            _ready = false;
+            _readyPromise = null;
+            return fetchPlayPage(true);
+          }
         }
         const body = await resp.text().catch(() => "");
         throw new Error(`Play page HTTP ${resp.status} ${resp.statusText}: ${body.slice(0, 120)}`);
@@ -822,7 +861,11 @@ export class AnimePaheProvider implements StreamProvider {
 
     links.sort((a, b) => Number(b.quality) - Number(a.quality));
 
-    // Store in cache
+    // Store in cache (bounded — evict the oldest entry once full)
+    if (this.linksCache.size >= 200) {
+      const firstKey = this.linksCache.keys().next().value;
+      if (firstKey !== undefined) this.linksCache.delete(firstKey);
+    }
     this.linksCache.set(cacheKey, { links, timestamp: Date.now() });
 
     return links;

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+﻿import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft,
@@ -12,7 +12,7 @@ import {
 export default function StreamingPage() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
-  const startUrl = params.get("url") ?? "https://anikoto.cz/";
+  const startUrl = params.get("url") ?? "https://anikototv.to/";
 
   const webviewRef = useRef<HTMLElement & {
     src: string;
@@ -78,16 +78,16 @@ export default function StreamingPage() {
       // treat as search if no dots, otherwise prepend https
       target = target.includes(".")
         ? `https://${target}`
-        : `https://anikoto.cz/filter?keyword=${encodeURIComponent(target)}`;
+        : `https://anikototv.to/filter?keyword=${encodeURIComponent(target)}`;
     }
     webviewRef.current?.loadURL(target);
     setInputUrl(target);
   }
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#0b0b0f]">
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#000000]">
       {/* Browser toolbar */}
-      <div className="flex h-11 flex-shrink-0 items-center gap-1 border-b border-white/10 bg-[#111116] px-2">
+      <div className="flex h-11 flex-shrink-0 items-center gap-1 border-b border-white/10 bg-[#000000] px-2">
         {/* Nav buttons */}
         <button
           onClick={() => webviewRef.current?.goBack()}
@@ -110,7 +110,7 @@ export default function StreamingPage() {
           {loading ? <Loader2 size={14} className="animate-spin" /> : <RotateCcw size={14} />}
         </button>
         <button
-          onClick={() => webviewRef.current?.loadURL("https://anikoto.cz/")}
+          onClick={() => webviewRef.current?.loadURL("https://anikototv.to/")}
           className="flex h-7 w-7 items-center justify-center rounded text-white/60 hover:bg-white/10"
         >
           <Home size={14} />
@@ -126,7 +126,7 @@ export default function StreamingPage() {
           />
         </form>
 
-        {/* Close — go back to previous page */}
+        {/* Close â€” go back to previous page */}
         <button
           onClick={() => navigate(-1)}
           className="flex h-7 w-7 items-center justify-center rounded text-white/60 hover:bg-white/10"
@@ -136,7 +136,7 @@ export default function StreamingPage() {
       </div>
 
       {/* Webview */}
-      {/* @ts-ignore — webview is an Electron-only element not in React's JSX types */}
+      {/* @ts-ignore â€” webview is an Electron-only element not in React's JSX types */}
       <webview
         ref={webviewRef}
         src={startUrl}

@@ -132,7 +132,7 @@ export function VideoControls({
               onSeekToPct(pct);
             }}
           >
-            <div className="absolute inset-y-0 left-0 rounded-full bg-[#4a9eff] shadow-[0_0_10px_rgba(74,158,255,0.5)]" style={{ width: `${progressPct}%` }} />
+            <div className="absolute inset-y-0 left-0 rounded-full bg-[#e50914] shadow-[0_0_10px_rgba(229, 9, 20,0.5)]" style={{ width: `${progressPct}%` }} />
             <div className="absolute top-1/2 h-4 w-4 -translate-y-1/2 -translate-x-1/2 rounded-full bg-white shadow-md opacity-0 group-hover:opacity-100 transition-all group-hover:scale-110" style={{ left: `${progressPct}%` }} />
             <input
               type="range" min={0} max={duration || 1} step={0.5} value={position}
@@ -170,7 +170,7 @@ export function VideoControls({
           {!isMobile && (
             <input type="range" min={0} max={1} step={0.02} value={muted ? 0 : volume}
               onChange={(e) => onVolumeChange(Number(e.target.value))}
-              className="w-24 accent-[#4a9eff] cursor-pointer hover:accent-[#5eb0ff] transition-all"
+              className="w-24 accent-[#e50914] cursor-pointer hover:accent-[#5eb0ff] transition-all"
             />
           )}
           
@@ -195,7 +195,7 @@ export function VideoControls({
             <div className="relative flex items-center gap-1 z-30">
               <button 
                 onClick={onToggleSubtitles} 
-                className={`flex h-9 w-9 items-center justify-center rounded-full transition-all ${subtitlesEnabled ? "text-[#4a9eff] bg-white/10" : "text-white/50 hover:text-white hover:bg-white/10"}`}
+                className={`flex h-9 w-9 items-center justify-center rounded-full transition-all ${subtitlesEnabled ? "text-white bg-white/10" : "text-white/50 hover:text-white hover:bg-white/10"}`}
                 title={subtitlesEnabled ? "Subtitles: On" : "Subtitles: Off"}
               >
                 <Captions size={16} />
@@ -209,7 +209,7 @@ export function VideoControls({
                       e.stopPropagation();
                       e.nativeEvent.stopImmediatePropagation();
                     }}
-                    className={`flex h-7 w-7 items-center justify-center rounded-full transition-all bg-white/5 ${subSettingsOpen ? "text-[#4a9eff] bg-white/15" : "text-white/50 hover:text-white hover:bg-white/10"}`}
+                    className={`flex h-7 w-7 items-center justify-center rounded-full transition-all bg-white/5 ${subSettingsOpen ? "text-white bg-white/15" : "text-white/50 hover:text-white hover:bg-white/10"}`}
                     title="Subtitle Settings"
                   >
                     <Settings size={12} className={`transition-transform duration-300 ${subSettingsOpen ? "rotate-90" : ""}`} />
@@ -221,7 +221,7 @@ export function VideoControls({
                         e.nativeEvent.stopImmediatePropagation();
                       }}
                       onClick={(e) => e.stopPropagation()}
-                      className="absolute bottom-10 right-0 z-50 w-64 rounded-xl border border-white/10 bg-[#1a1a24]/95 p-4 backdrop-blur-xl shadow-2xl animate-in fade-in slide-in-from-bottom-2 duration-200 pointer-events-auto"
+                      className="absolute bottom-10 right-0 z-50 w-64 rounded-xl border border-white/10 bg-[#222222]/95 p-4 backdrop-blur-xl shadow-2xl animate-in fade-in slide-in-from-bottom-2 duration-200 pointer-events-auto"
                     >
                         <div className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-white/50">Subtitle Settings</div>
                         
@@ -241,7 +241,7 @@ export function VideoControls({
                                   setCueFontSize && setCueFontSize(sz.value);
                                   localStorage.setItem("ap-cue-size", sz.value);
                                 }}
-                                className={`rounded px-1.5 py-1 text-[10px] font-semibold transition ${cueFontSize === sz.value ? "bg-[#4a9eff] text-white" : "bg-white/5 text-white/70 hover:bg-white/10"}`}
+                                className={`rounded px-1.5 py-1 text-[10px] font-semibold transition ${cueFontSize === sz.value ? "bg-[#e50914] text-white" : "bg-white/5 text-white/70 hover:bg-white/10"}`}
                               >
                                 {sz.label}
                               </button>
@@ -265,7 +265,7 @@ export function VideoControls({
                                   setCueFontFamily && setCueFontFamily(f.value);
                                   localStorage.setItem("ap-cue-font", f.value);
                                 }}
-                                className={`rounded px-1 py-1 text-[9px] font-semibold truncate transition ${cueFontFamily === f.value ? "bg-[#4a9eff] text-white" : "bg-white/5 text-white/70 hover:bg-white/10"}`}
+                                className={`rounded px-1 py-1 text-[9px] font-semibold truncate transition ${cueFontFamily === f.value ? "bg-[#e50914] text-white" : "bg-white/5 text-white/70 hover:bg-white/10"}`}
                                 title={f.label}
                               >
                                 {f.label}
@@ -291,7 +291,7 @@ export function VideoControls({
                                   setCueBgOpacity && setCueBgOpacity(op.value);
                                   localStorage.setItem("ap-cue-opacity", String(op.value));
                                 }}
-                                className={`rounded py-1 text-[9px] font-semibold transition ${cueBgOpacity === op.value ? "bg-[#4a9eff] text-white" : "bg-white/5 text-white/70 hover:bg-white/10"}`}
+                                className={`rounded py-1 text-[9px] font-semibold transition ${cueBgOpacity === op.value ? "bg-[#e50914] text-white" : "bg-white/5 text-white/70 hover:bg-white/10"}`}
                               >
                                 {op.label}
                               </button>
@@ -315,7 +315,7 @@ export function VideoControls({
                                   setCueColor && setCueColor(c.value);
                                   localStorage.setItem("ap-cue-color", c.value);
                                 }}
-                                className={`flex h-6 w-6 items-center justify-center rounded-full border transition-all ${cueColor === c.value ? "ring-2 ring-[#4a9eff] scale-110" : "scale-100 opacity-80 hover:opacity-100"} ${c.class}`}
+                                className={`flex h-6 w-6 items-center justify-center rounded-full border transition-all ${cueColor === c.value ? "ring-2 ring-[#e50914] scale-110" : "scale-100 opacity-80 hover:opacity-100"} ${c.class}`}
                                 title={c.label}
                               >
                                 {cueColor === c.value && (
@@ -353,7 +353,7 @@ export function VideoControls({
                     e.nativeEvent.stopImmediatePropagation();
                   }}
                   onClick={(e) => e.stopPropagation()}
-                  className="absolute bottom-12 right-0 z-20 min-w-[130px] overflow-hidden rounded-xl border border-white/10 bg-[#1a1a24]/95 backdrop-blur-xl shadow-2xl"
+                  className="absolute bottom-12 right-0 z-20 min-w-[130px] overflow-hidden rounded-xl border border-white/10 bg-[#222222]/95 backdrop-blur-xl shadow-2xl"
                 >
                     {links.map((l, i) => (
                       <button 
@@ -362,9 +362,9 @@ export function VideoControls({
                           onChangeQuality(i);
                           setLinksOpen(false);
                         }} 
-                        className={`flex w-full items-center gap-2 px-4 py-2.5 text-left text-xs font-medium transition-colors hover:bg-white/10 ${i === selectedLink ? "bg-white/5 text-[#4a9eff]" : "text-white/80"}`}
+                        className={`flex w-full items-center gap-2 px-4 py-2.5 text-left text-xs font-medium transition-colors hover:bg-white/10 ${i === selectedLink ? "bg-white/5 text-white" : "text-white/80"}`}
                       >
-                        {i === selectedLink && <span className="text-[#4a9eff]">✓</span>}
+                        {i === selectedLink && <span className="text-white">✓</span>}
                         <span className={i === selectedLink ? "" : "ml-4"}>
                           {l.quality}
                         </span>
@@ -401,7 +401,7 @@ export function VideoControls({
                     e.nativeEvent.stopImmediatePropagation();
                   }}
                   onClick={(e) => e.stopPropagation()}
-                  className="absolute bottom-12 right-0 z-20 min-w-[120px] max-h-48 overflow-y-auto rounded-xl border border-white/10 bg-[#1a1a24]/95 backdrop-blur-xl shadow-2xl"
+                  className="absolute bottom-12 right-0 z-20 min-w-[120px] max-h-48 overflow-y-auto rounded-xl border border-white/10 bg-[#222222]/95 backdrop-blur-xl shadow-2xl"
                 >
                     {/* Auto option */}
                     <button 
@@ -409,9 +409,9 @@ export function VideoControls({
                         onChangeHlsLevel && onChangeHlsLevel(-1);
                         setHlsOpen(false);
                       }} 
-                      className={`flex w-full items-center gap-2 px-4 py-2.5 text-left text-xs font-medium transition-colors hover:bg-white/10 ${currentHlsLevel === -1 ? "bg-white/5 text-[#4a9eff]" : "text-white/80"}`}
+                      className={`flex w-full items-center gap-2 px-4 py-2.5 text-left text-xs font-medium transition-colors hover:bg-white/10 ${currentHlsLevel === -1 ? "bg-white/5 text-white" : "text-white/80"}`}
                     >
-                      {currentHlsLevel === -1 && <span className="text-[#4a9eff]">✓</span>}
+                      {currentHlsLevel === -1 && <span className="text-white">✓</span>}
                       <span className={currentHlsLevel === -1 ? "" : "ml-4"}>Auto</span>
                     </button>
                     {/* Specific levels */}
@@ -422,9 +422,9 @@ export function VideoControls({
                           onChangeHlsLevel && onChangeHlsLevel(lvl.index);
                           setHlsOpen(false);
                         }} 
-                        className={`flex w-full items-center gap-2 px-4 py-2.5 text-left text-xs font-medium transition-colors hover:bg-white/10 ${lvl.index === currentHlsLevel ? "bg-white/5 text-[#4a9eff]" : "text-white/80"}`}
+                        className={`flex w-full items-center gap-2 px-4 py-2.5 text-left text-xs font-medium transition-colors hover:bg-white/10 ${lvl.index === currentHlsLevel ? "bg-white/5 text-white" : "text-white/80"}`}
                       >
-                        {lvl.index === currentHlsLevel && <span className="text-[#4a9eff]">✓</span>}
+                        {lvl.index === currentHlsLevel && <span className="text-white">✓</span>}
                         <span className={lvl.index === currentHlsLevel ? "" : "ml-4"}>{lvl.quality}p</span>
                       </button>
                     ))}

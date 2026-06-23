@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import {
   ArrowLeft,
   Maximize,
@@ -17,10 +17,7 @@ import { pushProgress } from "../lib/supabase-sync";
 
 export default function Player() {
   const { animeId: idStr, episode: epStr } = useParams();
-  const [searchParams] = useSearchParams();
-  const streamUrl = searchParams.get("stream");   // set by PahePanel
-  const streamTitle = searchParams.get("title");  // set by PahePanel
-  const animeId = Number(idStr);                   // NaN for pahe streams — that's fine
+  const animeId = Number(idStr);
   const episode = Number(epStr);
   const navigate = useNavigate();
 
@@ -45,15 +42,10 @@ export default function Player() {
   const lastPersist = useRef<number>(0);
   const lastPositionUpdate = useRef<number>(0);
 
-  // Load metadata + resolve file path (or use stream URL directly for pahe)
+  // Load metadata + resolve file path
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (streamUrl) {
-        // AnimePahe stream — use URL directly, no library lookup needed
-        setSrc(decodeURIComponent(streamUrl));
-        return;
-      }
       const [a, eps] = await Promise.all([
         window.api.anilist.get(animeId),
         window.api.library.episodesFor(animeId),
@@ -78,7 +70,7 @@ export default function Player() {
     return () => {
       cancelled = true;
     };
-  }, [animeId, episode, streamUrl]);
+  }, [animeId, episode]);
 
   // Pause playback when app window is hidden to tray
   useEffect(() => {
@@ -93,7 +85,7 @@ export default function Player() {
 
   // Persist progress
   function persist(pos: number, dur: number, force = false) {
-    if (!Number.isFinite(pos) || !Number.isFinite(dur) || dur <= 0) return;
+    if (!Number.isFinite(animeId) || !Number.isFinite(pos) || !Number.isFinite(dur) || dur <= 0) return;
     const now = Date.now();
     if (!force && now - lastPersist.current < 5000) return;
     lastPersist.current = now;
@@ -331,7 +323,7 @@ export default function Player() {
         <div className="flex-1">
           <div className="text-xs text-white/60">Episode {episode}</div>
           <div className="text-base font-semibold">
-            {streamTitle ? decodeURIComponent(streamTitle) : (anime?.title ?? "Loading…")}
+            {anime?.title ?? "Loading…"}
           </div>
         </div>
       </div>

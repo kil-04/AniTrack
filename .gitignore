@@ -8,3 +8,4 @@ release
 *.log
 resources/mpv
 build/icon_tmp
+.claude

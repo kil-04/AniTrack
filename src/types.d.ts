@@ -65,13 +65,13 @@ interface ApiBridge {
     search(q: string): Promise<any[]>;
     episodes(providerId: string, animeId: string, page: number): Promise<{ data: any[]; total: number; lastPage: number }>;
     links(providerId: string, episodeId: string, animeId: string): Promise<any[]>;
-    resolve(providerId: string, linkId: string): Promise<{ url: string; cookies?: string; subtitles?: any[]; intro?: any; outro?: any }>;
+    resolve(providerId: string, linkId: string): Promise<{ url: string; cookies?: string; subtitles?: any[]; intro?: any; outro?: any; referer?: string }>;
     prefetch(providerIdOrKwikUrl: string, linkId?: string): Promise<{ ok: boolean }>;
     getIds(paheId: number, session: string): Promise<{ malId?: number; anilistId?: number; kitsuId?: number }>;
     findById(anilistId: number | undefined, malId?: number): Promise<any>;
     getUrl(): Promise<string>;
     setUrl(url: string): Promise<{ ok: boolean; url: string; reason?: string }>;
-    fetchUrl?(url: string, binary?: boolean): Promise<{ data: string; status: number; binary: boolean }>;
+    fetchUrl?(url: string, binary?: boolean, headers?: Record<string, string>): Promise<{ data: string; status: number; binary: boolean }>;
   };
   updater: {
     check(): Promise<{ ok: boolean; version?: string | null; reason?: string }>;

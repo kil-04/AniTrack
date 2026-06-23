@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { Clock, Play, X, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { secondsToTimestamp } from "../lib/format";
+import { deleteAnimeProgress } from "../lib/supabase-sync";
 
 const PAGE_SIZE = 24;
 
@@ -50,7 +51,7 @@ export default function ContinueWatching() {
 
   function dismiss(animeId: number) {
     window.api.list.dismissContinueWatching(animeId)
-      .then(() => load(page))
+      .then(() => { deleteAnimeProgress(animeId); load(page); })
       .catch(() => {});
   }
 
@@ -58,7 +59,7 @@ export default function ContinueWatching() {
     <div className="pb-16 px-8 pt-6">
       {/* Header */}
       <div className="mb-6 flex items-center gap-2">
-        <Clock size={18} className="text-[#4a9eff]" />
+        <Clock size={18} className="text-white" />
         <h1 className="text-xl font-bold">Continue Watching</h1>
         {total > 0 && (
           <span className="ml-1 rounded-full bg-white/10 px-2 py-0.5 text-xs text-white/50">{total}</span>
@@ -120,7 +121,7 @@ export default function ContinueWatching() {
                       disabled={loading}
                       className={`flex h-8 min-w-[2rem] items-center justify-center rounded px-2 text-xs font-medium transition
                         ${page === p
-                          ? "bg-[#4a9eff] text-white"
+                          ? "bg-white text-black"
                           : "text-white/60 hover:bg-white/10 hover:text-white disabled:opacity-40"}`}
                     >
                       {p}
@@ -158,11 +159,13 @@ function ContinueWatchingPageCard({ item, dismiss }: { item: any, dismiss: (id: 
   const [isFetching, setIsFetching] = useState(false);
   const displayAnime = fetchedMeta || item.anime;
 
+  // React Router v6: `state` is a separate <Link> prop, not part of `to`.
+  const goesToDetail = !item.animePaheSession && !item.filePath;
   const cwTo = item.animePaheSession
     ? cwStreamUrl(item.animePaheSession, item.anime.title, item.episode, item.anime.coverImage, item.anime.id)
     : item.filePath
     ? `/player/${item.anime.id}/${item.episode}`
-    : { pathname: "/anime/" + item.anime.id, state: { anime: displayAnime } };
+    : "/anime/" + item.anime.id;
 
   const cardRef = useRef<HTMLAnchorElement>(null);
   const [rect, setRect] = useState<DOMRect | null>(null);
@@ -200,13 +203,13 @@ function ContinueWatchingPageCard({ item, dismiss }: { item: any, dismiss: (id: 
 
   const tooltipPortal = isHovered && rect ? createPortal(
     <div 
-      className="fixed z-[9999] w-72 bg-[#15151f] rounded-xl border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.8)] p-5 flex flex-col pointer-events-none animate-in fade-in zoom-in-95 duration-200"
+      className="fixed z-[9999] w-72 bg-[#1f1f1f] rounded-xl border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.8)] p-5 flex flex-col pointer-events-none animate-in fade-in zoom-in-95 duration-200"
       style={{
         left: rect.right + 15 + 288 > window.innerWidth ? rect.left - 288 - 15 : rect.right + 15,
         top: Math.max(10, Math.min(window.innerHeight - 320, rect.top + rect.height / 2 - 160)),
       }}
     >
-      <h3 className="font-bold text-[#4a9eff] text-lg leading-tight mb-2">{displayAnime.title}</h3>
+      <h3 className="font-bold text-white text-lg leading-tight mb-2">{displayAnime.title}</h3>
       {displayAnime.averageScore && (
         <div className="text-sm font-bold text-green-400 mb-3">★ {(displayAnime.averageScore / 10).toFixed(1)} / 10</div>
       )}
@@ -224,7 +227,7 @@ function ContinueWatchingPageCard({ item, dismiss }: { item: any, dismiss: (id: 
       {displayAnime.synopsis ? (
         <p className="text-xs text-white/80 line-clamp-5 leading-relaxed" dangerouslySetInnerHTML={{ __html: displayAnime.synopsis }} />
       ) : isFetching ? (
-        <p className="text-xs text-[#4a9eff] animate-pulse italic">Loading details from network...</p>
+        <p className="text-xs text-white animate-pulse italic">Loading details from network...</p>
       ) : (
         <p className="text-xs text-white/40 italic">No synopsis available.</p>
       )}
@@ -242,8 +245,9 @@ function ContinueWatchingPageCard({ item, dismiss }: { item: any, dismiss: (id: 
         <X size={12} />
       </button>
 
-      <Link 
-        to={cwTo} 
+      <Link
+        to={cwTo}
+        state={goesToDetail ? { anime: displayAnime } : undefined}
         ref={cardRef}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
@@ -264,7 +268,7 @@ function ContinueWatchingPageCard({ item, dismiss }: { item: any, dismiss: (id: 
           )}
           <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent" />
 
-          <div className="absolute left-2 top-2 rounded bg-[#4a9eff] px-1.5 py-0.5 text-xs font-semibold text-white">
+          <div className="absolute left-2 top-2 rounded bg-[#e50914] px-1.5 py-0.5 text-xs font-semibold text-white">
             EP {item.episode}
           </div>
 
@@ -282,7 +286,7 @@ function ContinueWatchingPageCard({ item, dismiss }: { item: any, dismiss: (id: 
 
           <div className="absolute bottom-0 left-0 right-0 h-1 bg-white/20">
             <div
-              className="h-full bg-[#4a9eff]"
+              className="h-full bg-[#e50914]"
               style={{ width: `${Math.min(100, item.percent)}%` }}
             />
           </div>

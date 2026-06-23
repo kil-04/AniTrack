@@ -23,6 +23,8 @@ export interface AnimeMeta {
   averageScore?: number | null;
   year?: number | null;
   studios?: string[];
+  format?: string | null;       // TV / MOVIE / OVA / ONA / SPECIAL / MUSIC
+  popularity?: number | null;   // AniList popularity (user count)
 }
 
 export interface AdvancedSearchFilters {
@@ -33,6 +35,9 @@ export interface AdvancedSearchFilters {
   year?: number;
   format?: string;
   status?: string;
+  source?: string;          // AniList MediaSource (MANGA, ORIGINAL, LIGHT_NOVEL, …)
+  episodesGreater?: number; // episodes >= this
+  episodesLesser?: number;  // episodes <= this
   sort?: string;
   page?: number;
 }

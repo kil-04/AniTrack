@@ -34,11 +34,13 @@ const ContinueWatchingCard = React.memo(function ContinueWatchingCard({ item, pa
   const [isFetching, setIsFetching] = useState(false);
   const displayAnime = fetchedMeta || item.anime;
 
+  // React Router v6: `state` is a separate <Link> prop, not part of `to`.
+  const goesToDetail = !item.animePaheSession && !item.filePath;
   const cwTo = item.animePaheSession
     ? cwStreamUrl(item.animePaheSession, item.anime.title, item.episode, item.anime.coverImage, item.anime.id)
     : item.filePath
     ? `/player/${item.anime.id}/${item.episode}`
-    : { pathname: "/anime/" + item.anime.id, state: { anime: displayAnime } };
+    : "/anime/" + item.anime.id;
 
   const cardRef = useRef<HTMLAnchorElement>(null);
   const [rect, setRect] = useState<DOMRect | null>(null);
@@ -76,13 +78,13 @@ const ContinueWatchingCard = React.memo(function ContinueWatchingCard({ item, pa
 
   const tooltipPortal = isHovered && rect ? createPortal(
     <div 
-      className="fixed z-[9999] w-72 bg-[#15151f] rounded-xl border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.8)] p-5 flex flex-col pointer-events-none animate-in fade-in zoom-in-95 duration-200"
+      className="fixed z-[9999] w-72 bg-[#1f1f1f] rounded-xl border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.8)] p-5 flex flex-col pointer-events-none animate-in fade-in zoom-in-95 duration-200"
       style={{
         left: rect.right + 15 + 288 > window.innerWidth ? rect.left - 288 - 15 : rect.right + 15,
         top: Math.max(10, Math.min(window.innerHeight - 320, rect.top + rect.height / 2 - 160)),
       }}
     >
-      <h3 className="font-bold text-[#4a9eff] text-lg leading-tight mb-2">{displayAnime.title}</h3>
+      <h3 className="font-bold text-white text-lg leading-tight mb-2">{displayAnime.title}</h3>
       {displayAnime.averageScore && (
         <div className="text-sm font-bold text-green-400 mb-3">★ {(displayAnime.averageScore / 10).toFixed(1)} / 10</div>
       )}
@@ -100,7 +102,7 @@ const ContinueWatchingCard = React.memo(function ContinueWatchingCard({ item, pa
       {displayAnime.synopsis ? (
         <p className="text-xs text-white/80 line-clamp-5 leading-relaxed" dangerouslySetInnerHTML={{ __html: displayAnime.synopsis }} />
       ) : isFetching ? (
-        <p className="text-xs text-[#4a9eff] animate-pulse italic">Loading details from network...</p>
+        <p className="text-xs text-white animate-pulse italic">Loading details from network...</p>
       ) : (
         <p className="text-xs text-white/40 italic">No synopsis available.</p>
       )}
@@ -127,14 +129,15 @@ const ContinueWatchingCard = React.memo(function ContinueWatchingCard({ item, pa
       >
         <X size={14} />
       </button>
-      <Link 
-        to={cwTo} 
+      <Link
+        to={cwTo}
+        state={goesToDetail ? { anime: displayAnime } : undefined}
         ref={cardRef}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
         className="block outline-none"
       >
-        <div className="relative aspect-video w-72 overflow-hidden rounded-xl bg-[#111118] transition-all duration-300 ease-out group-hover:z-10 group-hover:scale-110 group-hover:shadow-[0_12px_40px_rgb(0,0,0,0.8)] group-hover:shadow-[#4a9eff]/30 group-hover:ring-2 group-hover:ring-white/30">
+        <div className="relative aspect-video w-72 overflow-hidden rounded-xl bg-[#1b1b1b] transition-all duration-300 ease-out group-hover:z-10 group-hover:scale-110 group-hover:shadow-[0_12px_40px_rgb(0,0,0,0.8)] group-hover:shadow-[#e50914]/30 group-hover:ring-2 group-hover:ring-white/30">
           {displayAnime.coverImage ? (
             <img
               src={displayAnime.coverImage}
@@ -150,7 +153,7 @@ const ContinueWatchingCard = React.memo(function ContinueWatchingCard({ item, pa
           
           <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent opacity-90 transition-opacity duration-300 group-hover:opacity-100" />
           
-          <div className="absolute left-2 top-2 rounded shadow-md bg-[#4a9eff] px-2 py-1 text-[10px] font-bold tracking-widest text-white">
+          <div className="absolute left-2 top-2 rounded shadow-md bg-[#e50914] px-2 py-1 text-[10px] font-bold tracking-widest text-white">
             EP {item.episode}
           </div>
           {(() => {
@@ -185,7 +188,7 @@ const ContinueWatchingCard = React.memo(function ContinueWatchingCard({ item, pa
 
           <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-white/20">
             <div
-              className="h-full bg-[#4a9eff] shadow-[0_0_10px_rgba(74,158,255,0.8)]"
+              className="h-full bg-[#e50914] shadow-[0_0_10px_rgba(229, 9, 20,0.8)]"
               style={{ width: `${Math.min(100, item.percent)}%` }}
             />
           </div>

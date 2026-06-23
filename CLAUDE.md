@@ -71,3 +71,22 @@ When adding a new IPC call: add the channel name to `IPC` in `shared/types.ts`, 
 - **Stub-then-resolve pattern**: when playback starts for an unknown anime, a stub row is immediately inserted so continue-watching works. A background task fires to resolve the real AniList entry and migrate the stub.
 - **`mal_dirty` flag** on `list_entry` drives background sync — entries are flushed to MAL every 30 seconds.
 - **CDN header injection** in `main.ts` (`onBeforeSendHeaders`/`onHeadersReceived`) is essential for AnimePahe HLS playback — the CDN validates Referer/Origin and the browser blocks cross-origin responses without the injected CORS headers.
+- **Electron webRequest only supports ONE listener per event per session** — registering `onBeforeSendHeaders` or `onHeadersReceived` twice silently replaces the first. All header manipulation must live in a single merged handler (`registerWebRequestHandlers()` in `main.ts`).
+- **AnimePahe Cloudflare bypass**: a hidden pre-warmed `BrowserWindow` solves the CF challenge. `net.fetch` with the session still gets 403 because CF validates `cf_clearance` against the exact browser fingerprint. The fix is `paheInPageFetch()` in `animepahe.ts` — it runs `fetch()` inside the hidden window via `executeJavaScript`, so CF sees a full browser fingerprint with all cookies. Used as fallback in `paheWindowFetch` and both `fetchPlayPage` paths.
+- **`app.userAgentFallback`** strips `Electron/x.y` and `anitrack/x.y` tokens so Cloudflare doesn't fingerprint the Electron UA. Set at startup in `main.ts` before `app.whenReady`.
+- **Provider detection in Home/ContinueWatching**: AnimePahe sessions are UUIDs (always contain dashes), so `includes("-")` cannot distinguish them from Anikoto slugs. Use a full UUID regex: `/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i`.
+- **Shared match utilities**: `src/lib/match.ts` exports `scoreMatch` and `getSeasonNumber` — do not re-define them in page/component files.
+- **Supabase dismiss sync**: `ContinueWatching.dismiss()` must call `deleteAnimeProgress(animeId)` so Supabase doesn't resurrect dismissed shows on next `pullAndMerge()`.
+
+### Providers
+
+- **`electron/services/providers/animepahe.ts`** — AnimePahe scraping. Key: `getPaheWindow()` waits for a non-CF-challenge title before marking session ready (checks `document.title` on `did-finish-load`). `paheInPageFetch()` executes fetch inside the hidden window for CF bypass.
+- **`electron/services/providers/anikoto.ts`** — Anikoto scraping. Key: HTML tag-stripping regex must be `/<[^>]+>/g` (not `/<[^+]+/g`); in-flight dedup `.finally()` chains need `.catch(() => {})` to suppress unhandled rejections.
+- Both providers are pre-warmed at startup (`pahePrewarm()`, `prewarmAnikoto()`).
+
+### IPC modules
+
+IPC handlers are split into `electron/ipc/` subfiles:
+- `electron/ipc/pahe.ts` — AnimePahe IPC; exports `registerPaheIpc(registerWebRequestHandlers)`
+- `electron/ipc/auth.ts` — MAL/AniList OAuth
+- `electron/ipc/db.ts` — DB read/write operations

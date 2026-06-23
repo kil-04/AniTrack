@@ -3,6 +3,14 @@ import { StreamProvider, AnimeInfo, EpisodeInfo, StreamLink, StreamData } from "
 
 const BASE_URL = "https://anikototv.to";
 
+// Origin of the player iframe that served the most-recently-resolved stream
+// (e.g. https://vidtube.site). The segment CDNs (mewstream.buzz, nekostream.site)
+// hotlink-check Referer against this embedding player, and it rotates — so we
+// capture it at resolve time and main.ts reads it via getAnikotoPlayerOrigin()
+// to spoof the correct Referer/Origin on CDN requests.
+let _lastPlayerOrigin = "";
+export function getAnikotoPlayerOrigin(): string { return _lastPlayerOrigin; }
+
 let _anikotoWin: BrowserWindow | null = null;
 let _anikotoReady = false;
 let _anikotoReadyPromise: Promise<void> | null = null;
@@ -30,7 +38,10 @@ export function getAnikotoWindow(): Promise<BrowserWindow> {
     return Promise.resolve(_anikotoWin);
   }
   if (_anikotoReadyPromise && _anikotoWin && !_anikotoWin.isDestroyed()) {
-    return _anikotoReadyPromise.then(() => _anikotoWin!);
+    return _anikotoReadyPromise.then(() => {
+      if (!_anikotoWin || _anikotoWin.isDestroyed()) throw new Error("Anikoto window closed during init");
+      return _anikotoWin;
+    });
   }
 
   _anikotoReady = false;
@@ -63,7 +74,10 @@ export function getAnikotoWindow(): Promise<BrowserWindow> {
     });
   });
 
-  return _anikotoReadyPromise.then(() => _anikotoWin!);
+  return _anikotoReadyPromise.then(() => {
+    if (!_anikotoWin || _anikotoWin.isDestroyed()) throw new Error("Anikoto window closed during init");
+    return _anikotoWin;
+  });
 }
 
 export function prewarmAnikoto(): void {
@@ -89,7 +103,7 @@ async function anikotoFetch(url: string, options: any = {}, retried = false): Pr
 
   if (!resp.ok) {
     if (!retried && (resp.status === 403 || resp.status === 503 || resp.status === 429)) {
-      console.log(`[Anikoto] Fetch failed with status \${resp.status}. Refreshing session...`);
+      console.log(`[Anikoto] Fetch failed with status ${resp.status}. Refreshing session...`);
       if (_anikotoWin && !_anikotoWin.isDestroyed()) {
         _anikotoWin.destroy();
       }
@@ -113,6 +127,14 @@ export class AnikotoProvider implements StreamProvider {
   private resolveCache = new Map<string, { data: StreamData; timestamp: number }>();
   private readonly RESOLVE_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
   private resolvePending = new Map<string, Promise<StreamData>>();
+
+  private cacheResolve(linkId: string, data: StreamData) {
+    if (this.resolveCache.size >= 200) {
+      const firstKey = this.resolveCache.keys().next().value;
+      if (firstKey !== undefined) this.resolveCache.delete(firstKey);
+    }
+    this.resolveCache.set(linkId, { data, timestamp: Date.now() });
+  }
 
   async search(query: string): Promise<AnimeInfo[]> {
     const results: AnimeInfo[] = [];
@@ -140,7 +162,12 @@ export class AnikotoProvider implements StreamProvider {
           
           const totalM = /class="ep-status total"[^>]*>\s*<span>\s*(\d+)\s*<\/span>/.exec(block);
           const totalEps = totalM ? parseInt(totalM[1], 10) : undefined;
-          
+          // Anikoto cards also carry per-language availability badges.
+          const subM = /class="ep-status sub"[^>]*>\s*<span>\s*(\d+)\s*<\/span>/.exec(block);
+          const dubM = /class="ep-status dub"[^>]*>\s*<span>\s*(\d+)\s*<\/span>/.exec(block);
+          const subCount = subM ? parseInt(subM[1], 10) : undefined;
+          const dubCount = dubM ? parseInt(dubM[1], 10) : undefined;
+
           const title = dataJp || imgAlt || "Untitled";
           
           // Extract year from title if possible
@@ -169,6 +196,8 @@ export class AnikotoProvider implements StreamProvider {
             poster: imgSrc || "",
             title: title,
             episodes: totalEps,
+            subCount,
+            dubCount,
             year: parsedYear,
           });
         }
@@ -254,7 +283,11 @@ export class AnikotoProvider implements StreamProvider {
 
       console.log(`[Anikoto] Parsed ${episodes.length} episodes browserlessly for ${animeId}`);
 
-      // Cache episodes
+      // Cache episodes (bounded — evict the oldest entry once full)
+      if (this.episodesCache.size >= 200) {
+        const firstKey = this.episodesCache.keys().next().value;
+        if (firstKey !== undefined) this.episodesCache.delete(firstKey);
+      }
       this.episodesCache.set(animeId, {
         episodes,
         total: episodes.length,
@@ -269,7 +302,9 @@ export class AnikotoProvider implements StreamProvider {
     })();
 
     this.episodesPending.set(animeId, promise);
-    promise.finally(() => this.episodesPending.delete(animeId));
+    // .catch on the derived chain so a rejected fetch doesn't surface as an
+    // unhandled rejection — the caller still receives the original rejection.
+    promise.finally(() => this.episodesPending.delete(animeId)).catch(() => {});
     return promise;
   }
 
@@ -300,16 +335,16 @@ export class AnikotoProvider implements StreamProvider {
       const labelRe = /<label[^>]*>([\s\S]*?)<\/label>/g;
       let match;
       while ((match = labelRe.exec(serversHtml)) !== null) {
-        labels.push(match[1].replace(/<[^+]+/g, '').replace(/<[^>]+>/g, '').trim().toUpperCase());
+        labels.push(match[1].replace(/<[^>]+>/g, '').trim().toUpperCase());
       }
 
       const links: StreamLink[] = [];
       
       const hasSub = labels.some(l => l.includes("SUB") && !l.includes("H-SUB") && !l.includes("HSUB") && !l.includes("HARDSUB") && !l.includes("HARD SUB"));
       const hasHSub = labels.some(l => l.includes("H-SUB") || l.includes("HSUB") || l.includes("HARDSUB") || l.includes("HARD SUB"));
-      const hasDub = labels.some(l => l.includes("DUB"));
 
-      if (hasSub || (!hasHSub && !hasDub)) {
+      // Dub is intentionally not offered — only soft/hard subs.
+      if (hasSub || !hasHSub) {
         links.push({
           id: JSON.stringify({ episodeId, animeId, subType: "soft" }),
           quality: "Auto (Soft Sub)",
@@ -320,13 +355,6 @@ export class AnikotoProvider implements StreamProvider {
         links.push({
           id: JSON.stringify({ episodeId, animeId, subType: "hard" }),
           quality: "Auto (Hard Sub)",
-          audio: "jpn"
-        });
-      }
-      if (hasDub) {
-        links.push({
-          id: JSON.stringify({ episodeId, animeId, subType: "dub" }),
-          quality: "Auto (Dub)",
           audio: "jpn"
         });
       }
@@ -454,25 +482,18 @@ export class AnikotoProvider implements StreamProvider {
         return isSoftLabel(t.label);
       });
       
-      let isActualHardSub = false;
-      let ajaxLinkId = "";
-      
-      if (targetType && targetType.items.length > 0) {
-        ajaxLinkId = targetType.items[0].linkId;
-        isActualHardSub = isHardLabel(targetType.label);
-      }
-      
-      if (!ajaxLinkId) {
-        // Fallback: take first available
-        if (types.length > 0 && types[0].items.length > 0) {
-          ajaxLinkId = types[0].items[0].linkId;
-          isActualHardSub = isHardLabel(types[0].label);
-        }
-      }
-
-      if (!ajaxLinkId) {
+      // Build the ordered list of candidate servers to try. Each sub-type lists
+      // several servers (VidPlay, HD, Vidstream, VidCloud, …); the first is often
+      // down for a given episode, so we fall through to the next until one yields
+      // a playable stream — that flakiness is why soft sub failed on some episodes.
+      const chosenType = (targetType && targetType.items.length > 0)
+        ? targetType
+        : types.find(t => t.items.length > 0);
+      if (!chosenType || chosenType.items.length === 0) {
         throw new Error(`Failed to find server matching subtitle subtype: ${subType}`);
       }
+      let isActualHardSub = isHardLabel(chosenType.label);
+      const candidateLinkIds = chosenType.items.map(it => it.linkId);
 
       let iframeUrl = "";
       let serverGetJson: any = null;
@@ -566,94 +587,116 @@ export class AnikotoProvider implements StreamProvider {
         }
       }
 
-      if (!iframeUrl) {
-        // Fetch the actual server iframe URL browserlessly
-        console.log(`[Anikoto] Resolving player server url browserlessly for linkId: ${ajaxLinkId.substring(0, 20)}...`);
-        const serverGetResp = await anikotoFetch(`${BASE_URL}/ajax/server?get=${encodeURIComponent(ajaxLinkId)}`, {
-          headers: {
-            'X-Requested-With': 'XMLHttpRequest'
-          }
-        });
-        if (!serverGetResp.ok) throw new Error(`Failed to fetch server iframe URL: status ${serverGetResp.status}`);
-        serverGetJson = (await serverGetResp.json()) as any;
-        iframeUrl = serverGetJson.result?.url || "";
-        if (!iframeUrl) throw new Error("Server iframe URL not found in AJAX response");
-        console.log(`[Anikoto] Found player iframe URL: ${iframeUrl}`);
-      }
+      // Resolve a single player iframe → { data, playerOrigin }: either the
+      // base64-hash path (plyr.php/mewcdn) or fetch the Megaplay iframe + call
+      // getSources. Throws on failure so the caller can try the next server.
+      // Returns playerOrigin so the caller sets the global Referer hint to match
+      // the CHOSEN stream rather than whichever attempt happened to run last.
+      const attempt = async (attIframeUrl: string, attServerGetJson: any): Promise<{ data: StreamData; playerOrigin: string }> => {
+        // getSources/segment CDN lives on the SAME origin as the iframe; the host
+        // rotates (megaplay.buzz → vidtube.site → …) so derive it rather than
+        // hardcode a dead domain (a stale host 302s to an ad → ERR_BLOCKED_BY_CLIENT).
+        let playerOrigin = "https://megaplay.buzz";
+        try { playerOrigin = new URL(attIframeUrl).origin; } catch { /* keep default */ }
 
-      // H-SUB encoding from hash
-      if (iframeUrl.includes('plyr.php') || iframeUrl.includes('mewcdn.online/player/')) {
-        const parts = iframeUrl.split('#');
-        if (parts.length >= 2) {
-          try {
+        // H-SUB encoding from hash
+        if (attIframeUrl.includes('plyr.php') || attIframeUrl.includes('mewcdn.online/player/')) {
+          const parts = attIframeUrl.split('#');
+          if (parts.length >= 2) {
             const decodedUrl = Buffer.from(parts[1], 'base64').toString('utf-8');
             console.log(`[Anikoto] Decoded H-SUB stream URL from hash: ${decodedUrl}`);
-            const result = {
-              url: decodedUrl,
-              subtitles: [],
-              intro: serverGetJson?.result?.skip_data?.intro?.end > 0 ? serverGetJson.result.skip_data.intro : undefined,
-              outro: serverGetJson?.result?.skip_data?.outro?.end > 0 ? serverGetJson.result.skip_data.outro : undefined
+            return {
+              data: {
+                url: decodedUrl,
+                subtitles: [],
+                intro: attServerGetJson?.result?.skip_data?.intro?.end > 0 ? attServerGetJson.result.skip_data.intro : undefined,
+                outro: attServerGetJson?.result?.skip_data?.outro?.end > 0 ? attServerGetJson.result.skip_data.outro : undefined,
+              },
+              playerOrigin,
             };
-            this.resolveCache.set(linkId, { data: result, timestamp: Date.now() });
-            return result;
-          } catch (err) {
-            console.error('[Anikoto] Failed to decode base64 hash:', err);
           }
         }
-      }
 
-      // Extract Megaplay ID by fetching the player iframe page HTML
-      const megaplayResp = await anikotoFetch(iframeUrl, {
-        headers: {
-          'Referer': `${BASE_URL}/`
-        }
-      });
-      if (!megaplayResp.ok) {
-        throw new Error(`Failed to fetch Megaplay iframe: status ${megaplayResp.status}`);
-      }
+        // Extract Megaplay ID by fetching the player iframe page HTML.
+        const megaplayResp = await anikotoFetch(attIframeUrl, { headers: { 'Referer': `${BASE_URL}/` } });
+        if (!megaplayResp.ok) throw new Error(`Failed to fetch Megaplay iframe: status ${megaplayResp.status}`);
+        const megaplayHtml = await megaplayResp.text();
+        const m = megaplayHtml.match(/id="megaplay-player"[^>]*data-id="([^"]+)"/) || megaplayHtml.match(/data-id="([^"]+)"/);
+        if (!m) throw new Error("Failed to extract data-id from Megaplay iframe HTML");
+        const megaplayId = m[1];
+        console.log(`[Anikoto] Extracted Megaplay player source ID: ${megaplayId}`);
 
-      const megaplayHtml = await megaplayResp.text();
-      const match = megaplayHtml.match(/id="megaplay-player"[^>]*data-id="([^"]+)"/) || megaplayHtml.match(/data-id="([^"]+)"/);
-      if (!match) {
-        throw new Error("Failed to extract data-id from Megaplay iframe HTML");
-      }
-      
-      const megaplayId = match[1];
-      console.log(`[Anikoto] Extracted Megaplay player source ID: ${megaplayId}`);
-
-      // REST API call to fetch sources directly
-      const resp = await anikotoFetch(`https://megaplay.buzz/stream/getSources?id=${megaplayId}`, {
-        headers: {
-          'Referer': iframeUrl,
-          'X-Requested-With': 'XMLHttpRequest'
-        }
-      });
-      if (!resp.ok) throw new Error(`Megaplay getSources failed: status ${resp.status}`);
-      const json = (await resp.json()) as any;
-      
-      const streamUrl = json.sources?.file || "";
-      if (!streamUrl) {
-        throw new Error("Failed to extract Megaplay stream URL from sources JSON");
-      }
-      const subs = isActualHardSub ? [] : (json.tracks || []).filter((t: any) => t.kind === "captions");
-      
-      // Use skip_data from server endpoint if getSources doesn't contain it
-      const intro = json.intro?.end > 0 ? json.intro : (serverGetJson?.result?.skip_data?.intro?.end > 0 ? serverGetJson.result.skip_data.intro : undefined);
-      const outro = json.outro?.end > 0 ? json.outro : (serverGetJson?.result?.skip_data?.outro?.end > 0 ? serverGetJson.result.skip_data.outro : undefined);
-
-      const result = {
-        url: streamUrl,
-        subtitles: subs,
-        intro,
-        outro
+        const sourcesResp = await anikotoFetch(`${playerOrigin}/stream/getSources?id=${megaplayId}`, {
+          headers: { 'Referer': attIframeUrl, 'X-Requested-With': 'XMLHttpRequest' },
+        });
+        if (!sourcesResp.ok) throw new Error(`getSources failed: status ${sourcesResp.status}`);
+        const json = (await sourcesResp.json()) as any;
+        const streamUrl = json.sources?.file || "";
+        if (!streamUrl) throw new Error("Failed to extract Megaplay stream URL from sources JSON");
+        console.log(`[Anikoto] Resolved stream URL: ${streamUrl}`);
+        const subs = isActualHardSub ? [] : (json.tracks || []).filter((t: any) => t.kind === "captions");
+        const intro = json.intro?.end > 0 ? json.intro : (attServerGetJson?.result?.skip_data?.intro?.end > 0 ? attServerGetJson.result.skip_data.intro : undefined);
+        const outro = json.outro?.end > 0 ? json.outro : (attServerGetJson?.result?.skip_data?.outro?.end > 0 ? attServerGetJson.result.skip_data.outro : undefined);
+        return { data: { url: streamUrl, subtitles: subs, intro, outro }, playerOrigin };
       };
 
-      this.resolveCache.set(linkId, { data: result, timestamp: Date.now() });
+      let result: StreamData | null = null;
+
+      if (iframeUrl) {
+        // The H-SUB BrowserWindow path already produced an iframe — use it directly.
+        const a = await attempt(iframeUrl, serverGetJson);
+        result = a.data;
+        _lastPlayerOrigin = a.playerOrigin;
+      } else {
+        // Try each server in the matched sub-type until one resolves. The first
+        // server is frequently dead for a given episode — that's what made soft
+        // sub fail intermittently; falling through to the next fixes it.
+        //
+        // For soft sub we also prefer a server that returns real caption tracks:
+        // a SUB server with no tracks is serving a hard-subbed video, so we keep
+        // looking before settling for it — that's why soft sub sometimes showed
+        // burned-in (hard) subs.
+        let lastErr: any = null;
+        let firstResolved: { data: StreamData; playerOrigin: string } | null = null;
+        for (const cand of candidateLinkIds) {
+          try {
+            const serverGetResp = await anikotoFetch(`${BASE_URL}/ajax/server?get=${encodeURIComponent(cand)}`, {
+              headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            });
+            if (!serverGetResp.ok) throw new Error(`server iframe status ${serverGetResp.status}`);
+            const sgJson = (await serverGetResp.json()) as any;
+            const candIframe = sgJson.result?.url || "";
+            if (!candIframe) throw new Error("Server iframe URL not found in AJAX response");
+            console.log(`[Anikoto] Found player iframe URL: ${candIframe}`);
+            const a = await attempt(candIframe, sgJson);
+            if (!firstResolved) firstResolved = a;
+            // Accept immediately unless we're on soft sub and this stream has no
+            // caption tracks (= hard-subbed); in that case keep trying.
+            if (subType !== "soft" || (a.data.subtitles && a.data.subtitles.length > 0)) {
+              result = a.data;
+              _lastPlayerOrigin = a.playerOrigin;
+              break;
+            }
+            console.log(`[Anikoto] Soft-sub server has no caption tracks (hard-subbed); trying next…`);
+          } catch (e: any) {
+            lastErr = e;
+            console.warn(`[Anikoto] server attempt failed (${String(e?.message ?? e)}); trying next…`);
+          }
+        }
+        if (!result && firstResolved) {
+          // No soft-sub-with-tracks server found — fall back to the first that resolved.
+          result = firstResolved.data;
+          _lastPlayerOrigin = firstResolved.playerOrigin;
+        }
+        if (!result) throw lastErr ?? new Error("All Anikoto servers failed to resolve");
+      }
+
+      this.cacheResolve(linkId, result);
       return result;
     })();
 
     this.resolvePending.set(linkId, promise);
-    promise.finally(() => this.resolvePending.delete(linkId));
+    promise.finally(() => this.resolvePending.delete(linkId)).catch(() => {});
     return promise;
   }
 }

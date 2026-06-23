@@ -66,9 +66,14 @@ export function beginAuth(mainWindow: BrowserWindow): { ok: boolean; reason?: st
   //   http://localhost#access_token=...&expires_in=...
   // will-navigate fires synchronously — we prevent the navigation so the
   // browser never tries to connect to localhost (which would show an error).
+  // will-navigate, did-navigate and did-navigate-in-page can all fire for the
+  // same redirect, so latch to process the token exactly once.
+  let handled = false;
   function handleNav(event: { preventDefault?: () => void }, navUrl: string) {
     if (!navUrl.startsWith(REDIRECT_URI)) return;
     event.preventDefault?.();
+    if (handled) return;
+    handled = true;
 
     // Fragment comes after '#'. URL API can't parse fragments so we replace '#' → '?'.
     const frag = navUrl.includes("#")

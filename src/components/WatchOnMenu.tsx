@@ -44,7 +44,7 @@ export default function WatchOnMenu({ animeId }: Props) {
                 className="flex items-center justify-between rounded-md bg-accent/20 border border-accent/30 px-3 py-2.5 text-sm text-white transition hover:bg-accent/30"
               >
                 <span className="font-medium">{l.service}</span>
-                <Play size={14} className="text-accent" fill="currentColor" />
+                <Play size={14} className="text-white" fill="currentColor" />
               </button>
             ))}
           </div>

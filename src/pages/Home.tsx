@@ -8,6 +8,8 @@ import { Play, RefreshCw, Clock, Loader2, X, ChevronLeft, ChevronRight, Chevrons
 import { secondsToTimestamp } from "../lib/format";
 import LatestEpCard from "../components/LatestEpCard";
 import ContinueWatchingCard from "../components/ContinueWatchingCard";
+import DiscoverRow from "../components/DiscoverRow";
+import Top10Sidebar from "../components/Top10Sidebar";
 
 export default function Home() {
   const trending = useAppStore((s) => s.trending);
@@ -22,7 +24,7 @@ export default function Home() {
   const [cwRefreshing, setCwRefreshing] = useState(false);
 
   const trendingCards = useMemo(
-    () => trending.map((a) => <Card key={a.id} anime={a} />),
+    () => trending.map((a) => <Card key={a.id} anime={a} size="sm" />),
     [trending]
   );
 
@@ -166,7 +168,10 @@ export default function Home() {
       if (stored[key] && now - stored[key].at < CACHE_TTL) return null;
 
       if (item.animePaheSession) {
-        const providerId = item.animePaheSession.includes("-") ? "anikoto" : "animepahe";
+        // AnimePahe sessions are UUIDs; Anikoto IDs are slugs (both contain
+        // dashes, so a full UUID test is required to tell them apart).
+        const isUuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(item.animePaheSession);
+        const providerId = isUuid ? "animepahe" : "anikoto";
         const total = await getLatestEpNumber(providerId, item.animePaheSession);
         return { key, total };
       }
@@ -218,7 +223,7 @@ export default function Home() {
   );
 
   return (
-    <div className="pb-16 bg-[#09090b] min-h-screen">
+    <div className="pb-16 bg-[#000000] min-h-screen">
       
       {/* Massive Hero Section (Top 10 Carousel) */}
       {heroItems.length > 0 && (
@@ -230,7 +235,7 @@ export default function Home() {
           onMouseUp={handleMouseUp}
           onWheel={handleWheel}
           onDragStart={(e) => e.preventDefault()}
-          className="relative w-full h-[65vh] min-h-[480px] max-h-[700px] mb-12 flex shrink-0 group overflow-hidden bg-[#09090b] cursor-grab active:cursor-grabbing select-none"
+          className="relative w-full h-[65vh] min-h-[480px] max-h-[700px] mb-12 flex shrink-0 group overflow-hidden bg-[#000000] cursor-grab active:cursor-grabbing select-none"
         >
           {heroItems.map((anime, idx) => (
             <div 
@@ -239,11 +244,11 @@ export default function Home() {
             >
               <div className="absolute inset-0">
                 <img draggable="false" src={anime.bannerImage || anime.coverImage || undefined} className={`w-full h-full object-cover transition-transform duration-[20s] ${idx === heroIndex ? 'scale-110' : 'scale-100'}`} />
-                <div className="absolute inset-0 bg-gradient-to-t from-[#09090b] via-[#09090b]/60 to-transparent" />
-                <div className="absolute inset-0 bg-gradient-to-r from-[#09090b] via-[#09090b]/60 to-transparent" />
+                <div className="absolute inset-0 bg-gradient-to-t from-[#000000] via-[#000000]/60 to-transparent" />
+                <div className="absolute inset-0 bg-gradient-to-r from-[#000000] via-[#000000]/60 to-transparent" />
               </div>
               <div className="relative z-10 flex flex-col justify-end p-6 sm:p-12 pb-12 sm:pb-16 h-full max-w-4xl">
-                <div className="text-[#4a9eff] font-bold text-xs sm:text-sm tracking-[0.2em] uppercase mb-2 sm:mb-4 drop-shadow-md">
+                <div className="text-white font-bold text-xs sm:text-sm tracking-[0.2em] uppercase mb-2 sm:mb-4 drop-shadow-md">
                   #{idx + 1} Trending Today
                 </div>
                 <h1 className="text-3xl sm:text-5xl md:text-6xl font-black text-white leading-[1.1] mb-3 sm:mb-4 drop-shadow-lg line-clamp-2">
@@ -270,7 +275,7 @@ export default function Home() {
               <button
                 key={idx}
                 onClick={() => setHeroIndex(idx)}
-                className={`h-1.5 rounded-full transition-all duration-300 ${idx === heroIndex ? 'w-8 bg-[#4a9eff] shadow-[0_0_10px_rgba(74,158,255,0.8)]' : 'w-2 bg-white/30 hover:bg-white/60'}`}
+                className={`h-1.5 rounded-full transition-all duration-300 ${idx === heroIndex ? 'w-8 bg-[#e50914] shadow-[0_0_10px_rgba(229, 9, 20,0.8)]' : 'w-2 bg-white/30 hover:bg-white/60'}`}
                 aria-label={`Go to slide ${idx + 1}`}
               />
             ))}
@@ -299,10 +304,10 @@ export default function Home() {
         <section className="mb-14">
           <div className="mb-5 flex items-center justify-between px-12">
             <div className="flex items-center gap-3">
-              <Clock size={20} className="text-[#4a9eff]" />
+              <Clock size={20} className="text-white" />
               <Link
                 to="/continue-watching"
-                className="group flex items-center gap-2 text-2xl font-bold hover:text-[#4a9eff] transition-colors"
+                className="group flex items-center gap-2 text-2xl font-bold hover:text-white transition-colors"
               >
                 Continue Watching
                 <ChevronRight size={20} className="opacity-0 -translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 transition-all" />
@@ -322,7 +327,7 @@ export default function Home() {
               <button
                 onClick={() => cwScroll("left")}
                 className="absolute left-0 top-0 bottom-2 z-10 flex w-14 items-center justify-start pl-2
-                           bg-gradient-to-r from-[#0b0b0f] to-transparent
+                           bg-gradient-to-r from-[#000000] to-transparent
                            opacity-0 group-hover/cwrow:opacity-100 transition-opacity"
               >
                 <div className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 hover:bg-white/20 transition">
@@ -334,7 +339,7 @@ export default function Home() {
               <button
                 onClick={() => cwScroll("right")}
                 className="absolute right-0 top-0 bottom-2 z-10 flex w-14 items-center justify-end pr-2
-                           bg-gradient-to-l from-[#0b0b0f] to-transparent
+                           bg-gradient-to-l from-[#000000] to-transparent
                            opacity-0 group-hover/cwrow:opacity-100 transition-opacity"
               >
                 <div className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 hover:bg-white/20 transition">
@@ -418,7 +423,7 @@ export default function Home() {
                         disabled={latestLoading}
                         className={`flex h-8 min-w-[2rem] items-center justify-center rounded px-2 text-xs font-medium transition
                           ${latestPage === p
-                            ? "bg-[#4a9eff] text-white"
+                            ? "bg-white text-black"
                             : "text-white/60 hover:bg-white/10 hover:text-white disabled:opacity-40"
                           }`}
                       >
@@ -449,11 +454,25 @@ export default function Home() {
         )}
       </section>
 
-      {trendingCards.length > 0 && (
-        <Row title="Trending now">
-          {trendingCards}
-        </Row>
-      )}
+      {/* Discovery sections + Top 10 sidebar (Anikoto-style) */}
+      <div className="flex gap-4">
+        <div className="min-w-0 flex-1">
+          {trendingCards.length > 0 && (
+            <Row title="Trending now">
+              {trendingCards}
+            </Row>
+          )}
+          <DiscoverRow title="Top Airing" filters={{ status: "RELEASING", sort: "POPULARITY_DESC" }} />
+          <DiscoverRow title="Most Popular" filters={{ sort: "POPULARITY_DESC" }} />
+          <DiscoverRow title="Top Movies" filters={{ format: "MOVIE", sort: "POPULARITY_DESC" }} />
+          <DiscoverRow title="Highest Rated" filters={{ sort: "SCORE_DESC" }} />
+        </div>
+        <aside className="hidden w-[330px] shrink-0 pr-8 pt-9 md:block">
+          <div className="sticky top-4">
+            <Top10Sidebar />
+          </div>
+        </aside>
+      </div>
 
     </div>
   );

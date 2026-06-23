@@ -95,13 +95,20 @@ export function beginAuth(mainWindow: BrowserWindow): { ok: boolean; reason?: st
 
   // Intercept the redirect before the page even loads — MAL will redirect to
   // REDIRECT_URI?code=... and we grab the code right here.
-  authWin.webContents.on("will-navigate", (_e, navUrl) => {
+  // Both events can fire for the same navigation; the `handled` latch keeps the
+  // second firing from re-entering after the PKCE verifier is consumed (which
+  // would surface a spurious "Missing PKCE verifier" error to the renderer).
+  let handled = false;
+  const onNav = (_e: unknown, navUrl: string) => {
+    if (handled) return;
+    if (navUrl.startsWith(REDIRECT_URI) && new URL(navUrl).searchParams.get("code")) {
+      handled = true;
+    }
     handleRedirect(navUrl, authWin, mainWindow);
-  });
+  };
+  authWin.webContents.on("will-navigate", onNav);
   // Also catch did-navigate in case will-navigate fires after load starts.
-  authWin.webContents.on("did-navigate", (_e, navUrl) => {
-    handleRedirect(navUrl, authWin, mainWindow);
-  });
+  authWin.webContents.on("did-navigate", onNav);
 
   // Auto-close after 10 minutes if the user abandons the flow.
   const timeout = setTimeout(() => authWin.destroy(), 10 * 60 * 1000);
@@ -191,10 +198,26 @@ export function getState(): MalAuthState {
   };
 }
 
+// Single-flight guard: the 30s flush timer and user-initiated calls can both
+// trigger a refresh at the same moment. MAL rotates refresh tokens, so two
+// concurrent refreshes race — the loser stores a revoked token and the user
+// gets logged out. Share one in-flight refresh instead.
+let _refreshing: Promise<string | null> | null = null;
+
 async function refreshIfNeeded(): Promise<string | null> {
   const t = store.get("malTokens");
   if (!t) return null;
   if (Date.now() < t.expires_at - 60_000) return t.access_token;
+  if (_refreshing) return _refreshing;
+  _refreshing = doRefresh(t);
+  try {
+    return await _refreshing;
+  } finally {
+    _refreshing = null;
+  }
+}
+
+async function doRefresh(t: MalTokens): Promise<string | null> {
   const body = new URLSearchParams({
     client_id: getClientId(),
     grant_type: "refresh_token",
