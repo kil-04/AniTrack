@@ -34,7 +34,7 @@ export function SkipOverlay({
     <div className={`absolute bottom-28 right-8 z-30 transition-all duration-300 ${showControls ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4 pointer-events-none"}`}>
       <button 
         onClick={(e) => { e.stopPropagation(); onSkip(skipTarget!.end); }}
-        className="flex items-center gap-2 rounded-md border border-white/20 bg-black/60 px-4 py-2 font-medium text-white backdrop-blur-md hover:bg-black/80 hover:scale-105 transition-all"
+        className="flex items-center gap-2 rounded-md border border-white/20 bg-black/70 px-4 py-2 font-medium text-white hover:bg-black/80 hover:scale-105 transition-all"
       >
         {skipTarget.label} <FastForward size={16} />
       </button>

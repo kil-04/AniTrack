@@ -16,10 +16,12 @@ import {
 } from "lucide-react";
 import { SkipOverlay } from "../components/player/SkipOverlay";
 import { VideoControls } from "../components/player/VideoControls";
+import { useVideoGestures, GestureFeedback } from "../components/player/useVideoGestures";
 import Hls from "hls.js";
 import { secondsToTimestamp } from "../lib/format";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { isCapacitor } from "../lib/platform";
+import { enterNativePip } from "../lib/pip";
 import { pushProgress } from "../lib/supabase-sync";
 import { scoreMatch } from "../lib/match";
 
@@ -95,7 +97,15 @@ export default function StreamPlayer() {
   const [muted, setMuted] = useState(false);
   const [position, setPosition] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [bufferedPct, setBufferedPct] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isTheater, setIsTheater] = useState(false);
+  const [isPiP, setIsPiP] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(() => {
+    const r = parseFloat(localStorage.getItem("ap-speed") ?? "1");
+    return isFinite(r) && r > 0 ? r : 1;
+  });
+  const playbackRateRef = useRef(playbackRate);
 
   // Skip times
   const [skipTimes, setSkipTimes] = useState<{
@@ -146,6 +156,12 @@ export default function StreamPlayer() {
   // Player origin (e.g. https://vidtube.site) captured at resolve time. On Android
   // the CapacitorLoader sends it as Referer so the segment CDN's hotlink check passes.
   const refererRef = useRef<string | null>(null);
+  const currentStreamUrlRef = useRef<string | null>(null);
+  // Per-episode link cache so prefetched episodes switch without re-scraping.
+  const linksCacheRef = useRef<Map<string, any[]>>(new Map());
+  // Live ref to playEpisode so the PiP-return hook can reload the current episode
+  // (the WebView MediaSource is destroyed during PiP and can't be revived in place).
+  const playEpisodeRef = useRef<((ep: any, session?: string, resumePos?: number) => void) | null>(null);
   const seekingRef = useRef(false);
   const singleClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoNextRef = useRef(autoNext);
@@ -169,6 +185,7 @@ export default function StreamPlayer() {
   const malIdCacheRef = useRef<number | null>(null);
 
   function resetPlayer() {
+    seekingRef.current = false; // clear any stuck seek flag (e.g. across a PiP transition)
     const video = videoRef.current;
     if (video) {
       video.pause();
@@ -427,6 +444,90 @@ export default function StreamPlayer() {
     return () => { if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current); };
   }, []);
 
+  // ── YouTube-style touch gestures (Android / tablet) ─────────────────────────
+  const setUiVolume = useCallback((v: number) => {
+    setVolume(v);
+    setMuted(v === 0);
+    localStorage.setItem("ap-volume", String(v));
+    const vid = videoRef.current;
+    if (vid) { vid.volume = v; vid.muted = v === 0; }
+  }, []);
+
+  const gestures = useVideoGestures({
+    enabled: isCapacitor,
+    videoRef,
+    wrapRef: videoWrapRef,
+    onToggleControls: () => {
+      setShowControls((prev) => {
+        const next = !prev;
+        if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current);
+        if (next) controlsTimerRef.current = setTimeout(() => setShowControls(false), 3000);
+        return next;
+      });
+    },
+    onShowControls: showControlsNow,
+    setUiVolume,
+    setUiPosition: (t: number) => setPosition(t),
+  });
+
+  const changePlaybackRate = useCallback((rate: number) => {
+    setPlaybackRate(rate);
+    playbackRateRef.current = rate;
+    localStorage.setItem("ap-speed", String(rate));
+    if (videoRef.current) videoRef.current.playbackRate = rate;
+  }, []);
+
+  const togglePiP = useCallback(async () => {
+    // Android WebView can't composite <video> into PiP → hand the HLS stream to a
+    // native ExoPlayer overlay (needs the stream url + referer + current position).
+    if (isCapacitor) {
+      const url = currentStreamUrlRef.current;
+      if (url) await enterNativePip({ url, referer: refererRef.current, position: videoRef.current?.currentTime ?? 0 });
+      return;
+    }
+    const v = videoRef.current;
+    if (!v) return;
+    try {
+      if (document.pictureInPictureElement) await document.exitPictureInPicture();
+      else if ((v as any).requestPictureInPicture) await v.requestPictureInPicture();
+    } catch { /* PiP unsupported or blocked */ }
+  }, []);
+
+  // Native PiP teardown calls this on return. The WebView <video> MediaSource is
+  // destroyed while suspended in PiP, so reload the current episode through the normal
+  // play path (links are cached + resolve is pre-warmed → fast) and resume at the
+  // position ExoPlayer reached. Using the full path keeps loading/controls state correct.
+  useEffect(() => {
+    (window as any).__anitrackPipResume = (posSec: number) => {
+      const ep = currentEpRef.current;
+      if (ep) playEpisodeRef.current?.(ep, undefined, posSec > 5 ? posSec : undefined);
+    };
+    return () => { try { delete (window as any).__anitrackPipResume; } catch { /* noop */ } };
+  }, []);
+
+  // On Android the WebView's <video> event listeners stop firing after a PiP session
+  // (so onCanPlay/timeupdate no longer clear "Resolving", apply the resume seek, or
+  // move the scrubber). Poll the element directly so the controls stay correct
+  // regardless of whether the events fire.
+  useEffect(() => {
+    if (!isCapacitor) return;
+    const id = setInterval(() => {
+      const v = videoRef.current;
+      if (!v) return;
+      // Apply a pending resume seek once metadata is available (onCanPlay may not fire).
+      if (pendingSeekRef.current != null && v.readyState >= 1) {
+        try { v.currentTime = pendingSeekRef.current; } catch { /* noop */ }
+        pendingSeekRef.current = null;
+      }
+      // Clear the "Resolving" overlay once the stream can actually play.
+      if (v.readyState >= 3) setLoadingStream(false);
+      if (!seekingRef.current && !isNaN(v.currentTime)) setPosition(v.currentTime);
+      if (isFinite(v.duration) && v.duration > 0) setDuration(v.duration);
+      setPlaying(!v.paused);
+    }, 400);
+    return () => clearInterval(id);
+  }, []);
+
   // ── Episode list loading ───────────────────────────────────────────────────
 
   // Fetch a single page with caching (paheCacheRef survives navigation).
@@ -680,9 +781,10 @@ export default function StreamPlayer() {
     };
   }
 
-  function attachStream(url: string, subtitles?: any[]) {
+  function attachStream(url: string, subtitles?: any[], startPos?: number) {
     const video = videoRef.current;
     if (!video) return;
+    currentStreamUrlRef.current = url;
 
     setStreamError(null);
 
@@ -715,12 +817,14 @@ export default function StreamPlayer() {
     const isHls = url.includes(".m3u8");
 
     if (isHls && Hls.isSupported()) {
-      buildHls(url, video, { worker: !isCapacitor, startLevel: -1, attempt: 1 });
+      buildHls(url, video, { worker: !isCapacitor, startLevel: -1, attempt: 1, startPosition: startPos ?? -1 });
     } else if (isHls && video.canPlayType("application/vnd.apple.mpegurl")) {
       video.src = url;
+      if (startPos && startPos > 0) pendingSeekRef.current = startPos;
       if (autoPlay) video.play().catch(() => {});
     } else {
       video.src = url;
+      if (startPos && startPos > 0) pendingSeekRef.current = startPos;
       if (autoPlay) video.play().catch(() => {});
     }
 
@@ -801,7 +905,7 @@ export default function StreamPlayer() {
   function buildHls(
     url: string,
     video: HTMLVideoElement,
-    opts: { worker: boolean; startLevel: number; attempt: number },
+    opts: { worker: boolean; startLevel: number; attempt: number; startPosition?: number },
   ) {
     if (hlsRef.current) {
       hlsRef.current.destroy();
@@ -813,7 +917,7 @@ export default function StreamPlayer() {
       lowLatencyMode: false,
       preferManagedMediaSource: false,
       startLevel: opts.startLevel,
-      startPosition: -1,
+      startPosition: opts.startPosition ?? -1,
       maxBufferLength: 30,
       maxMaxBufferLength: 60,
     };
@@ -902,7 +1006,7 @@ export default function StreamPlayer() {
   const loadingStreamRef = useRef(false);
 
   const playEpisode = useCallback(
-    async (ep: any, session = animeSession) => {
+    async (ep: any, session = animeSession, resumePos?: number) => {
       if (loadingStreamRef.current && (currentEpRef.current?.session ?? currentEpRef.current?.id) === (ep.session ?? ep.id)) return;
       resetPlayer();
       loadingStreamRef.current = true;
@@ -913,51 +1017,49 @@ export default function StreamPlayer() {
       setDuration(0);
       setLinks([]);
       
-      const preferredSubType = providerId === "anikoto"
-        ? (localStorage.getItem("anitrack-anikoto-subtype") || "soft")
-        : null;
+      const epKey = String(ep.session ?? ep.id);
+      // Pick the index we'll actually play: highest quality for AnimePahe, the user's
+      // preferred sub-type for Anikoto. Shared with the next-episode prefetch below.
+      const pickBestIdx = (lks: any[]): number => {
+        const preferredSubType = providerId === "anikoto"
+          ? (localStorage.getItem("anitrack-anikoto-subtype") || "soft") : null;
+        let idx = 0;
+        if (providerId === "anikoto" && preferredSubType) {
+          const i = lks.findIndex((l: any) => { try { return JSON.parse(l.id).subType === preferredSubType; } catch { return false; } });
+          if (i >= 0) idx = i;
+        } else if (providerId !== "anikoto") {
+          const qOf = (l: any) => parseInt(String(l.quality ?? "").replace(/[^0-9]/g, ""), 10) || 0;
+          const isJpn = (l: any) => !String(l.audio ?? "").toLowerCase().includes("eng");
+          let best = -1;
+          lks.forEach((l: any, i: number) => { const s = qOf(l) * 10 + (isJpn(l) ? 1 : 0); if (s > best) { best = s; idx = i; } });
+        }
+        return idx;
+      };
 
       try {
-        // Run links fetch and saved-progress lookup in parallel — they're
-        // independent and saving even ~50ms of perceived latency matters here.
+        // Use prefetched links if available (instant switch); else fetch. Run the
+        // links fetch + saved-progress lookup in parallel.
         const [fetchedLinks, savedProgress] = await Promise.all([
-          window.api.pahe.links(providerId, ep.session ?? ep.id, animeSession),
+          linksCacheRef.current.get(epKey) ?? window.api.pahe.links(providerId, ep.session ?? ep.id, animeSession),
           window.api.progress.get(effectiveAnimeIdRef.current, ep.episodeNumber).catch(() => null),
         ]);
 
         fetchSkipTimes(ep.episodeNumber).catch(() => {});
 
         if (!fetchedLinks.length) throw new Error("No stream links found for this episode");
+        linksCacheRef.current.set(epKey, fetchedLinks);
         setLinks(fetchedLinks);
-        
+
         // We apply the resume seek in onCanPlay (after the video is ready) rather than
         // passing startPosition to hls.js — hls.js startPosition stalls on
         // AnimePahe CDN because it tries to fetch mid-stream segments cold.
-        pendingSeekRef.current = (savedProgress && savedProgress.positionSec > 5)
+        pendingSeekRef.current = (resumePos != null && resumePos > 5)
+          ? resumePos
+          : (savedProgress && savedProgress.positionSec > 5)
           ? savedProgress.positionSec
           : null;
-        
-        // Map the user's preferred sub-type to the actual link index. Available
-        // types vary per show (some lack soft, some lack hard), and getStreamLinks
-        // builds the array conditionally — so a fixed index can resolve the wrong
-        // track (e.g. dub when the user picked sub). Match by subType instead.
-        let bestIdx = 0;
-        if (providerId === "anikoto" && preferredSubType) {
-          const i = fetchedLinks.findIndex((l: any) => {
-            try { return JSON.parse(l.id).subType === preferredSubType; } catch { return false; }
-          });
-          if (i >= 0) bestIdx = i;
-        } else if (providerId !== "anikoto") {
-          // AnimePahe serves a separate link per resolution — default to the highest
-          // quality (preferring Japanese audio when two share the top resolution).
-          const qOf = (l: any) => parseInt(String(l.quality ?? "").replace(/[^0-9]/g, ""), 10) || 0;
-          const isJpn = (l: any) => !String(l.audio ?? "").toLowerCase().includes("eng");
-          let bestScore = -1;
-          fetchedLinks.forEach((l: any, i: number) => {
-            const score = qOf(l) * 10 + (isJpn(l) ? 1 : 0);
-            if (score > bestScore) { bestScore = score; bestIdx = i; }
-          });
-        }
+
+        const bestIdx = pickBestIdx(fetchedLinks);
         setSelectedLink(bestIdx);
         const { url, subtitles, intro, outro, referer } = await window.api.pahe.resolve(providerId, fetchedLinks[bestIdx].id ?? fetchedLinks[bestIdx].kwik);
         refererRef.current = referer ?? null;
@@ -979,27 +1081,31 @@ export default function StreamPlayer() {
 
         attachStream(url, activeSubs);
 
-        // 1. Pre-fetch other qualities for the current episode in the background
-        for (let idx = 0; idx < fetchedLinks.length; idx++) {
-          if (idx !== bestIdx) {
-            const targetLink = fetchedLinks[idx];
-            const linkIdToResolve = targetLink.id ?? targetLink.kwik;
-            window.api.pahe.prefetch(providerId, linkIdToResolve);
-          }
-        }
-
-        // 2. Pre-fetch next episode and its qualities in the background
+        // Warm the NEXT episode so "Next" is near-instant: cache its links and
+        // pre-resolve only the quality we'd actually play (resolving every quality
+        // would compete with the current stream's bandwidth and slow startup).
         const nextEp = episodesRef.current.find((e) => e.episodeNumber === ep.episodeNumber + 1);
         if (nextEp) {
-          window.api.pahe.links(providerId, nextEp.session ?? nextEp.id, animeSession)
-            .then((nextLinks: any[]) => {
-              for (const targetLink of nextLinks) {
-                const linkIdToResolve = targetLink.id ?? targetLink.kwik;
-                window.api.pahe.prefetch(providerId, linkIdToResolve);
-              }
-            })
-            .catch(() => {});
+          const nextKey = String(nextEp.session ?? nextEp.id);
+          const cached = linksCacheRef.current.get(nextKey);
+          const warm = cached
+            ? Promise.resolve(cached)
+            : window.api.pahe.links(providerId, nextEp.session ?? nextEp.id, animeSession);
+          warm.then((nextLinks: any[]) => {
+            if (!nextLinks?.length) return;
+            linksCacheRef.current.set(nextKey, nextLinks);
+            const ni = pickBestIdx(nextLinks);
+            window.api.pahe.prefetch(providerId, nextLinks[ni].id ?? nextLinks[ni].kwik);
+          }).catch(() => {});
         }
+
+        // Pre-fetch the current episode's OTHER qualities a few seconds later, so the
+        // background resolves don't compete with the stream that just started.
+        setTimeout(() => {
+          fetchedLinks.forEach((l: any, idx: number) => {
+            if (idx !== bestIdx) window.api.pahe.prefetch(providerId, l.id ?? l.kwik);
+          });
+        }, 5000);
       } catch (e: any) {
         setStreamError(e.message ?? String(e));
         setLoadingStream(false);
@@ -1010,6 +1116,9 @@ export default function StreamPlayer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [animeSession, autoPlay, providerId],
   );
+
+  // Keep a live reference to playEpisode for the PiP-return hook (registered once).
+  useEffect(() => { playEpisodeRef.current = playEpisode; });
 
   async function changeQuality(idx: number) {
     const link = linksRef.current[idx];
@@ -1184,15 +1293,23 @@ export default function StreamPlayer() {
       }
     };
     const onDurationChange = () => setDuration(isFinite(video.duration) ? video.duration : 0);
+    const onProgress = () => {
+      if (!video.duration || !isFinite(video.duration) || video.buffered.length === 0) return;
+      setBufferedPct((video.buffered.end(video.buffered.length - 1) / video.duration) * 100);
+    };
     const onEnded = () => { if (autoNextRef.current) playNext(); };
     const onCanPlay = () => {
       setLoadingStream(false);
+      // Re-apply the chosen playback speed (a new source resets it to 1×).
+      video.playbackRate = playbackRateRef.current;
       // Apply saved resume position now that the video element is ready.
       if (pendingSeekRef.current !== null && videoRef.current) {
         videoRef.current.currentTime = pendingSeekRef.current;
         pendingSeekRef.current = null;
       }
     };
+    const onEnterPiP = () => setIsPiP(true);
+    const onLeavePiP = () => setIsPiP(false);
     const onError = () => {
       const err = video.error;
       // Ignore errors caused by intentionally resetting the source to empty string
@@ -1209,18 +1326,24 @@ export default function StreamPlayer() {
     video.addEventListener("pause", onPause);
     video.addEventListener("timeupdate", onTimeUpdate);
     video.addEventListener("durationchange", onDurationChange);
+    video.addEventListener("progress", onProgress);
     video.addEventListener("ended", onEnded);
     video.addEventListener("canplay", onCanPlay);
     video.addEventListener("error", onError);
+    video.addEventListener("enterpictureinpicture", onEnterPiP);
+    video.addEventListener("leavepictureinpicture", onLeavePiP);
 
     return () => {
       video.removeEventListener("play", onPlay);
       video.removeEventListener("pause", onPause);
       video.removeEventListener("timeupdate", onTimeUpdate);
       video.removeEventListener("durationchange", onDurationChange);
+      video.removeEventListener("progress", onProgress);
       video.removeEventListener("ended", onEnded);
       video.removeEventListener("canplay", onCanPlay);
       video.removeEventListener("error", onError);
+      video.removeEventListener("enterpictureinpicture", onEnterPiP);
+      video.removeEventListener("leavepictureinpicture", onLeavePiP);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1257,6 +1380,11 @@ export default function StreamPlayer() {
       if (e.key === "n") playNext();
       if (e.key === "p") playPrev();
       if (e.key === "f") toggleFullscreen();
+      if (e.key === "t") setIsTheater((t) => !t);
+      if (e.key === "i") togglePiP();
+      if (e.key === "c") toggleSubtitles();
+      if (e.key === ">" || e.key === ".") changePlaybackRate(Math.min(2, Math.round((playbackRateRef.current + 0.25) * 100) / 100));
+      if (e.key === "<" || e.key === ",") changePlaybackRate(Math.max(0.25, Math.round((playbackRateRef.current - 0.25) * 100) / 100));
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -1321,11 +1449,6 @@ export default function StreamPlayer() {
   const isTablet = useMediaQuery("(min-width: 900px)");
   // On Android phone (portrait) we use the YouTube-style layout.
   const isMobile = isCapacitor && !isTablet;
-
-  // ── Touch controls (mobile) ─────────────────────────────────────────────────
-  function handleVideoTap() {
-    showControlsNow();
-  }
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -1490,7 +1613,6 @@ export default function StreamPlayer() {
       style={{ cursor: isMobile ? "default" : (showControls ? "default" : "none") }}
       onMouseMove={handleVideoAreaMouseMove}
       onMouseLeave={handleVideoAreaMouseLeave}
-      onTouchStart={handleVideoTap}
       onClick={(e) => {
         const t = e.target as HTMLElement;
         if (t.closest("button") || t.closest("input") || t.closest("select")) return;
@@ -1517,7 +1639,31 @@ export default function StreamPlayer() {
           font-size: ${cueFontSize} !important;
         }
       `}</style>
-      <video ref={videoRef} className="h-full w-full object-contain" playsInline crossOrigin="anonymous" />
+      <video ref={videoRef} className={`h-full w-full ${gestures.fitMode === "cover" ? "object-cover" : "object-contain"}`} playsInline crossOrigin="anonymous" />
+      {/* YouTube-style gesture layer (Android / tablet). Sits above the video but
+          below the controls pill & overlay buttons (which come later in the DOM).
+          Stops the synthetic click so the desktop onClick play/pause doesn't fire. */}
+      {isCapacitor && (
+        <div
+          className="absolute inset-0"
+          style={{ touchAction: "none" }}
+          onClick={(e) => e.stopPropagation()}
+          onTouchStart={gestures.touchHandlers.onTouchStart}
+          onTouchMove={gestures.touchHandlers.onTouchMove}
+          onTouchEnd={gestures.touchHandlers.onTouchEnd}
+        />
+      )}
+      <GestureFeedback fb={gestures.feedback} />
+      {/* Center play/pause button (touch / Android) — appears with the controls */}
+      {isCapacitor && currentEp && !loadingStream && (
+        <button
+          onClick={(e) => { e.stopPropagation(); const v = videoRef.current; if (!v) return; v.paused ? v.play().catch(() => {}) : v.pause(); showControlsNow(); }}
+          className={`absolute left-1/2 top-1/2 z-30 flex h-16 w-16 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white transition-all duration-300 ${showControls ? "opacity-100 scale-100" : "pointer-events-none opacity-0 scale-90"}`}
+          title="Play / Pause"
+        >
+          {playing ? <Pause size={30} fill="currentColor" /> : <Play size={30} fill="currentColor" className="ml-0.5" />}
+        </button>
+      )}
       {!currentEp && !loadingStream && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <p className="text-sm text-white/30">Select an episode to start watching</p>
@@ -1567,6 +1713,13 @@ export default function StreamPlayer() {
         isMobile={isMobile}
         qualityOpen={qualityOpen}
         isFullscreen={isFullscreen}
+        bufferedPct={bufferedPct}
+        isTheater={isTheater}
+        isPiP={isPiP}
+        playbackRate={playbackRate}
+        onToggleTheater={() => setIsTheater((t) => !t)}
+        onTogglePiP={togglePiP}
+        onChangePlaybackRate={changePlaybackRate}
         onSeekToPct={(pct) => { const v = videoRef.current; if (v && duration) v.currentTime = pct * duration; }}
         onSeekBy={seek}
         onSeekStart={() => { seekingRef.current = true; }}
@@ -1678,9 +1831,9 @@ export default function StreamPlayer() {
         )}
       </div>
 
-      {/* Main content — episode panel left, video right */}
+      {/* Main content — episode panel left, video right (theater mode hides the panel) */}
       <div className="flex flex-1 overflow-hidden">
-        {EpisodePanel}
+        {!isTheater && EpisodePanel}
         {VideoArea(true)}
       </div>
     </div>

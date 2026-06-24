@@ -1,6 +1,7 @@
 import { Volume2, VolumeX, Play, Pause, Rewind, FastForward, Maximize2, Minimize2, ChevronDown, Captions, Settings } from "lucide-react";
 import { secondsToTimestamp } from "../../lib/format";
 import React from "react";
+import { YouTubeControls } from "./YouTubeControls";
 
 interface VideoControlsProps {
   showControls: boolean;
@@ -18,6 +19,16 @@ interface VideoControlsProps {
   isMobile: boolean;
   qualityOpen: boolean;
   isFullscreen: boolean;
+
+  // YouTube-style desktop bar extras
+  bufferedPct?: number;
+  isTheater?: boolean;
+  isPiP?: boolean;
+  playbackRate?: number;
+  onToggleTheater?: () => void;
+  onTogglePiP?: () => void;
+  onChangePlaybackRate?: (rate: number) => void;
+
   onSeekToPct: (pct: number) => void;
   onSeekBy: (delta: number) => void;
   onSeekStart: () => void;
@@ -58,6 +69,8 @@ interface VideoControlsProps {
 export function VideoControls({
   showControls, progressPct, position, duration, playing, muted, volume,
   autoPlay, autoNext, currentEp, links, selectedLink, isMobile, qualityOpen, isFullscreen,
+  bufferedPct = 0, isTheater = false, isPiP = false, playbackRate = 1,
+  onToggleTheater, onTogglePiP, onChangePlaybackRate,
   onSeekToPct, onSeekBy, onSeekStart, onSeekEnd, onPositionChange,
   onTogglePlay, onToggleMute, onVolumeChange, onToggleAutoPlay, onToggleAutoNext,
   onPlayPrev, onPlayNext, onToggleFullscreen, onToggleQualityMenu, onChangeQuality, onCloseQualityMenu,
@@ -118,10 +131,66 @@ export function VideoControls({
 
 
 
+  // Desktop / tablet → YouTube-style bottom bar
+  if (!isMobile) {
+    return (
+      <YouTubeControls
+        showControls={showControls}
+        progressPct={progressPct}
+        bufferedPct={bufferedPct}
+        position={position}
+        duration={duration}
+        playing={playing}
+        muted={muted}
+        volume={volume}
+        autoPlay={autoPlay}
+        autoNext={autoNext}
+        currentEp={currentEp}
+        links={links}
+        selectedLink={selectedLink}
+        isFullscreen={isFullscreen}
+        isTheater={isTheater}
+        isPiP={isPiP}
+        playbackRate={playbackRate}
+        providerId={providerId}
+        hlsLevels={hlsLevels}
+        currentHlsLevel={currentHlsLevel}
+        subtitlesEnabled={subtitlesEnabled}
+        availableSubtitles={availableSubtitles}
+        onSeekToPct={onSeekToPct}
+        onSeekStart={onSeekStart}
+        onSeekEnd={onSeekEnd}
+        onPositionChange={onPositionChange}
+        onTogglePlay={onTogglePlay}
+        onToggleMute={onToggleMute}
+        onVolumeChange={onVolumeChange}
+        onPlayPrev={onPlayPrev}
+        onPlayNext={onPlayNext}
+        onToggleFullscreen={onToggleFullscreen}
+        onToggleTheater={onToggleTheater ?? (() => {})}
+        onTogglePiP={onTogglePiP ?? (() => {})}
+        onChangeQuality={onChangeQuality}
+        onChangeHlsLevel={onChangeHlsLevel}
+        onToggleSubtitles={onToggleSubtitles}
+        onToggleAutoPlay={onToggleAutoPlay}
+        onToggleAutoNext={onToggleAutoNext}
+        onChangePlaybackRate={onChangePlaybackRate ?? (() => {})}
+        cueFontSize={cueFontSize}
+        setCueFontSize={setCueFontSize}
+        cueFontFamily={cueFontFamily}
+        setCueFontFamily={setCueFontFamily}
+        cueBgOpacity={cueBgOpacity}
+        setCueBgOpacity={setCueBgOpacity}
+        cueColor={cueColor}
+        setCueColor={setCueColor}
+      />
+    );
+  }
+
   return (
     <div className={`absolute inset-0 flex flex-col justify-end items-center pb-6 transition-all duration-300 pointer-events-none ${showControls ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}>
       {/* Floating Glassmorphic Pill */}
-      <div className="relative w-[96%] max-w-5xl rounded-2xl border border-white/10 bg-black/20 px-5 pb-3 pt-4 backdrop-blur-none shadow-[0_8px_32px_rgba(0,0,0,0.15)] select-none pointer-events-auto">
+      <div className={`relative w-[96%] max-w-5xl rounded-2xl border border-white/10 bg-black/20 px-5 pb-3 pt-4 backdrop-blur-none shadow-[0_8px_32px_rgba(0,0,0,0.15)] select-none ${showControls ? "pointer-events-auto" : "pointer-events-none"}`}>
         
         {/* Seek bar */}
         <div className="group mb-4 flex items-center gap-3">
