@@ -8,6 +8,7 @@ import {
   Tray,
   Menu,
   nativeImage,
+  shell,
 } from "electron";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -274,6 +275,24 @@ function createWindow() {
   } else {
     mainWindow.loadFile(path.join(__dirname, "../../dist/index.html"));
   }
+
+  // Keep the trusted window on its own origin. The preload re-injects window.api on
+  // every load, so any navigation to a remote page would hand a remote origin the
+  // full IPC bridge. Block off-origin navigations + new windows (open them in the
+  // user's browser instead). Internal React Router uses history/pushState, which
+  // doesn't trigger will-navigate, so app routing is unaffected.
+  const isAppOrigin = (u: string) =>
+    isDev ? u.startsWith("http://localhost:5173") : u.startsWith("file://");
+  mainWindow.webContents.on("will-navigate", (e, url) => {
+    if (!isAppOrigin(url)) {
+      e.preventDefault();
+      if (/^https?:\/\//i.test(url)) shell.openExternal(url).catch(() => {});
+    }
+  });
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url).catch(() => {});
+    return { action: "deny" };
+  });
   mainWindow.on("close", (e) => {
     if (!isQuitting) {
       e.preventDefault();

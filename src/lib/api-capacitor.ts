@@ -143,7 +143,9 @@ function mapMedia(m: any) {
     status: m.status ?? null,
     format: m.format ?? null,
     popularity: m.popularity ?? null,
-    synopsis: m.description ?? null,
+    // Strip HTML tags — the synopsis is rendered via dangerouslySetInnerHTML, and
+    // AniList descriptions can contain markup. (Desktop strips this in anilist.ts.)
+    synopsis: (m.description ?? "").replace(/<[^>]+>/g, "") || null,
     genres: m.genres ?? [],
     averageScore: m.averageScore ?? null,
     year: m.seasonYear ?? null,

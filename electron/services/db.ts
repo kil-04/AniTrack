@@ -202,6 +202,13 @@ export function upsertAnime(a: AnimeMeta) {
   );
 }
 
+// Tolerate malformed JSON in a column (e.g. a partial write) — return [] instead
+// of throwing, so a single bad row can't break an entire list query.
+function safeJsonArray(s: any): string[] {
+  if (!s) return [];
+  try { const v = JSON.parse(s); return Array.isArray(v) ? v : []; } catch { return []; }
+}
+
 function rowToAnime(row: any): AnimeMeta {
   return {
     id: row.id,
@@ -215,10 +222,10 @@ function rowToAnime(row: any): AnimeMeta {
     status: row.status,
     coverImage: row.cover_image,
     bannerImage: row.banner_image,
-    genres: row.genres ? JSON.parse(row.genres) : [],
+    genres: safeJsonArray(row.genres),
     averageScore: row.average_score,
     year: row.year,
-    studios: row.studios ? JSON.parse(row.studios) : [],
+    studios: safeJsonArray(row.studios),
   };
 }
 
@@ -441,10 +448,10 @@ export function getContinueWatching(limit = 20, offset = 0): ContinueWatchingIte
       status: r.status,
       coverImage: r.cover_image,
       bannerImage: r.banner_image,
-      genres: r.genres ? JSON.parse(r.genres) : [],
+      genres: safeJsonArray(r.genres),
       averageScore: r.average_score,
       year: r.year,
-      studios: r.studios ? JSON.parse(r.studios) : [],
+      studios: safeJsonArray(r.studios),
     };
 
     // One card per show — deduplicate by title, keeping the most-recently

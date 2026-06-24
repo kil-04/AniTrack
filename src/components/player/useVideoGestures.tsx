@@ -198,7 +198,10 @@ export function useVideoGestures(opts: GestureOpts) {
     }
 
     if (s.pinching) {
-      if (e.touches.length === 0) s.pinching = false;
+      // A finger lifted after a pinch: ignore the remaining finger until all are up,
+      // so a leftover single touch doesn't start an accidental scrub/volume drag.
+      if (e.touches.length === 0) { s.pinching = false; s.ignore = false; }
+      else s.ignore = true;
       e.preventDefault();
       return;
     }
@@ -272,8 +275,23 @@ export function useVideoGestures(opts: GestureOpts) {
     }
   }
 
+  // The system can cancel a touch (incoming call, notification, edge gesture)
+  // without firing touchend — restore any transient state so we don't get stuck
+  // at 2× speed with a frozen overlay.
+  function onTouchCancel() {
+    cancelLongPress();
+    const v = optsRef.current.videoRef.current;
+    if (s.longPressing && v) v.playbackRate = s.prevRate || 1;
+    s.longPressing = false;
+    s.moved = false;
+    s.axis = "";
+    s.pinching = false;
+    s.ignore = false;
+    setFeedback(null);
+  }
+
   return {
-    touchHandlers: { onTouchStart, onTouchMove, onTouchEnd },
+    touchHandlers: { onTouchStart, onTouchMove, onTouchEnd, onTouchCancel },
     feedback,
     fitMode,
     setFitMode,

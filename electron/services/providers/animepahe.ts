@@ -21,7 +21,6 @@ import { StreamProvider, AnimeInfo, EpisodeInfo, StreamLink, StreamData } from "
  */
 
 import { BrowserWindow, net, session as electronSession } from "electron";
-import vm from "node:vm";
 import { SimpleStore } from "../store";
 
 interface PaheSettings { baseUrl?: string }
@@ -712,11 +711,10 @@ function extractAllPackedEvals(html: string): string[] {
 }
 
 function unpackJs(packed: string): string {
-  try {
-    const iife = packed.replace(/^eval\s*\(/, "").replace(/\)\s*$/, "");
-    const result = vm.runInNewContext("(" + iife + ")", { String, parseInt, RegExp }, { timeout: 3000 });
-    if (typeof result === "string" && result.length > 0) return result;
-  } catch {}
+  // SECURITY: never eval / vm.run this. It is attacker-controlled script from the
+  // third-party kwik CDN page, and `vm` is NOT a sandbox — host objects passed into
+  // the context leak the Function constructor, allowing a crafted page to run code
+  // in the main process (RCE). Decode the dean-edwards packer purely as a string.
   try {
     const match = packed.match(/}\s*\(\s*'((?:[^'\\]|\\.)*)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*'((?:[^'\\]|\\.)*)'\.split\('\|'\)/);
     if (!match) return packed;

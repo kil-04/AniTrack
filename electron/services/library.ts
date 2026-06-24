@@ -62,16 +62,21 @@ export function parseFilename(name: string): ParsedFilename {
   return { title, episode };
 }
 
-async function walk(dir: string, out: string[] = []): Promise<string[]> {
+async function walk(
+  dir: string,
+  out: string[] = [],
+  status: { ok: boolean } = { ok: true },
+): Promise<string[]> {
   let entries: import("node:fs").Dirent[];
   try {
     entries = await fs.readdir(dir, { withFileTypes: true });
   } catch {
+    status.ok = false; // a folder/subfolder couldn't be read (offline drive, perms)
     return out;
   }
   for (const e of entries) {
     const full = path.join(dir, e.name);
-    if (e.isDirectory()) await walk(full, out);
+    if (e.isDirectory()) await walk(full, out, status);
     else if (e.isFile() && VIDEO_EXT.has(path.extname(e.name).toLowerCase()))
       out.push(full);
   }
@@ -84,7 +89,8 @@ export async function scanAll(
 ): Promise<{ shows: number; episodes: number }> {
   const folders = listLibraryFolders();
   const files: string[] = [];
-  for (const f of folders) await walk(f, files);
+  const scanStatus = { ok: true };
+  for (const f of folders) await walk(f, files, scanStatus);
 
   // Bucket by best-guess title.
   const buckets = new Map<string, { episode: number; filePath: string }[]>();
@@ -150,7 +156,10 @@ export async function scanAll(
   }
 
   // Remove DB rows for files that no longer exist on disk (incremental update).
-  removeStaleLocalEpisodes(validPaths);
+  // Only prune when every folder was fully readable — otherwise a transiently
+  // offline drive would wipe its episodes from the library.
+  if (scanStatus.ok) removeStaleLocalEpisodes(validPaths);
+  else console.warn("[scan] some library folders were unreadable — skipping stale-episode prune to avoid data loss");
 
   return { shows, episodes };
 }

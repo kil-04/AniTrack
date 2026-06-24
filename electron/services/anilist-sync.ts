@@ -265,8 +265,11 @@ export async function alMarkEpisodeWatched(anilistId: number, episode: number): 
     if (existing?.status === "dropped") return;
     // We push "watching" with the episode count. AniList figures out
     // completion automatically when progress === total episodes.
+    // Only send the start date on the FIRST episode — otherwise every mark would
+    // overwrite AniList's "started" date with today's.
+    const isStart = !existing || (existing.episodesWatched ?? 0) === 0;
     const today = new Date().toISOString().slice(0, 10);
-    await pushEntry(anilistId, "watching", episode, undefined, today);
+    await pushEntry(anilistId, "watching", episode, undefined, isStart ? today : undefined);
   } catch (e) {
     console.warn("[al] markEpisodeWatched failed", e);
   }

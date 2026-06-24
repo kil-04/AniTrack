@@ -306,6 +306,14 @@ class MainActivity : BridgeActivity() {
         if (exoPlayer != null && !inPip) tearDownExo(syncBack = false)
     }
 
+    override fun onDestroy() {
+        // Safety net: dismissing PiP (X/swipe) can skip onStop's release with
+        // isInPictureInPictureMode still true — always release here so the ExoPlayer
+        // (media codec) and the broadcast receiver can't leak.
+        if (exoPlayer != null) tearDownExo(syncBack = false)
+        super.onDestroy()
+    }
+
     private fun handleDeepLink(uri: Uri) {
         if (uri.scheme == "anitrack" && uri.host == "mal-callback") {
             val code = uri.getQueryParameter("code") ?: return

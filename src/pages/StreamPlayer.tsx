@@ -1651,6 +1651,7 @@ export default function StreamPlayer() {
           onTouchStart={gestures.touchHandlers.onTouchStart}
           onTouchMove={gestures.touchHandlers.onTouchMove}
           onTouchEnd={gestures.touchHandlers.onTouchEnd}
+          onTouchCancel={gestures.touchHandlers.onTouchCancel}
         />
       )}
       <GestureFeedback fb={gestures.feedback} />
