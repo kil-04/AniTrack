@@ -5,26 +5,35 @@ import { Play, X } from "lucide-react";
 import { motion } from "framer-motion";
 import { secondsToTimestamp } from "../lib/format";
 import { deleteAnimeProgress } from "../lib/supabase-sync";
+import { downloadsSupported, getDownloads } from "../lib/downloads";
 import type { AnimeMeta } from "../../shared/types";
 
-function cwStreamUrl(session: string, title: string, ep: number, img: string, anilistId?: number) {
-  const isUuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(session);
-  const providerId = isUuid ? "animepahe" : "anikoto";
-  const p: Record<string, string> = { 
-    session, 
-    title, 
-    episode: String(ep),
-    ep: String(ep),
-    providerId
-  };
-  if (img) {
-    p.coverUrl = img;
-    p.img = img;
+// Build the URL that resumes a continue-watching item. Prefers a finished local
+// download; otherwise opens the stream player — with the session if we have it,
+// or just the title/id so the player resolves the provider itself. Never dead-ends
+// on the title page.
+export function cwResumeUrl(item: any): string {
+  const animeId: number = item.anime.id;
+  const ep: number = item.episode;
+  const title: string = item.anime.title;
+  const img: string | undefined = item.anime.coverImage;
+
+  const dl = downloadsSupported() ? getDownloads().get(`${animeId}:${ep}`) : undefined;
+  if (dl?.status === "done") {
+    const p: Record<string, string> = { download: dl.id, animeId: String(animeId), episode: String(ep), ep: String(ep), title };
+    if (img) p.coverUrl = img;
+    return "/stream-player?" + new URLSearchParams(p).toString();
   }
-  if (anilistId) {
-    p.animeId = String(anilistId);
-    p.anilistId = String(anilistId);
+
+  const p: Record<string, string> = { title, episode: String(ep), ep: String(ep) };
+  const session: string | undefined = item.animePaheSession;
+  if (session) {
+    const isUuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(session);
+    p.session = session;
+    p.providerId = isUuid ? "animepahe" : "anikoto";
   }
+  if (img) { p.coverUrl = img; p.img = img; }
+  if (animeId) { p.animeId = String(animeId); p.anilistId = String(animeId); }
   return "/stream-player?" + new URLSearchParams(p).toString();
 }
 
@@ -34,13 +43,10 @@ const ContinueWatchingCard = React.memo(function ContinueWatchingCard({ item, pa
   const [isFetching, setIsFetching] = useState(false);
   const displayAnime = fetchedMeta || item.anime;
 
-  // React Router v6: `state` is a separate <Link> prop, not part of `to`.
-  const goesToDetail = !item.animePaheSession && !item.filePath;
-  const cwTo = item.animePaheSession
-    ? cwStreamUrl(item.animePaheSession, item.anime.title, item.episode, item.anime.coverImage, item.anime.id)
-    : item.filePath
-    ? `/player/${item.anime.id}/${item.episode}`
-    : "/anime/" + item.anime.id;
+  // Continue Watching always resumes playback (download or stream) — never the
+  // title page; the player resolves the provider if we don't have a session.
+  const goesToDetail = false;
+  const cwTo = cwResumeUrl(item);
 
   const cardRef = useRef<HTMLAnchorElement>(null);
   const [rect, setRect] = useState<DOMRect | null>(null);

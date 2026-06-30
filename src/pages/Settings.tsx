@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { useAppStore } from "../store/useAppStore";
-import { Folder, FolderPlus, RefreshCcw, X } from "lucide-react";
+import { RefreshCcw } from "lucide-react";
 import type { AniListAuthState } from "../../shared/types";
 import { getSyncConfig, setSyncConfig, clearSyncConfig, pullAndMerge, pushAllProgress } from "../lib/supabase-sync";
 
@@ -10,7 +10,6 @@ export default function Settings() {
   const al = useAppStore((s) => s.al);
   const refreshAll = useAppStore((s) => s.refreshAll);
   const setScanStatus = useAppStore((s) => s.setScanStatus);
-  const [folders, setFolders] = useState<string[]>([]);
   const [authError, setAuthError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [awaitingAuth, setAwaitingAuth] = useState(false);
@@ -93,7 +92,6 @@ export default function Settings() {
   }, []);
 
   useEffect(() => {
-    window.api.library.listFolders().then(setFolders);
     window.api.al.state().then(setAlState);
 
     // Listen for MAL auth completion from the HTTP callback server.
@@ -181,19 +179,6 @@ export default function Settings() {
     }
   }
 
-  async function scan() {
-    setBusy(true);
-    setScanStatus("Scanning library...");
-    try {
-      const r = await window.api.library.scan();
-      setScanStatus(`Scan complete: ${r.shows} shows, ${r.episodes} episodes`);
-      await refreshAll();
-    } catch (e) {
-      setScanStatus(`Scan failed: ${(e as Error).message}`);
-    } finally {
-      setBusy(false);
-    }
-  }
 
   return (
     <div className="px-8 py-8">
@@ -356,60 +341,6 @@ export default function Settings() {
           </div>
         )}
       </section>
-
-      {!Capacitor.isNativePlatform() && (
-        <section className="mb-10 rounded-lg border border-white/10 bg-bg-card p-6">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <h2 className="text-xl font-semibold">Library folders</h2>
-              <p className="text-sm text-muted">
-                Folders containing your anime video files. Subfolders are scanned recursively.
-              </p>
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={async () => setFolders(await window.api.library.addFolder())}
-                className="flex items-center gap-2 rounded-md border border-white/10 px-3 py-2 text-sm hover:bg-white/5"
-              >
-                <FolderPlus size={14} /> Add folder
-              </button>
-              <button
-                disabled={busy || folders.length === 0}
-                onClick={scan}
-                className="flex items-center gap-2 rounded-md bg-accent px-3 py-2 text-sm hover:bg-accent-hover disabled:opacity-50"
-              >
-                <RefreshCcw size={14} /> Scan library
-              </button>
-            </div>
-          </div>
-          <div className="space-y-2">
-            {folders.length === 0 && (
-              <div className="rounded-md border border-dashed border-white/10 p-4 text-sm text-muted">
-                No folders added yet.
-              </div>
-            )}
-            {folders.map((f) => (
-              <div
-                key={f}
-                className="flex items-center justify-between rounded-md bg-bg-elev px-3 py-2"
-              >
-                <div className="flex items-center gap-2 truncate text-sm">
-                  <Folder size={14} className="shrink-0 text-muted" />
-                  <span className="truncate font-mono">{f}</span>
-                </div>
-                <button
-                  onClick={async () =>
-                    setFolders(await window.api.library.removeFolder(f))
-                  }
-                  className="text-muted hover:text-white"
-                >
-                  <X size={14} />
-                </button>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
 
       <section className="mb-10 rounded-lg border border-white/10 bg-bg-card p-6">
         <h2 className="mb-2 text-xl font-semibold">AnimePahe URL</h2>

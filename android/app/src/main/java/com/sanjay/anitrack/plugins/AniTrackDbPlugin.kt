@@ -199,8 +199,12 @@ class AniTrackDbPlugin : Plugin() {
         pruneDuplicateStubs(rdb)
         val offset = (page - 1) * pageSize
         // Count distinct anime titles (same as Electron — no completion filter, always show latest touched)
+        // Dedup on the CANONICAL AniList title (a.title) first, falling back to the
+        // provider title — the same show watched via two providers stores different
+        // provider titles (romaji vs english) under one anime_id, so keying on the
+        // provider title would show it twice.
         val countC = rdb.rawQuery("""
-            SELECT COUNT(DISTINCT LOWER(TRIM(COALESCE(p.anime_title, a.title))))
+            SELECT COUNT(DISTINCT LOWER(TRIM(COALESCE(a.title, p.anime_title))))
             FROM playback p
             LEFT JOIN anime a ON a.id = p.anime_id
             WHERE p.duration_sec > 0
@@ -212,25 +216,26 @@ class AniTrackDbPlugin : Plugin() {
         // CTE picks the single most-recently-touched episode per unique anime title (matches Electron behavior)
         val c = rdb.rawQuery("""
             WITH latest AS (
-                SELECT LOWER(TRIM(COALESCE(p2.anime_title, a2.title))) AS clean_title,
+                SELECT LOWER(TRIM(COALESCE(a2.title, p2.anime_title))) AS clean_title,
                        MAX(p2.updated_at) AS max_updated
                 FROM playback p2
                 LEFT JOIN anime a2 ON a2.id = p2.anime_id
                 WHERE p2.duration_sec > 0
-                GROUP BY LOWER(TRIM(COALESCE(p2.anime_title, a2.title)))
+                GROUP BY LOWER(TRIM(COALESCE(a2.title, p2.anime_title)))
             )
             SELECT p.anime_id, p.episode, p.position_sec, p.duration_sec,
                    p.anime_title, p.anime_cover_url, p.animepahe_session, p.updated_at,
                    a.title, a.cover_image
             FROM playback p
             LEFT JOIN anime a ON a.id = p.anime_id
-            JOIN latest l ON LOWER(TRIM(COALESCE(p.anime_title, a.title))) = l.clean_title AND p.updated_at = l.max_updated
+            JOIN latest l ON LOWER(TRIM(COALESCE(a.title, p.anime_title))) = l.clean_title AND p.updated_at = l.max_updated
             ORDER BY p.updated_at DESC
             LIMIT ? OFFSET ?
         """.trimIndent(), arrayOf(pageSize.toString(), offset.toString()))
         val seen = hashSetOf<String>()
         while (c.moveToNext()) {
-            val animeTitle  = c.getString(4) ?: c.getString(8) ?: "Unknown"
+            // Prefer the canonical AniList title (col 8) over the provider title (col 4).
+            val animeTitle  = c.getString(8) ?: c.getString(4) ?: "Unknown"
             val dedupKey = animeTitle.trim().lowercase()
             if (seen.contains(dedupKey)) continue
             seen.add(dedupKey)

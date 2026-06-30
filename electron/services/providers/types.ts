@@ -33,6 +33,9 @@ export interface StreamData {
   subtitles?: { file: string; label: string; kind: string; default?: boolean }[];
   intro?: { start: number; end: number };
   outro?: { start: number; end: number };
+  // Player origin the segment CDN hotlink-checks Referer against (Anikoto). The
+  // offline downloader sends this explicitly since it bypasses webRequest injection.
+  referer?: string;
 }
 
 export interface StreamProvider {

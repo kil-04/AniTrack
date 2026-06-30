@@ -56,13 +56,6 @@ export interface ListEntry {
   updatedAt: number;      // unix ms
 }
 
-export interface LocalEpisode {
-  animeId: number;
-  episode: number;
-  filePath: string;       // absolute path on disk
-  durationSec?: number | null;
-}
-
 export interface PlaybackProgress {
   animeId: number;
   episode: number;
@@ -105,10 +98,34 @@ export interface RelatedAnime {
   anime: AnimeMeta;
 }
 
-export interface StreamingServiceLink {
-  service: string;        // "Crunchyroll", "Netflix", ...
-  url: string;
-  kind: "search" | "deep";
+export interface AiringInfo {
+  animeId: number;          // AniList id
+  title: string;
+  coverImage?: string | null;
+  episode: number;          // the episode that airs at airingAt
+  airingAt: number;         // unix seconds
+}
+
+export type DownloadStatus = "queued" | "downloading" | "done" | "failed";
+
+export interface DownloadItem {
+  id: string;               // `${animeId}:${episode}`
+  animeId: number;
+  episode: number;
+  title: string;            // show title
+  coverUrl?: string | null;
+  providerId: string;
+  status: DownloadStatus;
+  progress: number;         // 0..100
+  doneSegments?: number;
+  totalSegments?: number;
+  sizeBytes?: number;
+  error?: string;
+  updatedAt: number;
+  // Provider session ids — persisted so a failed download can be re-resolved and
+  // retried from the Downloads page (kwik URLs expire, but these ids are stable).
+  animeSession?: string;
+  episodeSession?: string;
 }
 
 // IPC channel names. Keeping them in one place avoids drift.
@@ -126,12 +143,7 @@ export const IPC = {
   ANILIST_ADVANCED_SEARCH: "anilist:advanced-search",
   ANILIST_TRENDING: "anilist:trending",
   ANILIST_GET: "anilist:get",
-  // Library
-  LIBRARY_ADD_FOLDER: "library:add-folder",
-  LIBRARY_REMOVE_FOLDER: "library:remove-folder",
-  LIBRARY_LIST_FOLDERS: "library:list-folders",
-  LIBRARY_SCAN: "library:scan",
-  LIBRARY_EPISODES_FOR: "library:episodes-for",
+  ANILIST_AIRING: "anilist:airing",
   // Local state
   LIST_GET_ALL: "list:get-all",
   LIST_SET: "list:set",
@@ -140,11 +152,6 @@ export const IPC = {
   PROGRESS_GET: "progress:get",
   PROGRESS_SET: "progress:set",
   CW_DISMISS: "cw:dismiss",
-  // Player
-  PLAYER_RESOLVE_FILE: "player:resolve-file",
-  // Legal sites
-  LEGAL_LINKS: "legal:links",
-  LEGAL_OPEN: "legal:open",
   // AnimePahe
   PAHE_SEARCH: "pahe:search",
   PAHE_EPISODES: "pahe:episodes",
@@ -156,6 +163,7 @@ export const IPC = {
   PAHE_FIND_BY_ID: "pahe:find-by-id",
   PAHE_GET_URL: "pahe:get-url",
   PAHE_SET_URL: "pahe:set-url",
+  ANIKOTO_TOP: "anikoto:top",
   // AniList sync
   AL_BEGIN_AUTH: "al:begin-auth",
   AL_STATE: "al:state",
@@ -168,6 +176,11 @@ export const IPC = {
   // Updater
   UPDATE_CHECK: "update:check",
   UPDATE_INSTALL: "update:install",
+  // Offline downloads (desktop)
+  DOWNLOAD_START: "download:start",
+  DOWNLOAD_LIST: "download:list",
+  DOWNLOAD_REMOVE: "download:remove",
+  DOWNLOAD_GET_PLAY_URL: "download:get-play-url",
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

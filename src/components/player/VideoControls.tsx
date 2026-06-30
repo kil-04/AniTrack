@@ -1,12 +1,11 @@
 import { Volume2, VolumeX, Play, Pause, Rewind, FastForward, Maximize2, Minimize2, ChevronDown, Captions, Settings } from "lucide-react";
-import { secondsToTimestamp } from "../../lib/format";
 import React from "react";
 import { YouTubeControls } from "./YouTubeControls";
+import { Seekbar, TimeDisplay } from "./Seekbar";
 
 interface VideoControlsProps {
   showControls: boolean;
-  progressPct: number;
-  position: number;
+  videoRef: React.RefObject<HTMLVideoElement | null>;
   duration: number;
   playing: boolean;
   muted: boolean;
@@ -33,7 +32,6 @@ interface VideoControlsProps {
   onSeekBy: (delta: number) => void;
   onSeekStart: () => void;
   onSeekEnd: (time: number) => void;
-  onPositionChange: (time: number) => void;
   onTogglePlay: () => void;
   onToggleMute: () => void;
   onVolumeChange: (vol: number) => void;
@@ -67,11 +65,11 @@ interface VideoControlsProps {
 }
 
 export function VideoControls({
-  showControls, progressPct, position, duration, playing, muted, volume,
+  showControls, videoRef, duration, playing, muted, volume,
   autoPlay, autoNext, currentEp, links, selectedLink, isMobile, qualityOpen, isFullscreen,
   bufferedPct = 0, isTheater = false, isPiP = false, playbackRate = 1,
   onToggleTheater, onTogglePiP, onChangePlaybackRate,
-  onSeekToPct, onSeekBy, onSeekStart, onSeekEnd, onPositionChange,
+  onSeekToPct, onSeekBy, onSeekStart, onSeekEnd,
   onTogglePlay, onToggleMute, onVolumeChange, onToggleAutoPlay, onToggleAutoNext,
   onPlayPrev, onPlayNext, onToggleFullscreen, onToggleQualityMenu, onChangeQuality, onCloseQualityMenu,
 
@@ -136,9 +134,8 @@ export function VideoControls({
     return (
       <YouTubeControls
         showControls={showControls}
-        progressPct={progressPct}
+        videoRef={videoRef}
         bufferedPct={bufferedPct}
-        position={position}
         duration={duration}
         playing={playing}
         muted={muted}
@@ -160,7 +157,6 @@ export function VideoControls({
         onSeekToPct={onSeekToPct}
         onSeekStart={onSeekStart}
         onSeekEnd={onSeekEnd}
-        onPositionChange={onPositionChange}
         onTogglePlay={onTogglePlay}
         onToggleMute={onToggleMute}
         onVolumeChange={onVolumeChange}
@@ -192,31 +188,22 @@ export function VideoControls({
       {/* Floating Glassmorphic Pill */}
       <div className={`relative w-[96%] max-w-5xl rounded-2xl border border-white/10 bg-black/20 px-5 pb-3 pt-4 backdrop-blur-none shadow-[0_8px_32px_rgba(0,0,0,0.15)] select-none ${showControls ? "pointer-events-auto" : "pointer-events-none"}`}>
         
-        {/* Seek bar */}
-        <div className="group mb-4 flex items-center gap-3">
-          <div className="relative h-1.5 flex-1 cursor-pointer rounded-full bg-white/20 transition-all group-hover:h-2"
-            onClick={(e) => {
-              const rect = e.currentTarget.getBoundingClientRect();
-              const pct = (e.clientX - rect.left) / rect.width;
-              onSeekToPct(pct);
-            }}
-          >
-            <div className="absolute inset-y-0 left-0 rounded-full bg-[#e50914] shadow-[0_0_10px_rgba(229, 9, 20,0.5)]" style={{ width: `${progressPct}%` }} />
-            <div className="absolute top-1/2 h-4 w-4 -translate-y-1/2 -translate-x-1/2 rounded-full bg-white shadow-md opacity-0 group-hover:opacity-100 transition-all group-hover:scale-110" style={{ left: `${progressPct}%` }} />
-            <input
-              type="range" min={0} max={duration || 1} step={0.5} value={position}
-              disabled={!currentEp || !duration}
-              onMouseDown={onSeekStart}
-              onMouseUp={(e) => onSeekEnd(Number((e.target as HTMLInputElement).value))}
-              onTouchStart={onSeekStart}
-              onTouchEnd={(e) => onSeekEnd(Number((e.target as HTMLInputElement).value))}
-              onChange={(e) => onPositionChange(Number(e.target.value))}
-              className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-            />
-          </div>
-          <span className="min-w-[7.5rem] text-right text-xs font-medium tabular-nums text-white/80">
-            {secondsToTimestamp(position)} <span className="text-white/40 mx-0.5">/</span> {secondsToTimestamp(duration)}
-          </span>
+        {/* Seek bar (self-updating, isolated from React re-renders) */}
+        <div className="mb-4 flex items-center gap-3">
+          <Seekbar
+            videoRef={videoRef}
+            duration={duration}
+            disabled={!currentEp || !duration}
+            thick
+            onSeekStart={onSeekStart}
+            onSeekEnd={onSeekEnd}
+            onSeekToPct={onSeekToPct}
+          />
+          <TimeDisplay
+            videoRef={videoRef}
+            duration={duration}
+            className="min-w-[7.5rem] text-right text-xs font-medium tabular-nums text-white/80"
+          />
         </div>
 
         {/* Button row */}

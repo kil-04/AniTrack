@@ -8,6 +8,8 @@ const NAV = [
   { to: "/filter", label: "Search", end: false },
   { to: "/library", label: "My List", end: false },
   { to: "/continue-watching", label: "Continue", end: false },
+  { to: "/schedule", label: "Schedule", end: false },
+  { to: "/downloads", label: "Downloads", end: false },
   { to: "/settings", label: "Settings", end: false },
 ];
 

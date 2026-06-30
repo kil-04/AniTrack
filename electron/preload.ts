@@ -23,17 +23,9 @@ contextBridge.exposeInMainWorld("api", {
     search: (q: string) => ipcRenderer.invoke(IPC.ANILIST_SEARCH, q),
     advancedSearch: (filters: unknown) => ipcRenderer.invoke(IPC.ANILIST_ADVANCED_SEARCH, filters),
     trending: () => ipcRenderer.invoke(IPC.ANILIST_TRENDING),
+    airing: (ids: number[]) => ipcRenderer.invoke(IPC.ANILIST_AIRING, ids),
     get: (id: number) => ipcRenderer.invoke(IPC.ANILIST_GET, id),
     relations: (id: number) => ipcRenderer.invoke(IPC.ANILIST_RELATIONS, id),
-  },
-  library: {
-    addFolder: () => ipcRenderer.invoke(IPC.LIBRARY_ADD_FOLDER),
-    removeFolder: (p: string) =>
-      ipcRenderer.invoke(IPC.LIBRARY_REMOVE_FOLDER, p),
-    listFolders: () => ipcRenderer.invoke(IPC.LIBRARY_LIST_FOLDERS),
-    scan: () => ipcRenderer.invoke(IPC.LIBRARY_SCAN),
-    episodesFor: (id: number) =>
-      ipcRenderer.invoke(IPC.LIBRARY_EPISODES_FOR, id),
   },
   list: {
     getAll: () => ipcRenderer.invoke(IPC.LIST_GET_ALL),
@@ -49,14 +41,6 @@ contextBridge.exposeInMainWorld("api", {
     set: (p: unknown) => ipcRenderer.invoke(IPC.PROGRESS_SET, p),
     getForAnime: (id: number) => ipcRenderer.invoke(IPC.PROGRESS_GET_FOR_ANIME, id),
   },
-  player: {
-    resolveFile: (p: string) =>
-      ipcRenderer.invoke(IPC.PLAYER_RESOLVE_FILE, p),
-  },
-  legal: {
-    links: (id: number) => ipcRenderer.invoke(IPC.LEGAL_LINKS, id),
-    open: (url: string) => ipcRenderer.invoke(IPC.LEGAL_OPEN, url),
-  },
   pahe: {
     latest: (page = 1) => ipcRenderer.invoke(IPC.PAHE_LATEST, page),
     search: (q: string) => ipcRenderer.invoke(IPC.PAHE_SEARCH, q),
@@ -70,10 +54,17 @@ contextBridge.exposeInMainWorld("api", {
     findById: (anilistId: number | undefined, malId?: number) => ipcRenderer.invoke(IPC.PAHE_FIND_BY_ID, anilistId, malId),
     getUrl: () => ipcRenderer.invoke(IPC.PAHE_GET_URL),
     setUrl: (url: string) => ipcRenderer.invoke(IPC.PAHE_SET_URL, url),
+    anikotoTop: () => ipcRenderer.invoke(IPC.ANIKOTO_TOP),
   },
   updater: {
     check: () => ipcRenderer.invoke(IPC.UPDATE_CHECK),
     install: () => ipcRenderer.invoke(IPC.UPDATE_INSTALL),
+  },
+  downloads: {
+    start: (opts: unknown) => ipcRenderer.invoke(IPC.DOWNLOAD_START, opts),
+    list: () => ipcRenderer.invoke(IPC.DOWNLOAD_LIST),
+    remove: (id: string) => ipcRenderer.invoke(IPC.DOWNLOAD_REMOVE, id),
+    getPlayUrl: (id: string) => ipcRenderer.invoke(IPC.DOWNLOAD_GET_PLAY_URL, id),
   },
   on: (channel: string, fn: (...args: unknown[]) => void) => {
     const sub = (_e: unknown, ...args: unknown[]) => fn(...args);

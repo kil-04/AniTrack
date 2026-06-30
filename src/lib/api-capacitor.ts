@@ -264,6 +264,42 @@ const anikotoProvider = {
   id: "anikoto",
   name: "Anikoto",
 
+  async getTop(): Promise<{ day: any[]; week: any[]; month: any[] }> {
+    const out: { day: any[]; week: any[]; month: any[] } = { day: [], week: [], month: [] };
+    try {
+      const resp = await anikotoFetch(`/home`);
+      const html = await resp.text();
+      const secStart = html.indexOf('id="top-anime"');
+      if (secStart < 0) return out;
+      const sec = html.slice(secStart, secStart + 80000);
+      const markers = [...sec.matchAll(/<div class="tab-content" data-name="(day|week|month)"/g)];
+      for (let i = 0; i < markers.length; i++) {
+        const name = markers[i][1] as "day" | "week" | "month";
+        const start = markers[i].index!;
+        const end = i + 1 < markers.length ? markers[i + 1].index! : sec.length;
+        const block = sec.slice(start, end);
+        const items: any[] = [];
+        for (const p of block.split(/<a class="item/).slice(1, 11)) {
+          const href = (p.match(/href="([^"]+)"/) || [])[1] || "";
+          const slug = (href.match(/\/watch\/([^"?/]+)/) || [])[1] || "";
+          const poster = (p.match(/<img[^>]+src="([^"]+)"/) || [])[1] || "";
+          const alt = (p.match(/alt="([^"]*)"/) || [])[1] || "";
+          const nameM = p.match(/class="name[^"]*"[^>]*>\s*([^<]+?)\s*</);
+          const title = ((nameM && nameM[1]) || alt).trim();
+          const titleJp = (p.match(/data-jp="([^"]*)"/) || [])[1] || "";
+          const showId = (p.match(/data-tip="([^"]*)"/) || [])[1] || "";
+          const sub = (p.match(/ep-status sub[\s\S]*?<span>\s*(\d+)/) || [])[1];
+          const dub = (p.match(/ep-status dub[\s\S]*?<span>\s*(\d+)/) || [])[1];
+          if (title) items.push({ slug, showId, title, titleJp, poster, sub: sub ? +sub : null, dub: dub ? +dub : null });
+        }
+        out[name] = items;
+      }
+    } catch (e) {
+      console.warn("[Anikoto Capacitor] getTop failed", e);
+    }
+    return out;
+  },
+
   async search(query: string) {
     try {
       const results: any[] = [];
@@ -853,6 +889,36 @@ export async function installCapacitorApiBridge() {
           return data.Media ? mapMedia(data.Media) : null;
         } catch { return null; }
       },
+      async airing(ids: number[]) {
+        const unique = Array.from(new Set((ids ?? []).filter((n) => Number.isInteger(n) && n > 0)));
+        if (unique.length === 0) return [];
+        const out: any[] = [];
+        for (let i = 0; i < unique.length; i += 50) {
+          const chunk = unique.slice(i, i + 50);
+          try {
+            const data = await alGql<any>(`
+              query($ids: [Int]) {
+                Page(perPage: 50) {
+                  media(id_in: $ids, type: ANIME) {
+                    id title { romaji english } coverImage { large }
+                    nextAiringEpisode { airingAt episode }
+                  }
+                }
+              }`, { ids: chunk });
+            for (const m of (data.Page?.media ?? [])) {
+              if (!m.nextAiringEpisode) continue;
+              out.push({
+                animeId: m.id,
+                title: m.title?.english || m.title?.romaji || "Untitled",
+                coverImage: m.coverImage?.large ?? null,
+                episode: m.nextAiringEpisode.episode,
+                airingAt: m.nextAiringEpisode.airingAt,
+              });
+            }
+          } catch { /* skip chunk on error */ }
+        }
+        return out;
+      },
       async relations(id: number) {
         if (id <= 0) return [];
         try {
@@ -868,15 +934,6 @@ export async function installCapacitorApiBridge() {
           }));
         } catch { return []; }
       },
-    },
-
-    // ── library (no-op on Android — no local file library) ───────────────────
-    library: {
-      async addFolder() { return []; },
-      async removeFolder() { return []; },
-      async listFolders() { return []; },
-      async scan() { return { shows: 0, episodes: 0 }; },
-      async episodesFor() { return []; },
     },
 
     // ── list ──────────────────────────────────────────────────────────────────
@@ -914,22 +971,6 @@ export async function installCapacitorApiBridge() {
       async getForAnime(id: number) {
         const raw = await AniTrackDb.progressGetForAnime({ animeId: id });
         return JSON.parse(raw.value);
-      },
-    },
-
-    // ── player (no-op on Android) ─────────────────────────────────────────────
-    player: {
-      async resolveFile() { return ""; },
-    },
-
-    // ── legal ─────────────────────────────────────────────────────────────────
-    legal: {
-      async links(_id: number) {
-        return [] as import("../../shared/types").StreamingServiceLink[];
-      },
-      async open(url: string) {
-        await Browser.open({ url });
-        return { ok: true };
       },
     },
 
@@ -1015,6 +1056,9 @@ export async function installCapacitorApiBridge() {
       },
       async fetchUrl(url: string, binary = false, headers?: Record<string, string>) {
         return AniTrackPahe.fetchUrl({ url, binary, headers });
+      },
+      async anikotoTop() {
+        return anikotoProvider.getTop();
       },
     },
 

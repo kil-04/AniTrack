@@ -1,8 +1,16 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Play, ChevronLeft, ChevronRight, Loader2, Captions, Mic } from "lucide-react";
+import { Play, ChevronLeft, ChevronRight, Loader2, Captions, Mic, Download, Check, Trash2 } from "lucide-react";
 import type { PlaybackProgress } from "../../shared/types";
 import { scoreMatch } from "../lib/match";
+import {
+  downloadsSupported,
+  subscribeDownloads,
+  getDownloads,
+  enqueueDownload,
+  enqueueBatch,
+  removeDownload,
+} from "../lib/downloads";
 
 // Keyed by animeId (when a real AniList ID is known) or by title string.
 // Survives navigation so re-opening a show detail page is instant.
@@ -46,6 +54,16 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
   // Favicon URL derived from the configured AnimePahe base URL so domain hops work.
   const [paheBaseUrl, setPaheBaseUrl] = useState<string>("https://animepahe.pw");
   useEffect(() => { window.api.pahe.getUrl().then(setPaheBaseUrl).catch(() => {}); }, []);
+
+  // Offline downloads (Android only). Subscribe so episode tiles reflect status.
+  const canDownload = downloadsSupported();
+  const [, forceDownloads] = useReducer((x) => x + 1, 0);
+  useEffect(() => (canDownload ? subscribeDownloads(forceDownloads) : undefined), [canDownload]);
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [batchMsg, setBatchMsg] = useState<string | null>(null);
+  const [rangeOpen, setRangeOpen] = useState(false);
+  const [rangeFrom, setRangeFrom] = useState("");
+  const [rangeTo, setRangeTo] = useState("");
 
   function pickByTitle(res: any[], title: string): any | null {
     if (res.length === 0) return null;
@@ -333,6 +351,77 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
     navigate(`/stream-player?${p.toString()}`);
   }
 
+  function downloadEp(ep: any) {
+    if (!selected || !animeId) return;
+    const epNum = ep.episodeNumber ?? ep.episode;
+    enqueueDownload({
+      id: `${animeId}:${epNum}`,
+      animeId,
+      episode: epNum,
+      title: selected.title || animeTitle,
+      coverUrl: selected.poster ?? null,
+      providerId: selected.providerId ?? "animepahe",
+      animeSession: selected.id,
+      episodeSession: ep.session ?? ep.id,
+    });
+  }
+
+  const BATCH_MAX = 100;
+
+  // Queue up to 100 NEW episodes in [fromEp, toEp], skipping anything already
+  // downloaded/queued — so "Download 100" repeated picks up the next 100, and a
+  // range like 664–702 grabs exactly that span. Pages are pulled as needed.
+  async function runBatch(fromEp: number, toEp: number) {
+    if (!selected || !animeId || batchBusy) return;
+    setBatchBusy(true);
+    setBatchMsg(null);
+    try {
+      const provider = selected.providerId ?? "animepahe";
+      const isHandled = (epNum: number) => {
+        const d = getDownloads().get(`${animeId}:${epNum}`);
+        return !!d && (d.status === "done" || d.status === "downloading" || d.status === "queued");
+      };
+      const collected: any[] = [];
+      let pg = 1;
+      let lp = lastPage || 1;
+      while (collected.length < BATCH_MAX && pg <= lp) {
+        const r = await window.api.pahe.episodes(provider, selected.id, pg);
+        lp = r.lastPage ?? lp;
+        const mapped = (r.data || [])
+          .map((ep: any) => {
+            const orig = ep.episodeNumber ?? ep.episode ?? 0;
+            const rel = Math.max(1, orig - epOffset);
+            return { ...ep, episodeNumber: rel, episode: rel };
+          })
+          .sort((a: any, b: any) => a.episodeNumber - b.episodeNumber);
+        let beyond = false;
+        for (const ep of mapped) {
+          if (ep.episodeNumber > toEp) { beyond = true; continue; }
+          if (ep.episodeNumber >= fromEp && !isHandled(ep.episodeNumber)) collected.push(ep);
+        }
+        if (beyond) break; // pages are ascending — we've passed the range end
+        pg++;
+      }
+      const entries = collected.slice(0, BATCH_MAX).map((ep: any) => ({
+        id: `${animeId}:${ep.episodeNumber}`,
+        animeId: animeId!,
+        episode: ep.episodeNumber,
+        title: selected.title || animeTitle,
+        coverUrl: selected.poster ?? null,
+        providerId: provider,
+        animeSession: selected.id,
+        episodeSession: ep.session ?? ep.id,
+      }));
+      const n = enqueueBatch(entries, BATCH_MAX);
+      const more = collected.length >= BATCH_MAX ? " (more remain — tap again for the next 100)" : "";
+      setBatchMsg(n > 0 ? `Queued ${n} episode${n === 1 ? "" : "s"}${more}` : "Nothing new to download here");
+    } catch (e: any) {
+      setBatchMsg(`Batch failed: ${e?.message ?? e}`);
+    } finally {
+      setBatchBusy(false);
+    }
+  }
+
   if (inline) {
     return (
       <div>
@@ -401,12 +490,99 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
 
         {selected && (
           <>
-            <button
-              onClick={() => openStreamPlayer()}
-              className="mb-4 flex items-center gap-2 rounded-lg bg-white px-5 py-2.5 text-sm font-semibold text-black hover:bg-white/80 transition"
-            >
-              <Play size={14} fill="currentColor" /> Open Player
-            </button>
+            {(() => {
+              const providers = Array.from(new Set(results.map((r: any) => r.providerId ?? "animepahe")));
+              if (providers.length < 2) return null;
+              return (
+                <div className="mb-3 flex items-center gap-2">
+                  <span className="text-xs font-medium uppercase tracking-wider text-white/50">Server</span>
+                  {providers.map((pid) => {
+                    const isActive = (selected.providerId ?? "animepahe") === pid;
+                    const name = pid === "anikoto" ? "Anikoto" : "AnimePahe";
+                    return (
+                      <button
+                        key={pid}
+                        onClick={() => {
+                          if (isActive) return;
+                          const chosen = results.find((r: any) => (r.providerId ?? "animepahe") === pid);
+                          if (chosen) setSelected(chosen);
+                        }}
+                        className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${
+                          isActive ? "bg-[#e50914] text-white" : "bg-white/5 text-white/70 hover:bg-white/15 hover:text-white"
+                        }`}
+                      >
+                        {name}
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+            <div className="mb-4 flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => openStreamPlayer()}
+                className="flex items-center gap-2 rounded-lg bg-white px-5 py-2.5 text-sm font-semibold text-black hover:bg-white/80 transition"
+              >
+                <Play size={14} fill="currentColor" /> Open Player
+              </button>
+              {canDownload && (
+                <>
+                  <button
+                    onClick={() => runBatch(resumeEpisode ?? 1, Number.MAX_SAFE_INTEGER)}
+                    disabled={batchBusy}
+                    className="flex items-center gap-2 rounded-lg bg-white/10 px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/20 disabled:opacity-50 transition"
+                    title="Download the next 100 episodes from your resume point"
+                  >
+                    {batchBusy ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                    Download 100
+                  </button>
+                  <button
+                    onClick={() => setRangeOpen((o) => !o)}
+                    disabled={batchBusy}
+                    className="flex items-center gap-2 rounded-lg bg-white/10 px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/20 disabled:opacity-50 transition"
+                    title="Download a specific episode range"
+                  >
+                    <Download size={14} /> Range
+                  </button>
+                </>
+              )}
+              {batchMsg && <span className="text-xs text-white/50">{batchMsg}</span>}
+            </div>
+
+            {canDownload && rangeOpen && (
+              <div className="mb-4 flex flex-wrap items-center gap-2">
+                <span className="text-xs text-white/50">Episodes</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={rangeFrom}
+                  onChange={(e) => setRangeFrom(e.target.value)}
+                  placeholder="from"
+                  className="w-20 rounded-md border border-white/10 bg-white/5 px-2 py-1.5 text-sm text-white placeholder-white/30 focus:border-accent focus:outline-none"
+                />
+                <span className="text-white/40">–</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={rangeTo}
+                  onChange={(e) => setRangeTo(e.target.value)}
+                  placeholder="to"
+                  className="w-20 rounded-md border border-white/10 bg-white/5 px-2 py-1.5 text-sm text-white placeholder-white/30 focus:border-accent focus:outline-none"
+                />
+                <button
+                  onClick={() => {
+                    const f = Math.max(1, Math.floor(Number(rangeFrom)));
+                    const t = Math.max(f, Math.floor(Number(rangeTo)));
+                    if (f && t) runBatch(f, t);
+                  }}
+                  disabled={batchBusy || !rangeFrom || !rangeTo}
+                  className="flex items-center gap-2 rounded-md bg-[#e50914] px-4 py-1.5 text-sm font-semibold text-white hover:bg-[#f6121d] disabled:opacity-50 transition"
+                >
+                  {batchBusy ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} Download range
+                </button>
+                <span className="text-[11px] text-white/30">up to 100 at a time</span>
+              </div>
+            )}
 
             {loadingEps ? (
               <div className="flex items-center gap-2 py-4 text-sm text-white/40">
@@ -414,38 +590,80 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
               </div>
             ) : (
               <>
-                <div className="grid grid-cols-8 gap-1.5 sm:grid-cols-10 md:grid-cols-12 lg:grid-cols-14 xl:grid-cols-16">
+                <div className="flex flex-col divide-y divide-white/5 overflow-hidden rounded-lg border border-white/10">
                   {episodes.map((ep) => {
                     const epNum = ep.episodeNumber ?? ep.episode;
                     const pct = watchedEps.get(epNum) ?? 0;
                     const watched = pct >= 85;
                     const inProgress = pct > 5 && !watched;
+                    const dl = canDownload && animeId ? getDownloads().get(`${animeId}:${epNum}`) : undefined;
+                    const st = dl?.status;
                     return (
-                      <div key={ep.id ?? ep.session} className="group relative">
-                        <button
-                          onClick={() => openStreamPlayer(ep)}
-                          title={`Episode ${epNum}${ep.filler ? " (Filler)" : ""}`}
-                          className={`relative flex h-10 w-full items-center justify-center rounded text-xs font-medium transition
-                            hover:bg-[#e50914] hover:text-white
-                            ${watched ? "bg-green-500/20 text-green-400 ring-1 ring-green-500/30" : ep.filler ? "bg-yellow-500/10 text-yellow-400/80" : "bg-white/5 text-white/70"}`}
-                        >
-                          {epNum}
-                          {inProgress && (
-                            <div
-                              className="absolute bottom-0 left-0 h-0.5 rounded-full bg-[#e50914]"
-                              style={{ width: `${pct}%` }}
-                            />
-                          )}
+                      <div key={ep.id ?? ep.session} className="group flex items-center gap-3 bg-white/[0.02] px-3 py-2 transition hover:bg-white/5">
+                        <button onClick={() => openStreamPlayer(ep)} className="flex min-w-0 flex-1 items-center gap-3 text-left">
+                          <div className="relative h-12 w-20 shrink-0 overflow-hidden rounded bg-white/5">
+                            {ep.snapshot && (
+                              <img
+                                src={ep.snapshot}
+                                alt=""
+                                loading="lazy"
+                                className="h-full w-full object-cover"
+                                onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+                              />
+                            )}
+                            <div className="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 transition group-hover:opacity-100">
+                              <Play size={16} className="text-white" fill="currentColor" />
+                            </div>
+                            {inProgress && (
+                              <div className="absolute bottom-0 left-0 h-0.5 bg-[#e50914]" style={{ width: `${pct}%` }} />
+                            )}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className={`text-sm font-medium ${watched ? "text-green-400" : "text-white"}`}>Episode {epNum}</span>
+                              {ep.filler ? (
+                                <span className="rounded bg-yellow-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-yellow-400/90">Filler</span>
+                              ) : null}
+                              {watched ? <Check size={13} className="text-green-400" /> : null}
+                            </div>
+                            <div className="text-xs text-white/40">
+                              {watched ? "Watched" : inProgress ? `${Math.round(pct)}% watched` : "Not watched"}
+                            </div>
+                          </div>
                         </button>
-                        {ep.snapshot && (
-                          <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
-                            <img
-                              src={ep.snapshot}
-                              alt={`Ep ${ep.episode}`}
-                              loading="lazy"
-                              className="h-20 w-32 rounded-md object-cover shadow-lg ring-1 ring-white/20"
-                              onError={(e) => { (e.currentTarget.closest("div") as HTMLElement | null)?.style.setProperty("display", "none"); }}
-                            />
+                        {canDownload && animeId && (
+                          <div className="flex shrink-0 items-center gap-1.5">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); if (!st || st === "failed") downloadEp(ep); }}
+                              disabled={st === "done" || st === "downloading" || st === "queued"}
+                              title={
+                                st === "done" ? "Downloaded"
+                                : st === "downloading" ? `Downloading ${dl?.progress ?? 0}%`
+                                : st === "queued" ? "Queued"
+                                : st === "failed" ? "Failed — tap to retry"
+                                : "Download episode"
+                              }
+                              className={`flex h-8 items-center gap-1.5 rounded-md px-3 text-xs font-medium transition ${
+                                st === "done" ? "text-green-400"
+                                : st === "failed" ? "bg-red-500/10 text-red-400 hover:bg-red-500/20"
+                                : "bg-white/5 text-white/70 hover:bg-white/15 hover:text-white"
+                              }`}
+                            >
+                              {st === "done" ? <><Check size={13} /> Saved</>
+                                : st === "downloading" ? <><Loader2 size={13} className="animate-spin" /> {dl?.progress ?? 0}%</>
+                                : st === "queued" ? <><Loader2 size={13} className="animate-spin" /> Queued</>
+                                : st === "failed" ? <><Download size={13} /> Retry</>
+                                : <><Download size={13} /> Download</>}
+                            </button>
+                            {(st === "done" || st === "failed") && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); removeDownload(`${animeId}:${epNum}`); }}
+                                title="Delete download"
+                                className="flex h-8 w-8 items-center justify-center rounded-md text-white/40 hover:bg-white/10 hover:text-red-400 transition"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            )}
                           </div>
                         )}
                       </div>
@@ -516,7 +734,7 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
                   className="flex w-full items-center gap-2 rounded-md bg-bg-elev px-3 py-2 text-left text-sm hover:bg-white/10"
                 >
                   {r.poster && (
-                    <img src={r.poster} className="h-8 w-6 rounded object-cover" alt="" />
+                    <img src={r.poster} className="h-8 w-6 rounded object-cover" alt="" loading="lazy" decoding="async" />
                   )}
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-xs font-medium">{r.title}</div>

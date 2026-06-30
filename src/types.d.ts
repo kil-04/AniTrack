@@ -2,11 +2,9 @@ import type {
   AniListAuthState,
   AnimeMeta,
   ContinueWatchingItem,
-  LocalEpisode,
   MalAuthState,
   PlaybackProgress,
   RelatedAnime,
-  StreamingServiceLink,
   ListEntry,
 } from "../shared/types";
 
@@ -31,15 +29,9 @@ interface ApiBridge {
     search(q: string): Promise<AnimeMeta[]>;
     advancedSearch(filters: import("../shared/types").AdvancedSearchFilters): Promise<import("../shared/types").PaginatedAnime>;
     trending(): Promise<AnimeMeta[]>;
+    airing(ids: number[]): Promise<import("../shared/types").AiringInfo[]>;
     get(id: number): Promise<AnimeMeta | null>;
     relations(id: number): Promise<RelatedAnime[]>;
-  };
-  library: {
-    addFolder(): Promise<string[]>;
-    removeFolder(p: string): Promise<string[]>;
-    listFolders(): Promise<string[]>;
-    scan(): Promise<{ shows: number; episodes: number }>;
-    episodesFor(id: number): Promise<LocalEpisode[]>;
   };
   list: {
     getAll(): Promise<{ entry: ListEntry; anime: AnimeMeta | null }[]>;
@@ -53,13 +45,6 @@ interface ApiBridge {
     set(p: PlaybackProgress): Promise<{ ok: boolean }>;
     getForAnime(id: number): Promise<PlaybackProgress[]>;
   };
-  player: {
-    resolveFile(p: string): Promise<string>;
-  };
-  legal: {
-    links(id: number): Promise<StreamingServiceLink[]>;
-    open(url: string): Promise<{ ok: boolean }>;
-  };
   pahe: {
     latest(page?: number): Promise<{ data: any[]; total: number; lastPage: number }>;
     search(q: string): Promise<any[]>;
@@ -72,10 +57,17 @@ interface ApiBridge {
     getUrl(): Promise<string>;
     setUrl(url: string): Promise<{ ok: boolean; url: string; reason?: string }>;
     fetchUrl?(url: string, binary?: boolean, headers?: Record<string, string>): Promise<{ data: string; status: number; binary: boolean }>;
+    anikotoTop(): Promise<{ day: any[]; week: any[]; month: any[] }>;
   };
   updater: {
     check(): Promise<{ ok: boolean; version?: string | null; reason?: string }>;
     install(): Promise<void>;
+  };
+  downloads?: {
+    start(opts: any): Promise<{ ok: boolean }>;
+    list(): Promise<{ items: import("../shared/types").DownloadItem[] }>;
+    remove(id: string): Promise<{ ok: boolean }>;
+    getPlayUrl(id: string): Promise<{ url: string }>;
   };
   on(channel: string, fn: (...args: unknown[]) => void): () => void;
 }

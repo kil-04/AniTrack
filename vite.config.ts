@@ -19,5 +19,21 @@ export default defineConfig({
     include: ["hls.js"],
   },
   server: { port: 5173, strictPort: true },
-  build: { outDir: "dist", emptyOutDir: true },
+  build: {
+    outDir: "dist",
+    emptyOutDir: true,
+    // hls.js is large but only loaded with the (route-lazy) player; the 600 kB
+    // player chunk is expected, so lift the warning. Split heavy vendors into
+    // their own cached chunks so app-code edits don't re-bundle them.
+    chunkSizeWarningLimit: 700,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          hls: ["hls.js"],
+          "react-vendor": ["react", "react-dom", "react-router-dom"],
+          motion: ["framer-motion"],
+        },
+      },
+    },
+  },
 });

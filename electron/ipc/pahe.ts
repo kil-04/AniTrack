@@ -9,6 +9,7 @@ import {
   getPaheBaseUrl,
   setPaheBaseUrl,
 } from "../services/providers/animepahe";
+import { getAnikotoTop } from "../services/providers/anikoto";
 
 export function registerPaheIpc(registerWebRequestHandlers: () => void) {
   ipcMain.handle(IPC.PAHE_LATEST, (_e, page = 1) => paheLatest(30, page));
@@ -41,6 +42,7 @@ export function registerPaheIpc(registerWebRequestHandlers: () => void) {
   ipcMain.handle(IPC.PAHE_FIND_BY_ID, (_e, anilistId: number | undefined, malId: number | undefined) =>
     paheFindById(anilistId, malId)
   );
+  ipcMain.handle(IPC.ANIKOTO_TOP, () => getAnikotoTop());
   ipcMain.handle(IPC.PAHE_GET_URL, () => getPaheBaseUrl());
   ipcMain.handle(IPC.PAHE_SET_URL, (_e, url: string) => {
     try {

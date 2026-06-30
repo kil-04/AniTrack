@@ -1,61 +1,25 @@
-import { ipcMain, dialog, BrowserWindow } from "electron";
+import { ipcMain, BrowserWindow } from "electron";
 import { IPC } from "../../shared/types";
 import {
-  addLibraryFolder,
   deleteListEntry,
   dismissFromContinueWatching,
   getAllListEntries,
   getAnime,
   getContinueWatching,
   getContinueWatchingPaged,
-  getEpisodesFor,
   getListEntry,
   getProgress,
   getProgressForAnime,
-  listLibraryFolders,
   migrateAnimeId,
-  removeLibraryFolder,
   setListEntry,
   setProgress,
   upsertAnime,
 } from "../services/db";
-import { scanAll } from "../services/library";
 import { searchAnime } from "../services/anilist";
 import { markEpisodeWatched } from "../services/mal";
 import { alMarkEpisodeWatched } from "../services/anilist-sync";
 
-export function registerDbIpc(getMainWindow: () => BrowserWindow | null) {
-  // Library
-  ipcMain.handle(IPC.LIBRARY_ADD_FOLDER, async () => {
-    const mainWindow = getMainWindow();
-    if (!mainWindow) return [];
-    const r = await dialog.showOpenDialog(mainWindow, {
-      properties: ["openDirectory", "multiSelections"],
-    });
-    if (r.canceled) return listLibraryFolders();
-    for (const p of r.filePaths) addLibraryFolder(p);
-    return listLibraryFolders();
-  });
-  
-  ipcMain.handle(IPC.LIBRARY_REMOVE_FOLDER, (_e, p: string) => {
-    removeLibraryFolder(p);
-    return listLibraryFolders();
-  });
-  
-  ipcMain.handle(IPC.LIBRARY_LIST_FOLDERS, () => listLibraryFolders());
-  
-  ipcMain.handle(IPC.LIBRARY_SCAN, async () => {
-    const mainWindow = getMainWindow();
-    const r = await scanAll((c, t, label) =>
-      mainWindow?.webContents.send("library:scan-progress", { c, t, label }),
-    );
-    return r;
-  });
-  
-  ipcMain.handle(IPC.LIBRARY_EPISODES_FOR, (_e, id: number) =>
-    getEpisodesFor(id)
-  );
-
+export function registerDbIpc(_getMainWindow: () => BrowserWindow | null) {
   // List + progress
   ipcMain.handle(IPC.LIST_GET_ALL, () => {
     const entries = getAllListEntries();

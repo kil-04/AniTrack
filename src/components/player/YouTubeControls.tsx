@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import {
   Play,
   Pause,
@@ -14,14 +14,13 @@ import {
   PictureInPicture2,
   RectangleHorizontal,
 } from "lucide-react";
-import { secondsToTimestamp } from "../../lib/format";
 import { SettingsMenuContent } from "./PlayerSettingsMenu";
+import { Seekbar, TimeDisplay } from "./Seekbar";
 
 export interface YouTubeControlsProps {
   showControls: boolean;
-  progressPct: number;
+  videoRef: React.RefObject<HTMLVideoElement | null>;
   bufferedPct: number;
-  position: number;
   duration: number;
   playing: boolean;
   muted: boolean;
@@ -45,7 +44,6 @@ export interface YouTubeControlsProps {
   onSeekToPct: (pct: number) => void;
   onSeekStart: () => void;
   onSeekEnd: (time: number) => void;
-  onPositionChange: (time: number) => void;
   onTogglePlay: () => void;
   onToggleMute: () => void;
   onVolumeChange: (vol: number) => void;
@@ -73,25 +71,17 @@ export interface YouTubeControlsProps {
 
 export function YouTubeControls(props: YouTubeControlsProps) {
   const {
-    showControls, progressPct, bufferedPct, position, duration, playing, muted, volume,
+    showControls, videoRef, bufferedPct, duration, playing, muted, volume,
     autoPlay, autoNext, currentEp, links, selectedLink, isFullscreen, isTheater, isPiP, playbackRate,
     providerId = "", hlsLevels = [], currentHlsLevel = -1, subtitlesEnabled = true, availableSubtitles = [],
-    onSeekToPct, onSeekStart, onSeekEnd, onPositionChange, onTogglePlay, onToggleMute, onVolumeChange,
+    onSeekToPct, onSeekStart, onSeekEnd, onTogglePlay, onToggleMute, onVolumeChange,
     onPlayPrev, onPlayNext, onToggleFullscreen, onToggleTheater, onTogglePiP,
     onChangeQuality, onChangeHlsLevel, onToggleSubtitles, onToggleAutoPlay, onToggleAutoNext, onChangePlaybackRate,
     cueFontSize, setCueFontSize, cueFontFamily, setCueFontFamily,
     cueBgOpacity, setCueBgOpacity, cueColor, setCueColor,
   } = props;
 
-  const barRef = useRef<HTMLDivElement>(null);
-  const [hoverPct, setHoverPct] = useState<number | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
-
-  function barPct(clientX: number) {
-    const rect = barRef.current?.getBoundingClientRect();
-    if (!rect) return 0;
-    return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-  }
 
   const VolumeIcon = muted || volume === 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2;
 
@@ -108,48 +98,17 @@ export function YouTubeControls(props: YouTubeControlsProps) {
       {menuOpen && <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />}
 
       <div className="pointer-events-auto relative px-3 pb-1.5" onClick={(e) => e.stopPropagation()}>
-        {/* ── Progress bar ───────────────────────────────────────── */}
-        <div
-          ref={barRef}
-          className="group/bar relative mb-1 flex h-4 cursor-pointer items-center"
-          onMouseMove={(e) => setHoverPct(barPct(e.clientX))}
-          onMouseLeave={() => setHoverPct(null)}
-          onClick={(e) => onSeekToPct(barPct(e.clientX))}
-        >
-          <div className="relative h-[3px] w-full rounded-full bg-white/25 transition-all group-hover/bar:h-[5px]">
-            <div className="absolute inset-y-0 left-0 rounded-full bg-white/40" style={{ width: `${bufferedPct}%` }} />
-            {hoverPct != null && (
-              <div className="absolute inset-y-0 left-0 rounded-full bg-white/30" style={{ width: `${hoverPct * 100}%` }} />
-            )}
-            <div className="absolute inset-y-0 left-0 rounded-full bg-[#e50914]" style={{ width: `${progressPct}%` }} />
-            <div
-              className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#e50914] opacity-0 shadow transition-opacity group-hover/bar:opacity-100"
-              style={{ left: `${progressPct}%` }}
-            />
-          </div>
-
-          {hoverPct != null && duration > 0 && (
-            <div
-              className="pointer-events-none absolute -top-7 -translate-x-1/2 rounded bg-black/85 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-white"
-              style={{ left: `${hoverPct * 100}%` }}
-            >
-              {secondsToTimestamp(hoverPct * duration)}
-            </div>
-          )}
-
-          <input
-            type="range"
-            min={0}
-            max={duration || 1}
-            step={0.5}
-            value={position}
+        {/* ── Progress bar (self-updating, isolated from React re-renders) ── */}
+        <div className="mb-1">
+          <Seekbar
+            videoRef={videoRef}
+            duration={duration}
+            bufferedPct={bufferedPct}
             disabled={!currentEp || !duration}
-            onMouseDown={onSeekStart}
-            onMouseUp={(e) => onSeekEnd(Number((e.target as HTMLInputElement).value))}
-            onTouchStart={onSeekStart}
-            onTouchEnd={(e) => onSeekEnd(Number((e.target as HTMLInputElement).value))}
-            onChange={(e) => onPositionChange(Number(e.target.value))}
-            className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+            hoverPreview
+            onSeekStart={onSeekStart}
+            onSeekEnd={onSeekEnd}
+            onSeekToPct={onSeekToPct}
           />
         </div>
 
@@ -184,9 +143,11 @@ export function YouTubeControls(props: YouTubeControlsProps) {
           </div>
 
           {/* Time */}
-          <span className="ml-2 text-[13px] font-medium tabular-nums text-white/90">
-            {secondsToTimestamp(position)} <span className="text-white/50">/</span> {secondsToTimestamp(duration)}
-          </span>
+          <TimeDisplay
+            videoRef={videoRef}
+            duration={duration}
+            className="ml-2 text-[13px] font-medium tabular-nums text-white/90"
+          />
 
           <div className="flex-1" />
 

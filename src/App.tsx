@@ -22,7 +22,6 @@ const PageTransition = ({ children }: { children: React.ReactNode }) => (
 );
 
 const ShowDetail       = lazy(() => import("./pages/ShowDetail"));
-const Player           = lazy(() => import("./pages/Player"));
 const StreamingPage    = lazy(() => import("./pages/StreamingPage"));
 const StreamPlayer     = lazy(() => import("./pages/StreamPlayer"));
 const Settings         = lazy(() => import("./pages/Settings"));
@@ -30,6 +29,8 @@ const Search           = lazy(() => import("./pages/Search"));
 const Filter           = lazy(() => import("./pages/Filter"));
 const ContinueWatching = lazy(() => import("./pages/ContinueWatching"));
 const Library          = lazy(() => import("./pages/Library"));
+const Schedule         = lazy(() => import("./pages/Schedule"));
+const Downloads        = lazy(() => import("./pages/Downloads"));
 
 const PageFallback = () => (
   <div className="flex h-full items-center justify-center text-white/30 text-sm">
@@ -47,34 +48,58 @@ export default function App() {
   const location      = useLocation();
   const isTablet      = useMediaQuery(TABLET_LANDSCAPE);
 
-  const inPlayer    = location.pathname.startsWith("/player");
   const inStreaming  = location.pathname === "/stream" || location.pathname === "/stream-player";
 
   useEffect(() => {
     refreshAll();
 
-    // library:scan-progress is Electron-only; window.api.on is a no-op stub on Android
-    const offProgress = window.api.on("library:scan-progress", (payload: any) => {
-      setScanStatus(`Scanning ${payload.c}/${payload.t} — ${payload.label}`);
-    });
     const offMalAuth = window.api.on("mal:auth-complete", () => { refreshAll(); });
     const offMalPull = window.api.on("mal:pull-progress", (n: any) => {
       setScanStatus(`MAL sync: ${n} entries`);
     });
-    return () => { offProgress(); offMalAuth(); offMalPull(); };
+    return () => { offMalAuth(); offMalPull(); };
   }, [refreshAll, setScanStatus]);
 
-  // Full-screen routes (no shell)
-  if (inPlayer) {
-    return (
-      <Suspense fallback={<PageFallback />}>
-        <Routes>
-          <Route path="/player/:animeId/:episode" element={<Player />} />
-        </Routes>
-      </Suspense>
-    );
-  }
+  // Notify when a new episode of a tracked show drops — on launch, then hourly.
+  useEffect(() => {
+    let alive = true;
+    import("./lib/airing").then(({ checkAiringNotifications }) => {
+      if (alive) checkAiringNotifications();
+    });
+    const id = setInterval(() => {
+      import("./lib/airing").then(({ checkAiringNotifications }) => {
+        if (alive) checkAiringNotifications();
+      });
+    }, 60 * 60 * 1000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
 
+  // Load the downloads list once so Continue Watching can prefer a local copy.
+  useEffect(() => {
+    let off = () => {};
+    import("./lib/downloads").then(({ subscribeDownloads }) => { off = subscribeDownloads(() => {}); });
+    return () => off();
+  }, []);
+
+  // Warm the heaviest route chunks (player + detail) once the app is idle so the
+  // first stream open is instant instead of showing the "Loading…" fallback.
+  useEffect(() => {
+    const prefetch = () => {
+      import("./pages/ShowDetail");
+      import("./pages/StreamPlayer");
+    };
+    const ric = (window as any).requestIdleCallback as
+      | ((cb: () => void) => number)
+      | undefined;
+    if (ric) {
+      const id = ric(prefetch);
+      return () => (window as any).cancelIdleCallback?.(id);
+    }
+    const id = setTimeout(prefetch, 2500);
+    return () => clearTimeout(id);
+  }, []);
+
+  // Full-screen routes (no shell)
   if (inStreaming) {
     return (
       <Suspense fallback={<PageFallback />}>
@@ -105,6 +130,8 @@ export default function App() {
               <Route path="/anime/:id"          element={<PageTransition><ShowDetail /></PageTransition>} />
               <Route path="/settings"           element={<PageTransition><Settings /></PageTransition>} />
               <Route path="/continue-watching"  element={<PageTransition><ContinueWatching /></PageTransition>} />
+              <Route path="/schedule"           element={<PageTransition><Schedule /></PageTransition>} />
+              <Route path="/downloads"          element={<PageTransition><Downloads /></PageTransition>} />
             </Routes>
           </AnimatePresence>
         </Suspense>

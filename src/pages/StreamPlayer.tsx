@@ -22,7 +22,8 @@ import { secondsToTimestamp } from "../lib/format";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { isCapacitor } from "../lib/platform";
 import { enterNativePip } from "../lib/pip";
-import { pushProgress } from "../lib/supabase-sync";
+import { pushProgress, pullRemoteProgress } from "../lib/supabase-sync";
+import { getPlayUrl as getDownloadPlayUrl, readLocalFile, isLocalDownloadUrl, getDownloads, subscribeDownloads } from "../lib/downloads";
 import { scoreMatch } from "../lib/match";
 
 // ── Synthetic anime ID for AnimePahe-only watches ─────────────────────────
@@ -88,6 +89,8 @@ export default function StreamPlayer() {
 
   // Available sources (providers) for this anime
   const [availableSources, setAvailableSources] = useState<any[]>([]);
+  // Brief status shown while we auto-switch to a backup provider after a failure.
+  const [fallbackNotice, setFallbackNotice] = useState<string | null>(null);
 
   // Playback state
   const [currentEp, setCurrentEp] = useState<any | null>(null);
@@ -95,9 +98,9 @@ export default function StreamPlayer() {
   const [streamError, setStreamError] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(false);
-  const [position, setPosition] = useState(0);
   const [duration, setDuration] = useState(0);
   const [bufferedPct, setBufferedPct] = useState(0);
+  const [buffering, setBuffering] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isTheater, setIsTheater] = useState(false);
   const [isPiP, setIsPiP] = useState(false);
@@ -123,9 +126,9 @@ export default function StreamPlayer() {
   const [autoNext, setAutoNext] = useState(() => localStorage.getItem("ap-autonext") !== "false");
 
   // Soft Subtitle Caption Customization Settings — persisted in localStorage
-  const [cueFontSize, setCueFontSize] = useState(() => localStorage.getItem("ap-cue-size") ?? "16px");
+  const [cueFontSize, setCueFontSize] = useState(() => localStorage.getItem("ap-cue-size") ?? "20px");
   const [cueFontFamily, setCueFontFamily] = useState(() => localStorage.getItem("ap-cue-font") ?? "'Outfit', 'Inter', sans-serif");
-  const [cueBgOpacity, setCueBgOpacity] = useState(() => parseFloat(localStorage.getItem("ap-cue-opacity") ?? "0.85"));
+  const [cueBgOpacity, setCueBgOpacity] = useState(() => parseFloat(localStorage.getItem("ap-cue-opacity") ?? "0.25"));
   const [cueColor, setCueColor] = useState(() => localStorage.getItem("ap-cue-color") ?? "#f5f5f7");
   const [volume, setVolume] = useState(() => {
     const v = parseFloat(localStorage.getItem("ap-volume") ?? "1");
@@ -173,6 +176,14 @@ export default function StreamPlayer() {
   // Cache of fetched episode pages by AnimePahe page number — survives range changes.
   const paheCacheRef = useRef<Map<number, any>>(new Map());
   const lastPositionUpdate = useRef<number>(0);
+
+  // Live mirror of availableSources + the auto-fallback fn so stale closures
+  // (buildHls's error handler, playEpisode's catch) always read the latest.
+  const availableSourcesRef = useRef<any[]>([]);
+  const fallbackRef = useRef<(epNum: number | undefined) => boolean>(() => false);
+  // Which providers we've already auto-tried per episode, so a failing stream
+  // walks each provider exactly once instead of ping-ponging forever.
+  const fallbackTriedRef = useRef<Map<number, Set<string>>>(new Map());
 
   // Pending seek position — set before attachStream, applied in onCanPlay.
   // This avoids passing startPosition to hls.js (which stalls AnimePahe CDN).
@@ -258,8 +269,9 @@ export default function StreamPlayer() {
         .catch(() => {});
     }
 
-    // Fetch available providers for this anime
-    if (animeTitle && animeTitle !== "Anime") {
+    // Fetch available providers for this anime (skipped for offline downloads —
+    // we play the local file, no provider lookup needed).
+    if (animeTitle && animeTitle !== "Anime" && !params.get("download")) {
       (async () => {
         let targetYear = params.get("year") ? Number(params.get("year")) : undefined;
         let targetEpisodes = params.get("episodes") ? Number(params.get("episodes")) : undefined;
@@ -353,6 +365,52 @@ export default function StreamPlayer() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ── Offline download playback ───────────────────────────────────────────────
+  // When opened with ?download=<id>, skip the whole provider/resolve flow and play
+  // the locally-saved HLS straight through the existing player (hls.js + the
+  // capacitor loader, which reads anitrack-dl:// URLs from disk).
+  const isOffline = !!params.get("download");
+
+  async function playLocal(dlId: string, epNum: number) {
+    resetPlayer();
+    setStreamError(null);
+    setLoadingStream(true);
+    setCurrentEp({ episodeNumber: epNum, episode: epNum, id: dlId, session: dlId });
+    const url = await getDownloadPlayUrl(dlId);
+    if (!url) { setStreamError("Download not found on this device."); setLoadingStream(false); return; }
+    const saved = await window.api.progress.get(effectiveAnimeIdRef.current, epNum).catch(() => null);
+    pendingSeekRef.current = saved && saved.positionSec > 5 ? saved.positionSec : null;
+    refererRef.current = null;
+    // Offer the locally-saved subtitle (if any) — attachStream drops it when the
+    // download has none (hard-subbed AnimePahe).
+    const subUrl = url.replace(/index\.m3u8$/, "subs.vtt");
+    attachStream(url, [{ file: subUrl, label: "English", kind: "captions" }]);
+  }
+
+  // Next/prev downloaded episode of the same title (offline navigation).
+  function offlineNeighbor(delta: 1 | -1): { id: string; episode: number } | null {
+    const cur = currentEpRef.current?.episodeNumber;
+    if (cur == null) return null;
+    const eps = Array.from(getDownloads().values())
+      .filter((d) => d.animeId === effectiveAnimeIdRef.current && d.status === "done")
+      .sort((a, b) => a.episode - b.episode);
+    if (delta > 0) return eps.find((d) => d.episode > cur) ?? null;
+    let prev: { id: string; episode: number } | null = null;
+    for (const d of eps) { if (d.episode < cur) prev = d; else break; }
+    return prev;
+  }
+
+  useEffect(() => {
+    const dlId = params.get("download");
+    if (!dlId) return;
+    // Populate the downloads list so next/prev among downloads works.
+    const unsub = subscribeDownloads(() => {});
+    setLoadingEps(false);
+    playLocal(dlId, startEp || 1);
+    return () => unsub();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── Auto-correct provider and session from availableSources ───────────────
   useEffect(() => {
     if (availableSources.length === 0) return;
@@ -416,6 +474,7 @@ export default function StreamPlayer() {
 
   useEffect(() => { autoNextRef.current = autoNext; }, [autoNext]);
   useEffect(() => { currentEpRef.current = currentEp; }, [currentEp]);
+  useEffect(() => { availableSourcesRef.current = availableSources; }, [availableSources]);
   useEffect(() => { episodesRef.current = episodes; }, [episodes]);
   useEffect(() => { linksRef.current = links; }, [links]);
   useEffect(() => { rangeStartRef.current = rangeStart; }, [rangeStart]);
@@ -467,7 +526,8 @@ export default function StreamPlayer() {
     },
     onShowControls: showControlsNow,
     setUiVolume,
-    setUiPosition: (t: number) => setPosition(t),
+    // The seek bar self-reads the playhead now, so gestures don't need to push it.
+    setUiPosition: () => {},
   });
 
   const changePlaybackRate = useCallback((rate: number) => {
@@ -521,7 +581,6 @@ export default function StreamPlayer() {
       }
       // Clear the "Resolving" overlay once the stream can actually play.
       if (v.readyState >= 3) setLoadingStream(false);
-      if (!seekingRef.current && !isNaN(v.currentTime)) setPosition(v.currentTime);
       if (isFinite(v.duration) && v.duration > 0) setDuration(v.duration);
       setPlaying(!v.paused);
     }, 400);
@@ -738,7 +797,12 @@ export default function StreamPlayer() {
         console.log('[CapLoader] fetching', url, 'binary=', binary);
         const ref = refererRef.current;
         const hdrs = ref ? { Referer: ref.replace(/\/?$/, "/"), Origin: ref } : undefined;
-        window.api.pahe.fetchUrl!(url, binary, hdrs)
+        // Offline downloads are read from disk via the downloader plugin instead
+        // of the network — same response shape, so the decode path below is shared.
+        const fetcher = isLocalDownloadUrl(url)
+          ? readLocalFile(url, binary)
+          : window.api.pahe.fetchUrl!(url, binary, hdrs);
+        fetcher
           .then((result) => {
             if (this.aborted) return;
             console.log('[CapLoader] got response status=', result.status, 'size=', result.data?.length, 'url=', url);
@@ -849,15 +913,27 @@ export default function StreamPlayer() {
         if (isCapacitor) {
           const subRef = refererRef.current;
           const subHdrs = subRef ? { Referer: subRef.replace(/\/?$/, "/"), Origin: subRef } : undefined;
-          window.api.pahe.fetchUrl!(sub.file, false, subHdrs)
+          // Offline downloads read the saved .vtt from disk; streams fetch it.
+          const local = isLocalDownloadUrl(sub.file);
+          const fetchSub = local
+            ? readLocalFile(sub.file, false)
+            : window.api.pahe.fetchUrl!(sub.file, false, subHdrs);
+          fetchSub
             .then((result) => {
+              // A downloaded episode may have no subtitle file (e.g. hard-subbed
+              // AnimePahe) — drop the empty track instead of showing a blank entry.
+              if (local && (result.status !== 200 || !result.data || !result.data.includes("WEBVTT"))) {
+                try { video.removeChild(track); } catch (e) {}
+                setAvailableSubtitles((prev) => prev.filter((s: any) => s.file !== sub.file));
+                return;
+              }
               const blob = new Blob([result.data], { type: "text/vtt" });
               track.src = URL.createObjectURL(blob);
-              console.log("[Subtitles] Successfully loaded subtitle blob URL for Capacitor:", track.src);
               try { track.track.mode = subtitlesEnabled ? "showing" : "hidden"; } catch (e) {}
             })
             .catch((err) => {
               console.error("[Subtitles] Failed to fetch subtitle file:", err, "url=", sub.file);
+              if (local) { try { video.removeChild(track); } catch (e) {} return; }
               track.src = sub.file;
               try { track.track.mode = subtitlesEnabled ? "showing" : "hidden"; } catch (e) {}
             });
@@ -920,6 +996,15 @@ export default function StreamPlayer() {
       startPosition: opts.startPosition ?? -1,
       maxBufferLength: 30,
       maxMaxBufferLength: 60,
+      // Stall recovery — AnimePahe/Anikoto segments occasionally leave a small
+      // buffer hole that freezes the playhead. Let hls.js jump bigger gaps, watch
+      // for stalls sooner, and nudge harder before giving up (the watchdog below
+      // is the final backstop). Without these the user has to seek ±5s by hand.
+      maxBufferHole: 0.5,
+      highBufferWatchdogPeriod: 1,
+      nudgeOffset: 0.2,
+      nudgeMaxRetry: 10,
+      maxFragLookUpTolerance: 0.25,
     };
     if (isCapacitor) {
       (hlsConfig as any).loader = buildCapacitorLoader();
@@ -996,6 +1081,8 @@ export default function StreamPlayer() {
         return;
       }
 
+      // Stream is dead on this provider — try the next one before giving up.
+      if (fallbackRef.current(currentEpRef.current?.episodeNumber)) return;
       setStreamError(`HLS error: ${data.details} (${data.type})`);
       setLoadingStream(false);
     });
@@ -1013,7 +1100,6 @@ export default function StreamPlayer() {
       setCurrentEp(ep);
       setStreamError(null);
       setLoadingStream(true);
-      setPosition(0);
       setDuration(0);
       setLinks([]);
       
@@ -1038,10 +1124,12 @@ export default function StreamPlayer() {
 
       try {
         // Use prefetched links if available (instant switch); else fetch. Run the
-        // links fetch + saved-progress lookup in parallel.
-        const [fetchedLinks, savedProgress] = await Promise.all([
+        // links fetch, local saved-progress, and the cloud's latest position for
+        // this episode all in parallel (the remote pull adds no extra latency).
+        const [fetchedLinks, savedProgress, remoteProgress] = await Promise.all([
           linksCacheRef.current.get(epKey) ?? window.api.pahe.links(providerId, ep.session ?? ep.id, animeSession),
           window.api.progress.get(effectiveAnimeIdRef.current, ep.episodeNumber).catch(() => null),
+          pullRemoteProgress(effectiveAnimeIdRef.current, ep.episodeNumber).catch(() => null),
         ]);
 
         fetchSkipTimes(ep.episodeNumber).catch(() => {});
@@ -1050,13 +1138,20 @@ export default function StreamPlayer() {
         linksCacheRef.current.set(epKey, fetchedLinks);
         setLinks(fetchedLinks);
 
+        // Resume from the freshest saved position across this device and the cloud
+        // (the other device), so e.g. pausing on the tablet resumes here exactly —
+        // even if the tablet was watched after this app launched.
+        const freshest = ([savedProgress, remoteProgress] as Array<{ positionSec: number; updatedAt: number } | null>)
+          .filter((p): p is { positionSec: number; updatedAt: number } => !!p && p.positionSec > 5)
+          .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0] ?? null;
+
         // We apply the resume seek in onCanPlay (after the video is ready) rather than
         // passing startPosition to hls.js — hls.js startPosition stalls on
         // AnimePahe CDN because it tries to fetch mid-stream segments cold.
         pendingSeekRef.current = (resumePos != null && resumePos > 5)
           ? resumePos
-          : (savedProgress && savedProgress.positionSec > 5)
-          ? savedProgress.positionSec
+          : freshest
+          ? freshest.positionSec
           : null;
 
         const bestIdx = pickBestIdx(fetchedLinks);
@@ -1107,8 +1202,14 @@ export default function StreamPlayer() {
           });
         }, 5000);
       } catch (e: any) {
+        // Try the next provider before surfacing the error to the user.
+        if (fallbackRef.current(ep.episodeNumber)) {
+          loadingStreamRef.current = false;
+          return;
+        }
         setStreamError(e.message ?? String(e));
         setLoadingStream(false);
+        setFallbackNotice(null);
       } finally {
         loadingStreamRef.current = false;
       }
@@ -1119,6 +1220,64 @@ export default function StreamPlayer() {
 
   // Keep a live reference to playEpisode for the PiP-return hook (registered once).
   useEffect(() => { playEpisodeRef.current = playEpisode; });
+
+  // ── Provider switching + automatic fallback ─────────────────────────────────
+  const providerLabel = (pid: string) => (pid === "anikoto" ? "Anikoto" : "AnimePahe");
+
+  // Navigate to another provider's source, preserving the episode we're watching.
+  // Used by both the manual "Servers" buttons and the automatic failure fallback.
+  const switchToProvider = useCallback(
+    (source: any, epNum?: number) => {
+      const pid = source.providerId || "animepahe";
+      const targetEp =
+        epNum ?? currentEpRef.current?.episodeNumber ?? currentEpRef.current?.episode ?? startEp;
+      // Reset stream/episode state so the load effect performs a full reload.
+      setCurrentEp(null);
+      currentEpRef.current = null;
+      setEpisodes([]);
+      setLoadingEps(true);
+      setStreamError(null);
+      setLoadingStream(false);
+      paheCacheRef.current.clear();
+      linksCacheRef.current.clear();
+
+      const p = new URLSearchParams(params);
+      p.set("providerId", pid);
+      p.set("session", source.id || source.session);
+      if (targetEp) p.set("episode", String(targetEp));
+      navigate(`/stream-player?${p.toString()}`, { replace: true });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [params, navigate, startEp],
+  );
+
+  // After a stream fails, transparently try the next provider we haven't tried for
+  // this episode yet. Returns true if a switch was kicked off (caller should keep
+  // the loading state), false if every provider is exhausted (caller shows error).
+  const attemptAutoFallback = useCallback(
+    (epNum: number | undefined): boolean => {
+      if (epNum == null) return false;
+      const sources = availableSourcesRef.current;
+      if (sources.length < 2) return false;
+
+      let tried = fallbackTriedRef.current.get(epNum);
+      if (!tried) { tried = new Set(); fallbackTriedRef.current.set(epNum, tried); }
+      tried.add(providerId); // the provider we're on just failed
+
+      const alt = sources.find((s) => !tried!.has(s.providerId || "animepahe"));
+      if (!alt) return false;
+
+      const altPid = alt.providerId || "animepahe";
+      tried.add(altPid);
+      setFallbackNotice(`${providerLabel(providerId)} unavailable — trying ${providerLabel(altPid)}…`);
+      setStreamError(null);
+      setLoadingStream(true);
+      switchToProvider(alt, epNum);
+      return true;
+    },
+    [providerId, switchToProvider],
+  );
+  useEffect(() => { fallbackRef.current = attemptAutoFallback; });
 
   async function changeQuality(idx: number) {
     const link = linksRef.current[idx];
@@ -1192,8 +1351,13 @@ export default function StreamPlayer() {
 
   function playNext() {
     const ep = currentEpRef.current;
-    const eps = episodesRef.current;
     if (!ep) return;
+    if (isOffline) {
+      const n = offlineNeighbor(1);
+      if (n) playLocal(n.id, n.episode);
+      return;
+    }
+    const eps = episodesRef.current;
     const next = eps.find((e) => e.episodeNumber === ep.episodeNumber + 1);
     if (next) { playEpisode(next); return; }
     // Next episode is in the following range — jump to it.
@@ -1207,8 +1371,13 @@ export default function StreamPlayer() {
 
   function playPrev() {
     const ep = currentEpRef.current;
-    const eps = episodesRef.current;
     if (!ep) return;
+    if (isOffline) {
+      const p = offlineNeighbor(-1);
+      if (p) playLocal(p.id, p.episode);
+      return;
+    }
+    const eps = episodesRef.current;
     const prev = eps.find((e) => e.episodeNumber === ep.episodeNumber - 1);
     if (prev) { playEpisode(prev); return; }
     const prevEpNum = ep.episodeNumber - 1;
@@ -1273,12 +1442,15 @@ export default function StreamPlayer() {
 
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
+    const onWaiting = () => setBuffering(true);
+    const onStalled = () => setBuffering(true);
+    const onPlaying = () => setBuffering(false);
     const onTimeUpdate = () => {
       if (seekingRef.current) return;
+      setBuffering(false); // playhead advanced → not stalled
       const now = Date.now();
       if (now - lastPositionUpdate.current >= 250) {
         lastPositionUpdate.current = now;
-        setPosition(video.currentTime);
         // Mark current episode as watched when ≥85% — optimistic update so
         // the grid turns green immediately without waiting for a DB round-trip.
         const ep = currentEpRef.current;
@@ -1300,6 +1472,12 @@ export default function StreamPlayer() {
     const onEnded = () => { if (autoNextRef.current) playNext(); };
     const onCanPlay = () => {
       setLoadingStream(false);
+      setBuffering(false);
+      // Stream is healthy again — clear the fallback notice and let this episode
+      // fall back afresh if it dies again later in the session.
+      setFallbackNotice(null);
+      const ep = currentEpRef.current;
+      if (ep) fallbackTriedRef.current.delete(ep.episodeNumber);
       // Re-apply the chosen playback speed (a new source resets it to 1×).
       video.playbackRate = playbackRateRef.current;
       // Apply saved resume position now that the video element is ready.
@@ -1318,12 +1496,18 @@ export default function StreamPlayer() {
       if (!video.src || cleanSrc === cleanLoc || video.src.includes("about:blank")) {
         return;
       }
-      if (err) setStreamError(`Video error: ${err.message || err.code}`);
+      if (err) {
+        if (fallbackRef.current(currentEpRef.current?.episodeNumber)) return;
+        setStreamError(`Video error: ${err.message || err.code}`);
+      }
       setLoadingStream(false);
     };
 
     video.addEventListener("play", onPlay);
     video.addEventListener("pause", onPause);
+    video.addEventListener("waiting", onWaiting);
+    video.addEventListener("stalled", onStalled);
+    video.addEventListener("playing", onPlaying);
     video.addEventListener("timeupdate", onTimeUpdate);
     video.addEventListener("durationchange", onDurationChange);
     video.addEventListener("progress", onProgress);
@@ -1336,6 +1520,9 @@ export default function StreamPlayer() {
     return () => {
       video.removeEventListener("play", onPlay);
       video.removeEventListener("pause", onPause);
+      video.removeEventListener("waiting", onWaiting);
+      video.removeEventListener("stalled", onStalled);
+      video.removeEventListener("playing", onPlaying);
       video.removeEventListener("timeupdate", onTimeUpdate);
       video.removeEventListener("durationchange", onDurationChange);
       video.removeEventListener("progress", onProgress);
@@ -1345,6 +1532,74 @@ export default function StreamPlayer() {
       video.removeEventListener("enterpictureinpicture", onEnterPiP);
       video.removeEventListener("leavepictureinpicture", onLeavePiP);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Stall watchdog — the backstop for buffer holes hls.js's gap controller can't
+  // jump. If the playhead is frozen while we're supposed to be playing, resume
+  // loading and nudge over the gap automatically (what the user did by hand).
+  useEffect(() => {
+    let lastTime = -1;
+    let stalledTicks = 0;
+    let recovering = false;
+    const id = setInterval(() => {
+      const video = videoRef.current;
+      if (!video) return;
+      // Only watch when a stream should actively be playing.
+      if (
+        loadingStreamRef.current ||
+        !currentEpRef.current ||
+        video.paused ||
+        video.seeking ||
+        video.ended ||
+        recovering
+      ) {
+        lastTime = video.currentTime;
+        stalledTicks = 0;
+        return;
+      }
+
+      if (Math.abs(video.currentTime - lastTime) > 0.05) {
+        lastTime = video.currentTime; // progressing normally
+        stalledTicks = 0;
+        return;
+      }
+
+      // Playhead frozen while "playing" → count it; recover after ~3s.
+      stalledTicks++;
+      if (stalledTicks < 3) return;
+      recovering = true;
+      setBuffering(true);
+      const t = video.currentTime;
+      try {
+        hlsRef.current?.startLoad();
+        // Jump into the nearest buffered range ahead (skips the hole), else nudge.
+        let jumped = false;
+        const b = video.buffered;
+        for (let i = 0; i < b.length; i++) {
+          const start = b.start(i);
+          const end = b.end(i);
+          if (t >= start && t < end - 0.1) {
+            video.currentTime = Math.min(end - 0.1, t + 0.1); // stuck inside a range
+            jumped = true;
+            break;
+          }
+          if (start > t && start - t < 8) {
+            video.currentTime = start + 0.05; // gap with buffer beyond it
+            jumped = true;
+            break;
+          }
+        }
+        if (!jumped) video.currentTime = t + 0.2;
+        video.play().catch(() => {});
+      } catch {
+        /* ignore */
+      }
+      lastTime = video.currentTime;
+      stalledTicks = 0;
+      setTimeout(() => { recovering = false; }, 1000);
+    }, 1000);
+    return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1443,14 +1698,15 @@ export default function StreamPlayer() {
     ? `${String(currentRange.start).padStart(3, "0")}-${String(currentRange.end).padStart(3, "0")}`
     : "---";
 
-  const progressPct = duration > 0 ? (position / duration) * 100 : 0;
-
   // ── Responsive layout ───────────────────────────────────────────────────────
   const isTablet = useMediaQuery("(min-width: 900px)");
   // On Android phone (portrait) we use the YouTube-style layout.
   const isMobile = isCapacitor && !isTablet;
 
   // ── Render ─────────────────────────────────────────────────────────────────
+
+  // The other provider we could fall back to, if one matched this anime.
+  const altSource = availableSources.find((s) => (s.providerId || "animepahe") !== providerId);
 
   // Shared sub-components
 
@@ -1463,29 +1719,11 @@ export default function StreamPlayer() {
             {availableSources.map(s => {
               const pid = s.providerId || "animepahe";
               const isActive = pid === providerId;
-              const name = pid === "anikoto" ? "Anikoto" : "AnimePahe";
+              const name = providerLabel(pid);
               return (
                 <button
                   key={pid}
-                  onClick={() => {
-                    if (isActive) return;
-                    // Reset current stream state so it forces a full reload
-                    setCurrentEp(null);
-                    setEpisodes([]);
-                    setLoadingEps(true);
-                    setStreamError(null);
-                    setLoadingStream(false);
-                    paheCacheRef.current.clear();
-                    
-                    const p = new URLSearchParams(params);
-                    p.set("providerId", pid);
-                    p.set("session", s.id || s.session);
-                    // Preserve the current episode number we were watching
-                    const epNum = currentEpRef.current?.episodeNumber ?? currentEpRef.current?.episode ?? startEp;
-                    if (epNum) p.set("episode", String(epNum));
-                    
-                    navigate(`/stream-player?${p.toString()}`, { replace: true });
-                  }}
+                  onClick={() => { if (!isActive) switchToProvider(s); }}
                   className={`flex h-8 items-center gap-2 rounded px-3 text-xs font-medium transition-colors ${
                     isActive
                       ? "bg-[#e50914] text-white"
@@ -1673,12 +1911,35 @@ export default function StreamPlayer() {
       {loadingStream && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-white/40 pointer-events-none">
           <Loader2 size={36} className="animate-spin" />
-          <span className="text-sm">Resolving stream…</span>
+          <span className="text-sm">{fallbackNotice ?? "Resolving stream…"}</span>
+        </div>
+      )}
+      {buffering && !loadingStream && !streamError && currentEp && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <Loader2 size={44} className="animate-spin text-white/70 drop-shadow-lg" />
         </div>
       )}
       {streamError && !loadingStream && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <div className="max-w-sm rounded-lg bg-red-500/10 p-4 text-center text-sm text-red-400">{streamError}</div>
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="flex max-w-sm flex-col items-center gap-3 rounded-lg bg-red-500/10 p-5 text-center">
+            <div className="text-sm text-red-400">{streamError}</div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => { const ep = currentEpRef.current; if (ep) playEpisodeRef.current?.(ep); }}
+                className="rounded bg-white/10 px-4 py-1.5 text-xs font-medium text-white hover:bg-white/20 transition-colors"
+              >
+                Retry
+              </button>
+              {altSource && (
+                <button
+                  onClick={() => switchToProvider(altSource)}
+                  className="rounded bg-[#e50914] px-4 py-1.5 text-xs font-medium text-white hover:bg-[#f6121d] transition-colors"
+                >
+                  Try {providerLabel(altSource.providerId || "animepahe")}
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       )}
       {isFullscreen && (
@@ -1691,17 +1952,16 @@ export default function StreamPlayer() {
         </div>
       )}
       {/* Skip Intro / Outro Overlays */}
-      <SkipOverlay 
-        duration={duration} 
-        position={position} 
-        skipTimes={skipTimes} 
-        showControls={showControls} 
-        onSkip={(endTime) => { if (videoRef.current) videoRef.current.currentTime = endTime; }} 
+      <SkipOverlay
+        duration={duration}
+        videoRef={videoRef}
+        skipTimes={skipTimes}
+        showControls={showControls}
+        onSkip={(endTime) => { if (videoRef.current) videoRef.current.currentTime = endTime; }}
       />
       <VideoControls
         showControls={showControls}
-        progressPct={progressPct}
-        position={position}
+        videoRef={videoRef}
         duration={duration}
         playing={playing}
         muted={muted}
@@ -1725,7 +1985,6 @@ export default function StreamPlayer() {
         onSeekBy={seek}
         onSeekStart={() => { seekingRef.current = true; }}
         onSeekEnd={(time) => { seekingRef.current = false; if (videoRef.current) videoRef.current.currentTime = time; }}
-        onPositionChange={setPosition}
         onTogglePlay={() => { const v = videoRef.current; if (!v) return; v.paused ? v.play().catch(() => {}) : v.pause(); }}
         onToggleMute={() => { const next = !muted; setMuted(next); if (videoRef.current) videoRef.current.muted = next; }}
         onVolumeChange={(v) => { setVolume(v); setMuted(v === 0); localStorage.setItem("ap-volume", String(v)); if (videoRef.current) { videoRef.current.volume = v; videoRef.current.muted = v === 0; } }}

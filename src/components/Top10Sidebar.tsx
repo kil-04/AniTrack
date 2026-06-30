@@ -1,68 +1,58 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
-import { Star } from "lucide-react";
-import type { AnimeMeta, AdvancedSearchFilters } from "../../shared/types";
+import { useNavigate } from "react-router-dom";
+import { Captions, Mic } from "lucide-react";
 
 type Tab = "day" | "week" | "month";
 
 const TABS: { id: Tab; label: string }[] = [
-  { id: "day", label: "Today" },
+  { id: "day", label: "Day" },
   { id: "week", label: "Week" },
   { id: "month", label: "Month" },
 ];
 
-// AniList has no time-windowed view counts, so we approximate Anikoto's
-// Today / Week / Month tabs with trending, current-season popularity, and
-// all-time popularity respectively.
-function currentSeason(): { season: string; year: number } {
-  const now = new Date();
-  const m = now.getMonth(); // 0-11
-  const year = now.getFullYear();
-  if (m <= 1) return { season: "WINTER", year };
-  if (m <= 4) return { season: "SPRING", year };
-  if (m <= 7) return { season: "SUMMER", year };
-  if (m <= 10) return { season: "FALL", year };
-  return { season: "WINTER", year: year + 1 };
+interface TopItem {
+  slug: string;
+  showId?: string;
+  title: string;
+  titleJp?: string;
+  poster?: string;
+  sub?: number | null;
+  dub?: number | null;
 }
 
-function filtersFor(tab: Tab): AdvancedSearchFilters {
-  if (tab === "day") return { sort: "TRENDING_DESC" };
-  if (tab === "week") {
-    const { season, year } = currentSeason();
-    return { sort: "POPULARITY_DESC", season, year };
-  }
-  return { sort: "POPULARITY_DESC" };
-}
+type TopData = Record<Tab, TopItem[]>;
 
 export default function Top10Sidebar() {
+  const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>("day");
-  const [cache, setCache] = useState<Record<Tab, AnimeMeta[] | undefined>>({
-    day: undefined,
-    week: undefined,
-    month: undefined,
-  });
-  const [loading, setLoading] = useState(false);
+  const [data, setData] = useState<TopData | null>(null);
+  const [loading, setLoading] = useState(true);
 
+  // Anikoto serves real Day/Week/Month rankings in one home-page fetch.
   useEffect(() => {
-    if (cache[tab]) return;
     let cancelled = false;
-    setLoading(true);
-    window.api.anilist
-      .advancedSearch({ ...filtersFor(tab), page: 1 })
-      .then((res) => {
-        if (cancelled) return;
-        setCache((c) => ({ ...c, [tab]: res.results.slice(0, 10) }));
-      })
+    window.api.pahe
+      .anikotoTop()
+      .then((res: any) => { if (!cancelled) setData(res as TopData); })
       .catch(() => {})
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [tab, cache]);
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
 
-  const items = cache[tab] ?? [];
+  // Resolve an Anikoto title to its AniList entry so it opens the normal detail page.
+  async function open(item: TopItem) {
+    for (const q of [item.title, item.titleJp].filter(Boolean) as string[]) {
+      try {
+        const results = await window.api.anilist.search(q);
+        if (results && results.length > 0) {
+          navigate(`/anime/${results[0].id}`, { state: { anime: results[0] } });
+          return;
+        }
+      } catch { /* try next */ }
+    }
+  }
+
+  const items = data?.[tab] ?? [];
 
   return (
     <div className="rounded-xl border border-white/5 bg-[#1b1b1b] p-4">
@@ -83,16 +73,17 @@ export default function Top10Sidebar() {
         </div>
       </div>
 
-      {loading && items.length === 0 ? (
+      {loading && !data ? (
         <div className="py-8 text-center text-sm text-white/30">Loading…</div>
+      ) : items.length === 0 ? (
+        <div className="py-8 text-center text-sm text-white/30">Couldn't load rankings.</div>
       ) : (
         <div className="flex flex-col">
           {items.map((a, i) => (
-            <Link
-              key={a.id}
-              to={`/anime/${a.id}`}
-              state={{ anime: a }}
-              className="flex items-center gap-3 border-b border-white/5 py-2.5 last:border-0 hover:bg-white/[0.03] transition-colors"
+            <button
+              key={a.slug || i}
+              onClick={() => open(a)}
+              className="flex items-center gap-3 border-b border-white/5 py-2.5 text-left last:border-0 hover:bg-white/[0.03] transition-colors"
             >
               <span
                 className={`w-6 shrink-0 text-center text-lg font-black tabular-nums ${
@@ -101,25 +92,27 @@ export default function Top10Sidebar() {
               >
                 {i + 1}
               </span>
-              {a.coverImage ? (
-                <img src={a.coverImage} alt="" className="h-14 w-10 shrink-0 rounded object-cover" loading="lazy" />
+              {a.poster ? (
+                <img src={a.poster} alt="" className="h-14 w-10 shrink-0 rounded object-cover" loading="lazy" decoding="async" />
               ) : (
                 <div className="h-14 w-10 shrink-0 rounded bg-white/5" />
               )}
               <div className="min-w-0 flex-1">
                 <div className="line-clamp-2 text-sm font-semibold leading-tight text-white/90">{a.title}</div>
                 <div className="mt-1 flex items-center gap-2 text-[10px] font-bold text-white/40">
-                  {a.averageScore != null && (
-                    <span className="flex items-center gap-0.5 text-amber-300">
-                      <Star size={9} fill="currentColor" />
-                      {(a.averageScore / 10).toFixed(1)}
+                  {a.sub != null && (
+                    <span className="flex items-center gap-0.5 text-emerald-300">
+                      <Captions size={11} /> {a.sub}
                     </span>
                   )}
-                  {a.episodes != null && a.episodes > 0 && <span>{a.episodes} eps</span>}
-                  {a.format && <span className="uppercase">{a.format.replace("_", " ")}</span>}
+                  {a.dub != null && (
+                    <span className="flex items-center gap-0.5 text-sky-300">
+                      <Mic size={10} /> {a.dub}
+                    </span>
+                  )}
                 </div>
               </div>
-            </Link>
+            </button>
           ))}
         </div>
       )}

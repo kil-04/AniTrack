@@ -206,6 +206,63 @@ export async function searchAnime(q: string): Promise<AnimeMeta[]> {
   return result;
 }
 
+/**
+ * Next-airing-episode info for a batch of AniList IDs. Used by the Schedule page
+ * and the new-episode notifier. Only entries with a known next episode are
+ * returned. AniList caps `id_in` pages at 50, so we chunk and run sequentially
+ * through the rate-limited queue.
+ */
+export async function getAiringFor(
+  ids: number[],
+): Promise<import("../../shared/types").AiringInfo[]> {
+  const unique = Array.from(new Set(ids.filter((n) => Number.isInteger(n) && n > 0)));
+  if (unique.length === 0) return [];
+
+  const key = `airing:${unique.slice().sort((a, b) => a - b).join(",")}`;
+  const hit = cacheGet<import("../../shared/types").AiringInfo[]>(key);
+  if (hit) return hit;
+
+  const out: import("../../shared/types").AiringInfo[] = [];
+  for (let i = 0; i < unique.length; i += 50) {
+    const chunk = unique.slice(i, i + 50);
+    const data = await gql<{
+      Page: {
+        media: {
+          id: number;
+          title: { romaji?: string; english?: string };
+          coverImage?: { large?: string };
+          nextAiringEpisode?: { airingAt: number; episode: number } | null;
+        }[];
+      };
+    }>(
+      `query($ids: [Int]) {
+        Page(perPage: 50) {
+          media(id_in: $ids, type: ANIME) {
+            id
+            title { romaji english }
+            coverImage { large }
+            nextAiringEpisode { airingAt episode }
+          }
+        }
+      }`,
+      { ids: chunk },
+    );
+    for (const m of data.Page.media) {
+      if (!m.nextAiringEpisode) continue;
+      out.push({
+        animeId: m.id,
+        title: m.title.english || m.title.romaji || "Untitled",
+        coverImage: m.coverImage?.large ?? null,
+        episode: m.nextAiringEpisode.episode,
+        airingAt: m.nextAiringEpisode.airingAt,
+      });
+    }
+  }
+
+  cacheSet(key, out);
+  return out;
+}
+
 export async function advancedSearchAnime(filters: import("../../shared/types").AdvancedSearchFilters): Promise<import("../../shared/types").PaginatedAnime> {
   const page = filters.page || 1;
   const key = `advsearch:${page}:${JSON.stringify(filters)}`;

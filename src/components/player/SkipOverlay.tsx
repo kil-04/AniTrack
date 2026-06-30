@@ -1,8 +1,9 @@
+import { useEffect, useState } from "react";
 import { FastForward } from "lucide-react";
 
 interface SkipOverlayProps {
   duration: number;
-  position: number;
+  videoRef: React.RefObject<HTMLVideoElement | null>;
   skipTimes: {
     op?: { start: number; end: number };
     ed?: { start: number; end: number };
@@ -13,13 +14,24 @@ interface SkipOverlayProps {
 
 export function SkipOverlay({
   duration,
-  position,
+  videoRef,
   skipTimes,
   showControls,
   onSkip
 }: SkipOverlayProps) {
+  // Self-poll the playhead at 2 Hz — enough to show/hide the skip button without
+  // forcing the parent player to re-render on every timeupdate.
+  const [position, setPosition] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => {
+      const v = videoRef.current;
+      if (v) setPosition(v.currentTime);
+    }, 500);
+    return () => clearInterval(id);
+  }, [videoRef]);
+
   if (!duration) return null;
-  
+
   let skipTarget: { label: string; end: number } | null = null;
   
   if (skipTimes.op && position >= skipTimes.op.start && position < skipTimes.op.end) {

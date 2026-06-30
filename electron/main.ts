@@ -4,18 +4,15 @@ import {
   ipcMain,
   protocol,
   session,
-  net,
   Tray,
   Menu,
   nativeImage,
   shell,
 } from "electron";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import fs from "node:fs";
 import { IPC } from "../shared/types";
-import { getAnime } from "./services/db";
 import { flushDirty } from "./services/mal";
-import { linksFor, openLink } from "./services/legal-sites";
 import {
   prewarm as pahePrewarm,
   getKwikCookies,
@@ -25,6 +22,8 @@ import { autoUpdater } from "electron-updater";
 import { registerPaheIpc } from "./ipc/pahe";
 import { registerAuthIpc } from "./ipc/auth";
 import { registerDbIpc } from "./ipc/db";
+import { registerDownloadsIpc } from "./ipc/downloads";
+import { downloadsDir } from "./services/downloads";
 import { prewarmAnikoto, getAnikotoPlayerOrigin } from "./services/providers/anikoto";
 
 const isDev = process.env.NODE_ENV === "development";
@@ -237,17 +236,12 @@ if (process.defaultApp) {
   app.setAsDefaultProtocolClient("anitrack");
 }
 
-// Privileged scheme registration must happen before app `ready`.
+// Privileged scheme for serving offline downloads to the in-app hls.js player.
+// Must be registered before app `ready`.
 protocol.registerSchemesAsPrivileged([
   {
-    scheme: "local-video",
-    privileges: {
-      standard: true,
-      secure: true,
-      supportFetchAPI: true,
-      stream: true,
-      bypassCSP: true,
-    },
+    scheme: "anitrack-dl",
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true, corsEnabled: true },
   },
 ]);
 
@@ -335,12 +329,28 @@ function handleProtocolUrl(_url: string) {
 app.whenReady().then(() => {
   registerWebRequestHandlers();
 
-  // Serve local files through a custom protocol so the renderer can <video src="local-video://...">.
-  protocol.handle("local-video", (req) => {
-    // local-video:///absolute/path/to/file.mkv
-    const u = new URL(req.url);
-    const filePath = decodeURIComponent(u.pathname.replace(/^\/+/, ""));
-    return net.fetch(pathToFileURL(filePath).toString());
+  // Serve offline downloads: anitrack-dl://d/<folder>/<file> → userData/anitrack_downloads/<folder>/<file>
+  protocol.handle("anitrack-dl", async (req) => {
+    try {
+      const u = new URL(req.url);
+      const rel = decodeURIComponent(u.pathname.replace(/^\/+/, ""));
+      const filePath = path.join(downloadsDir(), rel);
+      const root = path.resolve(downloadsDir());
+      if (!path.resolve(filePath).startsWith(root) || !fs.existsSync(filePath)) {
+        return new Response("", { status: 404 });
+      }
+      const ext = path.extname(filePath).toLowerCase();
+      const type = ext === ".m3u8" ? "application/vnd.apple.mpegurl"
+        : ext === ".vtt" ? "text/vtt"
+        : ext === ".ts" ? "video/mp2t"
+        : ext === ".key" ? "application/octet-stream"
+        : "application/octet-stream";
+      return new Response(fs.readFileSync(filePath), {
+        headers: { "Content-Type": type, "Access-Control-Allow-Origin": "*" },
+      });
+    } catch {
+      return new Response("", { status: 500 });
+    }
   });
 
   registerIpc();
@@ -456,22 +466,7 @@ function registerIpc() {
   registerAuthIpc(getMainWindow);
   registerDbIpc(getMainWindow);
   registerPaheIpc(registerWebRequestHandlers);
-
-  // Player
-  ipcMain.handle(IPC.PLAYER_RESOLVE_FILE, (_e, filePath: string) => {
-    // Returns a URL the renderer can <video src=...> with.
-    return `local-video:///${encodeURI(filePath.replace(/\\/g, "/"))}`;
-  });
-
-  // Legal
-  ipcMain.handle(IPC.LEGAL_LINKS, (_e, id: number) => {
-    const anime = getAnime(id);
-    if (!anime) return [];
-    return linksFor(anime);
-  });
-  ipcMain.handle(IPC.LEGAL_OPEN, (_e, url: string) => {
-    openLink(url);
-  });
+  registerDownloadsIpc(getMainWindow);
 
   ipcMain.handle(IPC.UPDATE_CHECK, async () => {
     try {

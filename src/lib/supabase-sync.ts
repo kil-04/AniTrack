@@ -140,6 +140,44 @@ export async function deleteAnimeProgress(animeId: number): Promise<void> {
   ).catch(() => {});
 }
 
+// ── Targeted pull (freshest position for one episode) ────────────────────────
+
+/**
+ * Fetch the cloud playback row for a single anime+episode, if any. Used right
+ * before resuming so the position always reflects the other device — even if it
+ * was watched after this device launched (the app-start pullAndMerge missed it).
+ */
+export async function pullRemoteProgress(
+  animeId: number,
+  episode: number,
+): Promise<PlaybackRow | null> {
+  const cfg = getSyncConfig();
+  if (!cfg) return null;
+  try {
+    const res = await fetch(
+      `${cfg.url}/rest/v1/sync_playback?user_id=eq.${encodeURIComponent(cfg.userId)}` +
+        `&anime_id=eq.${animeId}&episode=eq.${episode}&select=*&limit=1`,
+      { headers: restHeaders(cfg.key) },
+    );
+    if (!res.ok) return null;
+    const rows = await res.json();
+    if (!rows?.length) return null;
+    const r = rows[0];
+    return {
+      animeId:          r.anime_id,
+      episode:          r.episode,
+      positionSec:      r.position_sec,
+      durationSec:      r.duration_sec,
+      animeTitle:       r.anime_title ?? undefined,
+      animeCoverUrl:    r.anime_cover_url ?? undefined,
+      animePaheSession: r.animepahe_session ?? undefined,
+      updatedAt:        r.updated_at,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ── Pull & merge ──────────────────────────────────────────────────────────────
 
 export async function pullAndMerge(): Promise<number> {

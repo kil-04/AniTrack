@@ -1,10 +1,12 @@
 import { NavLink } from "react-router-dom";
-import { Home, Search, Clock, Settings } from "lucide-react";
+import { Home, Search, Clock, CalendarClock, Download, Settings } from "lucide-react";
 
 const items = [
   { to: "/", label: "Home", icon: Home },
   { to: "/filter", label: "Search", icon: Search },
   { to: "/continue-watching", label: "History", icon: Clock },
+  { to: "/schedule", label: "Schedule", icon: CalendarClock },
+  { to: "/downloads", label: "Saved", icon: Download },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 

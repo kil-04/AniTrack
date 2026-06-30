@@ -4,29 +4,9 @@ import { Link } from "react-router-dom";
 import { Clock, Play, X, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { secondsToTimestamp } from "../lib/format";
 import { deleteAnimeProgress } from "../lib/supabase-sync";
+import { cwResumeUrl } from "../components/ContinueWatchingCard";
 
 const PAGE_SIZE = 24;
-
-function cwStreamUrl(session: string, title: string, episode: number, coverUrl?: string | null, animeId?: number): string {
-  const isUuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(session);
-  const providerId = isUuid ? "animepahe" : "anikoto";
-  const p: Record<string, string> = { 
-    session, 
-    title, 
-    episode: String(episode),
-    ep: String(episode),
-    providerId
-  };
-  if (coverUrl) {
-    p.coverUrl = coverUrl;
-    p.img = coverUrl;
-  }
-  if (animeId && animeId > 0) {
-    p.animeId = String(animeId);
-    p.anilistId = String(animeId);
-  }
-  return "/stream-player?" + new URLSearchParams(p).toString();
-}
 
 export default function ContinueWatching() {
   const [page, setPage] = useState(1);
@@ -159,13 +139,10 @@ function ContinueWatchingPageCard({ item, dismiss }: { item: any, dismiss: (id: 
   const [isFetching, setIsFetching] = useState(false);
   const displayAnime = fetchedMeta || item.anime;
 
-  // React Router v6: `state` is a separate <Link> prop, not part of `to`.
-  const goesToDetail = !item.animePaheSession && !item.filePath;
-  const cwTo = item.animePaheSession
-    ? cwStreamUrl(item.animePaheSession, item.anime.title, item.episode, item.anime.coverImage, item.anime.id)
-    : item.filePath
-    ? `/player/${item.anime.id}/${item.episode}`
-    : "/anime/" + item.anime.id;
+  // Continue Watching always resumes playback (download or stream) — never the
+  // title page; the player resolves the provider if we don't have a session.
+  const goesToDetail = false;
+  const cwTo = cwResumeUrl(item);
 
   const cardRef = useRef<HTMLAnchorElement>(null);
   const [rect, setRect] = useState<DOMRect | null>(null);

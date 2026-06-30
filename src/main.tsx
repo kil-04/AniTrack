@@ -18,8 +18,9 @@ function renderApp() {
 }
 
 // On Android (Capacitor), window.api is not provided by a preload script.
-// Install the Capacitor shim before React renders.
-if ((window as any).Capacitor) {
+// Install the Capacitor shim before React renders. Use the native-platform check
+// (not just `window.Capacitor`, which @capacitor/core defines on desktop too).
+if ((window as any).Capacitor?.isNativePlatform?.()) {
   import("./lib/api-capacitor").then(async ({ installCapacitorApiBridge }) => {
     await installCapacitorApiBridge();
     renderApp();

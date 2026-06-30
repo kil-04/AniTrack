@@ -122,7 +122,7 @@ export default function GlobalSearch() {
                   className={`flex items-center gap-3 px-4 py-2 hover:bg-white/5 transition-colors ${selectedIndex === idx ? 'bg-white/10' : ''}`}
                 >
                   {anime.coverImage ? (
-                    <img src={anime.coverImage} className="w-10 h-14 object-cover rounded shadow-sm" alt="" />
+                    <img src={anime.coverImage} className="w-10 h-14 object-cover rounded shadow-sm" alt="" loading="lazy" decoding="async" />
                   ) : (
                     <div className="w-10 h-14 bg-white/5 rounded flex items-center justify-center text-xs text-muted">N/A</div>
                   )}

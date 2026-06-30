@@ -6,7 +6,6 @@ import type {
   AnimeMeta,
   ContinueWatchingItem,
   ListEntry,
-  LocalEpisode,
   PlaybackProgress,
   WatchStatus,
 } from "../../shared/types";
@@ -497,55 +496,6 @@ export function getContinueWatchingPaged(
   return { items, total };
 }
 
-// ---- Library ----
-
-export function addLibraryFolder(p: string) {
-  getDb().run(
-    `INSERT OR IGNORE INTO library_folder (path, added_at) VALUES (?, ?)`,
-    [p, Date.now()],
-  );
-}
-
-export function removeLibraryFolder(p: string) {
-  getDb().run(`DELETE FROM library_folder WHERE path = ?`, [p]);
-}
-
-export function listLibraryFolders(): string[] {
-  return (getDb().all(`SELECT path FROM library_folder`) as any[]).map(
-    (r) => r.path,
-  );
-}
-
-export function upsertLocalEpisode(ep: LocalEpisode) {
-  getDb().run(
-    `INSERT INTO local_episode (anime_id, episode, file_path, duration_sec, updated_at)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT (anime_id, episode) DO UPDATE SET
-       file_path    = excluded.file_path,
-       duration_sec = excluded.duration_sec,
-       updated_at   = excluded.updated_at`,
-    [ep.animeId, ep.episode, ep.filePath, ep.durationSec ?? null, Date.now()],
-  );
-}
-
-export function getEpisodesFor(animeId: number): LocalEpisode[] {
-  return (
-    getDb().all(
-      `SELECT anime_id, episode, file_path, duration_sec FROM local_episode WHERE anime_id = ? ORDER BY episode`,
-      [animeId],
-    ) as any[]
-  ).map((r) => ({
-    animeId: r.anime_id,
-    episode: r.episode,
-    filePath: r.file_path,
-    durationSec: r.duration_sec,
-  }));
-}
-
-export function clearLocalEpisodes() {
-  getDb().run(`DELETE FROM local_episode`);
-}
-
 export function findAnimeByTitle(title: string): AnimeMeta | null {
   const q = title.trim();
   const row = getDb().get(
@@ -572,21 +522,6 @@ export function getProgressForAnime(animeId: number): PlaybackProgress[] {
     durationSec: row.duration_sec,
     updatedAt: row.updated_at,
   }));
-}
-
-/** Delete local_episode rows whose file_path is not in the provided set. */
-export function removeStaleLocalEpisodes(validPaths: Set<string>): number {
-  return runInTransaction(() => {
-    const rows = getDb().all(`SELECT rowid, file_path FROM local_episode`) as any[];
-    let removed = 0;
-    for (const row of rows) {
-      if (!validPaths.has(row.file_path)) {
-        getDb().run(`DELETE FROM local_episode WHERE rowid = ?`, [row.rowid]);
-        removed++;
-      }
-    }
-    return removed;
-  });
 }
 
 /** Migrate playback progress, local episodes, and watch lists from an old/stub ID to a new/real ID. */

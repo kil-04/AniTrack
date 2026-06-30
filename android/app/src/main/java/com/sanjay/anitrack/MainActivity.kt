@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.webkit.*
 import com.getcapacitor.BridgeActivity
 import com.sanjay.anitrack.plugins.AniTrackDbPlugin
+import com.sanjay.anitrack.plugins.AniTrackDownloaderPlugin
 import com.sanjay.anitrack.plugins.AniTrackMalPlugin
 import com.sanjay.anitrack.plugins.AniTrackPahePlugin
 import com.sanjay.anitrack.plugins.AniTrackSettingsPlugin
@@ -49,6 +50,7 @@ class MainActivity : BridgeActivity() {
         registerPlugin(AniTrackSettingsPlugin::class.java)
         registerPlugin(AniTrackPahePlugin::class.java)
         registerPlugin(AniTrackMalPlugin::class.java)
+        registerPlugin(AniTrackDownloaderPlugin::class.java)
 
         super.onCreate(savedInstanceState)
 
@@ -139,6 +141,18 @@ class MainActivity : BridgeActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         intent.data?.let { handleDeepLink(it) }
+    }
+
+    // Hardware/gesture back: navigate back inside the app (the WebView's history,
+    // which HashRouter populates) instead of exiting. Only fall through to the
+    // default (exit) when there's no in-app history left.
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (bridge.webView.canGoBack()) {
+            bridge.webView.goBack()
+        } else {
+            super.onBackPressed()
+        }
     }
 
     // ── Picture-in-Picture (native ExoPlayer) ────────────────────────────────

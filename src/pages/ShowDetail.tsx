@@ -323,28 +323,27 @@ export default function ShowDetail() {
         </div>
       )}
 
-      {/* AnimePahe episodes */}
-      {anime.status === "NOT_YET_RELEASED" ? (
-        <div className="mt-8 px-8">
-          <h2 className="mb-3 text-lg font-semibold">Episodes</h2>
-          <p className="text-sm text-white/30">Not yet airing — check back when this title releases.</p>
-        </div>
-      ) : (
-        <div className="mt-8 px-8">
-          <PahePanel
-            animeTitle={anime.titleEnglish || anime.title}
-            animeTitleAlt={anime.titleEnglish ? anime.title : undefined}
-            animeTitleRomaji={anime.titleRomaji ?? undefined}
-            animeId={anime.id}
-            animeMalId={anime.malId ?? undefined}
-            animeYear={anime.year ?? undefined}
-            animeEpisodes={anime.episodes ?? undefined}
-            animeStatus={anime.status ?? undefined}
-            resumeEpisode={entry ? entry.episodesWatched + 1 : 1}
-            inline
-          />
-        </div>
-      )}
+      {/* AnimePahe episodes — always check providers; AniList's "not yet released"
+          status is often stale, and the show may already be streamable. */}
+      <div className="mt-8 px-8">
+        {anime.status === "NOT_YET_RELEASED" && (
+          <p className="mb-3 text-xs text-white/30">
+            AniList lists this as upcoming — checking providers in case it's already streamable…
+          </p>
+        )}
+        <PahePanel
+          animeTitle={anime.titleEnglish || anime.title}
+          animeTitleAlt={anime.titleEnglish ? anime.title : undefined}
+          animeTitleRomaji={anime.titleRomaji ?? undefined}
+          animeId={anime.id}
+          animeMalId={anime.malId ?? undefined}
+          animeYear={anime.year ?? undefined}
+          animeEpisodes={anime.episodes ?? undefined}
+          animeStatus={anime.status ?? undefined}
+          resumeEpisode={entry ? entry.episodesWatched + 1 : 1}
+          inline
+        />
+      </div>
     </div>
   );
 }
