@@ -58,7 +58,10 @@
     "productName": "AniTrack",
     "files": [
       "dist/**/*",
-      "dist-electron/**/*"
+      "dist-electron/**/*",
+      "!node_modules/@capacitor/**",
+      "!node_modules/@capacitor-community/**",
+      "!node_modules/**/android/**"
     ],
     "extraResources": [
       {
@@ -95,7 +98,8 @@
       "allowElevation": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "AniTrack"
+      "shortcutName": "AniTrack",
+      "include": "build/installer.nsh"
     },
     "asarUnpack": [
       "node_modules/node-sqlite3-wasm/**/*"
