@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, useCallback } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Home,
   Loader2,
@@ -13,7 +13,9 @@ import {
   Minimize2,
   ChevronDown,
   ArrowLeft,
+  X,
 } from "lucide-react";
+import { usePlayerStore } from "../store/usePlayerStore";
 import { SkipOverlay } from "../components/player/SkipOverlay";
 import { VideoControls } from "../components/player/VideoControls";
 import { useVideoGestures, GestureFeedback } from "../components/player/useVideoGestures";
@@ -51,9 +53,54 @@ if (typeof MediaSource !== "undefined") {
   };
 }
 
-export default function StreamPlayer() {
-  const [params] = useSearchParams();
+// Thin rAF-driven progress hairline for the mini-player (no React re-renders).
+function MiniProgressBar({ videoRef }: { videoRef: React.RefObject<HTMLVideoElement | null> }) {
+  const barRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    let raf = 0;
+    const tick = () => {
+      const v = videoRef.current;
+      const b = barRef.current;
+      if (v && b && v.duration && isFinite(v.duration)) {
+        b.style.width = `${(v.currentTime / v.duration) * 100}%`;
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [videoRef]);
+  return (
+    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[3px] bg-white/20">
+      <div ref={barRef} className="h-full bg-[#e50914]" style={{ width: "0%" }} />
+    </div>
+  );
+}
+
+export default function StreamPlayer({
+  search,
+  minimized,
+  onClose,
+}: {
+  search: string;
+  minimized: boolean;
+  onClose: () => void;
+}) {
+  // The player is mounted globally (outside <Routes>) so it survives navigation
+  // as a mini-player. Query params come in via the `search` prop, not the URL.
+  const params = useMemo(() => new URLSearchParams(search), [search]);
   const navigate = useNavigate();
+  const minimizedRef = useRef(minimized);
+  minimizedRef.current = minimized;
+
+  // URL sync that respects the mini-player: expanded → replace the route URL;
+  // minimized → update the global session only (don't hijack navigation).
+  const syncPlayerUrl = useCallback(
+    (p: URLSearchParams) => {
+      if (minimizedRef.current) usePlayerStore.getState().open(`?${p.toString()}`);
+      else navigate(`/stream-player?${p.toString()}`, { replace: true });
+    },
+    [navigate],
+  );
   const animeSession = params.get("session") ?? "";
   const providerId = params.get("providerId") ?? "animepahe";
   const animeTitle = params.get("title") ?? "Anime";
@@ -465,9 +512,9 @@ export default function StreamPlayer() {
 
     if (changed) {
       console.log(`[StreamPlayer] Auto-correcting query params:`, p.toString());
-      navigate(`/stream-player?${p.toString()}`, { replace: true });
+      syncPlayerUrl(p);
     }
-  }, [availableSources, animeSession, providerId, params, navigate]);
+  }, [availableSources, animeSession, providerId, params, syncPlayerUrl]);
 
   // Watched episodes map — keyed by episode number, value is percent watched.
   const [watchedEps, setWatchedEps] = useState<Map<number, number>>(new Map());
@@ -590,6 +637,28 @@ export default function StreamPlayer() {
   // ── Episode list loading ───────────────────────────────────────────────────
 
   // Fetch a single page with caching (paheCacheRef survives navigation).
+  // The player instance persists across navigations now (mini-player), so a new
+  // anime/provider session can arrive on an already-mounted component. Reset the
+  // per-anime caches and episode state exactly like a fresh mount would —
+  // paheCacheRef is keyed by page NUMBER, so stale entries would otherwise serve
+  // the previous anime's episode list.
+  const prevSessionKeyRef = useRef(`${animeSession}|${providerId}`);
+  useEffect(() => {
+    const key = `${animeSession}|${providerId}`;
+    if (prevSessionKeyRef.current === key) return;
+    prevSessionKeyRef.current = key;
+    paheCacheRef.current.clear();
+    linksCacheRef.current.clear();
+    setEpisodes([]);
+    setCurrentEp(null);
+    currentEpRef.current = null;
+    setRangeStart(1);
+    setTotalEpisodes(0);
+    setStreamError(null);
+    setLinks([]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [animeSession, providerId]);
+
   const fetchPahePage = useCallback(async (paheePage: number): Promise<{ data: any[]; total: number; lastPage: number }> => {
     const cached = paheCacheRef.current.get(paheePage);
     if (cached) return { data: cached, total: totalEpisodesRef.current, lastPage: paheCacheRef.current.get(-1) ?? 999 };
@@ -616,10 +685,17 @@ export default function StreamPlayer() {
       .then(async ({ data: firstData, total, lastPage: providerLastPage }) => {
         if (cancelled) return;
         if (firstData.length === 0) {
-          // Session expired or failed to load. Redirect back to Anime page to refresh session.
+          // Session expired or failed to load. Redirect back to Anime page to
+          // refresh the session — but never hijack navigation while minimized;
+          // in mini mode just surface the error on the card.
           const id = Number(params.get("animeId") ?? 0);
           if (id > 0) {
-            navigate(`/anime/${id}`, { replace: true });
+            if (!minimizedRef.current) {
+              navigate(`/anime/${id}`, { replace: true });
+            } else {
+              setStreamError("Session expired — tap to reopen this show.");
+              setLoadingEps(false);
+            }
             return;
           }
         }
@@ -1245,10 +1321,10 @@ export default function StreamPlayer() {
       p.set("providerId", pid);
       p.set("session", source.id || source.session);
       if (targetEp) p.set("episode", String(targetEp));
-      navigate(`/stream-player?${p.toString()}`, { replace: true });
+      syncPlayerUrl(p);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [params, navigate, startEp],
+    [params, syncPlayerUrl, startEp],
   );
 
   // After a stream fails, transparently try the next provider we haven't tried for
@@ -1434,6 +1510,65 @@ export default function StreamPlayer() {
     }
   }
 
+  // Minimizing while fullscreen makes no sense — drop out of fullscreen first
+  // so the mini card renders correctly.
+  useEffect(() => {
+    if (!minimized) return;
+    if (isCapacitor && isMobile) {
+      import("../lib/api-capacitor").then(({ ScreenOrientation }) => {
+        ScreenOrientation.unlock().catch(() => {});
+      });
+      setIsFullscreen(false);
+    } else if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [minimized]);
+
+  // ── "Up next" autoplay countdown (YouTube-style) ────────────────────────────
+
+  const [upNext, setUpNext] = useState<{ episode: number; count: number } | null>(null);
+  const upNextTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const clearUpNext = useCallback(() => {
+    if (upNextTimerRef.current) { clearInterval(upNextTimerRef.current); upNextTimerRef.current = null; }
+    setUpNext(null);
+  }, []);
+
+  function beginUpNext() {
+    const ep = currentEpRef.current;
+    if (!ep) return;
+    let nextEpNum: number | null = null;
+    if (isOffline) {
+      nextEpNum = offlineNeighbor(1)?.episode ?? null;
+    } else {
+      const n = (ep.episodeNumber ?? ep.episode) + 1;
+      nextEpNum =
+        episodesRef.current.some((e: any) => e.episodeNumber === n) || n <= totalEpisodesRef.current
+          ? n
+          : null;
+    }
+    if (nextEpNum == null) return; // series finished — nothing to queue
+    clearUpNext();
+    let count = 5;
+    setUpNext({ episode: nextEpNum, count });
+    upNextTimerRef.current = setInterval(() => {
+      count -= 1;
+      if (count <= 0) {
+        clearUpNext();
+        playNext();
+      } else {
+        setUpNext((u) => (u ? { ...u, count } : u));
+      }
+    }, 1000);
+  }
+  const beginUpNextRef = useRef(beginUpNext);
+  beginUpNextRef.current = beginUpNext;
+
+  // A new episode starting (or unmount) cancels any pending countdown.
+  useEffect(() => { clearUpNext(); }, [currentEp, clearUpNext]);
+  useEffect(() => () => { if (upNextTimerRef.current) clearInterval(upNextTimerRef.current); }, []);
+
   // ── Video element event handlers ───────────────────────────────────────────
 
   useEffect(() => {
@@ -1469,7 +1604,7 @@ export default function StreamPlayer() {
       if (!video.duration || !isFinite(video.duration) || video.buffered.length === 0) return;
       setBufferedPct((video.buffered.end(video.buffered.length - 1) / video.duration) * 100);
     };
-    const onEnded = () => { if (autoNextRef.current) playNext(); };
+    const onEnded = () => { if (autoNextRef.current) beginUpNextRef.current(); };
     const onCanPlay = () => {
       setLoadingStream(false);
       setBuffering(false);
@@ -1621,6 +1756,8 @@ export default function StreamPlayer() {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+      // While minimized the user is browsing the app — don't hijack their keys.
+      if (minimizedRef.current) return;
       const video = videoRef.current;
       if (!video) return;
       showControlsNow();
@@ -1881,7 +2018,7 @@ export default function StreamPlayer() {
       {/* YouTube-style gesture layer (Android / tablet). Sits above the video but
           below the controls pill & overlay buttons (which come later in the DOM).
           Stops the synthetic click so the desktop onClick play/pause doesn't fire. */}
-      {isCapacitor && (
+      {isCapacitor && !minimized && (
         <div
           className="absolute inset-0"
           style={{ touchAction: "none" }}
@@ -1894,7 +2031,7 @@ export default function StreamPlayer() {
       )}
       <GestureFeedback fb={gestures.feedback} />
       {/* Center play/pause button (touch / Android) — appears with the controls */}
-      {isCapacitor && currentEp && !loadingStream && (
+      {isCapacitor && !minimized && currentEp && !loadingStream && (
         <button
           onClick={(e) => { e.stopPropagation(); const v = videoRef.current; if (!v) return; v.paused ? v.play().catch(() => {}) : v.pause(); showControlsNow(); }}
           className={`absolute left-1/2 top-1/2 z-30 flex h-16 w-16 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white transition-all duration-300 ${showControls ? "opacity-100 scale-100" : "pointer-events-none opacity-0 scale-90"}`}
@@ -1960,7 +2097,7 @@ export default function StreamPlayer() {
         onSkip={(endTime) => { if (videoRef.current) videoRef.current.currentTime = endTime; }}
       />
       <VideoControls
-        showControls={showControls}
+        showControls={showControls && !minimized}
         videoRef={videoRef}
         duration={duration}
         playing={playing}
@@ -2015,25 +2152,94 @@ export default function StreamPlayer() {
         setCueColor={setCueColor}
       />
 
+      {/* "Up next" autoplay countdown (YouTube-style) */}
+      {upNext && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/70">
+          <div className={`flex flex-col items-center text-center ${minimized ? "gap-1" : "gap-3"}`}>
+            <div className={`uppercase tracking-widest text-white/50 ${minimized ? "text-[9px]" : "text-xs"}`}>Up next</div>
+            <div className={`font-bold ${minimized ? "text-sm" : "text-xl"}`}>Episode {upNext.episode}</div>
+            {/* Countdown ring around a play button */}
+            <button
+              onClick={(e) => { e.stopPropagation(); clearUpNext(); playNext(); }}
+              className={`relative flex items-center justify-center rounded-full bg-white/10 text-white transition hover:bg-white/20 ${minimized ? "h-10 w-10" : "h-16 w-16"}`}
+              title="Play now"
+            >
+              <svg viewBox="0 0 64 64" className="absolute inset-0 h-full w-full -rotate-90">
+                <circle cx="32" cy="32" r="29" fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="3" />
+                <circle
+                  cx="32" cy="32" r="29" fill="none" stroke="#e50914" strokeWidth="3" strokeLinecap="round"
+                  strokeDasharray={2 * Math.PI * 29}
+                  strokeDashoffset={2 * Math.PI * 29 * (1 - upNext.count / 5)}
+                  style={{ transition: "stroke-dashoffset 1s linear" }}
+                />
+              </svg>
+              <Play size={minimized ? 16 : 26} fill="currentColor" className="ml-0.5" />
+            </button>
+            {!minimized && (
+              <button
+                onClick={(e) => { e.stopPropagation(); clearUpNext(); }}
+                className="rounded-full bg-white/10 px-4 py-1.5 text-xs font-semibold text-white/80 transition hover:bg-white/20"
+              >
+                Cancel
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  // ── Mini-player overlay (shown when minimized) ──────────────────────────────
+  const expandMini = () => navigate(`/stream-player${search.startsWith("?") ? search : `?${search}`}`);
+
+  const MiniOverlay = (
+    <div className="group absolute inset-0 z-[45] cursor-pointer" onClick={expandMini} title="Tap to expand">
+      {/* Close */}
+      <button
+        onClick={(e) => { e.stopPropagation(); onClose(); }}
+        className="absolute right-1.5 top-1.5 z-10 flex h-7 w-7 items-center justify-center rounded-full bg-black/60 text-white transition hover:bg-black/85"
+        title="Close player"
+      >
+        <X size={14} />
+      </button>
+      {/* Center play/pause — always visible when paused/buffering, hover otherwise */}
+      {!upNext && (
+        <button
+          onClick={(e) => { e.stopPropagation(); const v = videoRef.current; if (!v) return; v.paused ? v.play().catch(() => {}) : v.pause(); }}
+          className={`absolute left-1/2 top-1/2 z-10 flex h-10 w-10 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white transition-opacity ${playing && !buffering ? "opacity-0 group-hover:opacity-100" : "opacity-100"}`}
+          title="Play / Pause"
+        >
+          {playing ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" className="ml-0.5" />}
+        </button>
+      )}
+      {/* Title strip */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-2 pb-1.5 pt-5">
+        <div className="truncate text-[11px] font-semibold text-white/90">{animeTitle}</div>
+        {currentEp && (
+          <div className="text-[10px] text-white/50">Episode {currentEp.episodeNumber ?? currentEp.episode}</div>
+        )}
+      </div>
+      <MiniProgressBar videoRef={videoRef} />
     </div>
   );
 
   // ── Mobile layout (YouTube-style) ───────────────────────────────────────────
+  // Minimize is CSS-only (class swaps + `hidden`) so the <video> element never
+  // remounts — playback continues seamlessly between full and mini modes.
   if (isMobile) {
-    // Fullscreen: fill entire screen in landscape (orientation is locked by toggleFullscreen)
-    if (isFullscreen) {
-      return (
-        <div className="flex h-screen w-screen bg-black text-white">
-          {VideoArea(true)}
-        </div>
-      );
-    }
-
-    // Portrait: video (16:9) at top, episode panel below
+    // One structure for portrait / fullscreen / minimized — mode changes are
+    // pure CSS so the <video> element never remounts and playback never skips.
+    const fs = isFullscreen && !minimized;
     return (
-      <div className="flex h-screen flex-col overflow-hidden bg-[#000000] text-white">
+      <div
+        className={
+          minimized
+            ? "fixed bottom-20 right-3 z-[60] aspect-video w-[min(62vw,320px)] overflow-hidden rounded-xl border border-white/15 bg-black text-white shadow-2xl"
+            : "fixed inset-0 z-[60] flex flex-col overflow-hidden bg-[#000000] text-white"
+        }
+      >
         {/* Top bar */}
-        <div className="flex h-12 flex-shrink-0 items-center gap-2 bg-[#000000] px-3">
+        <div className={`flex h-12 flex-shrink-0 items-center gap-2 bg-[#000000] px-3 ${minimized || fs ? "hidden" : ""}`}>
           <button onClick={() => navigate("/")} className="flex h-9 w-9 items-center justify-center rounded-full hover:bg-white/10">
             <ArrowLeft size={18} />
           </button>
@@ -2044,25 +2250,33 @@ export default function StreamPlayer() {
           {loadingStream && <Loader2 size={14} className="animate-spin text-white/40" />}
         </div>
 
-        {/* Video — 16:9 aspect ratio */}
-        <div className="aspect-video w-full flex-shrink-0 bg-black">
+        {/* Video — 16:9 in portrait, full-bleed in fullscreen, fills the card when mini */}
+        <div className={minimized ? "h-full w-full bg-black" : fs ? "min-h-0 w-full flex-1 bg-black" : "aspect-video w-full flex-shrink-0 bg-black"}>
           {VideoArea(true)}
         </div>
 
         {/* Episode list — scrollable below video */}
-        <div className="flex flex-1 flex-col overflow-hidden">
+        <div className={`flex flex-1 flex-col overflow-hidden ${minimized || fs ? "hidden" : ""}`}>
           {EpisodePanel}
         </div>
+
+        {minimized && MiniOverlay}
       </div>
     );
   }
 
   // ── Desktop / tablet layout (split view) ────────────────────────────────────
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-[#000000] text-white">
+    <div
+      className={
+        minimized
+          ? "fixed bottom-6 right-6 z-[60] aspect-video w-[400px] overflow-hidden rounded-xl border border-white/15 bg-black text-white shadow-2xl"
+          : "fixed inset-0 z-[60] flex flex-col overflow-hidden bg-[#000000] text-white"
+      }
+    >
 
       {/* Top bar */}
-      <div className="flex h-10 flex-shrink-0 items-center gap-3 border-b border-white/10 bg-[#000000] px-3">
+      <div className={`flex h-10 flex-shrink-0 items-center gap-3 border-b border-white/10 bg-[#000000] px-3 ${minimized ? "hidden" : ""}`}>
         <button
           onClick={() => navigate("/")}
           className="flex items-center gap-1 rounded px-2 py-1 text-sm text-white/60 hover:bg-white/10 hover:text-white"
@@ -2092,10 +2306,12 @@ export default function StreamPlayer() {
       </div>
 
       {/* Main content — episode panel left, video right (theater mode hides the panel) */}
-      <div className="flex flex-1 overflow-hidden">
-        {!isTheater && EpisodePanel}
+      <div className={`flex overflow-hidden ${minimized ? "h-full" : "flex-1"}`}>
+        {!isTheater && !minimized && EpisodePanel}
         {VideoArea(true)}
       </div>
+
+      {minimized && MiniOverlay}
     </div>
   );
 }

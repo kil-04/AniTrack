@@ -627,16 +627,14 @@ const anikotoProvider = {
 // ── Shim installation ──────────────────────────────────────────────────────────
 
 export async function installCapacitorApiBridge() {
-  // --- SUPABASE NATIVE RECOVERY ---
-  // If the WebView's localStorage gets wiped during an app update, this recovers
-  // the user's Supabase sync details from Android SharedPreferences BEFORE React boots.
-  const supaUrl = await AniTrackSettings.get({ key: "supabase_url" }).catch(() => ({ value: null }));
-  const supaKey = await AniTrackSettings.get({ key: "supabase_key" }).catch(() => ({ value: null }));
-  const supaUid = await AniTrackSettings.get({ key: "supabase_user_id" }).catch(() => ({ value: null }));
-  
-  if (supaUrl.value) localStorage.setItem("supabase_url", supaUrl.value);
-  if (supaKey.value) localStorage.setItem("supabase_key", supaKey.value);
-  if (supaUid.value) localStorage.setItem("supabase_user_id", supaUid.value);
+  // --- SYNC NATIVE RECOVERY ---
+  // If the WebView's localStorage gets wiped during an app update, recover the
+  // GitHub-Gist sync details from Android SharedPreferences BEFORE React boots.
+  const gistTok = await AniTrackSettings.get({ key: "gist_token" }).catch(() => ({ value: null }));
+  const gistId  = await AniTrackSettings.get({ key: "gist_id" }).catch(() => ({ value: null }));
+
+  if (gistTok.value) localStorage.setItem("gist_token", gistTok.value);
+  if (gistId.value)  localStorage.setItem("gist_id", gistId.value);
 
   // Bridge Capacitor plugin events → JS event bus so Settings.tsx listeners work unchanged.
   AniTrackMal.addListener("mal:auth-complete", async (data: any) => {

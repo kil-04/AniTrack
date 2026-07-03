@@ -65,19 +65,12 @@ export default function Settings() {
   const [alAwaitingAuth, setAlAwaitingAuth] = useState(false);
   const [alAuthError, setAlAuthError] = useState<string | null>(null);
 
-  // Supabase sync
+  // Cross-device sync (GitHub Gist)
   const cfg = getSyncConfig();
-  const [supaUrl,    setSupaUrl]    = useState(cfg?.url    ?? "");
-  const [supaKey,    setSupaKey]    = useState(cfg?.key    ?? "");
-  const [supaUser,   setSupaUser]   = useState(cfg?.userId ?? "");
+  const [gistToken, setGistToken] = useState(cfg?.token ?? "");
   const [supaSaved,  setSupaSaved]  = useState(false);
   const [supaStatus, setSupaStatus] = useState<string | null>(null);
   const [supaError,  setSupaError]  = useState<string | null>(null);
-
-  // Auto-fill user ID from MAL username when connecting for the first time
-  useEffect(() => {
-    if (!supaUser && mal.username) setSupaUser(mal.username);
-  }, [mal.username, supaUser]);
 
   // MAL custom client ID
   const [malClientId, setMalClientIdInput] = useState("");
@@ -431,53 +424,33 @@ export default function Settings() {
       <section className="rounded-lg border border-white/10 bg-bg-card p-6">
         <h2 className="mb-4 text-xl font-semibold">Cross-device Sync</h2>
         <p className="mb-4 text-sm text-muted">
-          Syncs your continue-watching progress across desktop and Android via your own Supabase project.
-          Create a free project at <span className="font-mono text-white/70">supabase.com</span>, run the SQL below
-          in the SQL Editor, then paste your project URL and anon key here.
+          Syncs your continue-watching progress across desktop and Android via a private GitHub Gist —
+          nothing to host and it never expires. Create a token at{" "}
+          <span className="font-mono text-white/70">github.com/settings/tokens</span> with the{" "}
+          <span className="font-mono text-white/70">gist</span> scope, then paste it here on each device
+          (the gist is created/found automatically — use the same token on both).
         </p>
-        <pre className="mb-4 overflow-x-auto rounded bg-black/40 p-3 text-xs text-white/60">{`create table sync_playback (
-  user_id text not null,
-  anime_id integer not null,
-  episode integer not null,
-  position_sec real not null default 0,
-  duration_sec real not null default 0,
-  anime_title text,
-  anime_cover_url text,
-  animepahe_session text,
-  updated_at bigint not null,
-  primary key (user_id, anime_id, episode)
-);
-alter table sync_playback enable row level security;
-create policy "anon all" on sync_playback for all to anon using (true) with check (true);`}</pre>
         <div className="space-y-3">
-          {(["Project URL", "Anon Key", "Sync User ID"] as const).map((label, i) => {
-            const [val, setter] = [
-              [supaUrl, setSupaUrl],
-              [supaKey, setSupaKey],
-              [supaUser, setSupaUser],
-            ][i] as [string, (v: string) => void];
-            return (
-              <div key={label}>
-                <label className="mb-1 block text-xs text-muted">{label}</label>
-                <input
-                  type={label === "Anon Key" ? "password" : "text"}
-                  value={val}
-                  onChange={(e) => setter(e.target.value)}
-                  placeholder={label === "Project URL" ? "https://xxxx.supabase.co" : label === "Anon Key" ? "eyJ..." : "your-mal-username"}
-                  className="w-full rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
-                />
-              </div>
-            );
-          })}
-          <div className="flex gap-2 pt-1">
+          <div>
+            <label className="mb-1 block text-xs text-muted">GitHub Token (gist scope)</label>
+            <input
+              type="password"
+              value={gistToken}
+              onChange={(e) => setGistToken(e.target.value)}
+              placeholder="ghp_… or github_pat_…"
+              className="w-full rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+            />
+          </div>
+          <div className="flex flex-wrap gap-2 pt-1">
             <button
               onClick={() => {
-                setSyncConfig({ url: supaUrl, key: supaKey, userId: supaUser });
+                setSyncConfig({ token: gistToken.trim(), gistId: "" });
                 setSupaSaved(true);
                 setSupaStatus(null);
+                setSupaError(null);
                 setTimeout(() => setSupaSaved(false), 2000);
               }}
-              disabled={!supaUrl || !supaKey || !supaUser}
+              disabled={!gistToken.trim()}
               className="rounded-md bg-accent px-4 py-2 text-sm font-medium hover:bg-accent-hover disabled:opacity-50"
             >
               {supaSaved ? "Saved ✓" : "Save"}
@@ -495,7 +468,7 @@ create policy "anon all" on sync_playback for all to anon using (true) with chec
                   setSupaError(`Pull failed: ${(e as Error).message}`);
                 }
               }}
-              disabled={!supaUrl || !supaKey || !supaUser}
+              disabled={!getSyncConfig()}
               className="flex items-center gap-2 rounded-md border border-white/10 px-4 py-2 text-sm hover:bg-white/5 disabled:opacity-50"
             >
               <RefreshCcw size={14} /> Pull now
@@ -512,14 +485,14 @@ create policy "anon all" on sync_playback for all to anon using (true) with chec
                   setSupaError(`Push failed: ${(e as Error).message}`);
                 }
               }}
-              disabled={!supaUrl || !supaKey || !supaUser}
+              disabled={!getSyncConfig()}
               className="rounded-md border border-white/10 px-4 py-2 text-sm hover:bg-white/5 disabled:opacity-50"
             >
               Push all to cloud
             </button>
             {getSyncConfig() && (
               <button
-                onClick={() => { clearSyncConfig(); setSupaUrl(""); setSupaKey(""); setSupaUser(""); }}
+                onClick={() => { clearSyncConfig(); setGistToken(""); setSupaStatus(null); setSupaError(null); }}
                 className="rounded-md border border-white/10 px-4 py-2 text-sm hover:bg-white/5"
               >
                 Disconnect

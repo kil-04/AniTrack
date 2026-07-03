@@ -5,6 +5,7 @@ import { motion } from "framer-motion";
 import { ArrowLeft, Plus, Check } from "lucide-react";
 import type { AnimeMeta, ListEntry, RelatedAnime, WatchStatus } from "../../shared/types";
 import PahePanel from "../components/PahePanel";
+import WatchOrder from "../components/WatchOrder";
 import { useAppStore } from "../store/useAppStore";
 
 const STATUS_OPTIONS: { value: WatchStatus; label: string }[] = [
@@ -122,6 +123,7 @@ export default function ShowDetail() {
   const stateAnime = location.state?.anime as AnimeMeta | undefined;
   const [anime, setAnime] = useState<AnimeMeta | null>(stateAnime || null);
   const [related, setRelated] = useState<RelatedAnime[]>([]);
+  const [chainIds, setChainIds] = useState<number[]>([]);
   const list = useAppStore((s) => s.list);
   const refreshList = useAppStore((s) => s.refreshList);
   const entry: ListEntry | undefined = list.find(
@@ -136,6 +138,7 @@ export default function ShowDetail() {
       setAnime(null);
     }
     setRelated([]);
+    setChainIds([]);
     window.api.anilist.get(animeId).then((a) => {
       if (cancelled) return;
       if (a) { setAnime(a); return; }
@@ -311,17 +314,25 @@ export default function ShowDetail() {
         </motion.p>
       )}
 
-      {/* Related anime */}
-      {related.length > 0 && (
-        <div className="mt-8 px-8">
-          <h2 className="mb-3 text-lg font-semibold">Related</h2>
-          <div className="flex gap-4 overflow-x-auto pb-2">
-            {related.map(({ relationType, anime: rel }) => (
-              <RelatedCard key={rel.id} rel={rel} relationType={relationType} />
-            ))}
+      {/* Franchise watch order (season spine: prequels → this → sequels) */}
+      <WatchOrder animeId={animeId} onChain={setChainIds} />
+
+      {/* Related anime (movies, side stories, spin-offs — seasons already in the
+          watch-order timeline above are filtered out to avoid duplicates) */}
+      {(() => {
+        const rest = related.filter(({ anime: rel }) => !chainIds.includes(rel.id));
+        if (!rest.length) return null;
+        return (
+          <div className="mt-8 px-8">
+            <h2 className="mb-3 text-lg font-semibold">Related</h2>
+            <div className="flex gap-4 overflow-x-auto pb-2">
+              {rest.map(({ relationType, anime: rel }) => (
+                <RelatedCard key={rel.id} rel={rel} relationType={relationType} />
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* AnimePahe episodes — always check providers; AniList's "not yet released"
           status is often stale, and the show may already be streamable. */}

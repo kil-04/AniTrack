@@ -5,6 +5,7 @@ import BottomNav from "./components/BottomNav";
 import UpdateBanner from "./components/UpdateBanner";
 import Home from "./pages/Home";
 import { useAppStore } from "./store/useAppStore";
+import { usePlayerStore } from "./store/usePlayerStore";
 import { useMediaQuery } from "./hooks/useMediaQuery";
 import { isCapacitor } from "./lib/platform";
 import { AnimatePresence, motion } from "framer-motion";
@@ -48,7 +49,16 @@ export default function App() {
   const location      = useLocation();
   const isTablet      = useMediaQuery(TABLET_LANDSCAPE);
 
-  const inStreaming  = location.pathname === "/stream" || location.pathname === "/stream-player";
+  const inStreaming   = location.pathname === "/stream";
+  const isPlayerRoute = location.pathname === "/stream-player";
+  const playerSearch  = usePlayerStore((s) => s.search);
+
+  // The stream player lives OUTSIDE the router: entering /stream-player opens a
+  // global player session; leaving the route keeps it mounted as a floating
+  // mini-player (YouTube-style) until explicitly closed.
+  useEffect(() => {
+    if (isPlayerRoute) usePlayerStore.getState().open(location.search);
+  }, [isPlayerRoute, location.search]);
 
   useEffect(() => {
     refreshAll();
@@ -59,6 +69,26 @@ export default function App() {
     });
     return () => { offMalAuth(); offMalPull(); };
   }, [refreshAll, setScanStatus]);
+
+  // Auto-sync on return: when the window regains focus (desktop) or the app
+  // resumes from background (tablet), two-way sync progress with the gist so
+  // Continue Watching reflects whatever the other device just watched.
+  // Throttled to once a minute to stay well inside GitHub's rate limits.
+  useEffect(() => {
+    let last = Date.now(); // the refreshAll above already synced on launch
+    const onReturn = () => {
+      if (document.visibilityState !== "visible") return;
+      if (Date.now() - last < 60_000) return;
+      last = Date.now();
+      useAppStore.getState().refreshContinue();
+    };
+    window.addEventListener("focus", onReturn);
+    document.addEventListener("visibilitychange", onReturn);
+    return () => {
+      window.removeEventListener("focus", onReturn);
+      document.removeEventListener("visibilitychange", onReturn);
+    };
+  }, []);
 
   // Notify when a new episode of a tracked show drops — on launch, then hourly.
   useEffect(() => {
@@ -99,15 +129,30 @@ export default function App() {
     return () => clearTimeout(id);
   }, []);
 
+  // Persistent player overlay — full-screen on /stream-player, floating mini
+  // card everywhere else. Mounted outside <Routes> so navigation never kills
+  // the <video> element (playback continues seamlessly while browsing).
+  const playerOverlay = playerSearch != null && (
+    <Suspense fallback={isPlayerRoute ? <div className="fixed inset-0 z-[60] bg-black" /> : null}>
+      <StreamPlayer
+        search={playerSearch}
+        minimized={!isPlayerRoute}
+        onClose={() => usePlayerStore.getState().close()}
+      />
+    </Suspense>
+  );
+
   // Full-screen routes (no shell)
   if (inStreaming) {
     return (
-      <Suspense fallback={<PageFallback />}>
-        <Routes>
-          <Route path="/stream" element={<StreamingPage />} />
-          <Route path="/stream-player" element={<StreamPlayer />} />
-        </Routes>
-      </Suspense>
+      <>
+        <Suspense fallback={<PageFallback />}>
+          <Routes>
+            <Route path="/stream" element={<StreamingPage />} />
+          </Routes>
+        </Suspense>
+        {playerOverlay}
+      </>
     );
   }
 
@@ -137,6 +182,7 @@ export default function App() {
         </Suspense>
       </main>
       {showBottomNav && <BottomNav />}
+      {playerOverlay}
     </div>
   );
 }

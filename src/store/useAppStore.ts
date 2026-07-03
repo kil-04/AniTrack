@@ -43,8 +43,8 @@ export const useAppStore = create<AppState>((set) => ({
 
   refreshAll: async () => {
     set({ loading: true });
-    // Pull remote playback progress from Supabase before refreshing the UI.
-    // Runs silently — a missing/misconfigured Supabase just returns 0.
+    // Two-way sync playback progress with the GitHub gist before refreshing the
+    // UI. Runs silently — missing/misconfigured sync just returns 0.
     await pullAndMerge().catch(() => {});
     // Resolve each call independently so one slow/failing fetch doesn't block
     // the others. Promise.allSettled lets us partially populate the UI.
