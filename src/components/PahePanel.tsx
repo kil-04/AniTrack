@@ -2,7 +2,7 @@ import { useEffect, useReducer, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Play, ChevronLeft, ChevronRight, Loader2, Captions, Mic, Download, Check, Trash2 } from "lucide-react";
 import type { PlaybackProgress } from "../../shared/types";
-import { scoreMatch } from "../lib/match";
+import { scoreMatch, pickVerifiedCandidate } from "../lib/match";
 import {
   downloadsSupported,
   subscribeDownloads,
@@ -229,17 +229,10 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
             .map(({ candidate }) => candidate)
             .slice(0, 3);
 
+          // Serial, time-boxed verification (common case: ONE request) — see
+          // pickVerifiedCandidate; parallel bursts trip provider anti-bot limits.
           const pool = [...validResults.slice(0, 3), ...plausibleRejects];
-          const checks = await Promise.all(
-            pool.map(async (candidate) => {
-              const ids = (await window.api.pahe.getIds(candidate.paheId ?? candidate.id, candidate.session ?? candidate.id).catch(() => ({}))) as any;
-              return { candidate, ids };
-            })
-          );
-          for (const { candidate, ids } of checks) {
-            if (realAnilistId && ids.anilistId === realAnilistId) { best = candidate; break; }
-            if (realMalId && ids.malId === realMalId) { best = candidate; break; }
-          }
+          best = await pickVerifiedCandidate(pool, realAnilistId, realMalId ?? undefined);
         }
 
         // A verified year-reject isn't in the visible results yet — surface it first.

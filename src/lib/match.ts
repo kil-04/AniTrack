@@ -1,5 +1,57 @@
 // Provider-result matching heuristics shared by PahePanel and StreamPlayer.
 
+// ── ID-based match verification ───────────────────────────────────────────────
+// Provider titles can lie (anikoto's "City Hunter" entry actually contains City
+// Hunter '91), so the chosen candidate is verified against AniList/MAL ids.
+// CRITICAL CONSTRAINTS learned the hard way:
+//  - checks run ONE at a time globally (parallel bursts trip provider anti-bot
+//    limits and everything starts timing out)
+//  - each check is time-boxed; an unreachable page must not block the UI
+//  - a candidate with UNKNOWN ids is trusted on title score — only a POSITIVE
+//    id match may override the score order.
+let _idCheckChain: Promise<unknown> = Promise.resolve();
+
+function _withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
+  return Promise.race([p, new Promise<null>((r) => setTimeout(() => r(null), ms))]);
+}
+
+/**
+ * Pick the candidate to use from a score-ordered list, verifying against real
+ * ids when available. Checks stop as soon as a verdict is clear: if the top
+ * candidate verifies or its ids are unknown, no further requests happen.
+ */
+export async function pickVerifiedCandidate(
+  candidates: any[],
+  anilistId?: number,
+  malId?: number,
+  maxChecks = 4,
+): Promise<any | null> {
+  if (!candidates.length) return null;
+  if (!anilistId && !malId) return candidates[0];
+
+  const run = async () => {
+    const matches = (ids: any) =>
+      (anilistId != null && ids?.anilistId === anilistId) || (malId != null && ids?.malId === malId);
+    const known = (ids: any) => ids?.anilistId != null || ids?.malId != null;
+    for (let i = 0; i < Math.min(candidates.length, maxChecks); i++) {
+      const c = candidates[i];
+      const ids =
+        (await _withTimeout(
+          window.api.pahe.getIds(c.paheId ?? c.id, c.session ?? c.id).catch(() => null),
+          8000,
+        )) ?? {};
+      if (matches(ids)) return c;
+      if (i === 0 && !known(ids)) return c; // unverifiable top pick → trust the title score
+      // top pick is known-wrong → keep looking for a positively-verified alternative
+    }
+    return candidates[0]; // nothing verified — fall back to the title score
+  };
+
+  const p = _idCheckChain.then(run, run);
+  _idCheckChain = p.catch(() => {});
+  return p;
+}
+
 export function getSeasonNumber(title: string): number | null {
   const clean = title.toLowerCase();
 

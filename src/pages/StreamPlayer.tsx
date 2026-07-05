@@ -28,7 +28,7 @@ import { isCapacitor } from "../lib/platform";
 import { enterNativePip } from "../lib/pip";
 import { pushProgress, pullRemoteProgress } from "../lib/supabase-sync";
 import { getPlayUrl as getDownloadPlayUrl, readLocalFile, isLocalDownloadUrl, getDownloads, subscribeDownloads } from "../lib/downloads";
-import { scoreMatch } from "../lib/match";
+import { scoreMatch, pickVerifiedCandidate } from "../lib/match";
 
 // ── Synthetic anime ID for AnimePahe-only watches ─────────────────────────
 // When a user watches via Latest Episodes there is no AniList ID in the URL.
@@ -426,39 +426,16 @@ export default function StreamPlayer({
           // Verify each provider's pick against real ids when we have them —
           // titles lie (anikoto's "City Hunter" entry actually contains City
           // Hunter '91's episodes), but the provider-embedded MAL id doesn't.
+          // pickVerifiedCandidate runs checks serially/time-boxed: the common
+          // case costs ONE provider request; parallel bursts tripped anti-bot
+          // limits and froze the whole app.
           const realAnilistId = anilistId > 0 && anilistId < 1_000_000_000 ? anilistId : undefined;
           const uniqueProviders: any[] = [];
           for (const [pid, candidates] of byProvider.entries()) {
             let pick = candidates[0];
             if (realAnilistId || targetMalId) {
-              const rejects = plausibleRejects.filter((i) => (i.providerId || "animepahe") === pid).slice(0, 3);
-              const pool = [...candidates, ...rejects];
-              const checks = await Promise.all(
-                pool.map(async (c) => ({
-                  c,
-                  ids: (await window.api.pahe.getIds(c.paheId ?? c.id, c.session ?? c.id).catch(() => ({}))) as any,
-                })),
-              );
-              const verified = checks.find(
-                ({ ids }) =>
-                  (realAnilistId && ids?.anilistId === realAnilistId) ||
-                  (targetMalId && ids?.malId === targetMalId),
-              );
-              if (verified) {
-                pick = verified.c;
-              } else {
-                // Nothing verified. If the top pick's id is KNOWN and wrong,
-                // prefer the best candidate with unknown ids over a known-wrong one.
-                const topIds = checks[0]?.ids;
-                const topKnownWrong =
-                  topIds &&
-                  ((topIds.malId && targetMalId && topIds.malId !== targetMalId) ||
-                    (topIds.anilistId && realAnilistId && topIds.anilistId !== realAnilistId));
-                if (topKnownWrong) {
-                  const unknown = checks.find(({ ids }) => !ids?.malId && !ids?.anilistId);
-                  if (unknown) pick = unknown.c;
-                }
-              }
+              const rejects = plausibleRejects.filter((i) => (i.providerId || "animepahe") === pid).slice(0, 2);
+              pick = (await pickVerifiedCandidate([...candidates, ...rejects], realAnilistId, targetMalId)) ?? pick;
             }
             uniqueProviders.push(pick);
           }

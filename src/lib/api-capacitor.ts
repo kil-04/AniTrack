@@ -249,6 +249,9 @@ const ANIKOTO_BASE_URL = "https://anikoto.cz";
 
 // MAL id per anikoto slug, harvested from the episode list (see getEpisodes).
 const _anikotoMalIds = new Map<string, number | null>();
+// Episode-list cache + in-flight dedup for the Android anikoto provider.
+const _anikotoEpsCache = new Map<string, { value: any; expires: number }>();
+const _anikotoEpsPending = new Map<string, Promise<any>>();
 
 async function anikotoFetch(url: string, options: RequestInit = {}): Promise<any> {
   const fullUrl = url.startsWith("http") ? url : `${ANIKOTO_BASE_URL}${url}`;
@@ -405,6 +408,29 @@ const anikotoProvider = {
   },
 
   async getEpisodes(animeId: string, page = 1) {
+    // Cache + in-flight dedup (mirrors the desktop provider): id verification
+    // and playback both need this list — they must share ONE fetch, or bursts
+    // trip the site's anti-bot limit and everything starts timing out.
+    const cached = _anikotoEpsCache.get(animeId);
+    if (cached && Date.now() < cached.expires) return cached.value;
+    const pending = _anikotoEpsPending.get(animeId);
+    if (pending) return pending;
+    const promise = this._getEpisodesUncached(animeId, page)
+      .then((value: any) => {
+        _anikotoEpsCache.set(animeId, { value, expires: Date.now() + 15 * 60 * 1000 });
+        if (_anikotoEpsCache.size > 100) {
+          const oldest = _anikotoEpsCache.keys().next().value;
+          if (oldest !== undefined) _anikotoEpsCache.delete(oldest);
+        }
+        return value;
+      })
+      .finally(() => _anikotoEpsPending.delete(animeId));
+    _anikotoEpsPending.set(animeId, promise);
+    promise.catch(() => {});
+    return promise;
+  },
+
+  async _getEpisodesUncached(animeId: string, _page = 1) {
     console.log(`[Anikoto Capacitor] Fetching watch page HTML for showId: ${animeId}`);
     const resp = await anikotoFetch(`/watch/${animeId}`);
     const html = await resp.text();
