@@ -14,6 +14,8 @@ import {
   ChevronDown,
   ArrowLeft,
   X,
+  SkipBack,
+  SkipForward,
 } from "lucide-react";
 import { usePlayerStore } from "../store/usePlayerStore";
 import { SkipOverlay } from "../components/player/SkipOverlay";
@@ -2192,8 +2194,68 @@ export default function StreamPlayer({
   // ── Mini-player overlay (shown when minimized) ──────────────────────────────
   const expandMini = () => navigate(`/stream-player${search.startsWith("?") ? search : `?${search}`}`);
 
+  // Drag-to-move (YouTube-style): drag the card anywhere, snap to the nearest
+  // corner on release. A plain tap (movement < 8px) still expands the player.
+  const [miniPos, setMiniPos] = useState<{ x: number; y: number } | null>(null);
+  const miniDragRef = useRef<{ px: number; py: number; ox: number; oy: number; moved: boolean } | null>(null);
+  const miniSuppressClickRef = useRef(false);
+
+  function onMiniPointerDown(e: React.PointerEvent) {
+    if ((e.target as HTMLElement).closest("button")) return;
+    const card = (e.currentTarget as HTMLElement).parentElement;
+    if (!card) return;
+    const r = card.getBoundingClientRect();
+    miniDragRef.current = { px: e.clientX, py: e.clientY, ox: r.left, oy: r.top, moved: false };
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* ignore */ }
+  }
+  function onMiniPointerMove(e: React.PointerEvent) {
+    const d = miniDragRef.current;
+    if (!d) return;
+    const dx = e.clientX - d.px;
+    const dy = e.clientY - d.py;
+    if (!d.moved && Math.hypot(dx, dy) < 8) return;
+    d.moved = true;
+    const card = (e.currentTarget as HTMLElement).parentElement;
+    if (!card) return;
+    setMiniPos({
+      x: Math.min(Math.max(4, d.ox + dx), window.innerWidth - card.offsetWidth - 4),
+      y: Math.min(Math.max(4, d.oy + dy), window.innerHeight - card.offsetHeight - 4),
+    });
+  }
+  function onMiniPointerUp(e: React.PointerEvent) {
+    const d = miniDragRef.current;
+    miniDragRef.current = null;
+    if (!d?.moved) return;
+    miniSuppressClickRef.current = true; // this gesture was a drag, not a tap
+    const card = (e.currentTarget as HTMLElement).parentElement;
+    if (!card) return;
+    const r = card.getBoundingClientRect();
+    const margin = 12;
+    const bottomMargin = isMobile ? 88 : 24; // clear the bottom nav on phones
+    setMiniPos({
+      x: r.left + r.width / 2 < window.innerWidth / 2 ? margin : window.innerWidth - r.width - margin,
+      y: r.top + r.height / 2 < window.innerHeight / 2 ? margin : window.innerHeight - r.height - bottomMargin,
+    });
+  }
+
+  const miniCardStyle = miniPos
+    ? { left: miniPos.x, top: miniPos.y, right: "auto" as const, bottom: "auto" as const }
+    : undefined;
+
   const MiniOverlay = (
-    <div className="group absolute inset-0 z-[45] cursor-pointer" onClick={expandMini} title="Tap to expand">
+    <div
+      className="group absolute inset-0 z-[45] cursor-pointer select-none"
+      style={{ touchAction: "none" }}
+      onClick={() => {
+        if (miniSuppressClickRef.current) { miniSuppressClickRef.current = false; return; }
+        expandMini();
+      }}
+      onPointerDown={onMiniPointerDown}
+      onPointerMove={onMiniPointerMove}
+      onPointerUp={onMiniPointerUp}
+      onPointerCancel={() => { miniDragRef.current = null; }}
+      title="Tap to expand · drag to move"
+    >
       {/* Close */}
       <button
         onClick={(e) => { e.stopPropagation(); onClose(); }}
@@ -2202,15 +2264,39 @@ export default function StreamPlayer({
       >
         <X size={14} />
       </button>
-      {/* Center play/pause — always visible when paused/buffering, hover otherwise */}
+      {/* Expand */}
+      <button
+        onClick={(e) => { e.stopPropagation(); expandMini(); }}
+        className="absolute left-1.5 top-1.5 z-10 flex h-7 w-7 items-center justify-center rounded-full bg-black/60 text-white transition hover:bg-black/85"
+        title="Expand player"
+      >
+        <Maximize2 size={13} />
+      </button>
+      {/* Center controls — always visible (no hover on touch screens) */}
       {!upNext && (
-        <button
-          onClick={(e) => { e.stopPropagation(); const v = videoRef.current; if (!v) return; v.paused ? v.play().catch(() => {}) : v.pause(); }}
-          className={`absolute left-1/2 top-1/2 z-10 flex h-10 w-10 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white transition-opacity ${playing && !buffering ? "opacity-0 group-hover:opacity-100" : "opacity-100"}`}
-          title="Play / Pause"
-        >
-          {playing ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" className="ml-0.5" />}
-        </button>
+        <div className="absolute left-1/2 top-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2">
+          <button
+            onClick={(e) => { e.stopPropagation(); playPrev(); }}
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-black/60 text-white transition hover:bg-black/85"
+            title="Previous episode"
+          >
+            <SkipBack size={14} fill="currentColor" />
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); const v = videoRef.current; if (!v) return; v.paused ? v.play().catch(() => {}) : v.pause(); }}
+            className="flex h-11 w-11 items-center justify-center rounded-full bg-black/65 text-white transition hover:bg-black/85"
+            title="Play / Pause"
+          >
+            {playing ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" className="ml-0.5" />}
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); playNext(); }}
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-black/60 text-white transition hover:bg-black/85"
+            title="Next episode"
+          >
+            <SkipForward size={14} fill="currentColor" />
+          </button>
+        </div>
       )}
       {/* Title strip */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-2 pb-1.5 pt-5">
@@ -2237,6 +2323,7 @@ export default function StreamPlayer({
             ? "fixed bottom-20 right-3 z-[60] aspect-video w-[min(62vw,320px)] overflow-hidden rounded-xl border border-white/15 bg-black text-white shadow-2xl"
             : "fixed inset-0 z-[60] flex flex-col overflow-hidden bg-[#000000] text-white"
         }
+        style={minimized ? miniCardStyle : undefined}
       >
         {/* Top bar */}
         <div className={`flex h-12 flex-shrink-0 items-center gap-2 bg-[#000000] px-3 ${minimized || fs ? "hidden" : ""}`}>
@@ -2273,6 +2360,7 @@ export default function StreamPlayer({
           ? "fixed bottom-6 right-6 z-[60] aspect-video w-[400px] overflow-hidden rounded-xl border border-white/15 bg-black text-white shadow-2xl"
           : "fixed inset-0 z-[60] flex flex-col overflow-hidden bg-[#000000] text-white"
       }
+      style={minimized ? miniCardStyle : undefined}
     >
 
       {/* Top bar */}

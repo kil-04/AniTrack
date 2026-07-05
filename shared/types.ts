@@ -77,6 +77,7 @@ export interface ContinueWatchingItem {
   filePath?: string | null;
   percent: number;
   animePaheSession?: string | null;  // set for pahe-only watches (no AniList ID)
+  updatedAt: number;                 // real watch time — cross-device sync ordering depends on this
 }
 
 export interface MalAuthState {

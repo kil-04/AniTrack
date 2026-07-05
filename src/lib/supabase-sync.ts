@@ -270,6 +270,10 @@ export async function pullRemoteProgress(animeId: number, episode: number): Prom
 function localItemToRow(item: any): PlaybackRow | null {
   const animeId = item?.anime?.id;
   if (animeId == null) return null;
+  // NEVER fabricate a timestamp. Defaulting to Date.now() here once re-stamped
+  // every gist row on each sync, flattening the continue-watching order across
+  // devices. A row without a real watch time simply doesn't get pushed.
+  if (item.updatedAt == null) return null;
   return {
     animeId,
     episode: item.episode,
@@ -278,7 +282,7 @@ function localItemToRow(item: any): PlaybackRow | null {
     animeTitle: item.anime?.title ?? undefined,
     animeCoverUrl: item.anime?.coverImage ?? undefined,
     animePaheSession: item.animePaheSession ?? undefined,
-    updatedAt: item.updatedAt ?? Date.now(),
+    updatedAt: item.updatedAt,
   };
 }
 

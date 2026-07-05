@@ -470,6 +470,7 @@ export function getContinueWatching(limit = 20, offset = 0): ContinueWatchingIte
       filePath: r.le_file_path ?? null,
       percent,
       animePaheSession: r.pb_pahe_session ?? null,
+      updatedAt: r.pb_updated_at,
     });
   }
   return items;
