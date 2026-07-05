@@ -104,6 +104,9 @@ export default function StreamPlayer({
     [navigate],
   );
   const animeSession = params.get("session") ?? "";
+  // The session the player was OPENED with (from CW card / detail page). Used to
+  // limit stale-session self-healing to stored sessions only.
+  const initialSessionRef = useRef(animeSession);
   const providerId = params.get("providerId") ?? "animepahe";
   const animeTitle = params.get("title") ?? "Anime";
   const animeCoverUrl = params.get("coverUrl") ?? params.get("img") ?? undefined;
@@ -508,6 +511,18 @@ export default function StreamPlayer({
           p.set("providerId", "animepahe");
           p.set("session", paheMatch.id || paheMatch.session);
           changed = true;
+        } else if (animeSession === initialSessionRef.current && providerId === "anikoto" && anikotoMatch && (anikotoMatch.id || anikotoMatch.session) !== animeSession) {
+          // Same provider, but the STORED session (the one we were opened with)
+          // doesn't match the freshly-scored best entry for this anime — it's
+          // stale or wrong (e.g. an old bad match resurrected by cross-device
+          // sync, like City Hunter opening City Hunter '91). Self-heal to the
+          // fresh match. Guarded to the initial session only, so a source the
+          // user deliberately switched to in-session is never overridden.
+          p.set("session", anikotoMatch.id || anikotoMatch.session);
+          changed = true;
+        } else if (animeSession === initialSessionRef.current && providerId === "animepahe" && isPaheSession && paheMatch && (paheMatch.id || paheMatch.session) !== animeSession) {
+          p.set("session", paheMatch.id || paheMatch.session);
+          changed = true;
         }
       }
     }
@@ -644,6 +659,16 @@ export default function StreamPlayer({
   // per-anime caches and episode state exactly like a fresh mount would —
   // paheCacheRef is keyed by page NUMBER, so stale entries would otherwise serve
   // the previous anime's episode list.
+  // Re-arm stale-session self-healing when a different SHOW arrives (the
+  // persistent mini-player instance can be handed a new anime via params).
+  const prevTitleRef = useRef(animeTitle);
+  useEffect(() => {
+    if (prevTitleRef.current === animeTitle) return;
+    prevTitleRef.current = animeTitle;
+    initialSessionRef.current = animeSession;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [animeTitle]);
+
   const prevSessionKeyRef = useRef(`${animeSession}|${providerId}`);
   useEffect(() => {
     const key = `${animeSession}|${providerId}`;

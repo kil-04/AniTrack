@@ -66,23 +66,46 @@ const AniTrackSettings = registerPlugin<SettingsPlugin>("AniTrackSettings");
 
 const ANILIST_GQL = "https://graphql.anilist.co";
 
-// Serial queue + TTL cache + 429 retry — mirrors electron/services/anilist.ts.
-// Without this, the Home page's many concurrent AniList calls (trending, Top 10,
-// discover rows, filter) hammer AniList and trigger 429s, leaving the app empty
-// on Android (CapacitorHttp has no throttling of its own).
-let _alQueueTail: Promise<void> = Promise.resolve();
+// Two-lane serial scheduler + TTL cache + 429 retry — mirrors electron/services/anilist.ts.
+// All requests stay serialized (AniList 429s otherwise), but interactive calls
+// (search / filter / detail get) go through the HIGH lane and always run before
+// queued background work (watch-order relations crawl, trending, airing). Without
+// the lanes, a Search or Filter request can sit behind dozens of queued background
+// calls at 350ms spacing and appear to load forever.
+const _alHigh: Array<() => Promise<void>> = [];
+const _alLow: Array<() => Promise<void>> = [];
+let _alPumping = false;
 let _alStartup = true;
 setTimeout(() => { _alStartup = false; }, 6000);
 const _alCache = new Map<string, { value: unknown; expires: number }>();
 const AL_CACHE_TTL = 5 * 60 * 1000;
 
-async function alGql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+async function _alPump() {
+  if (_alPumping) return;
+  _alPumping = true;
+  try {
+    while (_alHigh.length || _alLow.length) {
+      const job = (_alHigh.shift() ?? _alLow.shift())!;
+      await job();
+      // Space requests so we stay under AniList's ~90/min limit.
+      await new Promise((r) => setTimeout(r, _alStartup ? 700 : 350));
+    }
+  } finally {
+    _alPumping = false;
+  }
+}
+
+async function alGql<T>(
+  query: string,
+  variables: Record<string, unknown>,
+  priority: "high" | "low" = "high",
+): Promise<T> {
   const key = JSON.stringify({ query, variables });
   const hit = _alCache.get(key);
   if (hit && Date.now() < hit.expires) return hit.value as T;
 
   return new Promise<T>((resolve, reject) => {
-    _alQueueTail = _alQueueTail.then(async () => {
+    const job = async () => {
       try {
         const result = await _alDoGql<T>(query, variables);
         _alCache.set(key, { value: result, expires: Date.now() + AL_CACHE_TTL });
@@ -94,9 +117,9 @@ async function alGql<T>(query: string, variables: Record<string, unknown>): Prom
       } catch (err) {
         reject(err);
       }
-      // Space requests so we stay under AniList's ~90/min limit.
-      await new Promise((r) => setTimeout(r, _alStartup ? 700 : 350));
-    });
+    };
+    (priority === "high" ? _alHigh : _alLow).push(job);
+    void _alPump();
   });
 }
 
@@ -876,7 +899,7 @@ export async function installCapacitorApiBridge() {
             Page(perPage: 20) {
               media(type: ANIME, sort: TRENDING_DESC, status_in: [RELEASING, NOT_YET_RELEASED]) { ${MEDIA_FIELDS} }
             }
-          }`, {});
+          }`, {}, "low");
         return (data.Page?.media ?? []).map((m: any) => mapMedia(m));
       },
       async get(id: number) {
@@ -902,7 +925,7 @@ export async function installCapacitorApiBridge() {
                     nextAiringEpisode { airingAt episode }
                   }
                 }
-              }`, { ids: chunk });
+              }`, { ids: chunk }, "low");
             for (const m of (data.Page?.media ?? [])) {
               if (!m.nextAiringEpisode) continue;
               out.push({
@@ -925,7 +948,7 @@ export async function installCapacitorApiBridge() {
               Media(id: $id) {
                 relations { edges { relationType(version: 2) node { ${MEDIA_FIELDS} } } }
               }
-            }`, { id });
+            }`, { id }, "low");
           return (data.Media?.relations?.edges ?? []).map((edge: any) => ({
             relationType: edge.relationType,
             anime: mapMedia(edge.node),

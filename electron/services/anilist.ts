@@ -127,29 +127,52 @@ function rankByRelevance(query: string, media: MediaNode[]): MediaNode[] {
     .map((x) => x.m);
 }
 
-// Serial queue: only one AniList request in-flight at a time to prevent 429 storms.
-// On app startup, 20+ components fire requests concurrently. Without serialisation,
-// all of them hit AniList within seconds and trigger rate-limiting.
-let queueTail: Promise<void> = Promise.resolve();
+// Two-lane serial scheduler: only one AniList request in-flight at a time to
+// prevent 429 storms, but interactive calls (search / filter / detail get) go
+// through the HIGH lane and always run before queued background work (the
+// watch-order relations crawl, trending, airing batches). Without the lanes a
+// user search can sit behind dozens of queued background calls at 300ms
+// spacing and appear to load forever.
+const gqlHigh: Array<() => Promise<void>> = [];
+const gqlLow: Array<() => Promise<void>> = [];
+let gqlPumping = false;
 let isStartup = true;
 setTimeout(() => { isStartup = false; }, 6000); // 6 seconds for initial app bootup
 
 const MAX_RETRIES = 3;
 
-async function gql<T>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
-  // Chain onto the queue so requests run one-at-a-time.
+async function gqlPump() {
+  if (gqlPumping) return;
+  gqlPumping = true;
+  try {
+    while (gqlHigh.length || gqlLow.length) {
+      const job = (gqlHigh.shift() ?? gqlLow.shift())!;
+      await job();
+      // Spaced gap to protect rate-limit: 700ms during startup storm, 300ms after.
+      const gap = isStartup ? 700 : 300;
+      await new Promise(r => setTimeout(r, gap));
+    }
+  } finally {
+    gqlPumping = false;
+  }
+}
+
+async function gql<T>(
+  query: string,
+  variables: Record<string, unknown> = {},
+  priority: "high" | "low" = "high",
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    queueTail = queueTail.then(async () => {
+    const job = async () => {
       try {
         const result = await _doGql<T>(query, variables);
         resolve(result);
       } catch (err) {
         reject(err);
       }
-      // Spaced gap to protect rate-limit: 700ms during startup storm, 300ms for blazing-fast interactive searches.
-      const gap = isStartup ? 700 : 300;
-      await new Promise(r => setTimeout(r, gap));
-    });
+    };
+    (priority === "high" ? gqlHigh : gqlLow).push(job);
+    void gqlPump();
   });
 }
 
@@ -246,6 +269,7 @@ export async function getAiringFor(
         }
       }`,
       { ids: chunk },
+      "low",
     );
     for (const m of data.Page.media) {
       if (!m.nextAiringEpisode) continue;
@@ -367,6 +391,8 @@ export async function trending(): Promise<AnimeMeta[]> {
         media(type: ANIME, sort: TRENDING_DESC) { ${MEDIA_FIELDS} }
       }
     }`,
+    {},
+    "low",
   );
   const result = data.Page.media.map(toAnime);
   cacheSet("trending", result);
@@ -417,6 +443,7 @@ export async function getRelations(id: number): Promise<RelatedAnime[]> {
       }
     }`,
     { id },
+    "low",
   );
   if (!data.Media) return [];
   const result = data.Media.relations.edges
