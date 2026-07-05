@@ -50,7 +50,7 @@ contextBridge.exposeInMainWorld("api", {
       ipcRenderer.invoke(IPC.PAHE_LINKS, providerId, episodeId, animeId),
     resolve: (providerId: string, linkId: string) => ipcRenderer.invoke(IPC.PAHE_RESOLVE, providerId, linkId),
     prefetch: (providerIdOrKwikUrl: string, linkId?: string) => ipcRenderer.invoke(IPC.PAHE_PREFETCH, providerIdOrKwikUrl, linkId),
-    getIds: (paheId: number, session: string) => ipcRenderer.invoke(IPC.PAHE_GET_IDS, paheId, session),
+    getIds: (paheId: number | string, session: string) => ipcRenderer.invoke(IPC.PAHE_GET_IDS, paheId, session),
     findById: (anilistId: number | undefined, malId?: number) => ipcRenderer.invoke(IPC.PAHE_FIND_BY_ID, anilistId, malId),
     getUrl: () => ipcRenderer.invoke(IPC.PAHE_GET_URL),
     setUrl: (url: string) => ipcRenderer.invoke(IPC.PAHE_SET_URL, url),

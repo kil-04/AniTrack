@@ -148,7 +148,7 @@ async function _alDoGql<T>(query: string, variables: Record<string, unknown>): P
 }
 
 const MEDIA_FIELDS = `
-  id title { romaji english native } synonyms coverImage { large } bannerImage
+  id idMal title { romaji english native } synonyms coverImage { large } bannerImage
   episodes status format popularity season seasonYear averageScore genres description(asHtml: false)
   startDate { year month day } nextAiringEpisode { airingAt episode }
   studios(isMain: true) { nodes { name } }
@@ -157,6 +157,7 @@ const MEDIA_FIELDS = `
 function mapMedia(m: any) {
   return {
     id: m.id,
+    malId: m.idMal ?? null,
     title: m.title?.english || m.title?.romaji || "Unknown",
     titleEnglish: m.title?.english ?? null,
     titleRomaji: m.title?.romaji ?? null,
@@ -245,6 +246,9 @@ let _alState: import("../../shared/types").AniListAuthState = {
 // ── Anikoto Provider (Browserless HTTP Scraper) ────────────────────────────────
 
 const ANIKOTO_BASE_URL = "https://anikoto.cz";
+
+// MAL id per anikoto slug, harvested from the episode list (see getEpisodes).
+const _anikotoMalIds = new Map<string, number | null>();
 
 async function anikotoFetch(url: string, options: RequestInit = {}): Promise<any> {
   const fullUrl = url.startsWith("http") ? url : `${ANIKOTO_BASE_URL}${url}`;
@@ -417,6 +421,11 @@ const anikotoProvider = {
     });
     const listJson = await listResp.json() as any;
     const listHtml = listJson.result || "";
+
+    // Harvest the MAL id from the episode anchors (data-mal) — anikoto entries
+    // can be mislabeled, and this id is the only reliable identity check.
+    const malM = /data-mal="(\d+)"/.exec(listHtml);
+    _anikotoMalIds.set(animeId, malM ? parseInt(malM[1], 10) : null);
 
     const episodes = [];
     const regex = /<a[^>]+data-id="([^"]+)"[^>]+data-slug="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
@@ -1060,8 +1069,19 @@ export async function installCapacitorApiBridge() {
       async prefetch(kwikUrl: string) {
         return AniTrackPahe.prefetch({ kwikUrl: String(kwikUrl) });
       },
-      async getIds(paheId: number, session: string) {
-        const raw = await AniTrackPahe.getIds({ paheId, session: String(session) });
+      async getIds(paheId: number | string, session: string) {
+        // Anikoto candidates pass their slug (non-numeric string). Their MAL id
+        // lives in the episode list — fetch it so title-mislabeled entries
+        // (e.g. anikoto's "City Hunter" actually being City Hunter '91) can be
+        // caught by id verification, same as on desktop.
+        if (typeof paheId === "string" && !/^\d+$/.test(paheId)) {
+          if (!_anikotoMalIds.has(paheId)) {
+            try { await anikotoProvider.getEpisodes(paheId, 1); } catch { /* unreachable */ }
+          }
+          const mal = _anikotoMalIds.get(paheId);
+          return mal != null ? { malId: mal } : {};
+        }
+        const raw = await AniTrackPahe.getIds({ paheId: Number(paheId), session: String(session) });
         return JSON.parse(raw.value);
       },
       async findById(anilistId?: number, malId?: number) {

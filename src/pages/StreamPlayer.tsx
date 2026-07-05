@@ -350,10 +350,12 @@ export default function StreamPlayer({
         } catch (e) {
           console.warn("[StreamPlayer] Failed to load AniList metadata:", e);
         }
+        let targetMalId: number | undefined;
         if (meta) {
           if (meta.year) targetYear = meta.year;
           if (meta.episodes) targetEpisodes = meta.episodes;
           if (meta.status) targetStatus = meta.status;
+          if (meta.malId) targetMalId = meta.malId;
           if (meta.titleRomaji && meta.titleRomaji.toLowerCase() !== animeTitle.toLowerCase()) {
             searchQueries.push(meta.titleRomaji);
           }
@@ -399,15 +401,66 @@ export default function StreamPlayer({
           .map((x) => x.item);
 
         if (scored.length > 0) {
-          // Deduplicate available sources by provider ID, keeping the highest-scored match for each provider
-          const uniqueProviders: any[] = [];
-          const seenProviders = new Set<string>();
+          // Group the top few candidates per provider (score order preserved).
+          const byProvider = new Map<string, any[]>();
           for (const item of scored) {
             const pid = item.providerId || "animepahe";
-            if (!seenProviders.has(pid)) {
-              seenProviders.add(pid);
-              uniqueProviders.push(item);
+            const arr = byProvider.get(pid) ?? [];
+            if (arr.length < 3) arr.push(item);
+            byProvider.set(pid, arr);
+          }
+
+          // Title-plausible candidates the YEAR gate rejected. A mislabeled
+          // entry parses the wrong year out of its lying title (anikoto's real
+          // City Hunter is titled "City Hunter '91"), so id verification must
+          // get a look at these too.
+          const normT = (s: string) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, " ").replace(/\s+/g, " ").trim();
+          const plausibleRejects = Array.from(combinedMap.values())
+            .filter(({ item }) => targetYear && item.year && Math.abs(Number(item.year) - targetYear) > 3)
+            .filter(({ item }) => {
+              const c = normT(item.title);
+              return searchQueries.some((q) => { const t = normT(q); return !!t && !!c && (c.includes(t) || t.includes(c)); });
+            })
+            .map(({ item }) => item);
+
+          // Verify each provider's pick against real ids when we have them —
+          // titles lie (anikoto's "City Hunter" entry actually contains City
+          // Hunter '91's episodes), but the provider-embedded MAL id doesn't.
+          const realAnilistId = anilistId > 0 && anilistId < 1_000_000_000 ? anilistId : undefined;
+          const uniqueProviders: any[] = [];
+          for (const [pid, candidates] of byProvider.entries()) {
+            let pick = candidates[0];
+            if (realAnilistId || targetMalId) {
+              const rejects = plausibleRejects.filter((i) => (i.providerId || "animepahe") === pid).slice(0, 3);
+              const pool = [...candidates, ...rejects];
+              const checks = await Promise.all(
+                pool.map(async (c) => ({
+                  c,
+                  ids: (await window.api.pahe.getIds(c.paheId ?? c.id, c.session ?? c.id).catch(() => ({}))) as any,
+                })),
+              );
+              const verified = checks.find(
+                ({ ids }) =>
+                  (realAnilistId && ids?.anilistId === realAnilistId) ||
+                  (targetMalId && ids?.malId === targetMalId),
+              );
+              if (verified) {
+                pick = verified.c;
+              } else {
+                // Nothing verified. If the top pick's id is KNOWN and wrong,
+                // prefer the best candidate with unknown ids over a known-wrong one.
+                const topIds = checks[0]?.ids;
+                const topKnownWrong =
+                  topIds &&
+                  ((topIds.malId && targetMalId && topIds.malId !== targetMalId) ||
+                    (topIds.anilistId && realAnilistId && topIds.anilistId !== realAnilistId));
+                if (topKnownWrong) {
+                  const unknown = checks.find(({ ids }) => !ids?.malId && !ids?.anilistId);
+                  if (unknown) pick = unknown.c;
+                }
+              }
             }
+            uniqueProviders.push(pick);
           }
           setAvailableSources(uniqueProviders);
         } else {

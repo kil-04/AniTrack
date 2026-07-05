@@ -212,12 +212,26 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
 
       if (validResults.length > 0) {
         setResults(validResults);
-        
+
         let best = null;
         if (realAnilistId || realMalId) {
-          const topThree = validResults.slice(0, 3);
+          // Also verify title-plausible candidates the YEAR filter rejected:
+          // a mislabeled provider entry parses the wrong year from its lying
+          // title (anikoto's real City Hunter is titled "City Hunter '91"),
+          // so the id check must get a look at those too.
+          const normT = (s: string) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, " ").replace(/\s+/g, " ").trim();
+          const plausibleRejects = allCandidates
+            .filter(({ candidate }) => animeYear && candidate.year && Math.abs(Number(candidate.year) - animeYear) > 3)
+            .filter(({ candidate }) => {
+              const c = normT(candidate.title ?? "");
+              return searchQueries.some((q) => { const t = normT(q); return !!t && !!c && (c.includes(t) || t.includes(c)); });
+            })
+            .map(({ candidate }) => candidate)
+            .slice(0, 3);
+
+          const pool = [...validResults.slice(0, 3), ...plausibleRejects];
           const checks = await Promise.all(
-            topThree.map(async (candidate) => {
+            pool.map(async (candidate) => {
               const ids = (await window.api.pahe.getIds(candidate.paheId ?? candidate.id, candidate.session ?? candidate.id).catch(() => ({}))) as any;
               return { candidate, ids };
             })
@@ -228,12 +242,16 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
           }
         }
 
+        // A verified year-reject isn't in the visible results yet — surface it first.
+        const finalResults = best && !validResults.includes(best) ? [best, ...validResults] : validResults;
+        if (finalResults !== validResults) setResults(finalResults);
+
         if (!best) {
           best = validResults[0];
         }
 
         setSelected(best);
-        _searchCache.set(cacheKey, { results: validResults, selected: best });
+        _searchCache.set(cacheKey, { results: finalResults, selected: best });
       } else {
         setResults([]);
         setManualQuery(animeTitle);

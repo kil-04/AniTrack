@@ -166,6 +166,12 @@ export class AnikotoProvider implements StreamProvider {
   private readonly EPISODES_CACHE_TTL = 15 * 60 * 1000; // 15 minutes
   private episodesPending = new Map<string, Promise<{ data: EpisodeInfo[]; total: number; lastPage: number }>>();
 
+  // MAL id per slug, harvested from the episode list's data-mal attribute.
+  // Anikoto entries can be MISLABELED (their "City Hunter" is actually City
+  // Hunter '91's episodes) — the embedded MAL id is the only reliable truth,
+  // so match verification uses this instead of trusting titles.
+  private malIdCache = new Map<string, number | null>();
+
   private resolveCache = new Map<string, { data: StreamData; timestamp: number }>();
   private readonly RESOLVE_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
   private resolvePending = new Map<string, Promise<StreamData>>();
@@ -292,6 +298,11 @@ export class AnikotoProvider implements StreamProvider {
       const listJson = (await listResp.json()) as any;
       const listHtml = listJson.result || "";
 
+      // Harvest the MAL id the episode anchors carry (data-mal) — used to
+      // verify search matches against AniList/MAL ids.
+      const malM = /data-mal="(\d+)"/.exec(listHtml);
+      this.malIdCache.set(animeId, malM ? parseInt(malM[1], 10) : null);
+
       // Parse episodes from returned HTML using fast regex
       const episodes: EpisodeInfo[] = [];
       const regex = /<a[^>]+data-id="([^"]+)"[^>]+data-slug="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
@@ -348,6 +359,17 @@ export class AnikotoProvider implements StreamProvider {
     // unhandled rejection — the caller still receives the original rejection.
     promise.finally(() => this.episodesPending.delete(animeId)).catch(() => {});
     return promise;
+  }
+
+  /** External ids for a slug — the MAL id embedded in the episode list. Reuses
+   *  the episode fetch (cache + in-flight dedup), so verifying a match costs at
+   *  most one episodes load that the player would do anyway. */
+  async getAnimeIds(animeId: string): Promise<{ malId?: number; anilistId?: number }> {
+    if (!this.malIdCache.has(animeId)) {
+      try { await this.getEpisodes(animeId, 1); } catch { /* unreachable page */ }
+    }
+    const mal = this.malIdCache.get(animeId);
+    return mal != null ? { malId: mal } : {};
   }
 
   async getStreamLinks(episodeId: string, animeId: string): Promise<StreamLink[]> {

@@ -9,7 +9,7 @@ import {
   getPaheBaseUrl,
   setPaheBaseUrl,
 } from "../services/providers/animepahe";
-import { getAnikotoTop } from "../services/providers/anikoto";
+import { getAnikotoTop, AnikotoProvider } from "../services/providers/anikoto";
 
 export function registerPaheIpc(registerWebRequestHandlers: () => void) {
   ipcMain.handle(IPC.PAHE_LATEST, (_e, page = 1) => paheLatest(30, page));
@@ -36,9 +36,17 @@ export function registerPaheIpc(registerWebRequestHandlers: () => void) {
     }
     return { ok: true };
   });
-  ipcMain.handle(IPC.PAHE_GET_IDS, (_e, paheId: number, session: string) =>
-    paheGetIds(paheId, session)
-  );
+  ipcMain.handle(IPC.PAHE_GET_IDS, (_e, paheId: number | string, session: string) => {
+    // Anikoto candidates pass their slug (non-numeric string) as the id; pahe
+    // candidates pass a numeric paheId + UUID session. Route accordingly so
+    // match verification works for BOTH providers (anikoto entries can be
+    // mislabeled — only their embedded MAL id tells the truth).
+    if (typeof paheId === "string" && !/^\d+$/.test(paheId)) {
+      const anikoto = providerManager.getProvider("anikoto") as AnikotoProvider;
+      return anikoto.getAnimeIds(paheId);
+    }
+    return paheGetIds(Number(paheId), session);
+  });
   ipcMain.handle(IPC.PAHE_FIND_BY_ID, (_e, anilistId: number | undefined, malId: number | undefined) =>
     paheFindById(anilistId, malId)
   );

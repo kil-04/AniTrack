@@ -52,7 +52,9 @@ interface ApiBridge {
     links(providerId: string, episodeId: string, animeId: string): Promise<any[]>;
     resolve(providerId: string, linkId: string): Promise<{ url: string; cookies?: string; subtitles?: any[]; intro?: any; outro?: any; referer?: string }>;
     prefetch(providerIdOrKwikUrl: string, linkId?: string): Promise<{ ok: boolean }>;
-    getIds(paheId: number, session: string): Promise<{ malId?: number; anilistId?: number; kitsuId?: number }>;
+    // paheId is the numeric AnimePahe id, OR an Anikoto slug (string) — the
+    // handler routes by shape so id verification works for both providers.
+    getIds(paheId: number | string, session: string): Promise<{ malId?: number; anilistId?: number; kitsuId?: number }>;
     findById(anilistId: number | undefined, malId?: number): Promise<any>;
     getUrl(): Promise<string>;
     setUrl(url: string): Promise<{ ok: boolean; url: string; reason?: string }>;
