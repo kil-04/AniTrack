@@ -226,7 +226,12 @@ export default function StreamPlayer({
   const rangeStartRef = useRef(rangeStart);
   const totalEpisodesRef = useRef(totalEpisodes);
   // Cache of fetched episode pages by AnimePahe page number — survives range changes.
-  const paheCacheRef = useRef<Map<number, any>>(new Map());
+  // Episode-page cache. Keyed by `${session}:${page}` — NEVER by page alone:
+  // the player instance persists across shows (mini-player) and sessions can
+  // switch mid-load (stale-session self-heal), so an in-flight fetch for the
+  // old session must not be able to poison the new session's pages (this is
+  // how City Hunter once showed City Hunter '91 for its first 13 episodes).
+  const paheCacheRef = useRef<Map<string, any>>(new Map());
   const lastPositionUpdate = useRef<number>(0);
 
   // Live mirror of availableSources + the auto-fallback fn so stale closures
@@ -656,9 +661,8 @@ export default function StreamPlayer({
   // Fetch a single page with caching (paheCacheRef survives navigation).
   // The player instance persists across navigations now (mini-player), so a new
   // anime/provider session can arrive on an already-mounted component. Reset the
-  // per-anime caches and episode state exactly like a fresh mount would —
-  // paheCacheRef is keyed by page NUMBER, so stale entries would otherwise serve
-  // the previous anime's episode list.
+  // per-anime caches (memory hygiene — keys are session-scoped) and episode
+  // state exactly like a fresh mount would.
   // Re-arm stale-session self-healing when a different SHOW arrives (the
   // persistent mini-player instance can be handed a new anime via params).
   const prevTitleRef = useRef(animeTitle);
@@ -687,12 +691,14 @@ export default function StreamPlayer({
   }, [animeSession, providerId]);
 
   const fetchPahePage = useCallback(async (paheePage: number): Promise<{ data: any[]; total: number; lastPage: number }> => {
-    const cached = paheCacheRef.current.get(paheePage);
-    if (cached) return { data: cached, total: totalEpisodesRef.current, lastPage: paheCacheRef.current.get(-1) ?? 999 };
+    const cacheKey = `${providerId}:${animeSession}:${paheePage}`;
+    const lastPageKey = `${providerId}:${animeSession}:lastPage`;
+    const cached = paheCacheRef.current.get(cacheKey);
+    if (cached) return { data: cached, total: totalEpisodesRef.current, lastPage: paheCacheRef.current.get(lastPageKey) ?? 999 };
     try {
       const r = await window.api.pahe.episodes(providerId, animeSession, paheePage);
-      paheCacheRef.current.set(paheePage, r.data);
-      paheCacheRef.current.set(-1, r.lastPage ?? 999); // cache lastPage under key -1
+      paheCacheRef.current.set(cacheKey, r.data);
+      paheCacheRef.current.set(lastPageKey, r.lastPage ?? 999);
       return { data: r.data, total: r.total, lastPage: r.lastPage ?? 999 };
     } catch {
       return { data: [], total: 0, lastPage: 1 };
