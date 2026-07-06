@@ -43,6 +43,7 @@ export function clearSyncConfig() {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(GISTID_KEY);
   cache = {};
+  tombstones = {};
   cacheLoaded = false;
   cacheAt = 0;
   dirty.clear();
@@ -76,6 +77,12 @@ const GH = "https://api.github.com";
 // ── Gist storage ──────────────────────────────────────────────────────────────
 
 let cache: Record<string, PlaybackRow> = {};
+// Deletion tombstones: animeId -> when it was dismissed. Without these, the
+// OTHER device's push-back re-uploads its local rows for a dismissed show and
+// resurrects it in Continue Watching everywhere. A tombstone beats any row
+// older than it; watching the show again (newer row) clears the tombstone.
+let tombstones: Record<string, number> = {};
+const TOMBSTONE_TTL = 90 * 24 * 3600 * 1000;
 let cacheLoaded = false;
 let cacheAt = 0; // when the cache last saw the remote gist
 const CACHE_STALE_MS = 60_000;
@@ -86,11 +93,30 @@ function rowKey(animeId: number, episode: number) {
   return `${animeId}:${episode}`;
 }
 
-/** Fold remote rows into the cache, keeping whichever side is newer per key.
- *  Never blindly replaces the cache — un-flushed local rows must survive. */
-function mergeRemoteIntoCache(remote: Record<string, PlaybackRow>) {
-  for (const [k, v] of Object.entries(remote)) {
+function tombstoneCovers(animeId: number | string, updatedAt: number | undefined): boolean {
+  const ts = tombstones[String(animeId)];
+  return ts != null && (updatedAt ?? 0) <= ts;
+}
+
+interface RemoteDoc {
+  rows: Record<string, PlaybackRow>;
+  deleted: Record<string, number>;
+}
+
+/** Fold remote rows + tombstones into the cache, keeping whichever side is
+ *  newer per key. Never blindly replaces the cache — un-flushed local rows
+ *  must survive. */
+function mergeRemoteIntoCache(remote: RemoteDoc) {
+  for (const [id, ts] of Object.entries(remote.deleted)) {
+    if (!(id in tombstones) || ts > tombstones[id]) tombstones[id] = ts;
+  }
+  for (const [k, v] of Object.entries(remote.rows)) {
+    if (tombstoneCovers(k.split(":")[0], v.updatedAt)) continue;
     if (!cache[k] || (v.updatedAt ?? 0) > (cache[k].updatedAt ?? 0)) cache[k] = v;
+  }
+  // Drop cached rows a (possibly newer) tombstone now covers.
+  for (const k of Object.keys(cache)) {
+    if (tombstoneCovers(k.split(":")[0], cache[k].updatedAt)) { delete cache[k]; dirty.delete(k); }
   }
   cacheLoaded = true;
   cacheAt = Date.now();
@@ -126,22 +152,27 @@ async function ensureGistId(cfg: SyncConfig): Promise<string | null> {
   return null;
 }
 
-async function loadRemote(cfg: SyncConfig, gistId: string): Promise<Record<string, PlaybackRow>> {
+const EMPTY_DOC: RemoteDoc = { rows: {}, deleted: {} };
+
+async function loadRemote(cfg: SyncConfig, gistId: string): Promise<RemoteDoc> {
   try {
     const res = await fetch(`${GH}/gists/${gistId}`, { headers: ghHeaders(cfg.token) });
-    if (!res.ok) return {};
+    if (!res.ok) return EMPTY_DOC;
     const j = (await res.json()) as any;
     const file = j?.files?.[GIST_FILE];
-    if (!file) return {};
+    if (!file) return EMPTY_DOC;
     let content: string = file.content ?? "";
     if (file.truncated && file.raw_url) {
       content = await fetch(file.raw_url, { headers: ghHeaders(cfg.token) }).then((r) => (r.ok ? r.text() : "")).catch(() => "");
     }
-    if (!content) return {};
+    if (!content) return EMPTY_DOC;
     const parsed = JSON.parse(content);
-    return (parsed?.playback ?? {}) as Record<string, PlaybackRow>;
+    return {
+      rows: (parsed?.playback ?? {}) as Record<string, PlaybackRow>,
+      deleted: (parsed?.deleted ?? {}) as Record<string, number>,
+    };
   } catch {
-    return {};
+    return EMPTY_DOC;
   }
 }
 
@@ -151,10 +182,17 @@ async function writeGist(
   data: Record<string, PlaybackRow>,
   keepalive = false,
 ): Promise<boolean> {
+  // Prune ancient tombstones so the deleted map can't grow forever.
+  const cutoff = Date.now() - TOMBSTONE_TTL;
+  for (const [id, ts] of Object.entries(tombstones)) {
+    if (ts < cutoff) delete tombstones[id];
+  }
   const res = await fetch(`${GH}/gists/${gistId}`, {
     method: "PATCH",
     headers: ghHeaders(cfg.token),
-    body: JSON.stringify({ files: { [GIST_FILE]: { content: JSON.stringify({ playback: data }) } } }),
+    body: JSON.stringify({
+      files: { [GIST_FILE]: { content: JSON.stringify({ playback: data, deleted: tombstones }) } },
+    }),
     keepalive,
   });
   return res.ok;
@@ -215,6 +253,9 @@ if (typeof window !== "undefined") {
 
 export async function pushProgress(p: PlaybackRow): Promise<void> {
   if (!getSyncConfig()) return;
+  // Watching a previously-dismissed show again legitimately resurrects it.
+  const t = tombstones[String(p.animeId)];
+  if (t != null && (p.updatedAt ?? 0) > t) delete tombstones[String(p.animeId)];
   const key = rowKey(p.animeId, p.episode);
   const prev = cache[key];
   if (!prev || (p.updatedAt ?? 0) >= (prev.updatedAt ?? 0)) cache[key] = p;
@@ -236,6 +277,7 @@ export async function pushAllProgress(): Promise<number> {
   for (const item of items) {
     const row = localItemToRow(item);
     if (!row) continue;
+    if (tombstoneCovers(row.animeId, row.updatedAt)) continue;
     cache[rowKey(row.animeId, row.episode)] = row;
     n++;
   }
@@ -252,11 +294,15 @@ export async function deleteAnimeProgress(animeId: number): Promise<void> {
   const gistId = await ensureGistId(cfg);
   if (!gistId) return;
   await ensureCacheLoaded(cfg, gistId);
-  let changed = false;
+  // Tombstone FIRST — deleting the rows alone isn't durable: the other
+  // device's push-back would re-upload its local copies and resurrect the
+  // show. The tombstone tells every device "dismissed at T; ignore and drop
+  // anything older".
+  tombstones[String(animeId)] = Date.now();
   for (const k of Object.keys(cache)) {
-    if (k.startsWith(`${animeId}:`)) { delete cache[k]; dirty.delete(k); changed = true; }
+    if (k.startsWith(`${animeId}:`)) { delete cache[k]; dirty.delete(k); }
   }
-  if (changed) { try { await writeGist(cfg, gistId, cache); } catch { /* ignore */ } }
+  try { await writeGist(cfg, gistId, cache); } catch { /* ignore */ }
 }
 
 /** Freshest cloud position for one episode (used for pull-before-resume).
@@ -311,28 +357,51 @@ export async function pullAndMerge(): Promise<number> {
     if (!gistId) return 0;
     const remote = await loadRemote(cfg, gistId);
     mergeRemoteIntoCache(remote);
+    let changedLocal = 0;
 
-    // Pull: remote rows that are newer than the local DB.
+    // Pull: remote rows that are newer than the local DB (tombstoned shows
+    // are skipped — they were dismissed on some device).
     const results = await Promise.allSettled(
-      Object.values(remote).map(async (r) => {
-        const local = await window.api.progress.get(r.animeId, r.episode).catch(() => null);
-        if (local && local.updatedAt >= r.updatedAt) return false;
-        await window.api.progress.set({
-          animeId: r.animeId,
-          episode: r.episode,
-          positionSec: r.positionSec,
-          durationSec: r.durationSec,
-          animeTitle: r.animeTitle ?? undefined,
-          animeCoverUrl: r.animeCoverUrl ?? undefined,
-          animePaheSession: r.animePaheSession ?? undefined,
-          updatedAt: r.updatedAt,
-        });
-        return true;
-      }),
+      Object.values(remote.rows)
+        .filter((r) => !tombstoneCovers(r.animeId, r.updatedAt))
+        .map(async (r) => {
+          const local = await window.api.progress.get(r.animeId, r.episode).catch(() => null);
+          if (local && local.updatedAt >= r.updatedAt) return false;
+          await window.api.progress.set({
+            animeId: r.animeId,
+            episode: r.episode,
+            positionSec: r.positionSec,
+            durationSec: r.durationSec,
+            animeTitle: r.animeTitle ?? undefined,
+            animeCoverUrl: r.animeCoverUrl ?? undefined,
+            animePaheSession: r.animePaheSession ?? undefined,
+            updatedAt: r.updatedAt,
+          });
+          return true;
+        }),
     );
+    changedLocal += results.filter((r) => r.status === "fulfilled" && r.value).length;
+
+    // Apply tombstones locally: a show dismissed on the other device gets
+    // dismissed here too — unless it was watched here AFTER the dismissal.
+    for (const [idStr, ts] of Object.entries(tombstones)) {
+      const animeId = Number(idStr);
+      if (!Number.isFinite(animeId)) continue;
+      try {
+        const rows = await window.api.progress.getForAnime(animeId);
+        if (!rows.length) continue;
+        const newest = Math.max(...rows.map((r: any) => r.updatedAt ?? 0));
+        if (newest <= ts) {
+          await window.api.list.dismissContinueWatching(animeId);
+          changedLocal++;
+        }
+      } catch { /* best-effort */ }
+    }
 
     // Push back: local rows the gist is missing or has stale (covers progress
     // made while offline, or an app killed before the debounced flush ran).
+    // Tombstoned rows stay out — that's exactly how dismissed shows used to
+    // resurrect themselves.
     try {
       const paged = await window.api.list.continueWatchingPaged(1, 10000).catch(() => ({ items: [] }));
       const items: any[] = (paged as any).items ?? paged;
@@ -340,6 +409,7 @@ export async function pullAndMerge(): Promise<number> {
       for (const item of items) {
         const row = localItemToRow(item);
         if (!row) continue;
+        if (tombstoneCovers(row.animeId, row.updatedAt)) continue;
         const key = rowKey(row.animeId, row.episode);
         if (!cache[key] || (row.updatedAt ?? 0) > (cache[key].updatedAt ?? 0)) {
           cache[key] = row;
@@ -351,7 +421,7 @@ export async function pullAndMerge(): Promise<number> {
       /* push-back is best-effort; the debounced flush will catch up */
     }
 
-    return results.filter((r) => r.status === "fulfilled" && r.value).length;
+    return changedLocal;
   })().finally(() => { syncInFlight = null; });
   return syncInFlight;
 }

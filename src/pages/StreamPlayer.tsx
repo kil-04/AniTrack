@@ -1619,6 +1619,40 @@ export default function StreamPlayer({
     }
   }
 
+  // Media Session: gives the desktop PiP window its ±5s seek buttons (Chromium
+  // only shows them when seek handlers are registered) and puts proper
+  // title/episode/cover metadata + prev/next into the OS media controls.
+  useEffect(() => {
+    const ms: any = (navigator as any).mediaSession;
+    if (!ms) return;
+    try {
+      ms.setActionHandler("seekbackward", (d: any) => seek(-(d?.seekOffset || 5)));
+      ms.setActionHandler("seekforward", (d: any) => seek(d?.seekOffset || 5));
+      ms.setActionHandler("previoustrack", () => playPrevRef.current());
+      ms.setActionHandler("nexttrack", () => playNextRef.current());
+      ms.setActionHandler("play", () => videoRef.current?.play().catch(() => {}));
+      ms.setActionHandler("pause", () => videoRef.current?.pause());
+    } catch { /* older engines may not know some actions */ }
+    return () => {
+      for (const a of ["seekbackward", "seekforward", "previoustrack", "nexttrack", "play", "pause"]) {
+        try { ms.setActionHandler(a, null); } catch { /* ignore */ }
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const ms: any = (navigator as any).mediaSession;
+    if (!ms || !("MediaMetadata" in window) || !currentEp) return;
+    try {
+      ms.metadata = new MediaMetadata({
+        title: `Episode ${currentEp.episodeNumber ?? currentEp.episode}`,
+        artist: animeTitle,
+        artwork: animeCoverUrl ? [{ src: animeCoverUrl, sizes: "512x512", type: "image/jpeg" }] : [],
+      });
+    } catch { /* ignore */ }
+  }, [currentEp, animeTitle, animeCoverUrl]);
+
   // Minimizing while fullscreen makes no sense — drop out of fullscreen first
   // so the mini card renders correctly.
   useEffect(() => {
@@ -1673,6 +1707,13 @@ export default function StreamPlayer({
   }
   const beginUpNextRef = useRef(beginUpNext);
   beginUpNextRef.current = beginUpNext;
+  // Fresh-closure refs for mount-once handlers (keyboard, Media Session): the
+  // persistent player renders many shows over one mount, so direct closures
+  // over playNext/playPrev would go stale after the first show.
+  const playNextRef = useRef(playNext);
+  playNextRef.current = playNext;
+  const playPrevRef = useRef(playPrev);
+  playPrevRef.current = playPrev;
 
   // A new episode starting (or unmount) cancels any pending countdown.
   useEffect(() => { clearUpNext(); }, [currentEp, clearUpNext]);
@@ -1878,8 +1919,8 @@ export default function StreamPlayer({
       if (e.key === "ArrowRight") { e.preventDefault(); seek(5); }
       if (e.key === "ArrowLeft")  { e.preventDefault(); seek(-5); }
       if (e.key === "m") { video.muted = !video.muted; setMuted(video.muted); }
-      if (e.key === "n") playNext();
-      if (e.key === "p") playPrev();
+      if (e.key === "n") playNextRef.current();
+      if (e.key === "p") playPrevRef.current();
       if (e.key === "f") toggleFullscreen();
       if (e.key === "t") setIsTheater((t) => !t);
       if (e.key === "i") togglePiP();

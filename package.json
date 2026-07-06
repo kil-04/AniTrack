@@ -1,6 +1,6 @@
 {
   "name": "anitrack",
-  "version": "6.3.7",
+  "version": "6.3.8",
   "description": "Anime tracker + local player with Discord RPC, MAL two-way sync and legal-site launcher",
   "main": "dist-electron/electron/main.js",
   "author": "Sanjay",
