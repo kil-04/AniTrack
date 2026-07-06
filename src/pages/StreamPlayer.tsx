@@ -309,9 +309,26 @@ export default function StreamPlayer({
     }
   }
 
+  // Stable identity for the CURRENT show. The player instance persists across
+  // navigations (mini-player), so everything per-show below must re-run when
+  // this changes — running it on mount only meant a newly-opened show inherited
+  // the PREVIOUS show's sources/anime-id (Cat's Eye playing City Hunter 2).
+  const animeIdentity = (() => {
+    const aid = Number(params.get("animeId") ?? params.get("anilistId") ?? 0);
+    return aid > 0 ? `id:${aid}` : `title:${animeTitle}`;
+  })();
+
   useEffect(() => {
     const anilistId = Number(params.get("animeId") ?? params.get("anilistId") ?? 0);
     effectiveAnimeIdRef.current = anilistId > 0 ? anilistId : paheSessionId(animeSession);
+    // A different show arrived on this mounted player: the previous show's
+    // provider matches are meaningless (and actively dangerous — the session
+    // self-heal would rewrite the new show's session to the old show's match).
+    setAvailableSources([]);
+    setWatchedEps(new Map());
+    epOffsetRef.current = Number(params.get("episodeOffset") ?? 0);
+    pendingSeekRef.current = null;
+    fallbackTriedRef.current.clear();
 
     // Load initial watched-episode map from DB.
     if (effectiveAnimeIdRef.current !== 0) {
@@ -449,8 +466,10 @@ export default function StreamPlayer({
     } else {
       setLoadingEps(false);
     }
+  // Re-run per SHOW (not per mount — the mini-player instance persists across
+  // navigations, and stale sources from the previous show corrupt the new one).
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [animeIdentity]);
 
   // ── Offline download playback ───────────────────────────────────────────────
   // When opened with ?download=<id>, skip the whole provider/resolve flow and play
@@ -495,8 +514,10 @@ export default function StreamPlayer({
     setLoadingEps(false);
     playLocal(dlId, startEp || 1);
     return () => unsub();
+  // Keyed on the download id — the persistent player instance can be handed a
+  // different offline episode without remounting.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [params.get("download")]);
 
   // ── Auto-correct provider and session from availableSources ───────────────
   useEffect(() => {
