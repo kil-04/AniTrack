@@ -708,6 +708,17 @@ export default function StreamPlayer({
     const key = `${animeSession}|${providerId}`;
     if (prevSessionKeyRef.current === key) return;
     prevSessionKeyRef.current = key;
+    // Kill the PREVIOUS show's stream immediately. If the new episode load
+    // fails (network, provider anti-bot), the old video must not keep playing
+    // under the new title ("says Cat's Eye, plays Dragon Ball").
+    if (hlsRef.current) {
+      hlsRef.current.destroy();
+      hlsRef.current = null;
+    }
+    const v = videoRef.current;
+    if (v) {
+      try { v.pause(); v.removeAttribute("src"); v.load(); } catch { /* ignore */ }
+    }
     paheCacheRef.current.clear();
     linksCacheRef.current.clear();
     setEpisodes([]);
