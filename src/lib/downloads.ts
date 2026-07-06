@@ -223,10 +223,18 @@ async function tickQueue() {
       subtitleUrl,
     });
     // The native `progress` listener drives status to done/failed, which calls
-    // tickQueue() again. Clear the active marker once it settles.
+    // tickQueue() again. Clear the active marker once it settles. Capped: a
+    // download stuck for 2h without settling releases the queue instead of
+    // polling forever.
+    let settleTries = 0;
     const settle = () => {
       const cur = state.get(next.id);
       if (cur && (cur.status === "done" || cur.status === "failed")) {
+        if (activeId === next.id) { activeId = null; tickQueue(); }
+        return;
+      }
+      if (++settleTries > 7200) {
+        setLocal({ id: next.id, status: "failed", error: "Download stalled" });
         if (activeId === next.id) { activeId = null; tickQueue(); }
         return;
       }

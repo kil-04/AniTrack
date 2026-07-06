@@ -312,6 +312,17 @@ class AniTrackDbPlugin : Plugin() {
         try {
             val pStr = call.getString("progress") ?: return call.reject("progress required")
             val p    = JSONObject(pStr)
+            // CONFLICT_REPLACE overwrites the whole row, so a save without a
+            // session (e.g. a sync-pulled row) must not wipe the one we have —
+            // mirror the desktop's COALESCE(excluded, existing) behaviour.
+            var session: String? = if (p.isNull("animePaheSession")) null else p.getString("animePaheSession")
+            if (session.isNullOrEmpty()) {
+                val sc = db.readableDatabase.rawQuery(
+                    "SELECT animepahe_session FROM playback WHERE anime_id=? AND episode=?",
+                    arrayOf(p.getInt("animeId").toString(), p.getInt("episode").toString()))
+                if (sc.moveToFirst() && !sc.isNull(0)) session = sc.getString(0)
+                sc.close()
+            }
             val cv   = ContentValues().apply {
                 put("anime_id",         p.getInt("animeId"))
                 put("episode",          p.getInt("episode"))
@@ -319,7 +330,7 @@ class AniTrackDbPlugin : Plugin() {
                 put("duration_sec",     p.getDouble("durationSec"))
                 put("anime_title",      p.optString("animeTitle"))
                 put("anime_cover_url",  p.optString("animeCoverUrl"))
-                put("animepahe_session",if (p.isNull("animePaheSession")) null else p.getString("animePaheSession"))
+                put("animepahe_session", session)
                 put("updated_at",       p.optLong("updatedAt", System.currentTimeMillis()))
             }
             db.writableDatabase.insertWithOnConflict("playback", null, cv, SQLiteDatabase.CONFLICT_REPLACE)

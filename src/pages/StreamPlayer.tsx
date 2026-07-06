@@ -26,7 +26,7 @@ import { secondsToTimestamp } from "../lib/format";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { isCapacitor } from "../lib/platform";
 import { enterNativePip } from "../lib/pip";
-import { pushProgress, pullRemoteProgress } from "../lib/supabase-sync";
+import { pushProgress, pullRemoteProgress, flushOnQuit } from "../lib/supabase-sync";
 import { getPlayUrl as getDownloadPlayUrl, readLocalFile, isLocalDownloadUrl, getDownloads, subscribeDownloads } from "../lib/downloads";
 import { scoreMatch, pickVerifiedCandidate } from "../lib/match";
 
@@ -1902,6 +1902,10 @@ export default function StreamPlayer({
     const timer = setInterval(saveNow, 10_000);
     const handleBeforeUnload = () => {
       saveNow();
+      // The sync module's own quit listener registered before this one and has
+      // already fired — flush again so the position saveNow just pushed makes
+      // it into the gist before the process dies.
+      flushOnQuit();
     };
     window.addEventListener("beforeunload", handleBeforeUnload);
 

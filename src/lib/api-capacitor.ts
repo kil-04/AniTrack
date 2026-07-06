@@ -125,11 +125,24 @@ async function alGql<T>(
 
 async function _alDoGql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
   for (let attempt = 1; attempt <= 3; attempt++) {
-    const res = await fetch(ANILIST_GQL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ query, variables }),
-    });
+    // Time-box the request — the scheduler is a single serial pump, so one
+    // hung fetch would otherwise stall EVERY AniList call in the app.
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 15_000);
+    let res: Response;
+    try {
+      res = await fetch(ANILIST_GQL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ query, variables }),
+        signal: ac.signal,
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      if (attempt < 3) continue;
+      throw err;
+    }
+    clearTimeout(timer);
     if (res.status === 429) {
       if (attempt < 3) {
         const ra = Number(res.headers.get("retry-after"));

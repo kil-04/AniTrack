@@ -173,12 +173,15 @@ async function flush() {
   if (!cfg) return;
   const gistId = await ensureGistId(cfg);
   if (!gistId) return;
+  const flushed = Array.from(dirty);
   dirty.clear();
   try {
     mergeRemoteIntoCache(await loadRemote(cfg, gistId));
     await writeGist(cfg, gistId, cache);
   } catch {
-    /* will retry on next push */
+    // Restore the un-flushed keys so the next push retries them — clearing
+    // them on failure silently dropped progress until the next reconcile.
+    for (const k of flushed) dirty.add(k);
   }
 }
 
@@ -191,7 +194,10 @@ function scheduleFlush() {
 // otherwise drop the final position (e.g. quit right after pausing). keepalive
 // lets the PATCH outlive the page. No GET-merge here — there's no time; the
 // regular flush path re-merges on next launch anyway.
-function flushOnQuit() {
+// Exported so the player can invoke it AFTER its own final save — module-level
+// listeners registered here fire BEFORE the player's, which would otherwise
+// flush just before the last position lands in the cache.
+export function flushOnQuit() {
   if (!dirty.size) return;
   const cfg = getSyncConfig();
   if (!cfg?.gistId) return;

@@ -179,11 +179,24 @@ async function gql<T>(
 async function _doGql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     console.log(`[AniList] request attempt ${attempt}/${MAX_RETRIES}`);
-    const res = await fetch(ENDPOINT, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ query, variables }),
-    });
+    // Time-box the request — the scheduler is a single serial pump, so one
+    // hung fetch would otherwise stall EVERY AniList call in the app.
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 15_000);
+    let res: Response;
+    try {
+      res = await fetch(ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ query, variables }),
+        signal: ac.signal,
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      if (attempt < MAX_RETRIES) continue;
+      throw err;
+    }
+    clearTimeout(timer);
 
     if (res.status === 429) {
       if (attempt < MAX_RETRIES) {

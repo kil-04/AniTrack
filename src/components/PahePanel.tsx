@@ -74,28 +74,6 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
     return scored[0].score >= 20 ? scored[0].r : null;
   }
 
-  async function pickByIds(res: any[]): Promise<any | null> {
-    if (res.length === 0) return null;
-    const realAnilistId = animeId && animeId < 1_000_000_000 ? animeId : undefined;
-    const realMalId = animeMalId
-      ?? (animeId && animeId >= 1_000_000_000 ? animeId - 1_000_000_000 : undefined);
-    if (!realAnilistId && !realMalId) return null;
-    const top = [...res]
-      .sort((a, b) => scoreMatch(b, animeTitle, animeYear, animeEpisodes, animeStatus) - scoreMatch(a, animeTitle, animeYear, animeEpisodes, animeStatus))
-      .slice(0, 3);
-    const checks = await Promise.all(
-      top.map(async (candidate) => {
-        const ids = await window.api.pahe.getIds(candidate.paheId ?? candidate.id, candidate.session ?? candidate.id).catch(() => ({}));
-        return { candidate, ids } as { candidate: any; ids: any };
-      }),
-    );
-    for (const { candidate, ids } of checks) {
-      if (realAnilistId && ids.anilistId === realAnilistId) return candidate;
-      if (realMalId && ids.malId === realMalId) return candidate;
-    }
-    return null;
-  }
-
   useEffect(() => {
     if (!animeTitle) return;
     setShowManualSearch(false);
@@ -244,6 +222,11 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
         }
 
         setSelected(best);
+        // Bounded — evict the oldest entry once full (long browse sessions).
+        if (_searchCache.size >= 100) {
+          const oldest = _searchCache.keys().next().value;
+          if (oldest !== undefined) _searchCache.delete(oldest);
+        }
         _searchCache.set(cacheKey, { results: finalResults, selected: best });
       } else {
         setResults([]);

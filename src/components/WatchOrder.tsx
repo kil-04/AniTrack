@@ -67,7 +67,11 @@ async function buildChain(animeId: number, isCancelled: () => boolean): Promise<
   }
 
   const chain = [...before, self, ...after];
-  if (chain.length > 1) for (const m of chain) chainCache.set(m.id, chain);
+  if (chain.length > 1) {
+    // Bounded — a long browse session shouldn't grow this forever.
+    if (chainCache.size > 300) chainCache.clear();
+    for (const m of chain) chainCache.set(m.id, chain);
+  }
   return chain;
 }
 
