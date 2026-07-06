@@ -319,6 +319,9 @@ export default function StreamPlayer({
   })();
 
   useEffect(() => {
+    // Guards every async setState below: a slow provider search must never
+    // land its results after the user has already switched to another show.
+    let cancelled = false;
     const anilistId = Number(params.get("animeId") ?? params.get("anilistId") ?? 0);
     effectiveAnimeIdRef.current = anilistId > 0 ? anilistId : paheSessionId(animeSession);
     // A different show arrived on this mounted player: the previous show's
@@ -334,6 +337,7 @@ export default function StreamPlayer({
     if (effectiveAnimeIdRef.current !== 0) {
       window.api.progress.getForAnime(effectiveAnimeIdRef.current)
         .then((rows) => {
+          if (cancelled) return;
           const m = new Map<number, number>();
           for (const r of rows) {
             if (r.durationSec > 0) m.set(r.episode, (r.positionSec / r.durationSec) * 100);
@@ -427,6 +431,13 @@ export default function StreamPlayer({
             byProvider.set(pid, arr);
           }
 
+          // OPTIMISTIC: publish the top-scored pick per provider right away so
+          // the episode list starts loading immediately. Verification below
+          // swaps a pick only in the rare case the title score was wrong.
+          const optimistic = Array.from(byProvider.values()).map((c) => c[0]);
+          if (cancelled) return;
+          setAvailableSources(optimistic);
+
           // Title-plausible candidates the YEAR gate rejected. A mislabeled
           // entry parses the wrong year out of its lying title (anikoto's real
           // City Hunter is titled "City Hunter '91"), so id verification must
@@ -447,25 +458,28 @@ export default function StreamPlayer({
           // case costs ONE provider request; parallel bursts tripped anti-bot
           // limits and froze the whole app.
           const realAnilistId = anilistId > 0 && anilistId < 1_000_000_000 ? anilistId : undefined;
-          const uniqueProviders: any[] = [];
-          for (const [pid, candidates] of byProvider.entries()) {
-            let pick = candidates[0];
-            if (realAnilistId || targetMalId) {
+          if (realAnilistId || targetMalId) {
+            const verified: any[] = [];
+            let changed = false;
+            for (const [pid, candidates] of byProvider.entries()) {
               const rejects = plausibleRejects.filter((i) => (i.providerId || "animepahe") === pid).slice(0, 2);
-              pick = (await pickVerifiedCandidate([...candidates, ...rejects], realAnilistId, targetMalId)) ?? pick;
+              const pick = (await pickVerifiedCandidate([...candidates, ...rejects], realAnilistId, targetMalId)) ?? candidates[0];
+              if (pick !== candidates[0]) changed = true;
+              verified.push(pick);
+              if (cancelled) return;
             }
-            uniqueProviders.push(pick);
+            if (changed && !cancelled) setAvailableSources(verified);
           }
-          setAvailableSources(uniqueProviders);
         } else {
           setLoadingEps(false);
         }
       })().catch(() => {
-        setLoadingEps(false);
+        if (!cancelled) setLoadingEps(false);
       });
     } else {
       setLoadingEps(false);
     }
+    return () => { cancelled = true; };
   // Re-run per SHOW (not per mount — the mini-player instance persists across
   // navigations, and stale sources from the previous show corrupt the new one).
   // eslint-disable-next-line react-hooks/exhaustive-deps

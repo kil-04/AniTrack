@@ -190,8 +190,11 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
 
       if (validResults.length > 0) {
         setResults(validResults);
+        // OPTIMISTIC: show the top-scored match immediately so episodes start
+        // loading now. Id verification runs in the background and swaps the
+        // selection only in the rare case the title-scored pick was wrong.
+        setSelected(validResults[0]);
 
-        let best = null;
         if (realAnilistId || realMalId) {
           // Also verify title-plausible candidates the YEAR filter rejected:
           // a mislabeled provider entry parses the wrong year from its lying
@@ -210,24 +213,24 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
           // Serial, time-boxed verification (common case: ONE request) — see
           // pickVerifiedCandidate; parallel bursts trip provider anti-bot limits.
           const pool = [...validResults.slice(0, 3), ...plausibleRejects];
-          best = await pickVerifiedCandidate(pool, realAnilistId, realMalId ?? undefined);
+          void pickVerifiedCandidate(pool, realAnilistId, realMalId ?? undefined).then((best) => {
+            if (!best) return;
+            const finalResults = validResults.includes(best) ? validResults : [best, ...validResults];
+            if (finalResults !== validResults) setResults(finalResults);
+            if (best !== validResults[0]) setSelected(best);
+            if (_searchCache.size >= 100) {
+              const oldest = _searchCache.keys().next().value;
+              if (oldest !== undefined) _searchCache.delete(oldest);
+            }
+            _searchCache.set(cacheKey, { results: finalResults, selected: best });
+          }).catch(() => {});
+        } else {
+          if (_searchCache.size >= 100) {
+            const oldest = _searchCache.keys().next().value;
+            if (oldest !== undefined) _searchCache.delete(oldest);
+          }
+          _searchCache.set(cacheKey, { results: validResults, selected: validResults[0] });
         }
-
-        // A verified year-reject isn't in the visible results yet — surface it first.
-        const finalResults = best && !validResults.includes(best) ? [best, ...validResults] : validResults;
-        if (finalResults !== validResults) setResults(finalResults);
-
-        if (!best) {
-          best = validResults[0];
-        }
-
-        setSelected(best);
-        // Bounded — evict the oldest entry once full (long browse sessions).
-        if (_searchCache.size >= 100) {
-          const oldest = _searchCache.keys().next().value;
-          if (oldest !== undefined) _searchCache.delete(oldest);
-        }
-        _searchCache.set(cacheKey, { results: finalResults, selected: best });
       } else {
         setResults([]);
         setManualQuery(animeTitle);

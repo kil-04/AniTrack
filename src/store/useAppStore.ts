@@ -43,9 +43,17 @@ export const useAppStore = create<AppState>((set) => ({
 
   refreshAll: async () => {
     set({ loading: true });
-    // Two-way sync playback progress with the GitHub gist before refreshing the
-    // UI. Runs silently — missing/misconfigured sync just returns 0.
-    await pullAndMerge().catch(() => {});
+    // Two-way gist sync runs in the BACKGROUND — the UI paints from local data
+    // immediately instead of waiting on a GitHub round-trip. If the pull
+    // brought anything new, Continue Watching refreshes itself afterwards.
+    pullAndMerge()
+      .then(async (n) => {
+        if (n > 0) {
+          const cw = await window.api.list.continueWatching();
+          set({ continueWatching: cw });
+        }
+      })
+      .catch(() => {});
     // Resolve each call independently so one slow/failing fetch doesn't block
     // the others. Promise.allSettled lets us partially populate the UI.
     const results = await Promise.allSettled([
@@ -89,9 +97,18 @@ export const useAppStore = create<AppState>((set) => ({
 
   refreshContinue: async () => {
     try {
-      await pullAndMerge().catch(() => {});
+      // Local list first (instant), cloud reconcile after — refresh again only
+      // if the pull actually changed something.
       const cw = await window.api.list.continueWatching();
       set({ continueWatching: cw });
+      pullAndMerge()
+        .then(async (n) => {
+          if (n > 0) {
+            const cw2 = await window.api.list.continueWatching();
+            set({ continueWatching: cw2 });
+          }
+        })
+        .catch(() => {});
     } catch (e) {
       console.error("refreshContinue failed", e);
     }
