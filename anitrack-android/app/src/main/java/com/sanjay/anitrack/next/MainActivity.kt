@@ -54,6 +54,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         com.sanjay.anitrack.next.data.Db.init(applicationContext)
         com.sanjay.anitrack.next.data.GistSync.init(applicationContext)
+        com.sanjay.anitrack.next.data.Pahe.attach(this)
         enableEdgeToEdge()
         setContent {
             MaterialTheme(colorScheme = DarkColors) {

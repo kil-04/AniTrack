@@ -48,18 +48,20 @@ private const val UA =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 
 private suspend fun saveProgress(player: ExoPlayer, index: Int) {
-    val ep = PlaySession.episodes.getOrNull(index) ?: return
+    if (index >= PlaySession.count) return
+    val epNum = PlaySession.episodeNumber(index)
     val dur = player.duration
     if (dur <= 0) return
     val now = System.currentTimeMillis()
+    val key = PlaySession.resumeKey()
     com.sanjay.anitrack.next.data.Db.save(
-        PlaySession.animeId, ep.number, player.currentPosition / 1000.0, dur / 1000.0,
-        PlaySession.animeTitle, PlaySession.animeCover, PlaySession.slug, updatedAt = now,
+        PlaySession.animeId, epNum, player.currentPosition / 1000.0, dur / 1000.0,
+        PlaySession.animeTitle, PlaySession.animeCover, key, updatedAt = now,
     )
     com.sanjay.anitrack.next.data.GistSync.pushProgress(
         com.sanjay.anitrack.next.data.Db.CwRow(
-            PlaySession.animeId, ep.number, player.currentPosition / 1000.0, dur / 1000.0,
-            PlaySession.animeTitle, PlaySession.animeCover, PlaySession.slug, now,
+            PlaySession.animeId, epNum, player.currentPosition / 1000.0, dur / 1000.0,
+            PlaySession.animeTitle, PlaySession.animeCover, key, now,
         ),
     )
 }
@@ -73,7 +75,7 @@ fun PlayerScreen(onBack: () -> Unit) {
     var retry by remember { mutableStateOf(0) }
     var status by remember { mutableStateOf("Resolving stream…") }
     var error by remember { mutableStateOf<String?>(null) }
-    var stream by remember { mutableStateOf<Anikoto.Stream?>(null) }
+    var stream by remember { mutableStateOf<PlaySession.Resolved?>(null) }
     var controllerVisible by remember { mutableStateOf(true) }
     var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
     var landscapeLocked by remember { mutableStateOf(false) }
@@ -103,7 +105,7 @@ fun PlayerScreen(onBack: () -> Unit) {
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
-                if (state == Player.STATE_ENDED && index + 1 < PlaySession.episodes.size) index += 1
+                if (state == Player.STATE_ENDED && index + 1 < PlaySession.count) index += 1
             }
         }
         player.addListener(listener)
@@ -112,15 +114,16 @@ fun PlayerScreen(onBack: () -> Unit) {
 
     var lastPlayedIndex by remember { mutableStateOf<Int?>(null) }
     LaunchedEffect(index, retry) {
-        val ep = PlaySession.episodes.getOrNull(index) ?: return@LaunchedEffect
+        if (index >= PlaySession.count) return@LaunchedEffect
+        val epNum = PlaySession.episodeNumber(index)
         // Save the outgoing episode's position before switching.
         lastPlayedIndex?.takeIf { it != index }?.let { saveProgress(player, it) }
         lastPlayedIndex = index
         error = null
-        status = "Resolving Episode ${ep.number.toInt()}…"
+        status = "Resolving Episode ${epNum.toInt()}…"
         player.stop()
         try {
-            val s = Anikoto.resolve(PlaySession.slug, ep)
+            val s = PlaySession.resolve(index)
             stream = s
             val httpFactory = DefaultHttpDataSource.Factory()
                 .setUserAgent(UA)
@@ -138,7 +141,7 @@ fun PlayerScreen(onBack: () -> Unit) {
             player.setMediaSource(DefaultMediaSourceFactory(httpFactory).createMediaSource(item))
             player.prepare()
             // Resume mid-episode from the local DB (finished episodes restart).
-            com.sanjay.anitrack.next.data.Db.resumeFor(PlaySession.animeId, ep.number)?.let { pos ->
+            com.sanjay.anitrack.next.data.Db.resumeFor(PlaySession.animeId, epNum)?.let { pos ->
                 player.seekTo((pos * 1000).toLong())
             }
             status = ""
@@ -172,14 +175,16 @@ fun PlayerScreen(onBack: () -> Unit) {
         onDispose {
             val dur = player.duration
             val posMs = player.currentPosition
-            val ep = PlaySession.episodes.getOrNull(index)
-            if (ep != null && dur > 0) {
+            val savedIndex = index
+            if (savedIndex < PlaySession.count && dur > 0) {
+                val epNum = PlaySession.episodeNumber(savedIndex)
+                val key = PlaySession.resumeKey()
                 // Fire-and-forget on a background thread; the composable is gone.
                 Thread {
                     kotlinx.coroutines.runBlocking {
                         com.sanjay.anitrack.next.data.Db.save(
-                            PlaySession.animeId, ep.number, posMs / 1000.0, dur / 1000.0,
-                            PlaySession.animeTitle, PlaySession.animeCover, PlaySession.slug,
+                            PlaySession.animeId, epNum, posMs / 1000.0, dur / 1000.0,
+                            PlaySession.animeTitle, PlaySession.animeCover, key,
                         )
                     }
                 }.start()
@@ -201,10 +206,10 @@ fun PlayerScreen(onBack: () -> Unit) {
                 IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, "Back", tint = Color.White) }
                 Column(Modifier.weight(1f)) {
                     Text(PlaySession.animeTitle, style = MaterialTheme.typography.titleSmall, color = Color.White, maxLines = 1)
-                    val ep = PlaySession.episodes.getOrNull(index)
-                    if (ep != null) {
+                    if (index < PlaySession.count) {
+                        val n = PlaySession.episodeNumber(index)
                         Text(
-                            "Episode ${if (ep.number % 1f == 0f) ep.number.toInt() else ep.number}",
+                            "Episode ${if (n % 1f == 0f) n.toInt() else n} · ${if (PlaySession.provider == "animepahe") "AnimePahe" else "Anikoto"}",
                             style = MaterialTheme.typography.labelSmall,
                             color = Color.White.copy(alpha = 0.5f),
                         )
@@ -227,8 +232,8 @@ fun PlayerScreen(onBack: () -> Unit) {
                     Icon(Icons.Filled.SkipPrevious, "Previous episode", tint = Color.White)
                 }
                 IconButton(
-                    onClick = { if (index + 1 < PlaySession.episodes.size) index += 1 },
-                    enabled = index + 1 < PlaySession.episodes.size,
+                    onClick = { if (index + 1 < PlaySession.count) index += 1 },
+                    enabled = index + 1 < PlaySession.count,
                 ) { Icon(Icons.Filled.SkipNext, "Next episode", tint = Color.White) }
             }
         }

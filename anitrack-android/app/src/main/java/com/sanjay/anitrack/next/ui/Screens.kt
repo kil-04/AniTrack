@@ -96,13 +96,25 @@ fun HomeScreen(onOpen: (Anime) -> Unit, onPlay: () -> Unit) {
                         ContinueCard(
                             row,
                             onResume = {
-                                val slug = row.slug ?: return@ContinueCard
+                                val key = row.slug ?: return@ContinueCard
                                 scope.launch {
-                                    val eps = runCatching { com.sanjay.anitrack.next.data.Anikoto.episodes(slug).episodes }.getOrNull() ?: return@launch
-                                    val idx = eps.indexOfFirst { it.number == row.episode }.takeIf { it >= 0 } ?: 0
-                                    com.sanjay.anitrack.next.data.PlaySession.apply {
-                                        animeId = row.animeId; animeTitle = row.title; animeCover = row.cover
-                                        this.slug = slug; episodes = eps; index = idx
+                                    if (key.startsWith("pahe:")) {
+                                        val session = key.removePrefix("pahe:")
+                                        val eps = runCatching { com.sanjay.anitrack.next.data.Pahe.episodesAll(session) }.getOrNull() ?: return@launch
+                                        val idx = eps.indexOfFirst { it.number == row.episode }.takeIf { it >= 0 } ?: 0
+                                        com.sanjay.anitrack.next.data.PlaySession.apply {
+                                            provider = "animepahe"; animeId = row.animeId
+                                            animeTitle = row.title; animeCover = row.cover
+                                            paheSession = session; paheEps = eps; index = idx
+                                        }
+                                    } else {
+                                        val eps = runCatching { com.sanjay.anitrack.next.data.Anikoto.episodes(key).episodes }.getOrNull() ?: return@launch
+                                        val idx = eps.indexOfFirst { it.number == row.episode }.takeIf { it >= 0 } ?: 0
+                                        com.sanjay.anitrack.next.data.PlaySession.apply {
+                                            provider = "anikoto"; animeId = row.animeId
+                                            animeTitle = row.title; animeCover = row.cover
+                                            slug = key; anikotoEps = eps; index = idx
+                                        }
                                     }
                                     onPlay()
                                 }
@@ -322,88 +334,124 @@ fun DetailScreen(animeId: Int, onPlay: () -> Unit) {
     }
 }
 
-// ── Episodes (Anikoto provider) ───────────────────────────────────────────────
+// ── Episodes (Anikoto + AnimePahe servers) ────────────────────────────────────
+
+private data class EpUi(val number: Float, val play: () -> Unit)
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: () -> Unit) {
-    var matched by remember { mutableStateOf<com.sanjay.anitrack.next.data.Anikoto.Matched?>(null) }
+    var server by remember { mutableStateOf("anikoto") } // "anikoto" | "animepahe"
+    var anikotoMatch by remember { mutableStateOf<com.sanjay.anitrack.next.data.Anikoto.Matched?>(null) }
+    var paheMatch by remember { mutableStateOf<com.sanjay.anitrack.next.data.Pahe.Matched?>(null) }
+    var loading by remember { mutableStateOf(false) }
     var failed by remember { mutableStateOf(false) }
-    var rangeStart by remember { mutableStateOf(0) } // index into ranges of 100
+    var rangeStart by remember { mutableStateOf(0) }
     var watched by remember { mutableStateOf<Map<Float, Int>>(emptyMap()) }
 
     LaunchedEffect(anime.id) {
-        matched = null; failed = false; rangeStart = 0
         runCatching { watched = com.sanjay.anitrack.next.data.Db.positionsFor(anime.id) }
-        runCatching { matched = com.sanjay.anitrack.next.data.Anikoto.matchFor(anime) }
-            .onFailure { failed = true }
-        if (matched == null) failed = true
+    }
+    // Load the selected server on demand.
+    LaunchedEffect(anime.id, server) {
+        rangeStart = 0; failed = false
+        if (server == "anikoto" && anikotoMatch == null) {
+            loading = true
+            runCatching { anikotoMatch = com.sanjay.anitrack.next.data.Anikoto.matchFor(anime) }
+                .onFailure { failed = true }
+            if (anikotoMatch == null) failed = true
+            loading = false
+        } else if (server == "animepahe" && paheMatch == null) {
+            loading = true
+            runCatching { paheMatch = com.sanjay.anitrack.next.data.Pahe.matchFor(anime) }
+                .onFailure { failed = true }
+            if (paheMatch == null) failed = true
+            loading = false
+        }
+    }
+
+    // Build the unified episode list + click actions for the active server.
+    val epUi: List<EpUi> = remember(server, anikotoMatch, paheMatch) {
+        when (server) {
+            "animepahe" -> paheMatch?.let { m ->
+                m.episodes.map { ep ->
+                    EpUi(ep.number) {
+                        com.sanjay.anitrack.next.data.PlaySession.apply {
+                            provider = "animepahe"; animeId = anime.id
+                            animeTitle = anime.title; animeCover = anime.cover
+                            paheSession = m.source.session; paheEps = m.episodes
+                            index = m.episodes.indexOf(ep).coerceAtLeast(0)
+                        }
+                        onPlay()
+                    }
+                }
+            }.orEmpty()
+            else -> anikotoMatch?.let { m ->
+                m.list.episodes.map { ep ->
+                    EpUi(ep.number) {
+                        com.sanjay.anitrack.next.data.PlaySession.apply {
+                            provider = "anikoto"; animeId = anime.id
+                            animeTitle = anime.title; animeCover = anime.cover
+                            slug = m.source.slug; anikotoEps = m.list.episodes
+                            index = m.list.episodes.indexOf(ep).coerceAtLeast(0)
+                        }
+                        onPlay()
+                    }
+                }
+            }.orEmpty()
+        }
     }
 
     Column(Modifier.padding(horizontal = 16.dp)) {
-        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            Text("Episodes", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.width(10.dp))
-            val m = matched
-            when {
-                m != null -> {
-                    Text(
-                        if (m.verified) "Anikoto · verified ✓" else "Anikoto · best match",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (m.verified) Color(0xFF4CAF50) else Color.White.copy(alpha = 0.5f),
-                    )
-                }
-                failed -> Text("no source found", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.4f))
-                else -> CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = Accent)
+        Text("Episodes", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        // Server toggle
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = server == "anikoto", onClick = { server = "anikoto" }, label = { Text("Anikoto") })
+            FilterChip(selected = server == "animepahe", onClick = { server = "animepahe" }, label = { Text("AnimePahe") })
+            if (loading) {
+                Spacer(Modifier.width(4.dp))
+                CircularProgressIndicator(Modifier.size(16.dp).align(Alignment.CenterVertically), strokeWidth = 2.dp, color = Accent)
             }
+        }
+        Spacer(Modifier.height(4.dp))
+        if (server == "anikoto" && anikotoMatch != null) {
+            Text(
+                if (anikotoMatch!!.verified) "verified ✓" else "best match",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (anikotoMatch!!.verified) Color(0xFF4CAF50) else Color.White.copy(alpha = 0.5f),
+            )
+        }
+        if (!loading && failed && epUi.isEmpty()) {
+            Text("No source on this server.", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.4f))
         }
         Spacer(Modifier.height(10.dp))
 
-        val eps = matched?.list?.episodes.orEmpty()
-        if (eps.isNotEmpty()) {
-            // Range selector for long series (chunks of 100).
-            val ranges = eps.chunked(100)
+        if (epUi.isNotEmpty()) {
+            val ranges = epUi.chunked(100)
             if (ranges.size > 1) {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(ranges.size) { i ->
-                        val first = ranges[i].first().number.toInt()
-                        val last = ranges[i].last().number.toInt()
                         FilterChip(
                             selected = rangeStart == i,
                             onClick = { rangeStart = i },
-                            label = { Text("$first–$last") },
+                            label = { Text("${ranges[i].first().number.toInt()}–${ranges[i].last().number.toInt()}") },
                         )
                     }
                 }
                 Spacer(Modifier.height(10.dp))
             }
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                val allEps = matched!!.list.episodes
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 for (ep in ranges.getOrElse(rangeStart) { emptyList() }) {
                     val pct = watched[ep.number] ?: 0
                     val bg = when {
-                        pct >= 85 -> Accent.copy(alpha = 0.30f)      // watched
-                        pct > 0 -> Color.White.copy(alpha = 0.16f)   // partial
+                        pct >= 85 -> Accent.copy(alpha = 0.30f)
+                        pct > 0 -> Color.White.copy(alpha = 0.16f)
                         else -> Color.White.copy(alpha = 0.07f)
                     }
                     Box(
-                        Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(bg)
-                            .clickable {
-                                com.sanjay.anitrack.next.data.PlaySession.apply {
-                                    animeId = anime.id
-                                    animeTitle = anime.title
-                                    animeCover = anime.cover
-                                    slug = matched!!.source.slug
-                                    episodes = allEps
-                                    index = allEps.indexOf(ep).coerceAtLeast(0)
-                                }
-                                onPlay()
-                            }
+                        Modifier.clip(RoundedCornerShape(8.dp)).background(bg)
+                            .clickable { ep.play() }
                             .padding(horizontal = 14.dp, vertical = 8.dp),
                     ) {
                         Text(
