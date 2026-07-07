@@ -226,17 +226,96 @@ fun DetailScreen(animeId: Int) {
                 a.synopsis,
                 style = MaterialTheme.typography.bodyMedium,
                 color = Color.White.copy(alpha = 0.7f),
+                maxLines = 6,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
         }
-        Spacer(Modifier.height(24.dp))
-        Text(
-            "Episodes — provider port lands in the next phase",
-            style = MaterialTheme.typography.labelMedium,
-            color = Accent,
-            modifier = Modifier.padding(horizontal = 16.dp),
-        )
+        Spacer(Modifier.height(20.dp))
+        EpisodesSection(a)
         Spacer(Modifier.height(32.dp))
+    }
+}
+
+// ── Episodes (Anikoto provider) ───────────────────────────────────────────────
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime) {
+    var matched by remember { mutableStateOf<com.sanjay.anitrack.next.data.Anikoto.Matched?>(null) }
+    var failed by remember { mutableStateOf(false) }
+    var rangeStart by remember { mutableStateOf(0) } // index into ranges of 100
+
+    LaunchedEffect(anime.id) {
+        matched = null; failed = false; rangeStart = 0
+        runCatching { matched = com.sanjay.anitrack.next.data.Anikoto.matchFor(anime) }
+            .onFailure { failed = true }
+        if (matched == null) failed = true
+    }
+
+    Column(Modifier.padding(horizontal = 16.dp)) {
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Text("Episodes", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.width(10.dp))
+            val m = matched
+            when {
+                m != null -> {
+                    Text(
+                        if (m.verified) "Anikoto · verified ✓" else "Anikoto · best match",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (m.verified) Color(0xFF4CAF50) else Color.White.copy(alpha = 0.5f),
+                    )
+                }
+                failed -> Text("no source found", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.4f))
+                else -> CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = Accent)
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+
+        val eps = matched?.list?.episodes.orEmpty()
+        if (eps.isNotEmpty()) {
+            // Range selector for long series (chunks of 100).
+            val ranges = eps.chunked(100)
+            if (ranges.size > 1) {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(ranges.size) { i ->
+                        val first = ranges[i].first().number.toInt()
+                        val last = ranges[i].last().number.toInt()
+                        FilterChip(
+                            selected = rangeStart == i,
+                            onClick = { rangeStart = i },
+                            label = { Text("$first–$last") },
+                        )
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+            }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                for (ep in ranges.getOrElse(rangeStart) { emptyList() }) {
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color.White.copy(alpha = 0.07f))
+                            .clickable { /* Phase 3: native player */ }
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                    ) {
+                        Text(
+                            "${if (ep.number % 1f == 0f) ep.number.toInt() else ep.number}",
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Tap-to-play arrives with the native player (Phase 3)",
+                style = MaterialTheme.typography.labelSmall,
+                color = Accent.copy(alpha = 0.7f),
+            )
+        }
     }
 }
 

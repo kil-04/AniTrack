@@ -1,0 +1,177 @@
+package com.sanjay.anitrack.next.data
+
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONObject
+import java.util.concurrent.TimeUnit
+
+/**
+ * Anikoto provider — Kotlin port of the proven scraping flow from the
+ * Capacitor app (api-capacitor.ts + electron/services/providers/anikoto.ts).
+ *
+ * Hard-won rules carried over:
+ *  - Titles LIE (their "City Hunter" entry contains City Hunter '91). The
+ *    episode list's data-mal attribute is the only reliable identity, so
+ *    matching verifies against the target's MAL id, serially, one candidate
+ *    at a time (bursts trip the site's anti-bot limit).
+ *  - Episode lists are cached with in-flight-friendly TTL; verification and
+ *    display share one fetch.
+ */
+object Anikoto {
+    private const val BASE = "https://anikototv.to"
+    private const val UA =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+
+    private val http = OkHttpClient.Builder()
+        .callTimeout(20, TimeUnit.SECONDS)
+        .build()
+
+    data class SearchResult(
+        val slug: String,
+        val title: String,
+        val episodes: Int?,
+        val year: Int?,
+    )
+
+    data class Episode(
+        val number: Float,
+        val title: String,
+        val dataId: String,
+        val serversToken: String,
+    )
+
+    data class EpisodeList(val malId: Int?, val episodes: List<Episode>)
+
+    private val epsCache = object : LinkedHashMap<String, Pair<Long, EpisodeList>>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<Long, EpisodeList>>) = size > 60
+    }
+    private const val EPS_TTL_MS = 15 * 60 * 1000L
+
+    private fun get(url: String, referer: String = "$BASE/", xhr: Boolean = false): String {
+        val b = Request.Builder().url(url)
+            .header("User-Agent", UA)
+            .header("Referer", referer)
+        if (xhr) b.header("X-Requested-With", "XMLHttpRequest")
+        http.newCall(b.build()).execute().use { res ->
+            if (!res.isSuccessful) throw Exception("Anikoto ${res.code} for $url")
+            return res.body?.string() ?: throw Exception("empty body")
+        }
+    }
+
+    /** Year parsed from a title, the same imperfect way the JS did (titles can
+     *  still lie — that's what MAL verification is for). */
+    private fun parseYear(title: String): Int? {
+        Regex("""\b(19\d\d|20[0-2]\d)\b""").find(title)?.let { return it.groupValues[1].toInt() }
+        Regex("""'(\d{2})\b""").find(title)?.let {
+            val v = it.groupValues[1].toInt()
+            return if (v >= 50) 1900 + v else 2000 + v
+        }
+        return null
+    }
+
+    suspend fun search(query: String): List<SearchResult> = withContext(Dispatchers.IO) {
+        val out = mutableListOf<SearchResult>()
+        for (page in 1..2) {
+            val html = try {
+                get("$BASE/filter?keyword=${java.net.URLEncoder.encode(query, "UTF-8")}&page=$page")
+            } catch (e: Exception) { break }
+            val blocks = html.split(Regex("""<div class="item\s*"""))
+            for (i in 1 until blocks.size) {
+                val block = blocks[i]
+                val slug = Regex("""href="[^"]*/watch/([^/"]+)""").find(block)?.groupValues?.get(1) ?: continue
+                val jp = Regex("""data-jp="([^"]+)"""").find(block)?.groupValues?.get(1)?.replace("&#039;", "'")
+                val alt = Regex("""<img src="[^"]+" alt="([^"]+)"""").find(block)?.groupValues?.get(1)
+                val title = jp ?: alt ?: "Untitled"
+                val total = Regex("""class="ep-status total"[^>]*>\s*<span>\s*(\d+)\s*</span>""")
+                    .find(block)?.groupValues?.get(1)?.toIntOrNull()
+                if (out.none { it.slug == slug }) {
+                    out += SearchResult(slug, title, total, parseYear(title))
+                }
+            }
+        }
+        out
+    }
+
+    suspend fun episodes(slug: String): EpisodeList = withContext(Dispatchers.IO) {
+        synchronized(epsCache) {
+            epsCache[slug]?.let { (at, v) -> if (System.currentTimeMillis() - at < EPS_TTL_MS) return@withContext v }
+        }
+        val watchHtml = get("$BASE/watch/$slug")
+        val showId = Regex("""id="watch-main"[^>]*data-id="([^"]+)"""").find(watchHtml)?.groupValues?.get(1)
+            ?: Regex("""data-id="([^"]+)"""").find(watchHtml)?.groupValues?.get(1)
+            ?: throw Exception("no show id on watch page")
+        val listJson = get("$BASE/ajax/episode/list/$showId", referer = "$BASE/watch/$slug", xhr = true)
+        val listHtml = JSONObject(listJson).optString("result", "")
+
+        val malId = Regex("""data-mal="(\d+)"""").find(listHtml)?.groupValues?.get(1)?.toIntOrNull()
+
+        val episodes = mutableListOf<Episode>()
+        for (m in Regex("""<a[^>]+data-id="([^"]+)"[^>]+data-slug="([^"]+)"[^>]*>""").findAll(listHtml)) {
+            val tag = m.value
+            val dataId = m.groupValues[1]
+            val num = Regex("""data-num="([^"]*)"""").find(tag)?.groupValues?.get(1)?.toFloatOrNull() ?: 0f
+            val title = Regex("""title="([^"]*)"""").find(tag)?.groupValues?.get(1) ?: "Episode ${num.toInt()}"
+            val token = Regex("""data-ids="([^"]*)"""").find(tag)?.groupValues?.get(1) ?: ""
+            episodes += Episode(num, title, dataId, token)
+        }
+        val result = EpisodeList(malId, episodes)
+        synchronized(epsCache) { epsCache[slug] = System.currentTimeMillis() to result }
+        result
+    }
+
+    data class Matched(val source: SearchResult, val list: EpisodeList, val verified: Boolean)
+
+    /**
+     * Find the right Anikoto entry for an AniList anime: score by title,
+     * verify by MAL id (serial, early-exit), and let a positive verification
+     * rescue year-rejected candidates whose lying titles parsed the wrong year.
+     */
+    suspend fun matchFor(anime: Anime): Matched? {
+        val queries = buildList {
+            add(anime.title)
+            anime.titleRomaji?.let { if (it.lowercase() != anime.title.lowercase()) add(it) }
+        }
+        val candidates = LinkedHashMap<String, SearchResult>()
+        for (q in queries) {
+            for (r in runCatching { search(q) }.getOrDefault(emptyList())) {
+                candidates.putIfAbsent(r.slug, r)
+            }
+        }
+        if (candidates.isEmpty()) return null
+
+        val airing = anime.status == "RELEASING"
+        fun bestScore(r: SearchResult): Int = queries.maxOf {
+            Match.score(r.title, r.year, r.episodes, it, anime.year, anime.episodes, airing)
+        }
+
+        val yearOk = candidates.values.filter { it.year == null || anime.year == null || Math.abs(it.year - anime.year) <= 3 }
+        val scored = yearOk.map { it to bestScore(it) }.filter { it.second >= 20 }.sortedByDescending { it.second }.map { it.first }
+
+        // Title-plausible year-rejects join the verification pool (their year
+        // came from the lying title in the first place).
+        val rejects = candidates.values
+            .filter { it !in yearOk }
+            .filter { r -> queries.any { q ->
+                val c = Match.norm(r.title); val t = Match.norm(q)
+                t.isNotEmpty() && c.isNotEmpty() && (c.contains(t) || t.contains(c))
+            } }
+            .take(2)
+
+        val pool = (scored.take(3) + rejects).ifEmpty { return null }
+
+        // Serial verification, early exit — one episodes fetch in the common case.
+        for ((i, cand) in pool.withIndex()) {
+            val list = runCatching { episodes(cand.slug) }.getOrNull() ?: continue
+            val mal = list.malId
+            if (anime.malId != null && mal == anime.malId) return Matched(cand, list, verified = true)
+            if (i == 0 && (anime.malId == null || mal == null)) return Matched(cand, list, verified = false)
+            // known-wrong top pick → keep looking for a verified alternative
+        }
+        // Nothing verified — fall back to the top-scored candidate.
+        val top = pool.first()
+        val list = runCatching { episodes(top.slug) }.getOrNull() ?: return null
+        return Matched(top, list, verified = false)
+    }
+}
