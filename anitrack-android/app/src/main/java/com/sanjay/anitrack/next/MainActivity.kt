@@ -86,9 +86,14 @@ fun AppShell() {
             }
             Column(Modifier.weight(1f)) {
                 Box(Modifier.weight(1f)) {
+                    val openDetail: (com.sanjay.anitrack.next.data.Anime) -> Unit = { a -> nav.navigate("anime/${a.id}") }
                     NavHost(nav, startDestination = "home") {
-                        composable("home") { PlaceholderScreen("Home", "Trending, Continue Watching, discover rows") }
-                        composable("search") { PlaceholderScreen("Search", "AniList search + filters") }
+                        composable("home") { com.sanjay.anitrack.next.ui.HomeScreen(openDetail) }
+                        composable("search") { com.sanjay.anitrack.next.ui.SearchScreen(openDetail) }
+                        composable("anime/{id}") { entry ->
+                            val id = entry.arguments?.getString("id")?.toIntOrNull() ?: 0
+                            com.sanjay.anitrack.next.ui.DetailScreen(id)
+                        }
                         composable("downloads") { PlaceholderScreen("Downloads", "Offline HLS library (ports from the Kotlin downloader)") }
                         composable("settings") { PlaceholderScreen("Settings", "MAL account, gist sync, subtitles") }
                     }
