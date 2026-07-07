@@ -73,6 +73,12 @@ fun HomeScreen(onOpen: (Anime) -> Unit, onPlay: () -> Unit) {
     LaunchedEffect(Unit) {
         // Local data first — instant; network rows stream in after.
         runCatching { cw = com.sanjay.anitrack.next.data.Db.continueWatching() }
+        // Cloud reconcile in the background; refresh CW only if it changed
+        // something (same non-blocking pattern as the main app).
+        scope.launch {
+            val changed = runCatching { com.sanjay.anitrack.next.data.GistSync.pullAndMerge() }.getOrDefault(false)
+            if (changed) runCatching { cw = com.sanjay.anitrack.next.data.Db.continueWatching() }
+        }
         runCatching { trending = AniList.trending() }
         loading = false
         for (g in genres) {
@@ -104,6 +110,8 @@ fun HomeScreen(onOpen: (Anime) -> Unit, onPlay: () -> Unit) {
                             onDismiss = {
                                 scope.launch {
                                     com.sanjay.anitrack.next.data.Db.dismiss(row.animeId)
+                                    // Tombstone → the dismissal propagates to desktop too.
+                                    com.sanjay.anitrack.next.data.GistSync.deleteAnime(row.animeId)
                                     cw = com.sanjay.anitrack.next.data.Db.continueWatching()
                                 }
                             },
@@ -406,6 +414,64 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: 
                     }
                 }
             }
+        }
+    }
+}
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+
+@Composable
+fun SettingsScreen() {
+    var token by remember { mutableStateOf(com.sanjay.anitrack.next.data.GistSync.token) }
+    var statusMsg by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
+        Text("Settings", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(24.dp))
+
+        Text("Cross-device Sync", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Text(
+            "Shares Continue Watching with the desktop app via a private GitHub gist. " +
+                "Paste the same token (gist scope) you use there.",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.White.copy(alpha = 0.5f),
+        )
+        Spacer(Modifier.height(12.dp))
+        OutlinedTextField(
+            value = token,
+            onValueChange = { token = it },
+            label = { Text("GitHub Token (gist scope)") },
+            singleLine = true,
+            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth(),
+            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Accent, cursorColor = Accent),
+        )
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Button(
+                onClick = {
+                    com.sanjay.anitrack.next.data.GistSync.token = token.trim()
+                    statusMsg = if (token.isBlank()) "Sync disabled." else "Token saved."
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = Accent),
+            ) { Text("Save") }
+            OutlinedButton(
+                enabled = com.sanjay.anitrack.next.data.GistSync.configured() && !busy,
+                onClick = {
+                    busy = true; statusMsg = "Syncing…"
+                    scope.launch {
+                        val changed = runCatching { com.sanjay.anitrack.next.data.GistSync.pullAndMerge() }
+                        statusMsg = if (changed.isSuccess) "Synced ✓" else "Sync failed — check the token."
+                        busy = false
+                    }
+                },
+            ) { Text("Sync now") }
+        }
+        statusMsg?.let {
+            Spacer(Modifier.height(10.dp))
+            Text(it, style = MaterialTheme.typography.labelMedium, color = Accent)
         }
     }
 }

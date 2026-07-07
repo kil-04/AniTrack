@@ -53,6 +53,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         com.sanjay.anitrack.next.data.Db.init(applicationContext)
+        com.sanjay.anitrack.next.data.GistSync.init(applicationContext)
         enableEdgeToEdge()
         setContent {
             MaterialTheme(colorScheme = DarkColors) {
@@ -114,7 +115,7 @@ fun AppShell() {
                             com.sanjay.anitrack.next.ui.PlayerScreen(onBack = { nav.popBackStack() })
                         }
                         composable("downloads") { PlaceholderScreen("Downloads", "Offline HLS library (ports from the Kotlin downloader)") }
-                        composable("settings") { PlaceholderScreen("Settings", "MAL account, gist sync, subtitles") }
+                        composable("settings") { com.sanjay.anitrack.next.ui.SettingsScreen() }
                     }
                 }
                 if (!wideLayout && !hideChrome) {

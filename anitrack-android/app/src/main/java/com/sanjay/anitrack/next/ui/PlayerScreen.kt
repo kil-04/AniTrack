@@ -51,9 +51,16 @@ private suspend fun saveProgress(player: ExoPlayer, index: Int) {
     val ep = PlaySession.episodes.getOrNull(index) ?: return
     val dur = player.duration
     if (dur <= 0) return
+    val now = System.currentTimeMillis()
     com.sanjay.anitrack.next.data.Db.save(
         PlaySession.animeId, ep.number, player.currentPosition / 1000.0, dur / 1000.0,
-        PlaySession.animeTitle, PlaySession.animeCover, PlaySession.slug,
+        PlaySession.animeTitle, PlaySession.animeCover, PlaySession.slug, updatedAt = now,
+    )
+    com.sanjay.anitrack.next.data.GistSync.pushProgress(
+        com.sanjay.anitrack.next.data.Db.CwRow(
+            PlaySession.animeId, ep.number, player.currentPosition / 1000.0, dur / 1000.0,
+            PlaySession.animeTitle, PlaySession.animeCover, PlaySession.slug, now,
+        ),
     )
 }
 

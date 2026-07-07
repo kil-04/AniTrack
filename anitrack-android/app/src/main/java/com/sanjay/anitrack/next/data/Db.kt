@@ -50,8 +50,18 @@ object Db {
     suspend fun save(
         animeId: Int, episode: Float, positionSec: Double, durationSec: Double,
         title: String, cover: String?, slug: String?,
+        updatedAt: Long = System.currentTimeMillis(), // pulled rows keep their remote stamp
     ) = withContext(Dispatchers.IO) {
         if (animeId == 0 || durationSec <= 0) return@withContext
+        // Never wipe a stored slug with null (mirror of the main app's COALESCE
+        // lesson — sync-pulled rows may not carry one).
+        var keepSlug = slug
+        if (keepSlug.isNullOrEmpty()) {
+            helper.readableDatabase.rawQuery(
+                "SELECT slug FROM playback WHERE anime_id=? AND episode=?",
+                arrayOf(animeId.toString(), episode.toString()),
+            ).use { c -> if (c.moveToFirst() && !c.isNull(0)) keepSlug = c.getString(0) }
+        }
         val cv = ContentValues().apply {
             put("anime_id", animeId)
             put("episode", episode)
@@ -59,10 +69,42 @@ object Db {
             put("duration_sec", durationSec)
             put("anime_title", title)
             put("anime_cover", cover)
-            put("slug", slug)
-            put("updated_at", System.currentTimeMillis())
+            put("slug", keepSlug)
+            put("updated_at", updatedAt)
         }
         helper.writableDatabase.insertWithOnConflict("playback", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    suspend fun updatedAtFor(animeId: Int, episode: Float): Long? = withContext(Dispatchers.IO) {
+        helper.readableDatabase.rawQuery(
+            "SELECT updated_at FROM playback WHERE anime_id=? AND episode=?",
+            arrayOf(animeId.toString(), episode.toString()),
+        ).use { c -> if (c.moveToFirst()) c.getLong(0) else null }
+    }
+
+    suspend fun newestUpdatedAtFor(animeId: Int): Long? = withContext(Dispatchers.IO) {
+        helper.readableDatabase.rawQuery(
+            "SELECT MAX(updated_at) FROM playback WHERE anime_id=?",
+            arrayOf(animeId.toString()),
+        ).use { c -> if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else null }
+    }
+
+    /** Every playback row — for the sync push-back pass. */
+    suspend fun allRows(): List<CwRow> = withContext(Dispatchers.IO) {
+        val out = mutableListOf<CwRow>()
+        helper.readableDatabase.rawQuery(
+            """SELECT anime_id, episode, position_sec, duration_sec,
+                      anime_title, anime_cover, slug, updated_at FROM playback""",
+            null,
+        ).use { c ->
+            while (c.moveToNext()) {
+                out += CwRow(
+                    c.getInt(0), c.getFloat(1), c.getDouble(2), c.getDouble(3),
+                    c.getString(4) ?: "Unknown", c.getString(5), c.getString(6), c.getLong(7),
+                )
+            }
+        }
+        out
     }
 
     /** One card per anime — its most recently touched episode, newest first. */
