@@ -52,6 +52,7 @@ private val destinations = listOf(
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        com.sanjay.anitrack.next.data.Db.init(applicationContext)
         enableEdgeToEdge()
         setContent {
             MaterialTheme(colorScheme = DarkColors) {
@@ -103,7 +104,7 @@ fun AppShell() {
                 Box(Modifier.weight(1f)) {
                     val openDetail: (com.sanjay.anitrack.next.data.Anime) -> Unit = { a -> nav.navigate("anime/${a.id}") }
                     NavHost(nav, startDestination = "home") {
-                        composable("home") { com.sanjay.anitrack.next.ui.HomeScreen(openDetail) }
+                        composable("home") { com.sanjay.anitrack.next.ui.HomeScreen(openDetail, onPlay = { nav.navigate("player") }) }
                         composable("search") { com.sanjay.anitrack.next.ui.SearchScreen(openDetail) }
                         composable("anime/{id}") { entry ->
                             val id = entry.arguments?.getString("id")?.toIntOrNull() ?: 0

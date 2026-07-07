@@ -47,6 +47,16 @@ private val Accent = Color(0xFFE50914)
 private const val UA =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 
+private suspend fun saveProgress(player: ExoPlayer, index: Int) {
+    val ep = PlaySession.episodes.getOrNull(index) ?: return
+    val dur = player.duration
+    if (dur <= 0) return
+    com.sanjay.anitrack.next.data.Db.save(
+        PlaySession.animeId, ep.number, player.currentPosition / 1000.0, dur / 1000.0,
+        PlaySession.animeTitle, PlaySession.animeCover, PlaySession.slug,
+    )
+}
+
 @OptIn(UnstableApi::class)
 @Composable
 fun PlayerScreen(onBack: () -> Unit) {
@@ -93,8 +103,12 @@ fun PlayerScreen(onBack: () -> Unit) {
         onDispose { player.removeListener(listener); player.release() }
     }
 
+    var lastPlayedIndex by remember { mutableStateOf<Int?>(null) }
     LaunchedEffect(index, retry) {
         val ep = PlaySession.episodes.getOrNull(index) ?: return@LaunchedEffect
+        // Save the outgoing episode's position before switching.
+        lastPlayedIndex?.takeIf { it != index }?.let { saveProgress(player, it) }
+        lastPlayedIndex = index
         error = null
         status = "Resolving Episode ${ep.number.toInt()}…"
         player.stop()
@@ -116,14 +130,20 @@ fun PlayerScreen(onBack: () -> Unit) {
             val item = MediaItem.Builder().setUri(s.url).setSubtitleConfigurations(subtitleConfigs).build()
             player.setMediaSource(DefaultMediaSourceFactory(httpFactory).createMediaSource(item))
             player.prepare()
+            // Resume mid-episode from the local DB (finished episodes restart).
+            com.sanjay.anitrack.next.data.Db.resumeFor(PlaySession.animeId, ep.number)?.let { pos ->
+                player.seekTo((pos * 1000).toLong())
+            }
             status = ""
         } catch (e: Exception) {
             error = e.message ?: "Failed to resolve stream"
         }
     }
 
-    // Poll position for the skip-intro/outro windows (cheap, 500ms).
+    // Poll position for the skip-intro/outro windows (cheap, 500ms) and save
+    // watch progress every ~10s while playing.
     LaunchedEffect(stream) {
+        var sinceSave = 0
         while (isActive) {
             val s = stream
             val pos = player.currentPosition / 1000
@@ -131,7 +151,32 @@ fun PlayerScreen(onBack: () -> Unit) {
             val so = s?.outroEnd != null && pos >= (s.outroStart ?: 0) && pos < s.outroEnd!!
             if (si != showSkipIntro) showSkipIntro = si
             if (so != showSkipOutro) showSkipOutro = so
+            sinceSave += 1
+            if (sinceSave >= 20 && player.isPlaying) { // 20 * 500ms = 10s
+                sinceSave = 0
+                saveProgress(player, index)
+            }
             delay(500)
+        }
+    }
+
+    // Final save when the screen goes away.
+    DisposableEffect(Unit) {
+        onDispose {
+            val dur = player.duration
+            val posMs = player.currentPosition
+            val ep = PlaySession.episodes.getOrNull(index)
+            if (ep != null && dur > 0) {
+                // Fire-and-forget on a background thread; the composable is gone.
+                Thread {
+                    kotlinx.coroutines.runBlocking {
+                        com.sanjay.anitrack.next.data.Db.save(
+                            PlaySession.animeId, ep.number, posMs / 1000.0, dur / 1000.0,
+                            PlaySession.animeTitle, PlaySession.animeCover, PlaySession.slug,
+                        )
+                    }
+                }.start()
+            }
         }
     }
 
