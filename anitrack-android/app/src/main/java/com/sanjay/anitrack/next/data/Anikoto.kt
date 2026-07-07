@@ -123,6 +123,100 @@ object Anikoto {
 
     data class Matched(val source: SearchResult, val list: EpisodeList, val verified: Boolean)
 
+    data class Subtitle(val url: String, val label: String)
+
+    data class Stream(
+        val url: String,
+        // The segment CDN (nekostream) hotlink-checks Referer against the
+        // player origin — ExoPlayer's HTTP factory must send it explicitly.
+        val referer: String,
+        val subtitles: List<Subtitle>,
+        val introStart: Long?, val introEnd: Long?,
+        val outroStart: Long?, val outroEnd: Long?,
+    )
+
+    private fun enc(s: String) = java.net.URLEncoder.encode(s, "UTF-8")
+
+    /** Resolve a playable HLS stream for one episode. Port of the proven
+     *  Capacitor flow: server list → server?get → megaplay iframe →
+     *  getSources (same rotating origin as the iframe). */
+    suspend fun resolve(slug: String, ep: Episode, preferHardSub: Boolean = false): Stream = withContext(Dispatchers.IO) {
+        // Warm cookies the way the site expects.
+        runCatching { get("$BASE/watch/$slug") }
+
+        val serversHtml = JSONObject(
+            get("$BASE/ajax/server/list?servers=${enc(ep.serversToken)}", referer = "$BASE/watch/$slug", xhr = true),
+        ).optString("result", "")
+
+        data class ServerType(val label: String, val linkIds: List<String>)
+        val types = Regex("""<div class="type"[^>]*>([\s\S]*?)</ul>\s*</div>""").findAll(serversHtml).map { tm ->
+            val body = tm.groupValues[1]
+            val label = Regex("""<label[^>]*>([\s\S]*?)</label>""").find(body)
+                ?.groupValues?.get(1)?.replace(Regex("<[^>]+>"), "")?.trim() ?: ""
+            val ids = Regex("""<li[^>]+data-link-id="([^"]+)"""").findAll(body).map { it.groupValues[1] }.toList()
+            ServerType(label, ids)
+        }.toList()
+
+        fun isHard(l: String): Boolean {
+            val u = l.uppercase()
+            return u.contains("H-SUB") || u.contains("H SUB") || u.contains("HARDSUB") || u.contains("HARD SUB") || u.contains("HSUB")
+        }
+        fun isSoft(l: String) = l.uppercase().contains("SUB") && !isHard(l)
+
+        val target = types.firstOrNull { if (preferHardSub) isHard(it.label) else isSoft(it.label) }
+            ?: types.firstOrNull { it.linkIds.isNotEmpty() }
+            ?: throw Exception("no stream servers listed")
+        val linkId = target.linkIds.firstOrNull() ?: throw Exception("no server link id")
+        val actualHard = isHard(target.label)
+
+        val serverGet = JSONObject(get("$BASE/ajax/server?get=${enc(linkId)}", xhr = true))
+        val iframeUrl = serverGet.optJSONObject("result")?.optString("url").orEmpty()
+        if (iframeUrl.isEmpty()) throw Exception("server iframe URL missing")
+
+        fun skip(obj: JSONObject?, key: String): Pair<Long?, Long?> {
+            val o = obj?.optJSONObject(key) ?: return null to null
+            val end = o.optLong("end", 0)
+            return if (end > 0) o.optLong("start", 0) to end else null to null
+        }
+        val skipData = serverGet.optJSONObject("result")?.optJSONObject("skip_data")
+
+        // Direct-stream hosts encode the URL in the hash.
+        if (iframeUrl.contains("plyr.php") || iframeUrl.contains("mewcdn.online/player/")) {
+            val hash = iframeUrl.substringAfter('#', "")
+            if (hash.isNotEmpty()) {
+                val decoded = String(android.util.Base64.decode(hash, android.util.Base64.DEFAULT))
+                val (inS, inE) = skip(skipData, "intro"); val (outS, outE) = skip(skipData, "outro")
+                return@withContext Stream(decoded, "$BASE/", emptyList(), inS, inE, outS, outE)
+            }
+        }
+
+        val megaHtml = get(iframeUrl, referer = "$BASE/")
+        val megaId = Regex("""id="megaplay-player"[^>]*data-id="([^"]+)"""").find(megaHtml)?.groupValues?.get(1)
+            ?: Regex("""data-id="([^"]+)"""").find(megaHtml)?.groupValues?.get(1)
+            ?: throw Exception("megaplay data-id missing")
+
+        // getSources lives on the SAME (rotating) origin as the iframe.
+        val playerOrigin = java.net.URI(iframeUrl).let { "${it.scheme}://${it.host}" }
+        val src = JSONObject(get("$playerOrigin/stream/getSources?id=$megaId", referer = iframeUrl, xhr = true))
+
+        val streamUrl = src.optJSONObject("sources")?.optString("file").orEmpty()
+        if (streamUrl.isEmpty()) throw Exception("stream URL missing in getSources")
+
+        val subs = mutableListOf<Subtitle>()
+        if (!actualHard) {
+            val tracks = src.optJSONArray("tracks")
+            if (tracks != null) for (i in 0 until tracks.length()) {
+                val t = tracks.getJSONObject(i)
+                if (t.optString("kind") == "captions") {
+                    subs += Subtitle(t.optString("file"), t.optString("label", "English"))
+                }
+            }
+        }
+        val (inS, inE) = skip(src, "intro").takeIf { it.second != null } ?: skip(skipData, "intro")
+        val (outS, outE) = skip(src, "outro").takeIf { it.second != null } ?: skip(skipData, "outro")
+        Stream(streamUrl, playerOrigin, subs, inS, inE, outS, outE)
+    }
+
     /**
      * Find the right Anikoto entry for an AniList anime: score by title,
      * verify by MAL id (serial, early-exit), and let a positive verification

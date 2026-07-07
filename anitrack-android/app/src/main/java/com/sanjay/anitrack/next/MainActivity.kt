@@ -68,10 +68,11 @@ fun AppShell() {
     val current = backStack?.destination?.route
     // Tablet (or landscape phone) gets a nav rail; portrait phone a bottom bar.
     val wideLayout = LocalConfiguration.current.screenWidthDp >= 820
+    val hideChrome = current == "player"
 
     Surface(color = Bg, modifier = Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxSize()) {
-            if (wideLayout) {
+            if (wideLayout && !hideChrome) {
                 NavigationRail(containerColor = BgElev) {
                     Spacer(Modifier.height(8.dp))
                     destinations.forEach { d ->
@@ -92,13 +93,16 @@ fun AppShell() {
                         composable("search") { com.sanjay.anitrack.next.ui.SearchScreen(openDetail) }
                         composable("anime/{id}") { entry ->
                             val id = entry.arguments?.getString("id")?.toIntOrNull() ?: 0
-                            com.sanjay.anitrack.next.ui.DetailScreen(id)
+                            com.sanjay.anitrack.next.ui.DetailScreen(id, onPlay = { nav.navigate("player") })
+                        }
+                        composable("player") {
+                            com.sanjay.anitrack.next.ui.PlayerScreen(onBack = { nav.popBackStack() })
                         }
                         composable("downloads") { PlaceholderScreen("Downloads", "Offline HLS library (ports from the Kotlin downloader)") }
                         composable("settings") { PlaceholderScreen("Settings", "MAL account, gist sync, subtitles") }
                     }
                 }
-                if (!wideLayout) {
+                if (!wideLayout && !hideChrome) {
                     NavigationBar(containerColor = BgElev) {
                         destinations.forEach { d ->
                             NavigationBarItem(

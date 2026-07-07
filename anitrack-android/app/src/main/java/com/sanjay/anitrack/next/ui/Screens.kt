@@ -168,7 +168,7 @@ fun SearchScreen(onOpen: (Anime) -> Unit) {
 // ── Detail ────────────────────────────────────────────────────────────────────
 
 @Composable
-fun DetailScreen(animeId: Int) {
+fun DetailScreen(animeId: Int, onPlay: () -> Unit) {
     var anime by remember { mutableStateOf<Anime?>(null) }
     LaunchedEffect(animeId) { anime = AniList.byId(animeId) }
 
@@ -232,7 +232,7 @@ fun DetailScreen(animeId: Int) {
             )
         }
         Spacer(Modifier.height(20.dp))
-        EpisodesSection(a)
+        EpisodesSection(a, onPlay)
         Spacer(Modifier.height(32.dp))
     }
 }
@@ -241,7 +241,7 @@ fun DetailScreen(animeId: Int) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime) {
+private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: () -> Unit) {
     var matched by remember { mutableStateOf<com.sanjay.anitrack.next.data.Anikoto.Matched?>(null) }
     var failed by remember { mutableStateOf(false) }
     var rangeStart by remember { mutableStateOf(0) } // index into ranges of 100
@@ -294,12 +294,19 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                val allEps = matched!!.list.episodes
                 for (ep in ranges.getOrElse(rangeStart) { emptyList() }) {
                     Box(
                         Modifier
                             .clip(RoundedCornerShape(8.dp))
                             .background(Color.White.copy(alpha = 0.07f))
-                            .clickable { /* Phase 3: native player */ }
+                            .clickable {
+                                com.sanjay.anitrack.next.data.PlaySession.animeTitle = anime.title
+                                com.sanjay.anitrack.next.data.PlaySession.slug = matched!!.source.slug
+                                com.sanjay.anitrack.next.data.PlaySession.episodes = allEps
+                                com.sanjay.anitrack.next.data.PlaySession.index = allEps.indexOf(ep).coerceAtLeast(0)
+                                onPlay()
+                            }
                             .padding(horizontal = 14.dp, vertical = 8.dp),
                     ) {
                         Text(
@@ -309,12 +316,6 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime) {
                     }
                 }
             }
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Tap-to-play arrives with the native player (Phase 3)",
-                style = MaterialTheme.typography.labelSmall,
-                color = Accent.copy(alpha = 0.7f),
-            )
         }
     }
 }
