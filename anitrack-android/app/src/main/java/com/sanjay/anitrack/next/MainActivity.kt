@@ -59,6 +59,20 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    // YouTube behaviour: leaving the app while watching drops into PiP.
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (com.sanjay.anitrack.next.data.PlaySession.playerActive) {
+            try {
+                enterPictureInPictureMode(
+                    android.app.PictureInPictureParams.Builder()
+                        .setAspectRatio(android.util.Rational(16, 9))
+                        .build(),
+                )
+            } catch (e: Exception) { /* PiP unavailable */ }
+        }
+    }
 }
 
 @Composable

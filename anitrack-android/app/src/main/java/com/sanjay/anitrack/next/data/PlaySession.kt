@@ -7,4 +7,7 @@ object PlaySession {
     var slug: String = ""
     var episodes: List<Anikoto.Episode> = emptyList()
     var index: Int = 0
+
+    /** True while the player screen is mounted — drives auto-PiP on Home press. */
+    var playerActive: Boolean = false
 }
