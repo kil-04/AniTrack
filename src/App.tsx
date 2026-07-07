@@ -39,9 +39,11 @@ const PageFallback = () => (
   </div>
 );
 
-// On tablet landscape (≥900 px) keep the desktop sidebar.
-// On phone or portrait tablet use the bottom nav bar.
-const TABLET_LANDSCAPE = "(min-width: 900px)";
+// Keep the desktop-style shell on tablets in BOTH orientations. The Tab S7 FE
+// is ~853dp wide in portrait, so a 900px cutoff dropped it into phone mode on
+// rotation (old mobile UI + a full player layout swap that killed the video).
+// Phones stay under 820dp in portrait.
+const TABLET_LANDSCAPE = "(min-width: 820px)";
 
 export default function App() {
   const refreshAll   = useAppStore((s) => s.refreshAll);

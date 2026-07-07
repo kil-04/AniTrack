@@ -1626,15 +1626,16 @@ export default function StreamPlayer({
     const ms: any = (navigator as any).mediaSession;
     if (!ms) return;
     try {
+      // NOTE: no previoustrack/nexttrack here — when track handlers exist,
+      // Chromium's PiP window shows episode-skip buttons INSTEAD of the ±5s
+      // seek arrows, which is exactly what we don't want.
       ms.setActionHandler("seekbackward", (d: any) => seek(-(d?.seekOffset || 5)));
       ms.setActionHandler("seekforward", (d: any) => seek(d?.seekOffset || 5));
-      ms.setActionHandler("previoustrack", () => playPrevRef.current());
-      ms.setActionHandler("nexttrack", () => playNextRef.current());
       ms.setActionHandler("play", () => videoRef.current?.play().catch(() => {}));
       ms.setActionHandler("pause", () => videoRef.current?.pause());
     } catch { /* older engines may not know some actions */ }
     return () => {
-      for (const a of ["seekbackward", "seekforward", "previoustrack", "nexttrack", "play", "pause"]) {
+      for (const a of ["seekbackward", "seekforward", "play", "pause"]) {
         try { ms.setActionHandler(a, null); } catch { /* ignore */ }
       }
     };
@@ -1990,7 +1991,10 @@ export default function StreamPlayer({
     : "---";
 
   // ── Responsive layout ───────────────────────────────────────────────────────
-  const isTablet = useMediaQuery("(min-width: 900px)");
+  // 820px so a tablet stays in the desktop/tablet layout in BOTH orientations —
+  // crossing this breakpoint mid-playback swaps layout branches and remounts
+  // the <video>, which killed playback when rotating to portrait.
+  const isTablet = useMediaQuery("(min-width: 820px)");
   // On Android phone (portrait) we use the YouTube-style layout.
   const isMobile = isCapacitor && !isTablet;
 
