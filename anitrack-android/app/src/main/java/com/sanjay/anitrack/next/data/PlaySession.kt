@@ -27,6 +27,9 @@ object PlaySession {
     data class Resolved(
         val url: String,
         val referer: String,
+        // The CDN binds sessions to the browser fingerprint that resolved the
+        // stream — the player must present the SAME user agent.
+        val userAgent: String,
         val subtitles: List<Anikoto.Subtitle>,
         val introStart: Long?, val introEnd: Long?,
         val outroStart: Long?, val outroEnd: Long?,
@@ -43,6 +46,10 @@ object PlaySession {
     fun resumeKey(): String =
         if (provider == "animepahe") "pahe:$paheSession" else slug
 
+    /** Episode title for side-panel labels (anikoto has real titles; pahe doesn't). */
+    fun episodeTitle(i: Int): String? =
+        if (provider == "animepahe") null else anikotoEps.getOrNull(i)?.title
+
     suspend fun resolve(i: Int): Resolved {
         return if (provider == "animepahe") {
             val ep = paheEps[i]
@@ -55,10 +62,15 @@ object PlaySession {
             }!!
             val s = Pahe.resolveKwik(best.kwik)
             // AnimePahe is hard-subbed — no separate tracks, no provider skip data.
-            Resolved(s.url, s.referer, emptyList(), null, null, null, null)
+            // UA must match the kwik WebView's (session is fingerprint-bound).
+            Resolved(s.url, s.referer, Pahe.MOBILE_UA, emptyList(), null, null, null, null)
         } else {
             val s = Anikoto.resolve(slug, anikotoEps[i])
-            Resolved(s.url, s.referer, s.subtitles, s.introStart, s.introEnd, s.outroStart, s.outroEnd)
+            Resolved(
+                s.url, s.referer,
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+                s.subtitles, s.introStart, s.introEnd, s.outroStart, s.outroEnd,
+            )
         }
     }
 }

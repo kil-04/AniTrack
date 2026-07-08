@@ -42,7 +42,9 @@ import java.util.concurrent.TimeUnit
  *     manifest request; the kwik origin is remembered for the CDN Referer.
  */
 object Pahe {
-    private const val MOBILE_UA =
+    // Public: the player must present the SAME UA the kwik WebView used —
+    // the CDN binds the session to it.
+    const val MOBILE_UA =
         "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
 
     @Volatile var lastKwikOrigin: String = "https://kwik.cx"

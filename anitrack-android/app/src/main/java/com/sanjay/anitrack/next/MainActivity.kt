@@ -55,6 +55,9 @@ class MainActivity : ComponentActivity() {
         com.sanjay.anitrack.next.data.Db.init(applicationContext)
         com.sanjay.anitrack.next.data.GistSync.init(applicationContext)
         com.sanjay.anitrack.next.data.Pahe.attach(this)
+        // ExoPlayer's HttpURLConnection stack consults this for cookies — the
+        // pahe/kwik CDN rejects segment requests without the WebView's cookies.
+        java.net.CookieHandler.setDefault(com.sanjay.anitrack.next.data.WebkitCookieHandler())
         enableEdgeToEdge()
         setContent {
             MaterialTheme(colorScheme = DarkColors) {

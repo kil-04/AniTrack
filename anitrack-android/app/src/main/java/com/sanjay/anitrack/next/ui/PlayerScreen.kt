@@ -7,9 +7,12 @@ import android.net.Uri
 import android.util.Rational
 import androidx.annotation.OptIn
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -26,6 +29,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.C
@@ -91,6 +96,12 @@ fun PlayerScreen(onBack: () -> Unit) {
 
     // PiP heuristic: the PiP window is tiny — hide all chrome in it.
     val inPipLikely = LocalConfiguration.current.screenWidthDp < 400
+    // Old-app layout: episode panel beside the video on wide screens.
+    val wide = LocalConfiguration.current.screenWidthDp >= 820
+    var watchedMap by remember { mutableStateOf<Map<Float, Int>>(emptyMap()) }
+    LaunchedEffect(index) {
+        runCatching { watchedMap = com.sanjay.anitrack.next.data.Db.positionsFor(PlaySession.animeId) }
+    }
 
     val player = remember { ExoPlayer.Builder(context).build().apply { playWhenReady = true } }
 
@@ -126,7 +137,7 @@ fun PlayerScreen(onBack: () -> Unit) {
             val s = PlaySession.resolve(index)
             stream = s
             val httpFactory = DefaultHttpDataSource.Factory()
-                .setUserAgent(UA)
+                .setUserAgent(s.userAgent)
                 .setDefaultRequestProperties(mapOf("Referer" to s.referer + "/"))
                 .setAllowCrossProtocolRedirects(true)
             val subtitleConfigs = s.subtitles.mapIndexed { i, sub ->
@@ -238,7 +249,11 @@ fun PlayerScreen(onBack: () -> Unit) {
             }
         }
 
-        Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Row(Modifier.weight(1f).fillMaxWidth()) {
+            if (wide && !inPipLikely) {
+                EpisodeSidePanel(current = index, watched = watchedMap, onSelect = { index = it })
+            }
+            Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
             AndroidView(
                 factory = { ctx ->
                     PlayerView(ctx).apply {
@@ -376,6 +391,71 @@ fun PlayerScreen(onBack: () -> Unit) {
                     CircularProgressIndicator(color = Accent)
                     Spacer(Modifier.height(10.dp))
                     Text(status, color = Color.White.copy(alpha = 0.6f), style = MaterialTheme.typography.labelMedium)
+                }
+            }
+            } // player Box
+        } // Row (panel + player)
+    }
+}
+
+// ── Episode side panel (old-app split view on wide screens) ──────────────────
+
+@Composable
+private fun EpisodeSidePanel(current: Int, watched: Map<Float, Int>, onSelect: (Int) -> Unit) {
+    val listState = rememberLazyListState()
+    LaunchedEffect(current) {
+        runCatching { listState.animateScrollToItem((current - 2).coerceAtLeast(0)) }
+    }
+    Column(
+        Modifier.width(280.dp).fillMaxHeight().background(Color(0xFF141419)),
+    ) {
+        Text(
+            "EPISODES · ${if (PlaySession.provider == "animepahe") "AnimePahe" else "Anikoto"}",
+            style = MaterialTheme.typography.labelSmall,
+            color = Color.White.copy(alpha = 0.45f),
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+        )
+        LazyColumn(state = listState, modifier = Modifier.weight(1f)) {
+            items(PlaySession.count) { i ->
+                val n = PlaySession.episodeNumber(i)
+                val pct = watched[n] ?: 0
+                val isCur = i == current
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(if (isCur) Accent.copy(alpha = 0.16f) else Color.Transparent)
+                        .clickable { onSelect(i) }
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "${if (n % 1f == 0f) n.toInt() else n}",
+                        modifier = Modifier.width(40.dp),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = if (isCur) FontWeight.Bold else FontWeight.Normal,
+                        color = when {
+                            isCur -> Accent
+                            pct >= 85 -> Color.White.copy(alpha = 0.35f)
+                            else -> Color.White.copy(alpha = 0.85f)
+                        },
+                    )
+                    Text(
+                        PlaySession.episodeTitle(i) ?: "Episode ${if (n % 1f == 0f) n.toInt() else n}",
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        color = when {
+                            isCur -> Color.White
+                            pct >= 85 -> Color.White.copy(alpha = 0.35f)
+                            else -> Color.White.copy(alpha = 0.7f)
+                        },
+                    )
+                    if (pct >= 85) {
+                        Text("✓", style = MaterialTheme.typography.labelSmall, color = Accent.copy(alpha = 0.8f))
+                    } else if (pct > 0) {
+                        Text("$pct%", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.4f))
+                    }
                 }
             }
         }
