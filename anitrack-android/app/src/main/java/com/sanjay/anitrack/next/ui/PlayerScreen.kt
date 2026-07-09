@@ -74,7 +74,7 @@ private fun fmtTime(ms: Long): String {
     return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
 }
 
-private suspend fun saveProgress(player: ExoPlayer, index: Int) {
+internal suspend fun saveProgress(player: ExoPlayer, index: Int) {
     if (index >= PlaySession.count) return
     val epNum = PlaySession.episodeNumber(index)
     val dur = player.duration

@@ -83,6 +83,7 @@ fun HomeScreen(
     var popular by remember { mutableStateOf<List<Anime>>(emptyList()) }
     var anikotoTop by remember { mutableStateOf<Map<String, List<com.sanjay.anitrack.next.data.Anikoto.TopItem>>>(emptyMap()) }
     var cw by remember { mutableStateOf<List<com.sanjay.anitrack.next.data.Db.CwRow>>(emptyList()) }
+    var epTotals by remember { mutableStateOf<Map<Int, Int>>(emptyMap()) }
     var loading by remember { mutableStateOf(true) }
     var resumingId by remember { mutableStateOf<Int?>(null) }
     var opening by remember { mutableStateOf(false) }
@@ -105,6 +106,8 @@ fun HomeScreen(
         scope.launch {
             val changed = runCatching { com.sanjay.anitrack.next.data.GistSync.pullAndMerge() }.getOrDefault(false)
             if (changed) runCatching { cw = com.sanjay.anitrack.next.data.Db.continueWatching() }
+            // "EP total ▲" badges — one batched AniList query (desktop parity).
+            runCatching { epTotals = AniList.episodeTotals(cw.map { it.animeId }) }
         }
         // Rows stream in as each lands (the client serializes requests anyway).
         runCatching { trending = AniList.trending() }
@@ -146,6 +149,7 @@ fun HomeScreen(
                         val row = cw[i]
                         ContinueCardWide(
                             row,
+                            total = epTotals[row.animeId],
                             resuming = resumingId == row.animeId,
                             onResume = {
                                 if (resumingId != null) return@ContinueCardWide
@@ -356,6 +360,13 @@ private fun HeroBanner(anime: Anime, onOpen: (Anime) -> Unit) {
     }
 }
 
+// m:ss / h:mm:ss — the desktop's secondsToTimestamp.
+internal fun fmtSecs(sec: Double): String {
+    val t = sec.toLong()
+    val h = t / 3600; val m = (t % 3600) / 60; val s = t % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
+}
+
 // Landscape Continue-Watching card (the desktop app's wide format).
 /**
  * Prepare PlaySession to resume a Continue-Watching row. Uses the stored slug
@@ -365,11 +376,14 @@ private fun HeroBanner(anime: Anime, onOpen: (Anime) -> Unit) {
  */
 internal suspend fun prepareResume(row: com.sanjay.anitrack.next.data.Db.CwRow): Boolean {
     com.sanjay.anitrack.next.data.PlaySession.localFile = null   // online resume, not a download
-    val key = row.slug
+    // Same detection as the desktop: pahe sessions are UUIDs, anikoto slugs
+    // aren't. (Also strip the legacy "pahe:" prefix older Next builds wrote.)
+    val key = row.slug?.removePrefix("pahe:")
+    val isPahe = key != null && com.sanjay.anitrack.next.data.PlaySession.PAHE_UUID.matches(key)
     val meta = com.sanjay.anitrack.next.data.AniList.byId(row.animeId)
 
     // 1. Anikoto slug stored → use it directly.
-    if (key != null && !key.startsWith("pahe:")) {
+    if (key != null && !isPahe) {
         val eps = runCatching { com.sanjay.anitrack.next.data.Anikoto.episodes(key).episodes }.getOrNull()
         if (!eps.isNullOrEmpty()) {
             com.sanjay.anitrack.next.data.PlaySession.apply {
@@ -381,13 +395,12 @@ internal suspend fun prepareResume(row: com.sanjay.anitrack.next.data.Db.CwRow):
         }
     }
     // 2. AnimePahe session stored → use it.
-    if (key != null && key.startsWith("pahe:")) {
-        val session = key.removePrefix("pahe:")
-        val eps = runCatching { com.sanjay.anitrack.next.data.Pahe.episodesAll(session) }.getOrNull()
+    if (key != null && isPahe) {
+        val eps = runCatching { com.sanjay.anitrack.next.data.Pahe.episodesAll(key) }.getOrNull()
         if (!eps.isNullOrEmpty()) {
             com.sanjay.anitrack.next.data.PlaySession.apply {
                 provider = "animepahe"; animeId = row.animeId; animeTitle = row.title; animeCover = row.cover
-                anime = meta; anikotoEps = emptyList(); paheSession = session; paheEps = eps
+                anime = meta; anikotoEps = emptyList(); paheSession = key; paheEps = eps
                 index = eps.indexOfFirst { it.number == row.episode }.takeIf { it >= 0 } ?: 0
             }
             return true
@@ -418,57 +431,81 @@ internal suspend fun prepareResume(row: com.sanjay.anitrack.next.data.Db.CwRow):
 @Composable
 private fun ContinueCardWide(
     row: com.sanjay.anitrack.next.data.Db.CwRow,
+    total: Int?,
     resuming: Boolean,
     onResume: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    Column(Modifier.width(260.dp)) {
-        Box {
-            AsyncImage(
-                model = row.cover,
-                contentDescription = row.title,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .width(260.dp).height(146.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Color.White.copy(alpha = 0.06f))
-                    .clickable { onResume() },
-            )
-            // EP badge
+    val ep = if (row.episode % 1f == 0f) "${row.episode.toInt()}" else "${row.episode}"
+    // Desktop card: 16:9 cover, gradient, EP badge, EP-total badge, title +
+    // timestamp inside the card, red progress strip at the bottom.
+    Box(
+        Modifier.width(280.dp).height(158.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0xFF1B1B1B))
+            .clickable { onResume() },
+    ) {
+        AsyncImage(
+            model = row.cover, contentDescription = row.title, contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize(),
+        )
+        Box(
+            Modifier.fillMaxSize().background(
+                androidx.compose.ui.graphics.Brush.verticalGradient(
+                    0f to Color.Transparent, 0.5f to Color.Black.copy(alpha = 0.2f), 1f to Color.Black.copy(alpha = 0.9f),
+                ),
+            ),
+        )
+        // EP badge (top-left, red)
+        Box(
+            Modifier.align(Alignment.TopStart).padding(8.dp)
+                .clip(RoundedCornerShape(4.dp)).background(Accent)
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+        ) { Text("EP $ep", color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, letterSpacing = androidx.compose.ui.unit.TextUnit(1.5f, androidx.compose.ui.unit.TextUnitType.Sp)) }
+        // ✕ + EP-total badge (top-right): green "▲" when new episodes exist.
+        Row(Modifier.align(Alignment.TopEnd).padding(8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
-                Modifier.align(Alignment.TopStart).padding(8.dp)
-                    .clip(RoundedCornerShape(6.dp)).background(Accent)
-                    .padding(horizontal = 8.dp, vertical = 2.dp),
-            ) { Text("EP ${if (row.episode % 1f == 0f) row.episode.toInt() else row.episode}", color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold) }
-            // Dismiss ✕
-            Box(
-                Modifier.align(Alignment.TopEnd).padding(8.dp)
-                    .clip(RoundedCornerShape(50)).background(Color.Black.copy(alpha = 0.6f))
-                    .clickable { onDismiss() }.padding(horizontal = 7.dp, vertical = 2.dp),
-            ) { Text("✕", color = Color.White, style = MaterialTheme.typography.labelSmall) }
-            // Play scrim (spinner while the episode list resolves)
-            Box(
-                Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp)).clickable { onResume() },
+                Modifier.size(24.dp).clip(RoundedCornerShape(50)).background(Color.Black.copy(alpha = 0.7f))
+                    .clickable { onDismiss() },
                 contentAlignment = Alignment.Center,
-            ) {
-                if (resuming) {
-                    CircularProgressIndicator(color = Accent, modifier = Modifier.size(34.dp))
-                } else {
-                    Box(Modifier.clip(RoundedCornerShape(50)).background(Color.Black.copy(alpha = 0.45f)).padding(10.dp)) {
-                        Text("▶", color = Color.White, style = MaterialTheme.typography.titleMedium)
-                    }
+            ) { Text("✕", color = Color.White, style = MaterialTheme.typography.labelSmall) }
+            if (total != null) {
+                val hasNew = total > row.episode
+                Box(
+                    Modifier.clip(RoundedCornerShape(4.dp))
+                        .background(if (hasNew) Color(0xFF22C55E) else Color.Black.copy(alpha = 0.6f))
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                ) {
+                    Text(
+                        if (hasNew) "EP $total ▲" else "EP $total ✓",
+                        color = if (hasNew) Color.White else Color.White.copy(alpha = 0.5f),
+                        style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold,
+                    )
                 }
             }
-            LinearProgressIndicator(
-                progress = { (row.percent / 100f).coerceIn(0f, 1f) },
-                color = Accent,
-                trackColor = Color.White.copy(alpha = 0.25f),
-                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(3.dp),
+        }
+        // Resolving spinner
+        if (resuming) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = Accent, modifier = Modifier.size(34.dp))
+            }
+        }
+        // Title + timestamp (inside the card, desktop style)
+        Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
+            Text(
+                row.title, color = Color.White, style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                "${fmtSecs(row.positionSec)} / ${fmtSecs(row.durationSec)}",
+                color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.labelSmall,
             )
         }
-        Spacer(Modifier.height(6.dp))
-        Text(row.title, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Color.White.copy(alpha = 0.9f))
-        Text("Ep ${if (row.episode % 1f == 0f) row.episode.toInt() else row.episode} · ${row.percent}%", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.4f))
+        // Progress strip
+        Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(5.dp).background(Color.White.copy(alpha = 0.2f))) {
+            Box(Modifier.fillMaxWidth(fraction = (row.percent / 100f).coerceIn(0f, 1f)).fillMaxHeight().background(Accent))
+        }
     }
 }
 

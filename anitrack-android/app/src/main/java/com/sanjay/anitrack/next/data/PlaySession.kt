@@ -47,9 +47,14 @@ object PlaySession {
         else anikotoEps.getOrNull(i)?.number ?: 0f
 
     /** The slug/session persisted with progress so Continue Watching can resume
-     *  without re-matching. Prefixed by provider so the two never collide. */
+     *  without re-matching. RAW value, same as the desktop app writes to the
+     *  sync gist: pahe sessions are UUIDs, anikoto slugs never are — consumers
+     *  detect the provider with PAHE_UUID (a "pahe:" prefix broke desktop). */
     fun resumeKey(): String =
-        if (provider == "animepahe") "pahe:$paheSession" else slug
+        if (provider == "animepahe") paheSession else slug
+
+    /** AnimePahe sessions are full UUIDs; anikoto slugs are never UUID-shaped. */
+    val PAHE_UUID = Regex("^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$", RegexOption.IGNORE_CASE)
 
     /** Episode title for side-panel labels (anikoto has real titles; pahe doesn't). */
     fun episodeTitle(i: Int): String? =

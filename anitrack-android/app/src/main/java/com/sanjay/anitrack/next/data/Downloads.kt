@@ -41,11 +41,11 @@ object Downloads {
     fun sizeOf(id: String): Long =
         folder(id).walkTopDown().filter { it.isFile }.sumOf { it.length() }
 
-    fun humanSize(bytes: Long): String = when {
-        bytes >= 1_000_000_000 -> "%.1f GB".format(bytes / 1_000_000_000.0)
-        bytes >= 1_000_000 -> "${bytes / 1_000_000} MB"
-        bytes >= 1_000 -> "${bytes / 1_000} KB"
-        else -> "$bytes B"
+    // Same numbers as the desktop's fmtSize (1024-based, whole MB / 1-dp GB).
+    fun humanSize(bytes: Long): String {
+        if (bytes <= 0) return ""
+        val mb = bytes / (1024.0 * 1024.0)
+        return if (mb >= 1024) "%.1f GB".format(mb / 1024) else "${mb.toInt()} MB"
     }
 
     private lateinit var appCtx: Context

@@ -237,6 +237,32 @@ object AniList {
         )
     )
 
+    /** Episodes available per show for the CW "EP N ▲/✓" badge — one batched
+     *  query. Airing shows use aired-so-far (nextAiringEpisode - 1). */
+    suspend fun episodeTotals(ids: List<Int>): Map<Int, Int> {
+        val valid = ids.filter { it > 0 }.distinct().take(50)
+        if (valid.isEmpty()) return emptyMap()
+        val data = gql(
+            """query(${'$'}ids: [Int]) {
+                Page(perPage: 50) {
+                    media(id_in: ${'$'}ids, type: ANIME) {
+                        id episodes nextAiringEpisode { episode }
+                    }
+                }
+            }""",
+            JSONObject().put("ids", org.json.JSONArray(valid)),
+        )
+        val arr = data.getJSONObject("Page").getJSONArray("media")
+        val out = mutableMapOf<Int, Int>()
+        for (i in 0 until arr.length()) {
+            val m = arr.getJSONObject(i)
+            val aired = m.optJSONObject("nextAiringEpisode")?.optInt("episode")?.minus(1)
+            val total = aired ?: (if (m.isNull("episodes")) null else m.getInt("episodes"))
+            if (total != null && total > 0) out[m.getInt("id")] = total
+        }
+        return out
+    }
+
     suspend fun byId(id: Int): Anime? = try {
         val data = gql(
             """query(${'$'}id: Int) { Media(id: ${'$'}id, type: ANIME) { $MEDIA_FIELDS } }""",

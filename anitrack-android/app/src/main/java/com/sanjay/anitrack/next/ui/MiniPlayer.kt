@@ -49,8 +49,13 @@ fun MiniPlayer(onExpand: () -> Unit, onClose: () -> Unit) {
     var controls by remember { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {
+        var ticks = 0
         while (isActive) {
             playing = player.isPlaying
+            // Keep Continue Watching fresh while playing in the mini (every ~10s).
+            if (playing && ++ticks % 25 == 0) {
+                runCatching { saveProgress(player, PlaySession.index) }
+            }
             delay(400)
         }
     }
@@ -96,7 +101,16 @@ fun MiniPlayer(onExpand: () -> Unit, onClose: () -> Unit) {
             IconButton(onClick = onExpand, modifier = Modifier.align(Alignment.TopStart)) {
                 Icon(Icons.Filled.OpenInFull, "Expand", tint = Color.White, modifier = Modifier.size(18.dp))
             }
-            IconButton(onClick = onClose, modifier = Modifier.align(Alignment.TopEnd)) {
+            IconButton(
+                onClick = {
+                    // Persist the position before tearing the player down.
+                    scope.launch {
+                        runCatching { saveProgress(player, PlaySession.index) }
+                        onClose()
+                    }
+                },
+                modifier = Modifier.align(Alignment.TopEnd),
+            ) {
                 Icon(Icons.Filled.Close, "Close", tint = Color.White, modifier = Modifier.size(20.dp))
             }
             Row(
