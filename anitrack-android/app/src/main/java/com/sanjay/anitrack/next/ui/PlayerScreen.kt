@@ -25,7 +25,7 @@ import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.ScreenRotation
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Speed
@@ -122,6 +122,11 @@ fun PlayerScreen(onBack: () -> Unit) {
     var speed by remember { mutableStateOf(1f) }
     var speedMenu by remember { mutableStateOf(false) }
     var ccOn by remember { mutableStateOf(true) }
+    // Caption style (persisted).
+    val capPrefs = remember { context.getSharedPreferences("anitrack_next", android.content.Context.MODE_PRIVATE) }
+    var capSize by remember { mutableStateOf(capPrefs.getFloat("cap_size", 0.055f)) }
+    var capBg by remember { mutableStateOf(capPrefs.getInt("cap_bg", 0x40)) }   // alpha 0..255
+    var capSettings by remember { mutableStateOf(false) }
     fun flashControls() { controlsVisible = true }
 
     // Gesture feedback overlays
@@ -293,26 +298,8 @@ fun PlayerScreen(onBack: () -> Unit) {
                         )
                     }
                 }
-                IconButton(onClick = {
-                    landscapeLocked = !landscapeLocked
-                    activity?.requestedOrientation =
-                        if (landscapeLocked) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                        else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-                }) { Icon(Icons.Filled.ScreenRotation, "Lock landscape", tint = if (landscapeLocked) Accent else Color.White) }
-                IconButton(onClick = {
-                    try {
-                        activity?.enterPictureInPictureMode(
-                            PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build(),
-                        )
-                    } catch (e: Exception) { /* device without PiP */ }
-                }) { Icon(Icons.Filled.PictureInPictureAlt, "Picture in picture", tint = Color.White) }
-                IconButton(onClick = { if (index > 0) index -= 1 }, enabled = index > 0) {
-                    Icon(Icons.Filled.SkipPrevious, "Previous episode", tint = Color.White)
-                }
-                IconButton(
-                    onClick = { if (index + 1 < PlaySession.count) index += 1 },
-                    enabled = index + 1 < PlaySession.count,
-                ) { Icon(Icons.Filled.SkipNext, "Next episode", tint = Color.White) }
+                // (prev/next/PiP/fullscreen live in the bottom control bar — no
+                // duplicates up here; just Back + title.)
             }
         }
 
@@ -359,22 +346,24 @@ fun PlayerScreen(onBack: () -> Unit) {
                         this.player = player
                         useController = false          // custom Compose control bar below
                         keepScreenOn = true
-                        // Subtitle look ported from the old app: white on 25% black.
-                        subtitleView?.setStyle(
-                            CaptionStyleCompat(
-                                android.graphics.Color.WHITE,
-                                0x40000000,
-                                android.graphics.Color.TRANSPARENT,
-                                CaptionStyleCompat.EDGE_TYPE_OUTLINE,
-                                android.graphics.Color.BLACK,
-                                null,
-                            ),
-                        )
-                        subtitleView?.setFractionalTextSize(0.055f)
                         playerViewRef = this
                     }
                 },
                 modifier = Modifier.fillMaxSize(),
+                update = { pv ->
+                    // Apply the current caption style whenever it changes.
+                    pv.subtitleView?.setStyle(
+                        CaptionStyleCompat(
+                            android.graphics.Color.WHITE,
+                            (capBg shl 24),
+                            android.graphics.Color.TRANSPARENT,
+                            CaptionStyleCompat.EDGE_TYPE_OUTLINE,
+                            android.graphics.Color.BLACK,
+                            null,
+                        ),
+                    )
+                    pv.subtitleView?.setFractionalTextSize(capSize)
+                },
             )
 
             // Gesture layer — sits under the control bar. Single tap toggles
@@ -555,6 +544,10 @@ fun PlayerScreen(onBack: () -> Unit) {
                                 Icon(if (ccOn) Icons.Filled.ClosedCaption else Icons.Filled.ClosedCaptionOff, "Subtitles", tint = Color.White)
                             }
                         }
+                        // Caption / settings gear
+                        IconButton(onClick = { capSettings = true; flashControls() }) {
+                            Icon(Icons.Filled.Settings, "Caption settings", tint = Color.White)
+                        }
                         IconButton(onClick = {
                             try {
                                 activity?.enterPictureInPictureMode(
@@ -570,6 +563,42 @@ fun PlayerScreen(onBack: () -> Unit) {
                         }) { Icon(if (landscapeLocked) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen, "Fullscreen", tint = Color.White) }
                     }
                 }
+            }
+
+            // Caption settings dialog
+            if (capSettings) {
+                AlertDialog(
+                    onDismissRequest = { capSettings = false },
+                    confirmButton = { TextButton(onClick = { capSettings = false }) { Text("Done") } },
+                    title = { Text("Caption settings") },
+                    text = {
+                        Column {
+                            Text("Text size", style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.6f))
+                            Spacer(Modifier.height(4.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                listOf("S" to 0.04f, "M" to 0.055f, "L" to 0.07f, "XL" to 0.09f).forEach { (lbl, sz) ->
+                                    FilterChip(
+                                        selected = kotlin.math.abs(capSize - sz) < 0.001f,
+                                        onClick = { capSize = sz; capPrefs.edit().putFloat("cap_size", sz).apply() },
+                                        label = { Text(lbl) },
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.height(12.dp))
+                            Text("Background", style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.6f))
+                            Spacer(Modifier.height(4.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                listOf("Off" to 0x00, "25%" to 0x40, "50%" to 0x80, "75%" to 0xC0).forEach { (lbl, a) ->
+                                    FilterChip(
+                                        selected = capBg == a,
+                                        onClick = { capBg = a; capPrefs.edit().putInt("cap_bg", a).apply() },
+                                        label = { Text(lbl) },
+                                    )
+                                }
+                            }
+                        }
+                    },
+                )
             }
 
             // Skip intro / outro

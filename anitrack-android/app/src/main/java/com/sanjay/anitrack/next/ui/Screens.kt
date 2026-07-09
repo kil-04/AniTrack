@@ -64,7 +64,13 @@ fun AnimeCard(anime: Anime, onClick: (Anime) -> Unit, width: Int = 126) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun HomeScreen(onOpen: (Anime) -> Unit, onPlay: () -> Unit, onOpenSearch: () -> Unit) {
+fun HomeScreen(
+    onOpen: (Anime) -> Unit,
+    onPlay: () -> Unit,
+    onOpenSearch: () -> Unit,
+    onOpenContinue: () -> Unit = {},
+    onOpenLatest: () -> Unit = {},
+) {
     var trending by remember { mutableStateOf<List<Anime>>(emptyList()) }
     var latest by remember { mutableStateOf<List<com.sanjay.anitrack.next.data.AniList.Airing>>(emptyList()) }
     var topAiring by remember { mutableStateOf<List<Anime>>(emptyList()) }
@@ -122,7 +128,7 @@ fun HomeScreen(onOpen: (Anime) -> Unit, onPlay: () -> Unit, onOpenSearch: () -> 
             else Spacer(Modifier.height(16.dp))
         }
         if (cw.isNotEmpty()) {
-            item { SectionHeader("Continue Watching") }
+            item { SectionHeader("Continue Watching", onClick = onOpenContinue) }
             item {
                 LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     items(cw.size) { i ->
@@ -153,7 +159,7 @@ fun HomeScreen(onOpen: (Anime) -> Unit, onPlay: () -> Unit, onOpenSearch: () -> 
             }
         }
         if (latest.isNotEmpty()) {
-            item { SectionHeader("Latest Episodes") }
+            item { SectionHeader("Latest Episodes", onClick = onOpenLatest) }
             item {
                 LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     items(latest.size) { i ->
@@ -345,7 +351,7 @@ private fun HeroBanner(anime: Anime, onOpen: (Anime) -> Unit) {
  * slug) re-matches the show against a provider via its AniList id. Returns
  * false only if no source could be found at all.
  */
-private suspend fun prepareResume(row: com.sanjay.anitrack.next.data.Db.CwRow): Boolean {
+internal suspend fun prepareResume(row: com.sanjay.anitrack.next.data.Db.CwRow): Boolean {
     val key = row.slug
     val meta = com.sanjay.anitrack.next.data.AniList.byId(row.animeId)
 
@@ -496,14 +502,21 @@ private fun ContinueCard(
 }
 
 @Composable
-private fun SectionHeader(title: String) {
+private fun SectionHeader(title: String, onClick: (() -> Unit)? = null) {
     Row(
-        Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp),
-        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+        Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier)
+            .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.width(4.dp).height(18.dp).clip(RoundedCornerShape(2.dp)).background(Accent))
         Spacer(Modifier.width(8.dp))
         Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        if (onClick != null) {
+            Spacer(Modifier.width(6.dp))
+            Text("›", style = MaterialTheme.typography.titleMedium, color = Color.White.copy(alpha = 0.5f))
+        }
     }
 }
 

@@ -16,15 +16,158 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.layout.ContentScale as CS
 import coil.compose.AsyncImage
+import com.sanjay.anitrack.next.data.Anime
 import com.sanjay.anitrack.next.data.AniList
 import com.sanjay.anitrack.next.data.Db
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 private val Accent = Color(0xFFE50914)
+
+// ── Quick search (instant dropdown-style results, like the desktop header) ────
+
+@Composable
+fun QuickSearchScreen(onOpen: (Anime) -> Unit, onBack: () -> Unit) {
+    var query by remember { mutableStateOf("") }
+    var results by remember { mutableStateOf<List<Anime>>(emptyList()) }
+    var searching by remember { mutableStateOf(false) }
+    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    LaunchedEffect(query) {
+        if (query.isBlank()) { results = emptyList(); return@LaunchedEffect }
+        delay(350)
+        searching = true
+        runCatching { results = AniList.search(query.trim()) }
+        searching = false
+    }
+
+    Column(Modifier.fillMaxSize().padding(12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, "Back", tint = Color.White) }
+            OutlinedTextField(
+                value = query, onValueChange = { query = it },
+                placeholder = { Text("Search anime…") }, singleLine = true,
+                modifier = Modifier.weight(1f).focusRequester(focus),
+                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Accent, cursorColor = Accent),
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        if (searching && results.isEmpty()) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Accent)
+        LazyColumn {
+            items(results.size) { i ->
+                val a = results[i]
+                Row(
+                    Modifier.fillMaxWidth().clickable { onOpen(a) }.padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    AsyncImage(
+                        model = a.cover, contentDescription = a.title, contentScale = CS.Crop,
+                        modifier = Modifier.width(46.dp).height(64.dp).clip(RoundedCornerShape(6.dp)).background(Color.White.copy(alpha = 0.06f)),
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(a.title, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            a.year?.let { Text("$it", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.5f)) }
+                            a.score?.let { Text("★ ${it / 10.0}", style = MaterialTheme.typography.labelSmall, color = Color(0xFF7CD07C)) }
+                            a.status?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.5f)) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Continue Watching (full page) ─────────────────────────────────────────────
+
+@Composable
+fun ContinueWatchingScreen(onPlay: () -> Unit) {
+    var rows by remember { mutableStateOf<List<Db.CwRow>>(emptyList()) }
+    var resumingId by remember { mutableStateOf<Int?>(null) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(Unit) { runCatching { rows = Db.continueWatching(100) } }
+
+    Column(Modifier.fillMaxSize().padding(16.dp)) {
+        Text("Continue Watching", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(12.dp))
+        if (rows.isEmpty()) Text("Nothing in progress.", color = Color.White.copy(alpha = 0.4f))
+        LazyVerticalGrid(columns = GridCells.Adaptive(150.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            items(rows.size) { i ->
+                val row = rows[i]
+                Column(Modifier.clickable {
+                    if (resumingId != null) return@clickable
+                    resumingId = row.animeId
+                    scope.launch {
+                        val ok = prepareResume(row)
+                        resumingId = null
+                        if (ok) onPlay()
+                    }
+                }) {
+                    Box {
+                        AsyncImage(
+                            model = row.cover, contentDescription = row.title, contentScale = CS.Crop,
+                            modifier = Modifier.fillMaxWidth().height(84.dp).clip(RoundedCornerShape(10.dp)).background(Color.White.copy(alpha = 0.06f)),
+                        )
+                        if (resumingId == row.animeId) {
+                            Box(Modifier.matchParentSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Accent, modifier = Modifier.size(28.dp)) }
+                        }
+                        LinearProgressIndicator(
+                            progress = { (row.percent / 100f).coerceIn(0f, 1f) }, color = Accent,
+                            trackColor = Color.White.copy(alpha = 0.25f),
+                            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(3.dp),
+                        )
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Text(row.title, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis, color = Color.White.copy(alpha = 0.85f))
+                    Text("Ep ${if (row.episode % 1f == 0f) row.episode.toInt() else row.episode} · ${row.percent}%", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.4f))
+                }
+            }
+        }
+    }
+}
+
+// ── Latest Episodes (full page) ───────────────────────────────────────────────
+
+@Composable
+fun LatestScreen(onOpen: (Anime) -> Unit) {
+    var list by remember { mutableStateOf<List<AniList.Airing>>(emptyList()) }
+    LaunchedEffect(Unit) { runCatching { list = AniList.recentEpisodes() } }
+    Column(Modifier.fillMaxSize().padding(16.dp)) {
+        Text("Latest Episodes", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(12.dp))
+        LazyVerticalGrid(columns = GridCells.Adaptive(180.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            items(list.size) { i ->
+                val a = list[i]
+                Column(Modifier.clickable { onOpen(a.anime) }) {
+                    Box {
+                        AsyncImage(
+                            model = a.anime.banner ?: a.anime.cover, contentDescription = a.anime.title, contentScale = CS.Crop,
+                            modifier = Modifier.fillMaxWidth().height(100.dp).clip(RoundedCornerShape(10.dp)).background(Color.White.copy(alpha = 0.06f)),
+                        )
+                        Box(Modifier.align(Alignment.TopStart).padding(6.dp).clip(RoundedCornerShape(6.dp)).background(Accent).padding(horizontal = 7.dp, vertical = 2.dp)) {
+                            Text("EP ${a.episode}", color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Text(a.anime.title, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis, color = Color.White.copy(alpha = 0.85f))
+                }
+            }
+        }
+    }
+}
 
 // ── Schedule (next 7 days of airing, grouped by day) ──────────────────────────
 

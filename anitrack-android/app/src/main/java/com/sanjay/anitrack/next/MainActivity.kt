@@ -4,7 +4,10 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.CalendarMonth
@@ -16,9 +19,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -94,60 +99,79 @@ fun AppShell() {
     val wideLayout = LocalConfiguration.current.screenWidthDp >= 820
     val hideChrome = current == "player"
 
+    val go: (String) -> Unit = { r -> nav.navigate(r) { launchSingleTop = true; popUpTo("home") } }
+    val openDetail: (com.sanjay.anitrack.next.data.Anime) -> Unit = { a -> nav.navigate("anime/${a.id}") }
+
     Surface(color = Bg, modifier = Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+            // Wide screens: horizontal top nav bar (desktop-style) with a
+            // profile chip on the right that opens Settings.
             if (wideLayout && !hideChrome) {
-                NavigationRail(containerColor = BgElev) {
-                    Spacer(Modifier.height(8.dp))
+                Row(
+                    Modifier.fillMaxWidth().background(BgElev).padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("AniTrack", color = Accent, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold)
+                    Spacer(Modifier.width(24.dp))
+                    destinations.filter { it.route != "settings" }.forEach { d ->
+                        Text(
+                            d.label,
+                            modifier = Modifier.clickable { go(d.route) }.padding(horizontal = 12.dp, vertical = 6.dp),
+                            color = if (current == d.route) Color.White else Color.White.copy(alpha = 0.55f),
+                            fontWeight = if (current == d.route) FontWeight.Bold else FontWeight.Normal,
+                        )
+                    }
+                    Spacer(Modifier.weight(1f))
+                    // Profile → Settings
+                    Box(
+                        Modifier.size(34.dp).clip(RoundedCornerShape(50)).background(Accent)
+                            .clickable { go("settings") },
+                        contentAlignment = Alignment.Center,
+                    ) { Text("A", color = Color.White, fontWeight = FontWeight.Bold) }
+                }
+            }
+            Box(Modifier.weight(1f)) {
+                NavHost(nav, startDestination = "home") {
+                    composable("home") {
+                        com.sanjay.anitrack.next.ui.HomeScreen(
+                            openDetail,
+                            onPlay = { nav.navigate("player") },
+                            onOpenSearch = { nav.navigate("quicksearch") { launchSingleTop = true } },
+                            onOpenContinue = { go("continue") },
+                            onOpenLatest = { go("latest") },
+                        )
+                    }
+                    composable("search") { com.sanjay.anitrack.next.ui.SearchScreen(openDetail) }
+                    composable("quicksearch") { com.sanjay.anitrack.next.ui.QuickSearchScreen(onOpen = openDetail, onBack = { nav.popBackStack() }) }
+                    composable("continue") { com.sanjay.anitrack.next.ui.ContinueWatchingScreen(onPlay = { nav.navigate("player") }) }
+                    composable("latest") { com.sanjay.anitrack.next.ui.LatestScreen(onOpen = openDetail) }
+                    composable("anime/{id}") { entry ->
+                        val id = entry.arguments?.getString("id")?.toIntOrNull() ?: 0
+                        com.sanjay.anitrack.next.ui.DetailScreen(id, onPlay = { nav.navigate("player") })
+                    }
+                    composable("player") {
+                        com.sanjay.anitrack.next.ui.PlayerScreen(onBack = { nav.popBackStack() })
+                    }
+                    composable("mylist") {
+                        com.sanjay.anitrack.next.ui.MyListScreen(onOpen = { id -> nav.navigate("anime/$id") })
+                    }
+                    composable("schedule") {
+                        com.sanjay.anitrack.next.ui.ScheduleScreen(onOpen = { id -> nav.navigate("anime/$id") })
+                    }
+                    composable("downloads") { PlaceholderScreen("Downloads", "Offline HLS library (ports from the Kotlin downloader)") }
+                    composable("settings") { com.sanjay.anitrack.next.ui.SettingsScreen() }
+                }
+            }
+            // Phones: bottom nav bar.
+            if (!wideLayout && !hideChrome) {
+                NavigationBar(containerColor = BgElev) {
                     destinations.forEach { d ->
-                        NavigationRailItem(
+                        NavigationBarItem(
                             selected = current == d.route,
-                            onClick = { nav.navigate(d.route) { launchSingleTop = true; popUpTo("home") } },
+                            onClick = { go(d.route) },
                             icon = { Icon(d.icon, d.label) },
                             label = { Text(d.label) },
                         )
-                    }
-                }
-            }
-            Column(Modifier.weight(1f)) {
-                Box(Modifier.weight(1f)) {
-                    val openDetail: (com.sanjay.anitrack.next.data.Anime) -> Unit = { a -> nav.navigate("anime/${a.id}") }
-                    NavHost(nav, startDestination = "home") {
-                        composable("home") {
-                            com.sanjay.anitrack.next.ui.HomeScreen(
-                                openDetail,
-                                onPlay = { nav.navigate("player") },
-                                onOpenSearch = { nav.navigate("search") { launchSingleTop = true } },
-                            )
-                        }
-                        composable("search") { com.sanjay.anitrack.next.ui.SearchScreen(openDetail) }
-                        composable("anime/{id}") { entry ->
-                            val id = entry.arguments?.getString("id")?.toIntOrNull() ?: 0
-                            com.sanjay.anitrack.next.ui.DetailScreen(id, onPlay = { nav.navigate("player") })
-                        }
-                        composable("player") {
-                            com.sanjay.anitrack.next.ui.PlayerScreen(onBack = { nav.popBackStack() })
-                        }
-                        composable("mylist") {
-                            com.sanjay.anitrack.next.ui.MyListScreen(onOpen = { id -> nav.navigate("anime/$id") })
-                        }
-                        composable("schedule") {
-                            com.sanjay.anitrack.next.ui.ScheduleScreen(onOpen = { id -> nav.navigate("anime/$id") })
-                        }
-                        composable("downloads") { PlaceholderScreen("Downloads", "Offline HLS library (ports from the Kotlin downloader)") }
-                        composable("settings") { com.sanjay.anitrack.next.ui.SettingsScreen() }
-                    }
-                }
-                if (!wideLayout && !hideChrome) {
-                    NavigationBar(containerColor = BgElev) {
-                        destinations.forEach { d ->
-                            NavigationBarItem(
-                                selected = current == d.route,
-                                onClick = { nav.navigate(d.route) { launchSingleTop = true; popUpTo("home") } },
-                                icon = { Icon(d.icon, d.label) },
-                                label = { Text(d.label) },
-                            )
-                        }
                     }
                 }
             }
