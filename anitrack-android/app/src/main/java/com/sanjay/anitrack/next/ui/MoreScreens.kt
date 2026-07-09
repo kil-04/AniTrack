@@ -53,12 +53,20 @@ fun NavSearchBox(modifier: Modifier = Modifier, onOpen: (Anime) -> Unit) {
     Box(modifier) {
         OutlinedTextField(
             value = query, onValueChange = { query = it },
-            placeholder = { Text("Search anime…", style = MaterialTheme.typography.bodySmall) },
+            placeholder = { Text("Search anime…", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.4f)) },
             singleLine = true,
-            leadingIcon = { Text("🔍") },
+            shape = RoundedCornerShape(50),   // pill, like the desktop header
+            leadingIcon = { Text("🔍", modifier = Modifier.padding(start = 4.dp)) },
             trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Text("✕", color = Color.White.copy(alpha = 0.6f)) } },
-            modifier = Modifier.fillMaxWidth(),
-            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Accent, cursorColor = Accent),
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            textStyle = MaterialTheme.typography.bodyMedium,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Accent,
+                unfocusedBorderColor = Color.White.copy(alpha = 0.15f),
+                focusedContainerColor = Color.White.copy(alpha = 0.06f),
+                unfocusedContainerColor = Color.White.copy(alpha = 0.06f),
+                cursorColor = Accent,
+            ),
         )
         DropdownMenu(
             expanded = open,

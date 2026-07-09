@@ -128,9 +128,9 @@ fun AppShell() {
                         onOpen = openDetail,
                     )
                     Spacer(Modifier.width(12.dp))
-                    // Profile → Settings
+                    // Profile → Settings (rounded square, like the desktop).
                     Box(
-                        Modifier.size(34.dp).clip(RoundedCornerShape(50)).background(Accent)
+                        Modifier.size(36.dp).clip(RoundedCornerShape(10.dp)).background(Accent)
                             .clickable { go("settings") },
                         contentAlignment = Alignment.Center,
                     ) { Text("A", color = Color.White, fontWeight = FontWeight.Bold) }

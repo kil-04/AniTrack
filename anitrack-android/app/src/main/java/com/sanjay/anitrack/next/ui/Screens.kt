@@ -110,17 +110,22 @@ fun HomeScreen(
         scope.launch { runCatching { anikotoTop = com.sanjay.anitrack.next.data.Anikoto.top() } }
     }
 
+    // On wide screens the top nav bar already has a search box — only show the
+    // Home header search on phones (which use the bottom nav, no top search).
+    val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 820
+
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
-        // Search bar at the top (the old app's header search).
-        item {
-            Row(
-                Modifier.fillMaxWidth().padding(16.dp)
-                    .clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha = 0.07f))
-                    .clickable { onOpenSearch() }.padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("🔍", modifier = Modifier.padding(end = 10.dp))
-                Text("Search anime…", color = Color.White.copy(alpha = 0.45f), style = MaterialTheme.typography.bodyMedium)
+        if (!wide) {
+            item {
+                Row(
+                    Modifier.fillMaxWidth().padding(16.dp)
+                        .clip(RoundedCornerShape(24.dp)).background(Color.White.copy(alpha = 0.07f))
+                        .clickable { onOpenSearch() }.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("🔍", modifier = Modifier.padding(end = 10.dp))
+                    Text("Search anime…", color = Color.White.copy(alpha = 0.45f), style = MaterialTheme.typography.bodyMedium)
+                }
             }
         }
         item {
@@ -313,11 +318,12 @@ private fun AnikotoTop10(
 // Full-bleed hero banner (the desktop app's #1 trending spotlight).
 @Composable
 private fun HeroBanner(anime: Anime, onOpen: (Anime) -> Unit) {
-    Box(Modifier.fillMaxWidth().height(260.dp).clickable { onOpen(anime) }) {
+    Box(Modifier.fillMaxWidth().height(360.dp).clickable { onOpen(anime) }) {
         AsyncImage(
             model = anime.banner ?: anime.cover,
             contentDescription = anime.title,
             contentScale = ContentScale.Crop,
+            alignment = Alignment.TopCenter,   // favour the top of the art, not the middle
             modifier = Modifier.fillMaxSize(),
         )
         Box(
