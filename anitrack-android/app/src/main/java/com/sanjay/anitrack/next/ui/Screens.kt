@@ -64,26 +64,28 @@ fun AnimeCard(anime: Anime, onClick: (Anime) -> Unit, width: Int = 126) {
 @Composable
 fun HomeScreen(onOpen: (Anime) -> Unit, onPlay: () -> Unit) {
     var trending by remember { mutableStateOf<List<Anime>>(emptyList()) }
-    var rows by remember { mutableStateOf<Map<String, List<Anime>>>(emptyMap()) }
+    var latest by remember { mutableStateOf<List<com.sanjay.anitrack.next.data.AniList.Airing>>(emptyList()) }
+    var topAiring by remember { mutableStateOf<List<Anime>>(emptyList()) }
+    var popular by remember { mutableStateOf<List<Anime>>(emptyList()) }
+    var top10 by remember { mutableStateOf<List<Anime>>(emptyList()) }
     var cw by remember { mutableStateOf<List<com.sanjay.anitrack.next.data.Db.CwRow>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
-    val genres = listOf("Action", "Romance", "Comedy", "Fantasy")
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         // Local data first — instant; network rows stream in after.
         runCatching { cw = com.sanjay.anitrack.next.data.Db.continueWatching() }
-        // Cloud reconcile in the background; refresh CW only if it changed
-        // something (same non-blocking pattern as the main app).
         scope.launch {
             val changed = runCatching { com.sanjay.anitrack.next.data.GistSync.pullAndMerge() }.getOrDefault(false)
             if (changed) runCatching { cw = com.sanjay.anitrack.next.data.Db.continueWatching() }
         }
+        // Rows stream in as each lands (the client serializes requests anyway).
         runCatching { trending = AniList.trending() }
         loading = false
-        for (g in genres) {
-            runCatching { rows = rows + (g to AniList.popularByGenre(g)) }
-        }
+        runCatching { latest = AniList.recentEpisodes() }
+        runCatching { top10 = AniList.top10() }
+        runCatching { topAiring = AniList.topAiring() }
+        runCatching { popular = AniList.mostPopular() }
     }
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
@@ -149,15 +151,79 @@ fun HomeScreen(onOpen: (Anime) -> Unit, onPlay: () -> Unit) {
                 }
             }
         }
+        if (latest.isNotEmpty()) {
+            item { SectionHeader("Latest Episodes") }
+            item {
+                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    items(latest.size) { i ->
+                        val a = latest[i]
+                        LatestCard(a.anime, a.episode, onOpen)
+                    }
+                }
+            }
+        }
         item { SectionHeader("Trending Now") }
         item {
             if (loading && trending.isEmpty()) RowPlaceholder()
             else AnimeRow(trending, onOpen)
         }
-        for (g in genres) {
-            val list = rows[g] ?: continue
-            item { SectionHeader(g) }
-            item { AnimeRow(list, onOpen) }
+        if (top10.isNotEmpty()) {
+            item { SectionHeader("Top 10 Today") }
+            item {
+                Column(Modifier.padding(horizontal = 16.dp)) {
+                    top10.forEachIndexed { i, a -> Top10Row(i + 1, a, onOpen) }
+                }
+            }
+        }
+        if (topAiring.isNotEmpty()) {
+            item { SectionHeader("Top Airing") }
+            item { AnimeRow(topAiring, onOpen) }
+        }
+        if (popular.isNotEmpty()) {
+            item { SectionHeader("Most Popular") }
+            item { AnimeRow(popular, onOpen) }
+        }
+    }
+}
+
+// Landscape "Latest Episodes" card with an EP badge.
+@Composable
+private fun LatestCard(anime: Anime, episode: Int, onOpen: (Anime) -> Unit) {
+    Column(Modifier.width(200.dp).clickable { onOpen(anime) }) {
+        Box {
+            AsyncImage(
+                model = anime.banner ?: anime.cover,
+                contentDescription = anime.title,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.width(200.dp).height(112.dp).clip(RoundedCornerShape(10.dp)).background(Color.White.copy(alpha = 0.06f)),
+            )
+            Box(
+                Modifier.align(Alignment.TopStart).padding(6.dp).clip(RoundedCornerShape(6.dp)).background(Accent).padding(horizontal = 7.dp, vertical = 2.dp),
+            ) { Text("EP $episode", color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold) }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(anime.title, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis, color = Color.White.copy(alpha = 0.85f))
+    }
+}
+
+// Ranked Top-10 list row.
+@Composable
+private fun Top10Row(rank: Int, anime: Anime, onOpen: (Anime) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable { onOpen(anime) }.padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("$rank", Modifier.width(34.dp), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold, color = Color.White.copy(alpha = 0.35f))
+        AsyncImage(
+            model = anime.cover,
+            contentDescription = anime.title,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.width(40.dp).height(56.dp).clip(RoundedCornerShape(6.dp)).background(Color.White.copy(alpha = 0.06f)),
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(anime.title, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            anime.score?.let { Text("★ ${it / 10.0}", style = MaterialTheme.typography.labelSmall, color = Color(0xFF7CD07C)) }
         }
     }
 }

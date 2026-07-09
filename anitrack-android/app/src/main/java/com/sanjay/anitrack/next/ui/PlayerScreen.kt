@@ -160,9 +160,19 @@ fun PlayerScreen(onBack: () -> Unit) {
 
     DisposableEffect(Unit) {
         PlaySession.playerActive = true
+        // Immersive: hide the Android status + navigation bars for the whole
+        // player so nothing (clock, taskbar) sits over the video or controls.
+        val window = activity?.window
+        val insets = window?.let { w ->
+            androidx.core.view.WindowCompat.getInsetsController(w, w.decorView).apply {
+                systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            }
+        }
         onDispose {
             PlaySession.playerActive = false
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            insets?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
         }
     }
 

@@ -140,6 +140,61 @@ object AniList {
         }
     }
 
+    /** Recently aired episodes (the desktop app's "Latest Episodes" row). */
+    suspend fun recentEpisodes(): List<Airing> {
+        val now = System.currentTimeMillis() / 1000
+        val data = gql(
+            """query(${'$'}to: Int) {
+                Page(perPage: 30) {
+                    airingSchedules(airingAt_lesser: ${'$'}to, sort: TIME_DESC) {
+                        airingAt episode
+                        media { $MEDIA_FIELDS }
+                    }
+                }
+            }""",
+            JSONObject().put("to", now),
+        )
+        val arr = data.getJSONObject("Page").getJSONArray("airingSchedules")
+        val seen = HashSet<Int>()
+        return (0 until arr.length()).mapNotNull { i ->
+            val o = arr.getJSONObject(i)
+            val m = o.optJSONObject("media") ?: return@mapNotNull null
+            if (m.optBoolean("isAdult", false)) return@mapNotNull null
+            if (!seen.add(m.optInt("id"))) return@mapNotNull null
+            Airing(Anime.fromMedia(m), o.optInt("episode"), o.optLong("airingAt"))
+        }
+    }
+
+    /** Top 10 by trending (the desktop app's Top 10 rail). */
+    suspend fun top10(): List<Anime> = mediaList(
+        gql(
+            """query { Page(perPage: 10) {
+                media(type: ANIME, sort: TRENDING_DESC, isAdult: false) { $MEDIA_FIELDS }
+            } }""",
+            JSONObject(),
+        )
+    )
+
+    /** Popular currently-airing shows (the "Top Airing" row). */
+    suspend fun topAiring(): List<Anime> = mediaList(
+        gql(
+            """query { Page(perPage: 20) {
+                media(type: ANIME, status: RELEASING, sort: POPULARITY_DESC, isAdult: false) { $MEDIA_FIELDS }
+            } }""",
+            JSONObject(),
+        )
+    )
+
+    /** All-time most popular (the "Most Popular" row). */
+    suspend fun mostPopular(): List<Anime> = mediaList(
+        gql(
+            """query { Page(perPage: 20) {
+                media(type: ANIME, sort: POPULARITY_DESC, isAdult: false) { $MEDIA_FIELDS }
+            } }""",
+            JSONObject(),
+        )
+    )
+
     suspend fun byId(id: Int): Anime? = try {
         val data = gql(
             """query(${'$'}id: Int) { Media(id: ${'$'}id, type: ANIME) { $MEDIA_FIELDS } }""",
