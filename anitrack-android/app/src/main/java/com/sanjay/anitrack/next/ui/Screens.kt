@@ -875,6 +875,23 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: 
 
         if (epUi.isNotEmpty()) {
             val ranges = epUi.chunked(100)
+            val current = ranges.getOrElse(rangeStart) { emptyList() }
+
+            // Action buttons (Open Player · Download range · Range).
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Button(
+                    onClick = { (epUi.firstOrNull { (watched[it.number] ?: 0) < 85 } ?: epUi.first()).play() },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
+                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 8.dp),
+                ) { Text("▶  Open Player", fontWeight = FontWeight.Bold) }
+                OutlinedButton(onClick = {
+                    current.forEach { ep ->
+                        com.sanjay.anitrack.next.data.Downloads.enqueue(anime.id, ep.number, anime.title, anime.cover, ep.resolveForDownload)
+                    }
+                }) { Text("⬇ Download ${current.size}") }
+            }
+            Spacer(Modifier.height(10.dp))
+
             if (ranges.size > 1) {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(ranges.size) { i ->
@@ -887,35 +904,48 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: 
                 }
                 Spacer(Modifier.height(10.dp))
             }
-            Text("Tap to play · long-press to download", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.35f))
-            Spacer(Modifier.height(6.dp))
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (ep in ranges.getOrElse(rangeStart) { emptyList() }) {
+
+            // Vertical episode list (desktop layout).
+            val dls = com.sanjay.anitrack.next.data.Downloads.items
+            Column {
+                for (ep in current) {
                     val pct = watched[ep.number] ?: 0
-                    val downloaded = com.sanjay.anitrack.next.data.Downloads.isDownloaded(anime.id, ep.number)
-                    val bg = when {
-                        pct >= 85 -> Accent.copy(alpha = 0.30f)
-                        pct > 0 -> Color.White.copy(alpha = 0.16f)
-                        else -> Color.White.copy(alpha = 0.07f)
-                    }
-                    Box(
-                        Modifier.clip(RoundedCornerShape(8.dp)).background(bg)
-                            .combinedClickable(
-                                onClick = { ep.play() },
-                                onLongClick = {
-                                    com.sanjay.anitrack.next.data.Downloads.enqueue(
-                                        anime.id, ep.number, anime.title, anime.cover, ep.resolveForDownload,
-                                    )
-                                },
-                            )
-                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                    val dl = dls.firstOrNull { it.id == com.sanjay.anitrack.next.data.Downloads.idOf(anime.id, ep.number) }
+                    Row(
+                        Modifier.fillMaxWidth().clickable { ep.play() }.padding(vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(
-                            "${if (ep.number % 1f == 0f) ep.number.toInt() else ep.number}${if (downloaded) " ⬇" else ""}",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = if (pct >= 85) Color.White else Color.White.copy(alpha = 0.9f),
-                        )
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "Episode ${if (ep.number % 1f == 0f) ep.number.toInt() else ep.number}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (pct >= 85) Color(0xFF7CD07C) else Color.White,
+                                fontWeight = if (pct in 1..84) FontWeight.Bold else FontWeight.Normal,
+                            )
+                            Text(
+                                when {
+                                    pct >= 85 -> "Watched ✓"
+                                    pct > 0 -> "$pct% watched"
+                                    else -> "Not watched"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White.copy(alpha = 0.4f),
+                            )
+                        }
+                        // Download / progress / Saved
+                        when (dl?.status) {
+                            com.sanjay.anitrack.next.data.Downloads.Status.DONE ->
+                                Text("Saved ✓", color = Color(0xFF7CD07C), style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(end = 8.dp))
+                            com.sanjay.anitrack.next.data.Downloads.Status.DOWNLOADING ->
+                                Text("${dl.progress}%", color = Accent, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(end = 8.dp))
+                            com.sanjay.anitrack.next.data.Downloads.Status.QUEUED ->
+                                Text("queued…", color = Color.White.copy(alpha = 0.5f), style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(end = 8.dp))
+                            else -> TextButton(onClick = {
+                                com.sanjay.anitrack.next.data.Downloads.enqueue(anime.id, ep.number, anime.title, anime.cover, ep.resolveForDownload)
+                            }) { Text("⬇ Download", color = Color.White.copy(alpha = 0.75f)) }
+                        }
                     }
+                    androidx.compose.material3.HorizontalDivider(color = Color.White.copy(alpha = 0.06f))
                 }
             }
         }

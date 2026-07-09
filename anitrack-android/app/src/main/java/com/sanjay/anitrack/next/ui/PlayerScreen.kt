@@ -207,10 +207,18 @@ fun PlayerScreen(onBack: () -> Unit) {
         try {
             val s = PlaySession.resolve(index)
             stream = s
-            val httpFactory = DefaultHttpDataSource.Factory()
-                .setUserAgent(s.userAgent)
-                .setDefaultRequestProperties(mapOf("Referer" to s.referer + "/"))
-                .setAllowCrossProtocolRedirects(true)
+            // Local downloads are file:// URIs — an HTTP data source can't read
+            // them, so use DefaultDataSource (file + http) for offline; online
+            // uses the HTTP factory with the Referer/UA the CDN requires.
+            val isLocal = s.url.startsWith("file:")
+            val dataSourceFactory: androidx.media3.datasource.DataSource.Factory = if (isLocal) {
+                androidx.media3.datasource.DefaultDataSource.Factory(context)
+            } else {
+                DefaultHttpDataSource.Factory()
+                    .setUserAgent(s.userAgent)
+                    .setDefaultRequestProperties(mapOf("Referer" to s.referer + "/"))
+                    .setAllowCrossProtocolRedirects(true)
+            }
             val subtitleConfigs = s.subtitles.mapIndexed { i, sub ->
                 MediaItem.SubtitleConfiguration.Builder(Uri.parse(sub.url))
                     .setMimeType(MimeTypes.TEXT_VTT)
@@ -220,7 +228,7 @@ fun PlayerScreen(onBack: () -> Unit) {
                     .build()
             }
             val item = MediaItem.Builder().setUri(s.url).setSubtitleConfigurations(subtitleConfigs).build()
-            player.setMediaSource(DefaultMediaSourceFactory(httpFactory).createMediaSource(item))
+            player.setMediaSource(DefaultMediaSourceFactory(dataSourceFactory).createMediaSource(item))
             player.prepare()
             // Resume mid-episode from the local DB (finished episodes restart).
             com.sanjay.anitrack.next.data.Db.resumeFor(PlaySession.animeId, epNum)?.let { pos ->

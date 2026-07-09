@@ -270,51 +270,83 @@ fun LatestScreen(onOpen: (Anime) -> Unit) {
 @Composable
 fun DownloadsScreen(onPlay: () -> Unit) {
     val items = com.sanjay.anitrack.next.data.Downloads.items
+    // Group by anime (title), sorted; each group collapsible with a total size.
+    val groups = items.groupBy { it.animeId }.values.toList()
+    val expanded = remember { mutableStateMapOf<Int, Boolean>() }
+
+    fun playLocal(d: com.sanjay.anitrack.next.data.Downloads.Item) {
+        val f = com.sanjay.anitrack.next.data.Downloads.localPlaylist(d.id) ?: return
+        com.sanjay.anitrack.next.data.PlaySession.apply {
+            provider = "anikoto"; animeId = d.animeId; animeTitle = d.title; animeCover = d.cover
+            anime = null; localFile = f.absolutePath
+            slug = ""; anikotoEps = listOf(com.sanjay.anitrack.next.data.Anikoto.Episode(d.episode, "Episode ${d.episode.toInt()}", "", ""))
+            paheEps = emptyList(); index = 0
+        }
+        onPlay()
+    }
+
     Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Text("Downloads", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Text("⬇  Downloads", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
-        Text("Long-press an episode on any show to download it here.", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.45f))
-        Spacer(Modifier.height(12.dp))
+        Text("Watch downloaded episodes offline, in the app. Long-press an episode on any show to add one.", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.45f))
+        Spacer(Modifier.height(16.dp))
         if (items.isEmpty()) Text("No downloads yet.", color = Color.White.copy(alpha = 0.4f))
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(items.size) { i ->
-                val d = items[i]
-                Row(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Color.White.copy(alpha = 0.05f)).padding(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    AsyncImage(
-                        model = d.cover, contentDescription = d.title, contentScale = CS.Crop,
-                        modifier = Modifier.width(44.dp).height(60.dp).clip(RoundedCornerShape(6.dp)).background(Color.White.copy(alpha = 0.06f)),
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(d.title, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        val status = when (d.status) {
-                            com.sanjay.anitrack.next.data.Downloads.Status.QUEUED -> "Ep ${d.episode.toInt()} · queued"
-                            com.sanjay.anitrack.next.data.Downloads.Status.DOWNLOADING -> "Ep ${d.episode.toInt()} · ${d.progress}%"
-                            com.sanjay.anitrack.next.data.Downloads.Status.DONE -> "Ep ${d.episode.toInt()} · ready offline"
-                            com.sanjay.anitrack.next.data.Downloads.Status.FAILED -> "Ep ${d.episode.toInt()} · failed"
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            items(groups.size) { gi ->
+                val group = groups[gi].sortedBy { it.episode }
+                val head = group.first()
+                val open = expanded[head.animeId] ?: true
+                val totalSize = group.sumOf { it.sizeBytes }
+                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha = 0.05f))) {
+                    // Group header
+                    Row(
+                        Modifier.fillMaxWidth().clickable { expanded[head.animeId] = !open }.padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        AsyncImage(
+                            model = head.cover, contentDescription = head.title, contentScale = CS.Crop,
+                            modifier = Modifier.width(44.dp).height(60.dp).clip(RoundedCornerShape(6.dp)).background(Color.White.copy(alpha = 0.06f)),
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(head.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                "${group.size} episode${if (group.size == 1) "" else "s"} · ${com.sanjay.anitrack.next.data.Downloads.humanSize(totalSize)}",
+                                style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.5f),
+                            )
                         }
-                        Text(status, style = MaterialTheme.typography.labelSmall, color = if (d.status == com.sanjay.anitrack.next.data.Downloads.Status.FAILED) Color(0xFFFF6B6B) else Color.White.copy(alpha = 0.5f))
-                        if (d.status == com.sanjay.anitrack.next.data.Downloads.Status.DOWNLOADING) {
-                            LinearProgressIndicator(progress = { d.progress / 100f }, color = Accent, trackColor = Color.White.copy(alpha = 0.2f), modifier = Modifier.fillMaxWidth().height(3.dp).padding(top = 4.dp))
-                        }
+                        Text(if (open) "▲" else "▼", color = Color.White.copy(alpha = 0.5f))
                     }
-                    if (d.status == com.sanjay.anitrack.next.data.Downloads.Status.DONE) {
-                        TextButton(onClick = {
-                            val f = com.sanjay.anitrack.next.data.Downloads.localPlaylist(d.id) ?: return@TextButton
-                            com.sanjay.anitrack.next.data.PlaySession.apply {
-                                provider = "anikoto"; animeId = d.animeId; animeTitle = d.title; animeCover = d.cover
-                                anime = null; localFile = f.absolutePath
-                                slug = ""; anikotoEps = listOf(com.sanjay.anitrack.next.data.Anikoto.Episode(d.episode, "Episode ${d.episode.toInt()}", "", ""))
-                                paheEps = emptyList(); index = 0
+                    if (open) {
+                        group.forEach { d ->
+                            Row(
+                                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text("Episode ${if (d.episode % 1f == 0f) d.episode.toInt() else d.episode}", style = MaterialTheme.typography.bodyMedium)
+                                    val sub = when (d.status) {
+                                        com.sanjay.anitrack.next.data.Downloads.Status.QUEUED -> "queued…"
+                                        com.sanjay.anitrack.next.data.Downloads.Status.DOWNLOADING -> "${d.progress}%"
+                                        com.sanjay.anitrack.next.data.Downloads.Status.DONE -> com.sanjay.anitrack.next.data.Downloads.humanSize(d.sizeBytes)
+                                        com.sanjay.anitrack.next.data.Downloads.Status.FAILED -> "failed — long-press to retry"
+                                    }
+                                    Text(sub, style = MaterialTheme.typography.labelSmall, color = if (d.status == com.sanjay.anitrack.next.data.Downloads.Status.FAILED) Color(0xFFFF6B6B) else Color.White.copy(alpha = 0.45f))
+                                    if (d.status == com.sanjay.anitrack.next.data.Downloads.Status.DOWNLOADING) {
+                                        LinearProgressIndicator(progress = { d.progress / 100f }, color = Accent, trackColor = Color.White.copy(alpha = 0.2f), modifier = Modifier.fillMaxWidth(0.6f).height(3.dp).padding(top = 3.dp))
+                                    }
+                                }
+                                if (d.status == com.sanjay.anitrack.next.data.Downloads.Status.DONE) {
+                                    Button(onClick = { playLocal(d) }, colors = ButtonDefaults.buttonColors(containerColor = Accent), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)) {
+                                        Text("▶ Play")
+                                    }
+                                }
+                                IconButton(onClick = { com.sanjay.anitrack.next.data.Downloads.remove(d.id) }) {
+                                    Text("🗑", color = Color.White.copy(alpha = 0.55f))
+                                }
                             }
-                            onPlay()
-                        }) { Text("Play") }
-                    }
-                    IconButton(onClick = { com.sanjay.anitrack.next.data.Downloads.remove(d.id) }) {
-                        Text("🗑", color = Color.White.copy(alpha = 0.6f))
+                        }
+                        Spacer(Modifier.height(6.dp))
                     }
                 }
             }

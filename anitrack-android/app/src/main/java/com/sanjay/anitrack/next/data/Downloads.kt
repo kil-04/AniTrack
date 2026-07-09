@@ -35,7 +35,18 @@ object Downloads {
         var status: Status,
         var progress: Int,        // 0..100
         var error: String? = null,
+        var sizeBytes: Long = 0,
     )
+
+    fun sizeOf(id: String): Long =
+        folder(id).walkTopDown().filter { it.isFile }.sumOf { it.length() }
+
+    fun humanSize(bytes: Long): String = when {
+        bytes >= 1_000_000_000 -> "%.1f GB".format(bytes / 1_000_000_000.0)
+        bytes >= 1_000_000 -> "${bytes / 1_000_000} MB"
+        bytes >= 1_000 -> "${bytes / 1_000} KB"
+        else -> "$bytes B"
+    }
 
     private lateinit var appCtx: Context
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -58,10 +69,12 @@ object Downloads {
             if (meta.exists()) {
                 runCatching {
                     val o = JSONObject(meta.readText())
+                    val id = o.getString("id")
                     items += Item(
-                        o.getString("id"), o.getInt("animeId"), o.getDouble("episode").toFloat(),
+                        id, o.getInt("animeId"), o.getDouble("episode").toFloat(),
                         o.optString("title"), o.optString("cover").takeIf { it.isNotEmpty() },
                         if (File(dir, "index.m3u8").exists()) Status.DONE else Status.FAILED, 100,
+                        sizeBytes = sizeOf(id),
                     )
                 }
             }
@@ -101,7 +114,8 @@ object Downloads {
                     val (url, referer, ua) = resolve()
                     download(id, url, referer, ua) { p -> setStatus(id, Status.DOWNLOADING, p) }
                     writeMeta(id, animeId, episode, title, cover)
-                    setStatus(id, Status.DONE, 100)
+                    val i = items.indexOfFirst { it.id == id }
+                    if (i >= 0) items[i] = items[i].copy(status = Status.DONE, progress = 100, sizeBytes = sizeOf(id))
                 } catch (e: Exception) {
                     setStatus(id, Status.FAILED, 0, e.message)
                 }
