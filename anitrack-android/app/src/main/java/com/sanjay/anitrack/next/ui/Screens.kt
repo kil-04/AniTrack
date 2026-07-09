@@ -14,6 +14,10 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -849,7 +853,23 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: 
     }
 
     Column(Modifier.padding(horizontal = 16.dp)) {
-        Text("Episodes", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        // Header with SUB/DUB badges.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Episodes", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            val src = anikotoMatch?.source
+            if (src?.subCount != null) {
+                Spacer(Modifier.width(10.dp))
+                Box(Modifier.clip(RoundedCornerShape(6.dp)).background(Color(0xFF3BA55D).copy(alpha = 0.25f)).padding(horizontal = 8.dp, vertical = 2.dp)) {
+                    Text("SUB ${src.subCount}", style = MaterialTheme.typography.labelSmall, color = Color(0xFF7CD07C), fontWeight = FontWeight.Bold)
+                }
+            }
+            if (src?.dubCount != null && src.dubCount > 0) {
+                Spacer(Modifier.width(6.dp))
+                Box(Modifier.clip(RoundedCornerShape(6.dp)).background(Color(0xFF5865F2).copy(alpha = 0.25f)).padding(horizontal = 8.dp, vertical = 2.dp)) {
+                    Text("DUB ${src.dubCount}", style = MaterialTheme.typography.labelSmall, color = Color(0xFF9AA5FF), fontWeight = FontWeight.Bold)
+                }
+            }
+        }
         Spacer(Modifier.height(8.dp))
         // Server toggle
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -883,14 +903,21 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: 
                     onClick = { (epUi.firstOrNull { (watched[it.number] ?: 0) < 85 } ?: epUi.first()).play() },
                     colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
                     contentPadding = PaddingValues(horizontal = 18.dp, vertical = 8.dp),
-                ) { Text("▶  Open Player", fontWeight = FontWeight.Bold) }
-                OutlinedButton(onClick = {
-                    current.forEach { ep ->
-                        com.sanjay.anitrack.next.data.Downloads.enqueue(anime.id, ep.number, anime.title, anime.cover, ep.resolveForDownload)
-                    }
-                }) { Text("⬇ Download ${current.size}") }
+                ) {
+                    Icon(Icons.Filled.PlayArrow, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp)); Text("Open Player", fontWeight = FontWeight.Bold)
+                }
+                OutlinedButton(
+                    onClick = {
+                        current.forEach { ep -> com.sanjay.anitrack.next.data.Downloads.enqueue(anime.id, ep.number, anime.title, anime.cover, ep.resolveForDownload) }
+                    },
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                ) {
+                    Icon(Icons.Filled.FileDownload, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp)); Text("Download ${current.size}")
+                }
             }
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(12.dp))
 
             if (ranges.size > 1) {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -905,47 +932,68 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: 
                 Spacer(Modifier.height(10.dp))
             }
 
-            // Vertical episode list (desktop layout).
+            // Vertical episode list — each row a boxed card (desktop layout).
             val dls = com.sanjay.anitrack.next.data.Downloads.items
-            Column {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 for (ep in current) {
                     val pct = watched[ep.number] ?: 0
                     val dl = dls.firstOrNull { it.id == com.sanjay.anitrack.next.data.Downloads.idOf(anime.id, ep.number) }
                     Row(
-                        Modifier.fillMaxWidth().clickable { ep.play() }.padding(vertical = 10.dp),
+                        Modifier.fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color.White.copy(alpha = 0.05f))
+                            .clickable { ep.play() }
+                            .padding(8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        // Thumbnail box (anime cover, 16:9).
+                        AsyncImage(
+                            model = anime.banner ?: anime.cover,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.width(72.dp).height(44.dp).clip(RoundedCornerShape(6.dp)).background(Color.White.copy(alpha = 0.08f)),
+                        )
+                        Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "Episode ${if (ep.number % 1f == 0f) ep.number.toInt() else ep.number}",
+                                    style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold,
+                                    color = if (pct >= 85) Color(0xFF7CD07C) else Color.White,
+                                )
+                                if (pct >= 85) {
+                                    Spacer(Modifier.width(4.dp))
+                                    Icon(Icons.Filled.Check, null, tint = Color(0xFF7CD07C), modifier = Modifier.size(14.dp))
+                                }
+                            }
                             Text(
-                                "Episode ${if (ep.number % 1f == 0f) ep.number.toInt() else ep.number}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = if (pct >= 85) Color(0xFF7CD07C) else Color.White,
-                                fontWeight = if (pct in 1..84) FontWeight.Bold else FontWeight.Normal,
-                            )
-                            Text(
-                                when {
-                                    pct >= 85 -> "Watched ✓"
-                                    pct > 0 -> "$pct% watched"
-                                    else -> "Not watched"
-                                },
+                                when { pct >= 85 -> "Watched"; pct > 0 -> "$pct% watched"; else -> "Not watched" },
                                 style = MaterialTheme.typography.labelSmall,
                                 color = Color.White.copy(alpha = 0.4f),
                             )
                         }
-                        // Download / progress / Saved
+                        // Download control — boxed like the desktop.
                         when (dl?.status) {
                             com.sanjay.anitrack.next.data.Downloads.Status.DONE ->
-                                Text("Saved ✓", color = Color(0xFF7CD07C), style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(end = 8.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(end = 8.dp)) {
+                                    Icon(Icons.Filled.Check, null, tint = Color(0xFF7CD07C), modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(4.dp)); Text("Saved", color = Color(0xFF7CD07C), style = MaterialTheme.typography.labelMedium)
+                                }
                             com.sanjay.anitrack.next.data.Downloads.Status.DOWNLOADING ->
-                                Text("${dl.progress}%", color = Accent, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(end = 8.dp))
+                                Text("${dl.progress}%", color = Accent, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(end = 12.dp))
                             com.sanjay.anitrack.next.data.Downloads.Status.QUEUED ->
-                                Text("queued…", color = Color.White.copy(alpha = 0.5f), style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(end = 8.dp))
-                            else -> TextButton(onClick = {
-                                com.sanjay.anitrack.next.data.Downloads.enqueue(anime.id, ep.number, anime.title, anime.cover, ep.resolveForDownload)
-                            }) { Text("⬇ Download", color = Color.White.copy(alpha = 0.75f)) }
+                                Text("queued…", color = Color.White.copy(alpha = 0.5f), style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(end = 12.dp))
+                            else -> Row(
+                                Modifier.clip(RoundedCornerShape(8.dp)).background(Color.White.copy(alpha = 0.08f))
+                                    .clickable { com.sanjay.anitrack.next.data.Downloads.enqueue(anime.id, ep.number, anime.title, anime.cover, ep.resolveForDownload) }
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(Icons.Filled.FileDownload, null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp)); Text("Download", color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.labelMedium)
+                            }
                         }
                     }
-                    androidx.compose.material3.HorizontalDivider(color = Color.White.copy(alpha = 0.06f))
                 }
             }
         }

@@ -33,6 +33,8 @@ object Anikoto {
         val title: String,
         val episodes: Int?,
         val year: Int?,
+        val subCount: Int? = null,
+        val dubCount: Int? = null,
     )
 
     data class Episode(
@@ -119,8 +121,12 @@ object Anikoto {
                 val title = jp ?: alt ?: "Untitled"
                 val total = Regex("""class="ep-status total"[^>]*>\s*<span>\s*(\d+)\s*</span>""")
                     .find(block)?.groupValues?.get(1)?.toIntOrNull()
+                val sub = Regex("""class="ep-status sub"[^>]*>\s*<span>\s*(\d+)\s*</span>""")
+                    .find(block)?.groupValues?.get(1)?.toIntOrNull()
+                val dub = Regex("""class="ep-status dub"[^>]*>\s*<span>\s*(\d+)\s*</span>""")
+                    .find(block)?.groupValues?.get(1)?.toIntOrNull()
                 if (out.none { it.slug == slug }) {
-                    out += SearchResult(slug, title, total, parseYear(title))
+                    out += SearchResult(slug, title, total, parseYear(title), sub, dub)
                 }
             }
         }

@@ -21,6 +21,9 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.ContentScale as CS
 import coil.compose.AsyncImage
@@ -56,9 +59,9 @@ fun NavSearchBox(modifier: Modifier = Modifier, onOpen: (Anime) -> Unit) {
             placeholder = { Text("Search anime…", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.4f)) },
             singleLine = true,
             shape = RoundedCornerShape(50),   // pill, like the desktop header
-            leadingIcon = { Text("🔍", modifier = Modifier.padding(start = 4.dp)) },
+            leadingIcon = { Icon(Icons.Filled.Search, null, tint = Color.White.copy(alpha = 0.5f)) },
             trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Text("✕", color = Color.White.copy(alpha = 0.6f)) } },
-            modifier = Modifier.fillMaxWidth().height(48.dp),
+            modifier = Modifier.fillMaxWidth().height(52.dp),
             textStyle = MaterialTheme.typography.bodyMedium,
             colors = OutlinedTextFieldDefaults.colors(
                 focusedBorderColor = Accent,
@@ -338,11 +341,11 @@ fun DownloadsScreen(onPlay: () -> Unit) {
                                 }
                                 if (d.status == com.sanjay.anitrack.next.data.Downloads.Status.DONE) {
                                     Button(onClick = { playLocal(d) }, colors = ButtonDefaults.buttonColors(containerColor = Accent), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)) {
-                                        Text("▶ Play")
+                                        Icon(Icons.Filled.PlayArrow, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("Play")
                                     }
                                 }
                                 IconButton(onClick = { com.sanjay.anitrack.next.data.Downloads.remove(d.id) }) {
-                                    Text("🗑", color = Color.White.copy(alpha = 0.55f))
+                                    Icon(Icons.Filled.Delete, "Delete", tint = Color.White.copy(alpha = 0.5f))
                                 }
                             }
                         }
