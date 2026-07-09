@@ -71,6 +71,39 @@ object Anikoto {
         return null
     }
 
+    data class TopItem(val slug: String, val title: String, val poster: String?)
+
+    /** Anikoto's Top-10 board (Day / Week / Month) scraped from /home — the same
+     *  source the desktop app uses. Returns the three tabs keyed by name. */
+    suspend fun top(): Map<String, List<TopItem>> = withContext(Dispatchers.IO) {
+        val out = linkedMapOf("day" to emptyList<TopItem>(), "week" to emptyList(), "month" to emptyList())
+        try {
+            val html = get("$BASE/home")
+            val secStart = html.indexOf("id=\"top-anime\"")
+            if (secStart < 0) return@withContext out
+            val sec = html.substring(secStart, minOf(secStart + 80000, html.length))
+            val markers = Regex("""<div class="tab-content" data-name="(day|week|month)"""").findAll(sec).toList()
+            for (i in markers.indices) {
+                val name = markers[i].groupValues[1]
+                val start = markers[i].range.first
+                val end = if (i + 1 < markers.size) markers[i + 1].range.first else sec.length
+                val block = sec.substring(start, end)
+                val items = mutableListOf<TopItem>()
+                for (p in block.split(Regex("""<a class="item""")).drop(1).take(10)) {
+                    val href = Regex("""href="([^"]+)"""").find(p)?.groupValues?.get(1) ?: ""
+                    val slug = Regex("""/watch/([^"?/]+)""").find(href)?.groupValues?.get(1) ?: continue
+                    val poster = Regex("""<img[^>]+src="([^"]+)"""").find(p)?.groupValues?.get(1)
+                    val alt = Regex("""alt="([^"]*)"""").find(p)?.groupValues?.get(1) ?: ""
+                    val nameM = Regex("""class="name[^"]*"[^>]*>\s*([^<]+?)\s*<""").find(p)?.groupValues?.get(1)
+                    val title = (nameM ?: alt).trim().replace("&#039;", "'")
+                    if (title.isNotEmpty()) items += TopItem(slug, title, poster)
+                }
+                out[name] = items
+            }
+        } catch (e: Exception) { /* offline / layout change */ }
+        out
+    }
+
     suspend fun search(query: String): List<SearchResult> = withContext(Dispatchers.IO) {
         val out = mutableListOf<SearchResult>()
         for (page in 1..2) {

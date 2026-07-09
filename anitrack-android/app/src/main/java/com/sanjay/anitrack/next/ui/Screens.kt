@@ -62,17 +62,30 @@ fun AnimeCard(anime: Anime, onClick: (Anime) -> Unit, width: Int = 126) {
 
 // ── Home ──────────────────────────────────────────────────────────────────────
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun HomeScreen(onOpen: (Anime) -> Unit, onPlay: () -> Unit) {
+fun HomeScreen(onOpen: (Anime) -> Unit, onPlay: () -> Unit, onOpenSearch: () -> Unit) {
     var trending by remember { mutableStateOf<List<Anime>>(emptyList()) }
     var latest by remember { mutableStateOf<List<com.sanjay.anitrack.next.data.AniList.Airing>>(emptyList()) }
     var topAiring by remember { mutableStateOf<List<Anime>>(emptyList()) }
     var popular by remember { mutableStateOf<List<Anime>>(emptyList()) }
-    var top10 by remember { mutableStateOf<List<Anime>>(emptyList()) }
+    var anikotoTop by remember { mutableStateOf<Map<String, List<com.sanjay.anitrack.next.data.Anikoto.TopItem>>>(emptyMap()) }
     var cw by remember { mutableStateOf<List<com.sanjay.anitrack.next.data.Db.CwRow>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var resumingId by remember { mutableStateOf<Int?>(null) }
+    var opening by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+
+    // Resolve an Anikoto Top-10 slug/title to an AniList show, then open it.
+    fun openByTitle(title: String) {
+        if (opening) return
+        opening = true
+        scope.launch {
+            val hit = runCatching { AniList.search(title).firstOrNull() }.getOrNull()
+            opening = false
+            if (hit != null) onOpen(hit)
+        }
+    }
 
     LaunchedEffect(Unit) {
         // Local data first — instant; network rows stream in after.
@@ -85,14 +98,27 @@ fun HomeScreen(onOpen: (Anime) -> Unit, onPlay: () -> Unit) {
         runCatching { trending = AniList.trending() }
         loading = false
         runCatching { latest = AniList.recentEpisodes() }
-        runCatching { top10 = AniList.top10() }
         runCatching { topAiring = AniList.topAiring() }
         runCatching { popular = AniList.mostPopular() }
+        // Anikoto Top 10 (Day/Week/Month) — same source as the desktop app.
+        scope.launch { runCatching { anikotoTop = com.sanjay.anitrack.next.data.Anikoto.top() } }
     }
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+        // Search bar at the top (the old app's header search).
         item {
-            if (trending.isNotEmpty()) HeroBanner(trending.first(), onOpen)
+            Row(
+                Modifier.fillMaxWidth().padding(16.dp)
+                    .clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha = 0.07f))
+                    .clickable { onOpenSearch() }.padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("🔍", modifier = Modifier.padding(end = 10.dp))
+                Text("Search anime…", color = Color.White.copy(alpha = 0.45f), style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        item {
+            if (trending.isNotEmpty()) HeroCarousel(trending.take(6), onOpen)
             else Spacer(Modifier.height(16.dp))
         }
         if (cw.isNotEmpty()) {
@@ -142,13 +168,8 @@ fun HomeScreen(onOpen: (Anime) -> Unit, onPlay: () -> Unit) {
             if (loading && trending.isEmpty()) RowPlaceholder()
             else AnimeRow(trending, onOpen)
         }
-        if (top10.isNotEmpty()) {
-            item { SectionHeader("Top 10 Today") }
-            item {
-                Column(Modifier.padding(horizontal = 16.dp)) {
-                    top10.forEachIndexed { i, a -> Top10Row(i + 1, a, onOpen) }
-                }
-            }
+        if (anikotoTop.values.any { it.isNotEmpty() }) {
+            item { AnikotoTop10(anikotoTop, onOpenTitle = { openByTitle(it) }) }
         }
         if (topAiring.isNotEmpty()) {
             item { SectionHeader("Top Airing") }
@@ -199,6 +220,86 @@ private fun Top10Row(rank: Int, anime: Anime, onOpen: (Anime) -> Unit) {
         Column(Modifier.weight(1f)) {
             Text(anime.title, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
             anime.score?.let { Text("★ ${it / 10.0}", style = MaterialTheme.typography.labelSmall, color = Color(0xFF7CD07C)) }
+        }
+    }
+}
+
+// Swipeable hero carousel (the desktop app's trending spotlight, multiple).
+@Composable
+private fun HeroCarousel(list: List<Anime>, onOpen: (Anime) -> Unit) {
+    if (list.isEmpty()) return
+    val pager = androidx.compose.foundation.pager.rememberPagerState(pageCount = { list.size })
+    // Auto-advance every 6s.
+    LaunchedEffect(pager) {
+        while (true) {
+            kotlinx.coroutines.delay(6000)
+            val next = (pager.currentPage + 1) % list.size
+            runCatching { pager.animateScrollToPage(next) }
+        }
+    }
+    Box {
+        androidx.compose.foundation.pager.HorizontalPager(state = pager) { page ->
+            HeroBanner(list[page], onOpen)
+        }
+        // Dot indicators
+        Row(
+            Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            for (i in list.indices) {
+                Box(
+                    Modifier.size(if (i == pager.currentPage) 22.dp else 7.dp, 7.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(if (i == pager.currentPage) Accent else Color.White.copy(alpha = 0.4f)),
+                )
+            }
+        }
+    }
+}
+
+// Anikoto Top 10 with Day / Week / Month tabs (matches the desktop rail).
+@Composable
+private fun AnikotoTop10(
+    tabs: Map<String, List<com.sanjay.anitrack.next.data.Anikoto.TopItem>>,
+    onOpenTitle: (String) -> Unit,
+) {
+    var tab by remember { mutableStateOf("day") }
+    Column {
+        Row(
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.width(4.dp).height(18.dp).clip(RoundedCornerShape(2.dp)).background(Accent))
+            Spacer(Modifier.width(8.dp))
+            Text("Top 10", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.weight(1f))
+            listOf("day" to "Day", "week" to "Week", "month" to "Month").forEach { (k, label) ->
+                Text(
+                    label,
+                    modifier = Modifier.clickable { tab = k }.padding(horizontal = 8.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (tab == k) Accent else Color.White.copy(alpha = 0.5f),
+                    fontWeight = if (tab == k) FontWeight.Bold else FontWeight.Normal,
+                )
+            }
+        }
+        Column(Modifier.padding(horizontal = 16.dp)) {
+            (tabs[tab] ?: emptyList()).forEachIndexed { i, item ->
+                Row(
+                    Modifier.fillMaxWidth().clickable { onOpenTitle(item.title) }.padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("${i + 1}", Modifier.width(34.dp), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold, color = Color.White.copy(alpha = 0.35f))
+                    AsyncImage(
+                        model = item.poster,
+                        contentDescription = item.title,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.width(40.dp).height(56.dp).clip(RoundedCornerShape(6.dp)).background(Color.White.copy(alpha = 0.06f)),
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Text(item.title, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+            }
         }
     }
 }
@@ -429,8 +530,9 @@ private fun RowPlaceholder() {
 // ── Search ────────────────────────────────────────────────────────────────────
 
 private val GENRES = listOf("Action", "Adventure", "Comedy", "Drama", "Fantasy", "Horror", "Mahou Shoujo", "Mecha", "Music", "Mystery", "Psychological", "Romance", "Sci-Fi", "Slice of Life", "Sports", "Supernatural", "Thriller")
-private val FORMATS = mapOf("Any type" to null, "TV" to "TV", "Movie" to "MOVIE", "OVA" to "OVA", "ONA" to "ONA", "Special" to "SPECIAL")
-private val STATUSES_F = mapOf("Any status" to null, "Airing" to "RELEASING", "Finished" to "FINISHED", "Upcoming" to "NOT_YET_RELEASED")
+private val FORMATS = mapOf("Any type" to null, "TV" to "TV", "TV Short" to "TV_SHORT", "Movie" to "MOVIE", "OVA" to "OVA", "ONA" to "ONA", "Special" to "SPECIAL", "Music" to "MUSIC")
+private val STATUSES_F = mapOf("Any status" to null, "Airing" to "RELEASING", "Finished" to "FINISHED", "Upcoming" to "NOT_YET_RELEASED", "Cancelled" to "CANCELLED", "Hiatus" to "HIATUS")
+private val SEASONS = mapOf("Any season" to null, "Winter" to "WINTER", "Spring" to "SPRING", "Summer" to "SUMMER", "Fall" to "FALL")
 private val SORTS = mapOf("Trending" to "TRENDING_DESC", "Popularity" to "POPULARITY_DESC", "Score" to "SCORE_DESC", "Newest" to "START_DATE_DESC", "Title" to "TITLE_ROMAJI")
 
 @Composable
@@ -438,6 +540,7 @@ fun SearchScreen(onOpen: (Anime) -> Unit) {
     var query by remember { mutableStateOf("") }
     var genre by remember { mutableStateOf<String?>(null) }
     var year by remember { mutableStateOf<Int?>(null) }
+    var season by remember { mutableStateOf<String?>(null) }
     var format by remember { mutableStateOf<String?>(null) }
     var status by remember { mutableStateOf<String?>(null) }
     var sort by remember { mutableStateOf("TRENDING_DESC") }
@@ -453,7 +556,7 @@ fun SearchScreen(onOpen: (Anime) -> Unit) {
     LaunchedEffect(reload, page) {
         searching = true
         runCatching {
-            val (r, hn) = AniList.advancedSearch(query, genre, year, null, format, status, sort, page)
+            val (r, hn) = AniList.advancedSearch(query, genre, year, season, format, status, sort, page)
             results = r; hasNext = hn
         }
         searching = false
@@ -477,6 +580,7 @@ fun SearchScreen(onOpen: (Anime) -> Unit) {
                 genre = genre, onGenre = { genre = it },
                 format = format, onFormat = { format = it },
                 status = status, onStatus = { status = it },
+                season = season, onSeason = { season = it },
                 year = year, onYear = { year = it },
                 sort = sort, onSort = { sort = it },
                 onApply = { page = 1; reload++ },
@@ -519,15 +623,17 @@ private fun FlowRowFilters(
     genre: String?, onGenre: (String?) -> Unit,
     format: String?, onFormat: (String?) -> Unit,
     status: String?, onStatus: (String?) -> Unit,
+    season: String?, onSeason: (String?) -> Unit,
     year: Int?, onYear: (Int?) -> Unit,
     sort: String, onSort: (String) -> Unit,
     onApply: () -> Unit,
 ) {
-    val years = (2026 downTo 1990).map { it }
+    val years = (2026 downTo 1960).toList()
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         FilterDropdown("Genre", genre ?: "Any genre", listOf("Any genre" to null) + GENRES.map { it to it }, onGenre)
         FilterDropdown("Type", FORMATS.entries.firstOrNull { it.value == format }?.key ?: "Any type", FORMATS.map { it.key to it.value }, onFormat)
         FilterDropdown("Status", STATUSES_F.entries.firstOrNull { it.value == status }?.key ?: "Any status", STATUSES_F.map { it.key to it.value }, onStatus)
+        FilterDropdown("Season", SEASONS.entries.firstOrNull { it.value == season }?.key ?: "Any season", SEASONS.map { it.key to it.value }, onSeason)
         FilterDropdown("Year", year?.toString() ?: "Any year", listOf("Any year" to null) + years.map { it.toString() to it }, onYear)
         FilterDropdown("Sort", SORTS.entries.firstOrNull { it.value == sort }?.key ?: "Trending", SORTS.map { it.key to it.value }, { onSort(it ?: "TRENDING_DESC") })
         Button(onClick = onApply, colors = ButtonDefaults.buttonColors(containerColor = Accent)) { Text("Filter") }
