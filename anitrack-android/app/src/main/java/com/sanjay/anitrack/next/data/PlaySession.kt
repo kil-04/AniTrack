@@ -89,7 +89,14 @@ object PlaySession {
         return true
     }
 
+    // Offline single-episode playback (set when launched from Downloads).
+    var localFile: String? = null
+
     suspend fun resolve(i: Int): Resolved {
+        localFile?.let { path ->
+            // Downloaded HLS — play the local index.m3u8 directly.
+            return Resolved(java.io.File(path).toURI().toString(), "", "", emptyList(), null, null, null, null)
+        }
         return if (provider == "animepahe") {
             val ep = paheEps[i]
             val links = Pahe.links(paheSession, ep.session)

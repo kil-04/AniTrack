@@ -63,6 +63,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         com.sanjay.anitrack.next.data.Db.init(applicationContext)
         com.sanjay.anitrack.next.data.GistSync.init(applicationContext)
+        com.sanjay.anitrack.next.data.Downloads.init(applicationContext)
         com.sanjay.anitrack.next.data.Pahe.attach(this)
         // ExoPlayer's HttpURLConnection stack consults this for cookies — the
         // pahe/kwik CDN rejects segment requests without the WebView's cookies.
@@ -164,7 +165,7 @@ fun AppShell() {
                     composable("schedule") {
                         com.sanjay.anitrack.next.ui.ScheduleScreen(onOpen = { id -> nav.navigate("anime/$id") })
                     }
-                    composable("downloads") { PlaceholderScreen("Downloads", "Offline HLS library (ports from the Kotlin downloader)") }
+                    composable("downloads") { com.sanjay.anitrack.next.ui.DownloadsScreen(onPlay = { nav.navigate("player") }) }
                     composable("settings") { com.sanjay.anitrack.next.ui.SettingsScreen() }
                 }
             }

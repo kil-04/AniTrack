@@ -265,6 +265,63 @@ fun LatestScreen(onOpen: (Anime) -> Unit) {
     }
 }
 
+// ── Downloads (offline HLS library) ───────────────────────────────────────────
+
+@Composable
+fun DownloadsScreen(onPlay: () -> Unit) {
+    val items = com.sanjay.anitrack.next.data.Downloads.items
+    Column(Modifier.fillMaxSize().padding(16.dp)) {
+        Text("Downloads", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(4.dp))
+        Text("Long-press an episode on any show to download it here.", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.45f))
+        Spacer(Modifier.height(12.dp))
+        if (items.isEmpty()) Text("No downloads yet.", color = Color.White.copy(alpha = 0.4f))
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(items.size) { i ->
+                val d = items[i]
+                Row(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Color.White.copy(alpha = 0.05f)).padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    AsyncImage(
+                        model = d.cover, contentDescription = d.title, contentScale = CS.Crop,
+                        modifier = Modifier.width(44.dp).height(60.dp).clip(RoundedCornerShape(6.dp)).background(Color.White.copy(alpha = 0.06f)),
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(d.title, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        val status = when (d.status) {
+                            com.sanjay.anitrack.next.data.Downloads.Status.QUEUED -> "Ep ${d.episode.toInt()} · queued"
+                            com.sanjay.anitrack.next.data.Downloads.Status.DOWNLOADING -> "Ep ${d.episode.toInt()} · ${d.progress}%"
+                            com.sanjay.anitrack.next.data.Downloads.Status.DONE -> "Ep ${d.episode.toInt()} · ready offline"
+                            com.sanjay.anitrack.next.data.Downloads.Status.FAILED -> "Ep ${d.episode.toInt()} · failed"
+                        }
+                        Text(status, style = MaterialTheme.typography.labelSmall, color = if (d.status == com.sanjay.anitrack.next.data.Downloads.Status.FAILED) Color(0xFFFF6B6B) else Color.White.copy(alpha = 0.5f))
+                        if (d.status == com.sanjay.anitrack.next.data.Downloads.Status.DOWNLOADING) {
+                            LinearProgressIndicator(progress = { d.progress / 100f }, color = Accent, trackColor = Color.White.copy(alpha = 0.2f), modifier = Modifier.fillMaxWidth().height(3.dp).padding(top = 4.dp))
+                        }
+                    }
+                    if (d.status == com.sanjay.anitrack.next.data.Downloads.Status.DONE) {
+                        TextButton(onClick = {
+                            val f = com.sanjay.anitrack.next.data.Downloads.localPlaylist(d.id) ?: return@TextButton
+                            com.sanjay.anitrack.next.data.PlaySession.apply {
+                                provider = "anikoto"; animeId = d.animeId; animeTitle = d.title; animeCover = d.cover
+                                anime = null; localFile = f.absolutePath
+                                slug = ""; anikotoEps = listOf(com.sanjay.anitrack.next.data.Anikoto.Episode(d.episode, "Episode ${d.episode.toInt()}", "", ""))
+                                paheEps = emptyList(); index = 0
+                            }
+                            onPlay()
+                        }) { Text("Play") }
+                    }
+                    IconButton(onClick = { com.sanjay.anitrack.next.data.Downloads.remove(d.id) }) {
+                        Text("🗑", color = Color.White.copy(alpha = 0.6f))
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ── Schedule (next 7 days of airing, grouped by day) ──────────────────────────
 
 @Composable

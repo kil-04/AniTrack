@@ -1,7 +1,9 @@
 package com.sanjay.anitrack.next.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -358,6 +360,7 @@ private fun HeroBanner(anime: Anime, onOpen: (Anime) -> Unit) {
  * false only if no source could be found at all.
  */
 internal suspend fun prepareResume(row: com.sanjay.anitrack.next.data.Db.CwRow): Boolean {
+    com.sanjay.anitrack.next.data.PlaySession.localFile = null   // online resume, not a download
     val key = row.slug
     val meta = com.sanjay.anitrack.next.data.AniList.byId(row.animeId)
 
@@ -751,9 +754,16 @@ fun DetailScreen(animeId: Int, onPlay: () -> Unit) {
 
 // ── Episodes (Anikoto + AnimePahe servers) ────────────────────────────────────
 
-private data class EpUi(val number: Float, val play: () -> Unit)
+private data class EpUi(
+    val number: Float,
+    val play: () -> Unit,
+    val resolveForDownload: suspend () -> Triple<String, String, String>,
+)
 
-@OptIn(ExperimentalLayoutApi::class)
+private const val DESKTOP_UA =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+
+@OptIn(ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
 @Composable
 private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: () -> Unit) {
     var server by remember { mutableStateOf("anikoto") } // "anikoto" | "animepahe"
@@ -790,32 +800,49 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: 
         when (server) {
             "animepahe" -> paheMatch?.let { m ->
                 m.episodes.map { ep ->
-                    EpUi(ep.number) {
-                        com.sanjay.anitrack.next.data.PlaySession.apply {
-                            provider = "animepahe"; animeId = anime.id
-                            animeTitle = anime.title; animeCover = anime.cover
-                            this.anime = anime
-                            paheSession = m.source.session; paheEps = m.episodes
-                            anikotoEps = emptyList()
-                            index = m.episodes.indexOf(ep).coerceAtLeast(0)
-                        }
-                        onPlay()
-                    }
+                    EpUi(
+                        ep.number,
+                        play = {
+                            com.sanjay.anitrack.next.data.PlaySession.apply {
+                                provider = "animepahe"; animeId = anime.id
+                                animeTitle = anime.title; animeCover = anime.cover
+                                this.anime = anime; localFile = null
+                                paheSession = m.source.session; paheEps = m.episodes
+                                anikotoEps = emptyList()
+                                index = m.episodes.indexOf(ep).coerceAtLeast(0)
+                            }
+                            onPlay()
+                        },
+                        resolveForDownload = {
+                            val links = com.sanjay.anitrack.next.data.Pahe.links(m.source.session, ep.session)
+                            val best = links.maxByOrNull { (it.quality.filter { c -> c.isDigit() }.toIntOrNull() ?: 0) }
+                                ?: throw Exception("no link")
+                            val s = com.sanjay.anitrack.next.data.Pahe.resolveKwik(best.kwik)
+                            Triple(s.url, s.referer, com.sanjay.anitrack.next.data.Pahe.MOBILE_UA)
+                        },
+                    )
                 }
             }.orEmpty()
             else -> anikotoMatch?.let { m ->
                 m.list.episodes.map { ep ->
-                    EpUi(ep.number) {
-                        com.sanjay.anitrack.next.data.PlaySession.apply {
-                            provider = "anikoto"; animeId = anime.id
-                            animeTitle = anime.title; animeCover = anime.cover
-                            this.anime = anime
-                            slug = m.source.slug; anikotoEps = m.list.episodes
-                            paheEps = emptyList()
-                            index = m.list.episodes.indexOf(ep).coerceAtLeast(0)
-                        }
-                        onPlay()
-                    }
+                    EpUi(
+                        ep.number,
+                        play = {
+                            com.sanjay.anitrack.next.data.PlaySession.apply {
+                                provider = "anikoto"; animeId = anime.id
+                                animeTitle = anime.title; animeCover = anime.cover
+                                this.anime = anime; localFile = null
+                                slug = m.source.slug; anikotoEps = m.list.episodes
+                                paheEps = emptyList()
+                                index = m.list.episodes.indexOf(ep).coerceAtLeast(0)
+                            }
+                            onPlay()
+                        },
+                        resolveForDownload = {
+                            val s = com.sanjay.anitrack.next.data.Anikoto.resolve(m.source.slug, ep)
+                            Triple(s.url, s.referer, DESKTOP_UA)
+                        },
+                    )
                 }
             }.orEmpty()
         }
@@ -860,9 +887,12 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: 
                 }
                 Spacer(Modifier.height(10.dp))
             }
+            Text("Tap to play · long-press to download", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.35f))
+            Spacer(Modifier.height(6.dp))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 for (ep in ranges.getOrElse(rangeStart) { emptyList() }) {
                     val pct = watched[ep.number] ?: 0
+                    val downloaded = com.sanjay.anitrack.next.data.Downloads.isDownloaded(anime.id, ep.number)
                     val bg = when {
                         pct >= 85 -> Accent.copy(alpha = 0.30f)
                         pct > 0 -> Color.White.copy(alpha = 0.16f)
@@ -870,11 +900,18 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: 
                     }
                     Box(
                         Modifier.clip(RoundedCornerShape(8.dp)).background(bg)
-                            .clickable { ep.play() }
+                            .combinedClickable(
+                                onClick = { ep.play() },
+                                onLongClick = {
+                                    com.sanjay.anitrack.next.data.Downloads.enqueue(
+                                        anime.id, ep.number, anime.title, anime.cover, ep.resolveForDownload,
+                                    )
+                                },
+                            )
                             .padding(horizontal = 14.dp, vertical = 8.dp),
                     ) {
                         Text(
-                            "${if (ep.number % 1f == 0f) ep.number.toInt() else ep.number}",
+                            "${if (ep.number % 1f == 0f) ep.number.toInt() else ep.number}${if (downloaded) " ⬇" else ""}",
                             style = MaterialTheme.typography.labelLarge,
                             color = if (pct >= 85) Color.White else Color.White.copy(alpha = 0.9f),
                         )
