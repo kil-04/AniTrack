@@ -89,6 +89,13 @@ class MainActivity : ComponentActivity() {
             } catch (e: Exception) { /* PiP unavailable */ }
         }
     }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // The shared player outlives the player screen (mini player) — free it
+        // when the whole activity goes away.
+        if (isFinishing) com.sanjay.anitrack.next.data.PlayerHolder.release()
+    }
 }
 
 @Composable
@@ -125,8 +132,9 @@ fun AppShell() {
                     Spacer(Modifier.weight(1f))
                     // Inline search with a live results dropdown (desktop-style).
                     com.sanjay.anitrack.next.ui.NavSearchBox(
-                        modifier = Modifier.width(280.dp),
+                        modifier = Modifier.width(320.dp),
                         onOpen = openDetail,
+                        onViewAll = { go("search") },
                     )
                     Spacer(Modifier.width(12.dp))
                     // Profile → Settings (rounded square, like the desktop).
@@ -157,7 +165,11 @@ fun AppShell() {
                         com.sanjay.anitrack.next.ui.DetailScreen(id, onPlay = { nav.navigate("player") })
                     }
                     composable("player") {
-                        com.sanjay.anitrack.next.ui.PlayerScreen(onBack = { nav.popBackStack() })
+                        com.sanjay.anitrack.next.ui.PlayerScreen(
+                            onBack = { nav.popBackStack() },
+                            onHome = { nav.navigate("home") { launchSingleTop = true; popUpTo("home") } },
+                            onOpenDetail = { id -> nav.navigate("anime/$id") },
+                        )
                     }
                     composable("mylist") {
                         com.sanjay.anitrack.next.ui.MyListScreen(onOpen = { id -> nav.navigate("anime/$id") })
@@ -165,8 +177,23 @@ fun AppShell() {
                     composable("schedule") {
                         com.sanjay.anitrack.next.ui.ScheduleScreen(onOpen = { id -> nav.navigate("anime/$id") })
                     }
-                    composable("downloads") { com.sanjay.anitrack.next.ui.DownloadsScreen(onPlay = { nav.navigate("player") }) }
+                    composable("downloads") {
+                        com.sanjay.anitrack.next.ui.DownloadsScreen(
+                            onPlay = { nav.navigate("player") },
+                            onOpenAnime = { id -> nav.navigate("anime/$id") },
+                        )
+                    }
                     composable("settings") { com.sanjay.anitrack.next.ui.SettingsScreen() }
+                }
+                // Floating mini player (the desktop's bottom-right persistent player).
+                val miniOn by com.sanjay.anitrack.next.data.PlayerHolder.miniActive
+                if (miniOn && current != "player") {
+                    Box(Modifier.align(Alignment.BottomEnd).padding(16.dp)) {
+                        com.sanjay.anitrack.next.ui.MiniPlayer(
+                            onExpand = { nav.navigate("player") { launchSingleTop = true } },
+                            onClose = { com.sanjay.anitrack.next.data.PlayerHolder.release() },
+                        )
+                    }
                 }
             }
             // Phones: bottom nav bar.

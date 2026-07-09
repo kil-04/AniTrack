@@ -22,6 +22,8 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.ui.focus.focusRequester
@@ -41,7 +43,7 @@ private val Accent = Color(0xFFE50914)
 // ── Nav search box with a live results dropdown (desktop header search) ───────
 
 @Composable
-fun NavSearchBox(modifier: Modifier = Modifier, onOpen: (Anime) -> Unit) {
+fun NavSearchBox(modifier: Modifier = Modifier, onOpen: (Anime) -> Unit, onViewAll: () -> Unit = {}) {
     var query by remember { mutableStateOf("") }
     var results by remember { mutableStateOf<List<Anime>>(emptyList()) }
     var open by remember { mutableStateOf(false) }
@@ -71,13 +73,17 @@ fun NavSearchBox(modifier: Modifier = Modifier, onOpen: (Anime) -> Unit) {
                 cursorColor = Accent,
             ),
         )
+        // Aligned flush under the bar, same width — like the desktop dropdown.
         DropdownMenu(
             expanded = open,
             onDismissRequest = { open = false },
             properties = androidx.compose.ui.window.PopupProperties(focusable = false),
-            modifier = Modifier.width(360.dp).heightIn(max = 460.dp),
+            offset = androidx.compose.ui.unit.DpOffset(0.dp, 6.dp),
+            shape = RoundedCornerShape(14.dp),
+            containerColor = Color(0xFF16161C),
+            modifier = Modifier.width(320.dp).heightIn(max = 500.dp),
         ) {
-            results.take(10).forEach { a ->
+            results.take(9).forEach { a ->
                 DropdownMenuItem(
                     onClick = { open = false; query = ""; onOpen(a) },
                     text = {
@@ -88,9 +94,14 @@ fun NavSearchBox(modifier: Modifier = Modifier, onOpen: (Anime) -> Unit) {
                             )
                             Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)) {
-                                Text(a.title, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    a.year?.let { Text("$it", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.5f)) }
+                                Text(a.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Spacer(Modifier.height(2.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    a.year?.let {
+                                        Box(Modifier.clip(RoundedCornerShape(4.dp)).background(Color.White.copy(alpha = 0.1f)).padding(horizontal = 5.dp, vertical = 1.dp)) {
+                                            Text("$it", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.7f))
+                                        }
+                                    }
                                     a.score?.let { Text("★ ${it / 10.0}", style = MaterialTheme.typography.labelSmall, color = Color(0xFF7CD07C)) }
                                     a.status?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.5f)) }
                                 }
@@ -99,6 +110,16 @@ fun NavSearchBox(modifier: Modifier = Modifier, onOpen: (Anime) -> Unit) {
                     },
                 )
             }
+            HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+            DropdownMenuItem(
+                onClick = { open = false; onViewAll() },
+                text = {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("View all results for \"$query\"", style = MaterialTheme.typography.labelLarge, color = Color.White.copy(alpha = 0.8f), modifier = Modifier.weight(1f))
+                        Text("→", color = Color.White.copy(alpha = 0.6f))
+                    }
+                },
+            )
         }
     }
 }
@@ -271,7 +292,7 @@ fun LatestScreen(onOpen: (Anime) -> Unit) {
 // ── Downloads (offline HLS library) ───────────────────────────────────────────
 
 @Composable
-fun DownloadsScreen(onPlay: () -> Unit) {
+fun DownloadsScreen(onPlay: () -> Unit, onOpenAnime: (Int) -> Unit = {}) {
     val items = com.sanjay.anitrack.next.data.Downloads.items
     // Group by anime (title), sorted; each group collapsible with a total size.
     val groups = items.groupBy { it.animeId }.values.toList()
@@ -301,24 +322,34 @@ fun DownloadsScreen(onPlay: () -> Unit) {
                 val open = expanded[head.animeId] ?: true
                 val totalSize = group.sumOf { it.sizeBytes }
                 Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha = 0.05f))) {
-                    // Group header
+                    // Group header — title clickable → detail page (desktop style).
                     Row(
                         Modifier.fillMaxWidth().clickable { expanded[head.animeId] = !open }.padding(10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         AsyncImage(
                             model = head.cover, contentDescription = head.title, contentScale = CS.Crop,
-                            modifier = Modifier.width(44.dp).height(60.dp).clip(RoundedCornerShape(6.dp)).background(Color.White.copy(alpha = 0.06f)),
+                            modifier = Modifier.width(44.dp).height(60.dp).clip(RoundedCornerShape(6.dp)).background(Color.White.copy(alpha = 0.06f))
+                                .clickable(enabled = head.animeId > 0) { onOpenAnime(head.animeId) },
                         )
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
-                            Text(head.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                head.title,
+                                style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold,
+                                textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.clickable(enabled = head.animeId > 0) { onOpenAnime(head.animeId) },
+                            )
                             Text(
                                 "${group.size} episode${if (group.size == 1) "" else "s"} · ${com.sanjay.anitrack.next.data.Downloads.humanSize(totalSize)}",
                                 style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.5f),
                             )
                         }
-                        Text(if (open) "▲" else "▼", color = Color.White.copy(alpha = 0.5f))
+                        Icon(
+                            if (open) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                            null, tint = Color.White.copy(alpha = 0.5f),
+                        )
                     }
                     if (open) {
                         group.forEach { d ->

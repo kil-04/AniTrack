@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.ClosedCaptionOff
 import androidx.compose.material.icons.filled.Fullscreen
@@ -94,7 +95,11 @@ private suspend fun saveProgress(player: ExoPlayer, index: Int) {
 
 @OptIn(UnstableApi::class)
 @Composable
-fun PlayerScreen(onBack: () -> Unit) {
+fun PlayerScreen(
+    onBack: () -> Unit,
+    onHome: () -> Unit = onBack,
+    onOpenDetail: (Int) -> Unit = {},
+) {
     val context = LocalContext.current
     val activity = context as? Activity
     val scope = rememberCoroutineScope()
@@ -147,7 +152,10 @@ fun PlayerScreen(onBack: () -> Unit) {
         runCatching { watchedMap = com.sanjay.anitrack.next.data.Db.positionsFor(PlaySession.animeId) }
     }
 
-    val player = remember { ExoPlayer.Builder(context).build().apply { playWhenReady = true } }
+    // Borrow the app-wide player — it survives navigation so the floating
+    // mini player (AppShell overlay) can keep playing, like the desktop.
+    val player = remember { com.sanjay.anitrack.next.data.PlayerHolder.get(context) }
+    LaunchedEffect(Unit) { com.sanjay.anitrack.next.data.PlayerHolder.miniActive.value = false }
 
     // Poll playback state for the scrubber + time display.
     LaunchedEffect(player) {
@@ -189,7 +197,8 @@ fun PlayerScreen(onBack: () -> Unit) {
             }
         }
         player.addListener(listener)
-        onDispose { player.removeListener(listener); player.release() }
+        // No release here — PlayerHolder owns the instance (mini player).
+        onDispose { player.removeListener(listener) }
     }
 
     var lastPlayedIndex by remember { mutableStateOf<Int?>(null) }
@@ -198,6 +207,14 @@ fun PlayerScreen(onBack: () -> Unit) {
         if (index >= PlaySession.count) return@LaunchedEffect
         PlaySession.subType = subType
         val epNum = PlaySession.episodeNumber(index)
+        // Already loaded (returning from the mini player)? Don't restart it.
+        val holder = com.sanjay.anitrack.next.data.PlayerHolder
+        if (holder.loadedKey == holder.keyFor(index) && player.mediaItemCount > 0) {
+            stream = holder.lastResolved
+            lastPlayedIndex = index
+            status = ""
+            return@LaunchedEffect
+        }
         // Save the outgoing episode's position before switching.
         lastPlayedIndex?.takeIf { it != index }?.let { saveProgress(player, it) }
         lastPlayedIndex = index
@@ -207,29 +224,10 @@ fun PlayerScreen(onBack: () -> Unit) {
         try {
             val s = PlaySession.resolve(index)
             stream = s
-            // Local downloads are file:// URIs — an HTTP data source can't read
-            // them, so use DefaultDataSource (file + http) for offline; online
-            // uses the HTTP factory with the Referer/UA the CDN requires.
-            val isLocal = s.url.startsWith("file:")
-            val dataSourceFactory: androidx.media3.datasource.DataSource.Factory = if (isLocal) {
-                androidx.media3.datasource.DefaultDataSource.Factory(context)
-            } else {
-                DefaultHttpDataSource.Factory()
-                    .setUserAgent(s.userAgent)
-                    .setDefaultRequestProperties(mapOf("Referer" to s.referer + "/"))
-                    .setAllowCrossProtocolRedirects(true)
-            }
-            val subtitleConfigs = s.subtitles.mapIndexed { i, sub ->
-                MediaItem.SubtitleConfiguration.Builder(Uri.parse(sub.url))
-                    .setMimeType(MimeTypes.TEXT_VTT)
-                    .setLanguage("en")
-                    .setLabel(sub.label)
-                    .setSelectionFlags(if (i == 0) C.SELECTION_FLAG_DEFAULT else 0)
-                    .build()
-            }
-            val item = MediaItem.Builder().setUri(s.url).setSubtitleConfigurations(subtitleConfigs).build()
-            player.setMediaSource(DefaultMediaSourceFactory(dataSourceFactory).createMediaSource(item))
-            player.prepare()
+            // Shared loader: local file:// vs CDN (Referer/UA) data source.
+            holder.setMedia(context, s)
+            holder.loadedKey = holder.keyFor(index)
+            holder.lastResolved = s
             // Resume mid-episode from the local DB (finished episodes restart).
             com.sanjay.anitrack.next.data.Db.resumeFor(PlaySession.animeId, epNum)?.let { pos ->
                 player.seekTo((pos * 1000).toLong())
@@ -260,9 +258,15 @@ fun PlayerScreen(onBack: () -> Unit) {
         }
     }
 
-    // Final save when the screen goes away.
+    // Final save when the screen goes away + hand off to the mini player.
     DisposableEffect(Unit) {
         onDispose {
+            val holder = com.sanjay.anitrack.next.data.PlayerHolder
+            if (player.mediaItemCount > 0 && player.playbackState != Player.STATE_IDLE) {
+                holder.miniActive.value = true   // keep playing in the overlay
+            } else {
+                holder.release()
+            }
             val dur = player.duration
             val posMs = player.currentPosition
             val savedIndex = index
@@ -290,24 +294,44 @@ fun PlayerScreen(onBack: () -> Unit) {
     Column(Modifier.fillMaxSize().background(Color.Black)) {
         // Immersive while PiP'd or locked to landscape (the old app's fullscreen).
         if (!inPipLikely && !landscapeLocked) {
+            // Desktop-style header: "⌂ Home | <Title> — Episode N" with the
+            // title clickable → detail page.
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, "Back", tint = Color.White) }
-                Column(Modifier.weight(1f)) {
-                    Text(PlaySession.animeTitle, style = MaterialTheme.typography.titleSmall, color = Color.White, maxLines = 1)
+                Row(
+                    Modifier.clip(RoundedCornerShape(8.dp)).clickable { onHome() }
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Filled.Home, "Home", tint = Color.White.copy(alpha = 0.85f), modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Home", style = MaterialTheme.typography.labelLarge, color = Color.White.copy(alpha = 0.85f))
+                }
+                Spacer(Modifier.width(10.dp))
+                Row(
+                    Modifier.weight(1f).clip(RoundedCornerShape(8.dp))
+                        .clickable(enabled = PlaySession.animeId > 0) { onOpenDetail(PlaySession.animeId) }
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        PlaySession.animeTitle,
+                        style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold,
+                        color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
                     if (index < PlaySession.count) {
                         val n = PlaySession.episodeNumber(index)
+                        Spacer(Modifier.width(8.dp))
                         Text(
-                            "Episode ${if (n % 1f == 0f) n.toInt() else n} · ${if (provider == "animepahe") "AnimePahe" else "Anikoto"}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color.White.copy(alpha = 0.5f),
+                            "— Episode ${if (n % 1f == 0f) n.toInt() else n}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Color.White.copy(alpha = 0.55f),
                         )
                     }
                 }
-                // (prev/next/PiP/fullscreen live in the bottom control bar — no
-                // duplicates up here; just Back + title.)
             }
         }
 
