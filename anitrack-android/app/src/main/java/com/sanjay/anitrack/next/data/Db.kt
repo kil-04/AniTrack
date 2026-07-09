@@ -14,7 +14,7 @@ object Db {
 
     fun init(ctx: Context) {
         if (::helper.isInitialized) return
-        helper = object : SQLiteOpenHelper(ctx.applicationContext, "anitrack_next.db", null, 1) {
+        helper = object : SQLiteOpenHelper(ctx.applicationContext, "anitrack_next.db", null, 2) {
             override fun onCreate(db: SQLiteDatabase) {
                 db.execSQL(
                     """CREATE TABLE IF NOT EXISTS playback(
@@ -29,9 +29,64 @@ object Db {
                         PRIMARY KEY(anime_id, episode)
                     )""",
                 )
+                createListTable(db)
             }
-            override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) { /* v1 */ }
+            override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) {
+                if (old < 2) createListTable(db)
+            }
         }
+    }
+
+    private fun createListTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS list_entry(
+                anime_id   INTEGER PRIMARY KEY,
+                status     TEXT NOT NULL,
+                title      TEXT,
+                cover      TEXT,
+                score      REAL,
+                updated_at INTEGER NOT NULL
+            )""",
+        )
+    }
+
+    // ── My List ───────────────────────────────────────────────────────────────
+
+    val STATUSES = listOf("watching", "completed", "on_hold", "dropped", "plan_to_watch")
+
+    data class ListRow(val animeId: Int, val status: String, val title: String, val cover: String?, val score: Double?)
+
+    suspend fun setListStatus(animeId: Int, status: String, title: String, cover: String?) = withContext(Dispatchers.IO) {
+        val cv = ContentValues().apply {
+            put("anime_id", animeId); put("status", status)
+            put("title", title); put("cover", cover)
+            put("updated_at", System.currentTimeMillis())
+        }
+        helper.writableDatabase.insertWithOnConflict("list_entry", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    suspend fun removeFromList(animeId: Int) = withContext(Dispatchers.IO) {
+        helper.writableDatabase.delete("list_entry", "anime_id=?", arrayOf(animeId.toString()))
+    }
+
+    suspend fun listStatusOf(animeId: Int): String? = withContext(Dispatchers.IO) {
+        helper.readableDatabase.rawQuery(
+            "SELECT status FROM list_entry WHERE anime_id=?", arrayOf(animeId.toString()),
+        ).use { c -> if (c.moveToFirst()) c.getString(0) else null }
+    }
+
+    suspend fun listByStatus(status: String): List<ListRow> = withContext(Dispatchers.IO) {
+        val out = mutableListOf<ListRow>()
+        helper.readableDatabase.rawQuery(
+            "SELECT anime_id, status, title, cover, score FROM list_entry WHERE status=? ORDER BY updated_at DESC",
+            arrayOf(status),
+        ).use { c ->
+            while (c.moveToNext()) {
+                out += ListRow(c.getInt(0), c.getString(1), c.getString(2) ?: "Unknown", c.getString(3),
+                    if (c.isNull(4)) null else c.getDouble(4))
+            }
+        }
+        out
     }
 
     data class CwRow(

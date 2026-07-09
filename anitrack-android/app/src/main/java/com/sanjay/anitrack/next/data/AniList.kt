@@ -36,7 +36,7 @@ object AniList {
     }
 
     const val MEDIA_FIELDS = """
-        id idMal title { romaji english } coverImage { large } bannerImage
+        id idMal isAdult title { romaji english } coverImage { large } bannerImage
         episodes status format seasonYear averageScore genres description(asHtml: false)
     """
 
@@ -113,6 +113,32 @@ object AniList {
             JSONObject().put("q", q),
         )
     )
+
+    data class Airing(val anime: Anime, val episode: Int, val airingAt: Long)
+
+    /** Airing schedule for the next 7 days (sorted by time). */
+    suspend fun airingWeek(): List<Airing> {
+        val now = System.currentTimeMillis() / 1000
+        val week = now + 7 * 24 * 3600
+        val data = gql(
+            """query(${'$'}from: Int, ${'$'}to: Int) {
+                Page(perPage: 50) {
+                    airingSchedules(airingAt_greater: ${'$'}from, airingAt_lesser: ${'$'}to, sort: TIME) {
+                        airingAt episode
+                        media { $MEDIA_FIELDS }
+                    }
+                }
+            }""",
+            JSONObject().put("from", now).put("to", week),
+        )
+        val arr = data.getJSONObject("Page").getJSONArray("airingSchedules")
+        return (0 until arr.length()).mapNotNull { i ->
+            val o = arr.getJSONObject(i)
+            val m = o.optJSONObject("media") ?: return@mapNotNull null
+            if (m.optBoolean("isAdult", false)) return@mapNotNull null
+            Airing(Anime.fromMedia(m), o.optInt("episode"), o.optLong("airingAt"))
+        }
+    }
 
     suspend fun byId(id: Int): Anime? = try {
         val data = gql(

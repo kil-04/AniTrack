@@ -12,6 +12,10 @@ object PlaySession {
     var animeTitle: String = ""
     var animeCover: String? = null
     var index: Int = 0
+    // Full metadata, set on detail-page launches — enables in-player server
+    // switching (matchFor needs title/year/episodes/malId). Null on a bare
+    // Continue-Watching resume, where switching is simply disabled.
+    var anime: Anime? = null
 
     // Anikoto
     var slug: String = ""
@@ -49,6 +53,40 @@ object PlaySession {
     /** Episode title for side-panel labels (anikoto has real titles; pahe doesn't). */
     fun episodeTitle(i: Int): String? =
         if (provider == "animepahe") null else anikotoEps.getOrNull(i)?.title
+
+    val canSwitchServer: Boolean get() = anime != null
+
+    /**
+     * Switch the active server without leaving the player (the desktop app's
+     * "SERVERS" buttons). Matches the target provider lazily, then lands on the
+     * same EPISODE NUMBER — the two providers index episodes differently.
+     * Returns false if the target has no source for this show.
+     */
+    suspend fun switchProvider(target: String): Boolean {
+        if (target == provider) return true
+        val a = anime ?: return false
+        val currentNum = episodeNumber(index)
+        if (target == "animepahe") {
+            if (paheEps.isEmpty()) {
+                val m = Pahe.matchFor(a) ?: return false
+                paheSession = m.source.session
+                paheEps = m.episodes
+            }
+            if (paheEps.isEmpty()) return false
+            provider = "animepahe"
+            index = paheEps.indexOfFirst { it.number == currentNum }.takeIf { it >= 0 } ?: 0
+        } else {
+            if (anikotoEps.isEmpty()) {
+                val m = Anikoto.matchFor(a) ?: return false
+                slug = m.source.slug
+                anikotoEps = m.list.episodes
+            }
+            if (anikotoEps.isEmpty()) return false
+            provider = "anikoto"
+            index = anikotoEps.indexOfFirst { it.number == currentNum }.takeIf { it >= 0 } ?: 0
+        }
+        return true
+    }
 
     suspend fun resolve(i: Int): Resolved {
         return if (provider == "animepahe") {

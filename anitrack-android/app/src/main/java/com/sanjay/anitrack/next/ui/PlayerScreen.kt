@@ -9,17 +9,28 @@ import androidx.annotation.OptIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ClosedCaption
+import androidx.compose.material.icons.filled.ClosedCaptionOff
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureInPictureAlt
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -47,10 +58,20 @@ import com.sanjay.anitrack.next.data.Anikoto
 import com.sanjay.anitrack.next.data.PlaySession
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 private val Accent = Color(0xFFE50914)
 private const val UA =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+
+private fun fmtTime(ms: Long): String {
+    if (ms <= 0) return "0:00"
+    val total = ms / 1000
+    val h = total / 3600
+    val m = (total % 3600) / 60
+    val s = total % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
+}
 
 private suspend fun saveProgress(player: ExoPlayer, index: Int) {
     if (index >= PlaySession.count) return
@@ -76,14 +97,31 @@ private suspend fun saveProgress(player: ExoPlayer, index: Int) {
 fun PlayerScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val activity = context as? Activity
+    val scope = rememberCoroutineScope()
     var index by remember { mutableStateOf(PlaySession.index) }
+    var provider by remember { mutableStateOf(PlaySession.provider) }
+    var switching by remember { mutableStateOf(false) }
+    var switchError by remember { mutableStateOf<String?>(null) }
     var retry by remember { mutableStateOf(0) }
     var status by remember { mutableStateOf("Resolving stream…") }
     var error by remember { mutableStateOf<String?>(null) }
     var stream by remember { mutableStateOf<PlaySession.Resolved?>(null) }
-    var controllerVisible by remember { mutableStateOf(true) }
     var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
     var landscapeLocked by remember { mutableStateOf(false) }
+
+    // Custom control-bar state (desktop-style bar, not ExoPlayer's default).
+    var controlsVisible by remember { mutableStateOf(true) }
+    var positionMs by remember { mutableStateOf(0L) }
+    var durationMs by remember { mutableStateOf(0L) }
+    var bufferedMs by remember { mutableStateOf(0L) }
+    var isPlaying by remember { mutableStateOf(false) }
+    var isSeeking by remember { mutableStateOf(false) }
+    var seekPreviewMs by remember { mutableStateOf(0L) }
+    var muted by remember { mutableStateOf(false) }
+    var speed by remember { mutableStateOf(1f) }
+    var speedMenu by remember { mutableStateOf(false) }
+    var ccOn by remember { mutableStateOf(true) }
+    fun flashControls() { controlsVisible = true }
 
     // Gesture feedback overlays
     var seekFeedback by remember { mutableStateOf<Pair<Boolean, Int>?>(null) } // (isForward, totalSecs)
@@ -105,6 +143,21 @@ fun PlayerScreen(onBack: () -> Unit) {
 
     val player = remember { ExoPlayer.Builder(context).build().apply { playWhenReady = true } }
 
+    // Poll playback state for the scrubber + time display.
+    LaunchedEffect(player) {
+        while (isActive) {
+            if (!isSeeking) positionMs = player.currentPosition
+            durationMs = player.duration.coerceAtLeast(0L)
+            bufferedMs = player.bufferedPosition
+            isPlaying = player.isPlaying
+            delay(300)
+        }
+    }
+    // Auto-hide the bar while playing.
+    LaunchedEffect(controlsVisible, isPlaying, isSeeking) {
+        if (controlsVisible && isPlaying && !isSeeking) { delay(3500); controlsVisible = false }
+    }
+
     DisposableEffect(Unit) {
         PlaySession.playerActive = true
         onDispose {
@@ -124,7 +177,8 @@ fun PlayerScreen(onBack: () -> Unit) {
     }
 
     var lastPlayedIndex by remember { mutableStateOf<Int?>(null) }
-    LaunchedEffect(index, retry) {
+    // `provider` participates so a server switch re-resolves even at the same index.
+    LaunchedEffect(index, retry, provider) {
         if (index >= PlaySession.count) return@LaunchedEffect
         val epNum = PlaySession.episodeNumber(index)
         // Save the outgoing episode's position before switching.
@@ -209,7 +263,8 @@ fun PlayerScreen(onBack: () -> Unit) {
     LaunchedEffect(seekFeedback) { if (seekFeedback != null) { delay(700); seekFeedback = null; chainSecs = 0 } }
 
     Column(Modifier.fillMaxSize().background(Color.Black)) {
-        if (!inPipLikely) {
+        // Immersive while PiP'd or locked to landscape (the old app's fullscreen).
+        if (!inPipLikely && !landscapeLocked) {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -220,7 +275,7 @@ fun PlayerScreen(onBack: () -> Unit) {
                     if (index < PlaySession.count) {
                         val n = PlaySession.episodeNumber(index)
                         Text(
-                            "Episode ${if (n % 1f == 0f) n.toInt() else n} · ${if (PlaySession.provider == "animepahe") "AnimePahe" else "Anikoto"}",
+                            "Episode ${if (n % 1f == 0f) n.toInt() else n} · ${if (provider == "animepahe") "AnimePahe" else "Anikoto"}",
                             style = MaterialTheme.typography.labelSmall,
                             color = Color.White.copy(alpha = 0.5f),
                         )
@@ -249,23 +304,47 @@ fun PlayerScreen(onBack: () -> Unit) {
             }
         }
 
-        Row(Modifier.weight(1f).fillMaxWidth()) {
-            if (wide && !inPipLikely) {
-                EpisodeSidePanel(current = index, watched = watchedMap, onSelect = { index = it })
+        // Server switch is shared by both orientations.
+        val switchTo: (String) -> Unit = { target ->
+            if (target != provider && !switching) {
+                switching = true; switchError = null
+                scope.launch {
+                    val ok = runCatching { PlaySession.switchProvider(target) }.getOrDefault(false)
+                    if (ok) {
+                        provider = PlaySession.provider
+                        index = PlaySession.index
+                    } else {
+                        switchError = if (!PlaySession.canSwitchServer) "Reopen from the show page to switch servers"
+                        else "No source on that server"
+                    }
+                    switching = false
+                }
             }
-            Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
+        }
+
+        val panel: @Composable (Modifier) -> Unit = { mod ->
+            PlayerEpisodePanel(
+                modifier = mod,
+                provider = provider,
+                current = index,
+                watched = watchedMap,
+                switching = switching,
+                switchError = switchError,
+                canSwitch = PlaySession.canSwitchServer,
+                onSelect = { index = it },
+                onServer = switchTo,
+            )
+        }
+
+        // Video surface + overlays. Extracted so both orientations reuse it.
+        val videoArea: @Composable (Modifier) -> Unit = { mod ->
+        Box(mod, contentAlignment = Alignment.Center) {
             AndroidView(
                 factory = { ctx ->
                     PlayerView(ctx).apply {
                         this.player = player
-                        useController = true
+                        useController = false          // custom Compose control bar below
                         keepScreenOn = true
-                        setShowNextButton(false)
-                        setShowPreviousButton(false)
-                        controllerShowTimeoutMs = 3000
-                        setControllerVisibilityListener(
-                            PlayerView.ControllerVisibilityListener { v -> controllerVisible = v == android.view.View.VISIBLE },
-                        )
                         // Subtitle look ported from the old app: white on 25% black.
                         subtitleView?.setStyle(
                             CaptionStyleCompat(
@@ -284,15 +363,15 @@ fun PlayerScreen(onBack: () -> Unit) {
                 modifier = Modifier.fillMaxSize(),
             )
 
-            // Gesture layer — only when the controller is hidden, so the
-            // controller's own buttons stay tappable when visible.
-            if (!controllerVisible && !inPipLikely && error == null) {
+            // Gesture layer — sits under the control bar. Single tap toggles
+            // the bar; double-tap seeks; long-press = 2×; right-half drag = vol.
+            if (!inPipLikely && error == null) {
                 Box(
                     Modifier
                         .fillMaxSize()
                         .pointerInput(Unit) {
                             detectTapGestures(
-                                onTap = { playerViewRef?.showController() },
+                                onTap = { controlsVisible = !controlsVisible },
                                 onDoubleTap = { offset ->
                                     val w = size.width
                                     when {
@@ -368,6 +447,117 @@ fun PlayerScreen(onBack: () -> Unit) {
                 ) { Text("Vol ${(v * 100).toInt()}%", color = Color.White, style = MaterialTheme.typography.labelLarge) }
             }
 
+            // ── Custom control bar (desktop-style) ──
+            if (controlsVisible && !inPipLikely && error == null && status.isEmpty()) {
+                Column(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .background(
+                            androidx.compose.ui.graphics.Brush.verticalGradient(
+                                listOf(Color.Transparent, Color.Black.copy(alpha = 0.75f)),
+                            ),
+                        )
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                ) {
+                    // Scrubber
+                    val dur = durationMs.coerceAtLeast(1L)
+                    val shown = if (isSeeking) seekPreviewMs else positionMs
+                    val progress = (shown.toFloat() / dur).coerceIn(0f, 1f)
+                    val buffered = (bufferedMs.toFloat() / dur).coerceIn(0f, 1f)
+                    BoxWithConstraints(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(24.dp)
+                            .pointerInput(dur) {
+                                detectTapGestures { off ->
+                                    val t = (off.x / size.width * dur).toLong().coerceIn(0, dur)
+                                    player.seekTo(t); positionMs = t; flashControls()
+                                }
+                            }
+                            .pointerInput(dur) {
+                                detectHorizontalDragGestures(
+                                    onDragStart = { off -> isSeeking = true; seekPreviewMs = (off.x / size.width * dur).toLong().coerceIn(0, dur) },
+                                    onHorizontalDrag = { change, _ -> seekPreviewMs = (change.position.x / size.width * dur).toLong().coerceIn(0, dur) },
+                                    onDragEnd = { player.seekTo(seekPreviewMs); positionMs = seekPreviewMs; isSeeking = false },
+                                )
+                            },
+                    ) {
+                        val w = maxWidth
+                        Box(Modifier.align(Alignment.CenterStart).fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)).background(Color.White.copy(alpha = 0.25f)))
+                        Box(Modifier.align(Alignment.CenterStart).fillMaxWidth(buffered).height(3.dp).clip(RoundedCornerShape(2.dp)).background(Color.White.copy(alpha = 0.4f)))
+                        Box(Modifier.align(Alignment.CenterStart).fillMaxWidth(progress).height(3.dp).clip(RoundedCornerShape(2.dp)).background(Accent))
+                        Box(
+                            Modifier
+                                .align(Alignment.CenterStart)
+                                .offset(x = w * progress - 7.dp)
+                                .size(14.dp)
+                                .clip(RoundedCornerShape(50))
+                                .background(Accent),
+                        )
+                    }
+                    // Button row
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { if (index > 0) { index -= 1; flashControls() } }, enabled = index > 0) {
+                            Icon(Icons.Filled.SkipPrevious, "Previous", tint = Color.White)
+                        }
+                        IconButton(onClick = { if (player.isPlaying) player.pause() else player.play(); flashControls() }) {
+                            Icon(if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, "Play/Pause", tint = Color.White, modifier = Modifier.size(30.dp))
+                        }
+                        IconButton(onClick = { if (index + 1 < PlaySession.count) { index += 1; flashControls() } }, enabled = index + 1 < PlaySession.count) {
+                            Icon(Icons.Filled.SkipNext, "Next", tint = Color.White)
+                        }
+                        IconButton(onClick = { muted = !muted; player.volume = if (muted) 0f else 1f; flashControls() }) {
+                            Icon(if (muted) Icons.Filled.VolumeOff else Icons.Filled.VolumeUp, "Mute", tint = Color.White)
+                        }
+                        Text(
+                            "${fmtTime(shown)} / ${fmtTime(durationMs)}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Color.White.copy(alpha = 0.85f),
+                        )
+                        Spacer(Modifier.weight(1f))
+                        // Playback speed
+                        Box {
+                            IconButton(onClick = { speedMenu = true; flashControls() }) {
+                                Icon(Icons.Filled.Speed, "Speed", tint = Color.White)
+                            }
+                            DropdownMenu(expanded = speedMenu, onDismissRequest = { speedMenu = false }) {
+                                listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f).forEach { sp ->
+                                    DropdownMenuItem(
+                                        text = { Text("${sp}×" + if (sp == speed) "  ✓" else "") },
+                                        onClick = { speed = sp; player.setPlaybackSpeed(sp); speedMenu = false },
+                                    )
+                                }
+                            }
+                        }
+                        // CC toggle (only when there are subtitles)
+                        if (stream?.subtitles?.isNotEmpty() == true) {
+                            IconButton(onClick = {
+                                ccOn = !ccOn
+                                player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !ccOn).build()
+                                flashControls()
+                            }) {
+                                Icon(if (ccOn) Icons.Filled.ClosedCaption else Icons.Filled.ClosedCaptionOff, "Subtitles", tint = Color.White)
+                            }
+                        }
+                        IconButton(onClick = {
+                            try {
+                                activity?.enterPictureInPictureMode(
+                                    PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build(),
+                                )
+                            } catch (e: Exception) { /* no PiP */ }
+                        }) { Icon(Icons.Filled.PictureInPictureAlt, "PiP", tint = Color.White) }
+                        IconButton(onClick = {
+                            landscapeLocked = !landscapeLocked
+                            activity?.requestedOrientation =
+                                if (landscapeLocked) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                                else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                        }) { Icon(if (landscapeLocked) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen, "Fullscreen", tint = Color.White) }
+                    }
+                }
+            }
+
             // Skip intro / outro
             if (showSkipIntro || showSkipOutro) {
                 Button(
@@ -393,37 +583,155 @@ fun PlayerScreen(onBack: () -> Unit) {
                     Text(status, color = Color.White.copy(alpha = 0.6f), style = MaterialTheme.typography.labelMedium)
                 }
             }
-            } // player Box
-        } // Row (panel + player)
+        } // video Box
+        } // videoArea lambda
+
+        when {
+            // PiP / fullscreen-landscape lock: video only, no chrome.
+            inPipLikely || landscapeLocked -> videoArea(Modifier.weight(1f).fillMaxWidth())
+            // Landscape / tablet: panel beside the video (desktop app layout).
+            wide -> Row(Modifier.weight(1f).fillMaxWidth()) {
+                panel(Modifier.width(300.dp).fillMaxHeight())
+                videoArea(Modifier.weight(1f).fillMaxHeight())
+            }
+            // Portrait: 16:9 video on top, panel below.
+            else -> Column(Modifier.weight(1f).fillMaxWidth()) {
+                videoArea(Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+                panel(Modifier.fillMaxWidth().weight(1f))
+            }
+        }
     }
 }
 
-// ── Episode side panel (old-app split view on wide screens) ──────────────────
+// ── Episode panel (the desktop app's SERVERS + range + find + grid) ──────────
+// Rendered beside the video in landscape/tablet, below it in portrait.
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun EpisodeSidePanel(current: Int, watched: Map<Float, Int>, onSelect: (Int) -> Unit) {
+private fun PlayerEpisodePanel(
+    modifier: Modifier,
+    provider: String,
+    current: Int,
+    watched: Map<Float, Int>,
+    switching: Boolean,
+    switchError: String?,
+    canSwitch: Boolean,
+    onSelect: (Int) -> Unit,
+    onServer: (String) -> Unit,
+) {
+    val count = PlaySession.count
+    val RANGE = 100
+    val rangeCount = ((count + RANGE - 1) / RANGE).coerceAtLeast(1)
+    // Follow the playing episode into its range.
+    var range by remember(current, count) { mutableStateOf(current / RANGE) }
+    var find by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
-    LaunchedEffect(current) {
-        runCatching { listState.animateScrollToItem((current - 2).coerceAtLeast(0)) }
+
+    // Keep the playing episode visible when it's inside the shown range.
+    LaunchedEffect(current, range) {
+        val start = range * RANGE
+        if (current in start until minOf(start + RANGE, count)) {
+            runCatching { listState.animateScrollToItem((current - start - 2).coerceAtLeast(0)) }
+        }
     }
-    Column(
-        Modifier.width(280.dp).fillMaxHeight().background(Color(0xFF141419)),
-    ) {
+
+    Column(modifier.background(Color(0xFF0E0E12))) {
+        // ── SERVERS (the desktop app's switcher, in-player) ──
         Text(
-            "EPISODES · ${if (PlaySession.provider == "animepahe") "AnimePahe" else "Anikoto"}",
+            "SERVERS",
             style = MaterialTheme.typography.labelSmall,
             color = Color.White.copy(alpha = 0.45f),
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            modifier = Modifier.padding(start = 14.dp, top = 10.dp, bottom = 6.dp),
         )
+        Row(
+            Modifier.padding(horizontal = 14.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            FilterChip(
+                selected = provider == "animepahe",
+                enabled = canSwitch && !switching,
+                onClick = { onServer("animepahe") },
+                label = { Text("AnimePahe") },
+            )
+            FilterChip(
+                selected = provider == "anikoto",
+                enabled = canSwitch && !switching,
+                onClick = { onServer("anikoto") },
+                label = { Text("Anikoto") },
+            )
+            if (switching) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Accent)
+        }
+        switchError?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.labelSmall,
+                color = Color(0xFFFF6B6B),
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp),
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+
+        // ── Range chips + find-number (old app's 001-100 selector + search) ──
+        Row(
+            Modifier.padding(horizontal = 14.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (rangeCount > 1) {
+                LazyRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(rangeCount) { i ->
+                        val first = i * RANGE + 1
+                        val last = minOf((i + 1) * RANGE, count)
+                        FilterChip(
+                            selected = range == i,
+                            onClick = { range = i },
+                            label = { Text("$first–$last", style = MaterialTheme.typography.labelSmall) },
+                        )
+                    }
+                }
+            } else {
+                Spacer(Modifier.weight(1f))
+            }
+            OutlinedTextField(
+                value = find,
+                onValueChange = { v ->
+                    find = v.filter { it.isDigit() }.take(4)
+                    find.toIntOrNull()?.let { n ->
+                        val idx = (0 until count).firstOrNull { PlaySession.episodeNumber(it).toInt() == n }
+                        if (idx != null) range = idx / RANGE
+                    }
+                },
+                placeholder = { Text("Find", style = MaterialTheme.typography.labelSmall) },
+                singleLine = true,
+                textStyle = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.width(86.dp).height(52.dp),
+                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Accent, cursorColor = Accent),
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+
+        // ── Episode list for the active range ──
+        val start = range * RANGE
+        val visible = minOf(start + RANGE, count) - start
+        val findN = find.toIntOrNull()
         LazyColumn(state = listState, modifier = Modifier.weight(1f)) {
-            items(PlaySession.count) { i ->
+            items(visible) { off ->
+                val i = start + off
                 val n = PlaySession.episodeNumber(i)
                 val pct = watched[n] ?: 0
                 val isCur = i == current
+                val isFound = findN != null && n.toInt() == findN
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .background(if (isCur) Accent.copy(alpha = 0.16f) else Color.Transparent)
+                        .background(
+                            when {
+                                isCur -> Accent.copy(alpha = 0.16f)
+                                isFound -> Color.White.copy(alpha = 0.10f)
+                                else -> Color.Transparent
+                            },
+                        )
                         .clickable { onSelect(i) }
                         .padding(horizontal = 14.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,

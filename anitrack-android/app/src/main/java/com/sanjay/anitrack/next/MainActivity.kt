@@ -6,6 +6,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Search
@@ -45,6 +47,8 @@ data class Dest(val route: String, val label: String, val icon: ImageVector)
 private val destinations = listOf(
     Dest("home", "Home", Icons.Filled.Home),
     Dest("search", "Search", Icons.Filled.Search),
+    Dest("mylist", "My List", Icons.Filled.Bookmark),
+    Dest("schedule", "Schedule", Icons.Filled.CalendarMonth),
     Dest("downloads", "Downloads", Icons.Filled.Download),
     Dest("settings", "Settings", Icons.Filled.Settings),
 )
@@ -117,6 +121,12 @@ fun AppShell() {
                         }
                         composable("player") {
                             com.sanjay.anitrack.next.ui.PlayerScreen(onBack = { nav.popBackStack() })
+                        }
+                        composable("mylist") {
+                            com.sanjay.anitrack.next.ui.MyListScreen(onOpen = { id -> nav.navigate("anime/$id") })
+                        }
+                        composable("schedule") {
+                            com.sanjay.anitrack.next.ui.ScheduleScreen(onOpen = { id -> nav.navigate("anime/$id") })
                         }
                         composable("downloads") { PlaceholderScreen("Downloads", "Offline HLS library (ports from the Kotlin downloader)") }
                         composable("settings") { com.sanjay.anitrack.next.ui.SettingsScreen() }

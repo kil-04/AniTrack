@@ -86,17 +86,21 @@ fun HomeScreen(onOpen: (Anime) -> Unit, onPlay: () -> Unit) {
         }
     }
 
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 16.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+        item {
+            if (trending.isNotEmpty()) HeroBanner(trending.first(), onOpen)
+            else Spacer(Modifier.height(16.dp))
+        }
         if (cw.isNotEmpty()) {
             item { SectionHeader("Continue Watching") }
             item {
                 LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     items(cw.size) { i ->
                         val row = cw[i]
-                        ContinueCard(
+                        ContinueCardWide(
                             row,
                             onResume = {
-                                val key = row.slug ?: return@ContinueCard
+                                val key = row.slug ?: return@ContinueCardWide
                                 scope.launch {
                                     if (key.startsWith("pahe:")) {
                                         val session = key.removePrefix("pahe:")
@@ -105,7 +109,14 @@ fun HomeScreen(onOpen: (Anime) -> Unit, onPlay: () -> Unit) {
                                         com.sanjay.anitrack.next.data.PlaySession.apply {
                                             provider = "animepahe"; animeId = row.animeId
                                             animeTitle = row.title; animeCover = row.cover
+                                            anime = null; anikotoEps = emptyList()
                                             paheSession = session; paheEps = eps; index = idx
+                                        }
+                                        // Fetch full metadata so in-player server switching works.
+                                        scope.launch {
+                                            com.sanjay.anitrack.next.data.AniList.byId(row.animeId)?.let {
+                                                com.sanjay.anitrack.next.data.PlaySession.anime = it
+                                            }
                                         }
                                     } else {
                                         val eps = runCatching { com.sanjay.anitrack.next.data.Anikoto.episodes(key).episodes }.getOrNull() ?: return@launch
@@ -113,7 +124,13 @@ fun HomeScreen(onOpen: (Anime) -> Unit, onPlay: () -> Unit) {
                                         com.sanjay.anitrack.next.data.PlaySession.apply {
                                             provider = "anikoto"; animeId = row.animeId
                                             animeTitle = row.title; animeCover = row.cover
+                                            anime = null; paheEps = emptyList()
                                             slug = key; anikotoEps = eps; index = idx
+                                        }
+                                        scope.launch {
+                                            com.sanjay.anitrack.next.data.AniList.byId(row.animeId)?.let {
+                                                com.sanjay.anitrack.next.data.PlaySession.anime = it
+                                            }
                                         }
                                     }
                                     onPlay()
@@ -142,6 +159,93 @@ fun HomeScreen(onOpen: (Anime) -> Unit, onPlay: () -> Unit) {
             item { SectionHeader(g) }
             item { AnimeRow(list, onOpen) }
         }
+    }
+}
+
+// Full-bleed hero banner (the desktop app's #1 trending spotlight).
+@Composable
+private fun HeroBanner(anime: Anime, onOpen: (Anime) -> Unit) {
+    Box(Modifier.fillMaxWidth().height(260.dp).clickable { onOpen(anime) }) {
+        AsyncImage(
+            model = anime.banner ?: anime.cover,
+            contentDescription = anime.title,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize(),
+        )
+        Box(
+            Modifier.fillMaxSize().background(
+                androidx.compose.ui.graphics.Brush.verticalGradient(
+                    0f to Color.Transparent, 0.55f to Color(0xFF0B0B0F).copy(alpha = 0.65f), 1f to Color(0xFF0B0B0F),
+                ),
+            ),
+        )
+        Column(Modifier.align(Alignment.BottomStart).padding(16.dp)) {
+            Text("TRENDING NOW", style = MaterialTheme.typography.labelSmall, color = Accent, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(4.dp))
+            Text(anime.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(4.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                anime.year?.let { Text("$it", color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.labelMedium) }
+                anime.status?.let { Text(it, color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.labelMedium) }
+            }
+            Spacer(Modifier.height(10.dp))
+            Button(onClick = { onOpen(anime) }, colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black)) {
+                Text("▶  Play Now", fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+// Landscape Continue-Watching card (the desktop app's wide format).
+@Composable
+private fun ContinueCardWide(
+    row: com.sanjay.anitrack.next.data.Db.CwRow,
+    onResume: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Column(Modifier.width(260.dp)) {
+        Box {
+            AsyncImage(
+                model = row.cover,
+                contentDescription = row.title,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .width(260.dp).height(146.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color.White.copy(alpha = 0.06f))
+                    .clickable { onResume() },
+            )
+            // EP badge
+            Box(
+                Modifier.align(Alignment.TopStart).padding(8.dp)
+                    .clip(RoundedCornerShape(6.dp)).background(Accent)
+                    .padding(horizontal = 8.dp, vertical = 2.dp),
+            ) { Text("EP ${if (row.episode % 1f == 0f) row.episode.toInt() else row.episode}", color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold) }
+            // Dismiss ✕
+            Box(
+                Modifier.align(Alignment.TopEnd).padding(8.dp)
+                    .clip(RoundedCornerShape(50)).background(Color.Black.copy(alpha = 0.6f))
+                    .clickable { onDismiss() }.padding(horizontal = 7.dp, vertical = 2.dp),
+            ) { Text("✕", color = Color.White, style = MaterialTheme.typography.labelSmall) }
+            // Play scrim
+            Box(
+                Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp)).clickable { onResume() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(Modifier.clip(RoundedCornerShape(50)).background(Color.Black.copy(alpha = 0.45f)).padding(10.dp)) {
+                    Text("▶", color = Color.White, style = MaterialTheme.typography.titleMedium)
+                }
+            }
+            LinearProgressIndicator(
+                progress = { (row.percent / 100f).coerceIn(0f, 1f) },
+                color = Accent,
+                trackColor = Color.White.copy(alpha = 0.25f),
+                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(3.dp),
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(row.title, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Color.White.copy(alpha = 0.9f))
+        Text("Ep ${if (row.episode % 1f == 0f) row.episode.toInt() else row.episode} · ${row.percent}%", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.4f))
     }
 }
 
@@ -316,6 +420,8 @@ fun DetailScreen(animeId: Int, onPlay: () -> Unit) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     a.genres.take(3).forEach { Chip(it, subtle = true) }
                 }
+                Spacer(Modifier.height(10.dp))
+                ListStatusButton(a)
             }
         }
         if (a.synopsis != null) {
@@ -379,7 +485,9 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: 
                         com.sanjay.anitrack.next.data.PlaySession.apply {
                             provider = "animepahe"; animeId = anime.id
                             animeTitle = anime.title; animeCover = anime.cover
+                            this.anime = anime
                             paheSession = m.source.session; paheEps = m.episodes
+                            anikotoEps = emptyList()
                             index = m.episodes.indexOf(ep).coerceAtLeast(0)
                         }
                         onPlay()
@@ -392,7 +500,9 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: 
                         com.sanjay.anitrack.next.data.PlaySession.apply {
                             provider = "anikoto"; animeId = anime.id
                             animeTitle = anime.title; animeCover = anime.cover
+                            this.anime = anime
                             slug = m.source.slug; anikotoEps = m.list.episodes
+                            paheEps = emptyList()
                             index = m.list.episodes.indexOf(ep).coerceAtLeast(0)
                         }
                         onPlay()
@@ -461,6 +571,55 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: 
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+// ── List status control (detail page "Add to list" / status dropdown) ─────────
+
+@Composable
+private fun ListStatusButton(anime: Anime) {
+    var status by remember { mutableStateOf<String?>(null) }
+    var open by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val labels = mapOf(
+        "watching" to "Watching", "completed" to "Completed", "on_hold" to "On hold",
+        "dropped" to "Dropped", "plan_to_watch" to "Plan to watch",
+    )
+
+    LaunchedEffect(anime.id) {
+        runCatching { status = com.sanjay.anitrack.next.data.Db.listStatusOf(anime.id) }
+    }
+
+    Box {
+        OutlinedButton(onClick = { open = true }) {
+            Text(status?.let { labels[it] } ?: "+ Add to list")
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            for ((key, label) in labels) {
+                DropdownMenuItem(
+                    text = { Text(label) },
+                    onClick = {
+                        open = false
+                        scope.launch {
+                            com.sanjay.anitrack.next.data.Db.setListStatus(anime.id, key, anime.title, anime.cover)
+                            status = key
+                        }
+                    },
+                )
+            }
+            if (status != null) {
+                DropdownMenuItem(
+                    text = { Text("Remove from list", color = Color(0xFFFF6B6B)) },
+                    onClick = {
+                        open = false
+                        scope.launch {
+                            com.sanjay.anitrack.next.data.Db.removeFromList(anime.id)
+                            status = null
+                        }
+                    },
+                )
             }
         }
     }
