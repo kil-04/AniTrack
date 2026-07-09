@@ -71,6 +71,7 @@ fun HomeScreen(onOpen: (Anime) -> Unit, onPlay: () -> Unit) {
     var top10 by remember { mutableStateOf<List<Anime>>(emptyList()) }
     var cw by remember { mutableStateOf<List<com.sanjay.anitrack.next.data.Db.CwRow>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
+    var resumingId by remember { mutableStateOf<Int?>(null) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
@@ -102,41 +103,14 @@ fun HomeScreen(onOpen: (Anime) -> Unit, onPlay: () -> Unit) {
                         val row = cw[i]
                         ContinueCardWide(
                             row,
+                            resuming = resumingId == row.animeId,
                             onResume = {
-                                val key = row.slug ?: return@ContinueCardWide
+                                if (resumingId != null) return@ContinueCardWide
+                                resumingId = row.animeId
                                 scope.launch {
-                                    if (key.startsWith("pahe:")) {
-                                        val session = key.removePrefix("pahe:")
-                                        val eps = runCatching { com.sanjay.anitrack.next.data.Pahe.episodesAll(session) }.getOrNull() ?: return@launch
-                                        val idx = eps.indexOfFirst { it.number == row.episode }.takeIf { it >= 0 } ?: 0
-                                        com.sanjay.anitrack.next.data.PlaySession.apply {
-                                            provider = "animepahe"; animeId = row.animeId
-                                            animeTitle = row.title; animeCover = row.cover
-                                            anime = null; anikotoEps = emptyList()
-                                            paheSession = session; paheEps = eps; index = idx
-                                        }
-                                        // Fetch full metadata so in-player server switching works.
-                                        scope.launch {
-                                            com.sanjay.anitrack.next.data.AniList.byId(row.animeId)?.let {
-                                                com.sanjay.anitrack.next.data.PlaySession.anime = it
-                                            }
-                                        }
-                                    } else {
-                                        val eps = runCatching { com.sanjay.anitrack.next.data.Anikoto.episodes(key).episodes }.getOrNull() ?: return@launch
-                                        val idx = eps.indexOfFirst { it.number == row.episode }.takeIf { it >= 0 } ?: 0
-                                        com.sanjay.anitrack.next.data.PlaySession.apply {
-                                            provider = "anikoto"; animeId = row.animeId
-                                            animeTitle = row.title; animeCover = row.cover
-                                            anime = null; paheEps = emptyList()
-                                            slug = key; anikotoEps = eps; index = idx
-                                        }
-                                        scope.launch {
-                                            com.sanjay.anitrack.next.data.AniList.byId(row.animeId)?.let {
-                                                com.sanjay.anitrack.next.data.PlaySession.anime = it
-                                            }
-                                        }
-                                    }
-                                    onPlay()
+                                    val ok = prepareResume(row)
+                                    resumingId = null
+                                    if (ok) onPlay()
                                 }
                             },
                             onDismiss = {
@@ -264,9 +238,67 @@ private fun HeroBanner(anime: Anime, onOpen: (Anime) -> Unit) {
 }
 
 // Landscape Continue-Watching card (the desktop app's wide format).
+/**
+ * Prepare PlaySession to resume a Continue-Watching row. Uses the stored slug
+ * when present; otherwise (row synced from desktop with a pahe UUID, or no
+ * slug) re-matches the show against a provider via its AniList id. Returns
+ * false only if no source could be found at all.
+ */
+private suspend fun prepareResume(row: com.sanjay.anitrack.next.data.Db.CwRow): Boolean {
+    val key = row.slug
+    val meta = com.sanjay.anitrack.next.data.AniList.byId(row.animeId)
+
+    // 1. Anikoto slug stored → use it directly.
+    if (key != null && !key.startsWith("pahe:")) {
+        val eps = runCatching { com.sanjay.anitrack.next.data.Anikoto.episodes(key).episodes }.getOrNull()
+        if (!eps.isNullOrEmpty()) {
+            com.sanjay.anitrack.next.data.PlaySession.apply {
+                provider = "anikoto"; animeId = row.animeId; animeTitle = row.title; animeCover = row.cover
+                anime = meta; paheEps = emptyList(); slug = key; anikotoEps = eps
+                index = eps.indexOfFirst { it.number == row.episode }.takeIf { it >= 0 } ?: 0
+            }
+            return true
+        }
+    }
+    // 2. AnimePahe session stored → use it.
+    if (key != null && key.startsWith("pahe:")) {
+        val session = key.removePrefix("pahe:")
+        val eps = runCatching { com.sanjay.anitrack.next.data.Pahe.episodesAll(session) }.getOrNull()
+        if (!eps.isNullOrEmpty()) {
+            com.sanjay.anitrack.next.data.PlaySession.apply {
+                provider = "animepahe"; animeId = row.animeId; animeTitle = row.title; animeCover = row.cover
+                anime = meta; anikotoEps = emptyList(); paheSession = session; paheEps = eps
+                index = eps.indexOfFirst { it.number == row.episode }.takeIf { it >= 0 } ?: 0
+            }
+            return true
+        }
+    }
+    // 3. No usable slug → re-match from metadata (Anikoto first, then AnimePahe).
+    if (meta != null) {
+        runCatching { com.sanjay.anitrack.next.data.Anikoto.matchFor(meta) }.getOrNull()?.let { m ->
+            com.sanjay.anitrack.next.data.PlaySession.apply {
+                provider = "anikoto"; animeId = row.animeId; animeTitle = row.title; animeCover = row.cover
+                anime = meta; paheEps = emptyList(); slug = m.source.slug; anikotoEps = m.list.episodes
+                index = m.list.episodes.indexOfFirst { it.number == row.episode }.takeIf { it >= 0 } ?: 0
+            }
+            return true
+        }
+        runCatching { com.sanjay.anitrack.next.data.Pahe.matchFor(meta) }.getOrNull()?.let { m ->
+            com.sanjay.anitrack.next.data.PlaySession.apply {
+                provider = "animepahe"; animeId = row.animeId; animeTitle = row.title; animeCover = row.cover
+                anime = meta; anikotoEps = emptyList(); paheSession = m.source.session; paheEps = m.episodes
+                index = m.episodes.indexOfFirst { it.number == row.episode }.takeIf { it >= 0 } ?: 0
+            }
+            return true
+        }
+    }
+    return false
+}
+
 @Composable
 private fun ContinueCardWide(
     row: com.sanjay.anitrack.next.data.Db.CwRow,
+    resuming: Boolean,
     onResume: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -294,13 +326,17 @@ private fun ContinueCardWide(
                     .clip(RoundedCornerShape(50)).background(Color.Black.copy(alpha = 0.6f))
                     .clickable { onDismiss() }.padding(horizontal = 7.dp, vertical = 2.dp),
             ) { Text("✕", color = Color.White, style = MaterialTheme.typography.labelSmall) }
-            // Play scrim
+            // Play scrim (spinner while the episode list resolves)
             Box(
                 Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp)).clickable { onResume() },
                 contentAlignment = Alignment.Center,
             ) {
-                Box(Modifier.clip(RoundedCornerShape(50)).background(Color.Black.copy(alpha = 0.45f)).padding(10.dp)) {
-                    Text("▶", color = Color.White, style = MaterialTheme.typography.titleMedium)
+                if (resuming) {
+                    CircularProgressIndicator(color = Accent, modifier = Modifier.size(34.dp))
+                } else {
+                    Box(Modifier.clip(RoundedCornerShape(50)).background(Color.Black.copy(alpha = 0.45f)).padding(10.dp)) {
+                        Text("▶", color = Color.White, style = MaterialTheme.typography.titleMedium)
+                    }
                 }
             }
             LinearProgressIndicator(
