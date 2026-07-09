@@ -35,6 +35,63 @@ import java.util.Locale
 
 private val Accent = Color(0xFFE50914)
 
+// ── Nav search box with a live results dropdown (desktop header search) ───────
+
+@Composable
+fun NavSearchBox(modifier: Modifier = Modifier, onOpen: (Anime) -> Unit) {
+    var query by remember { mutableStateOf("") }
+    var results by remember { mutableStateOf<List<Anime>>(emptyList()) }
+    var open by remember { mutableStateOf(false) }
+
+    LaunchedEffect(query) {
+        if (query.isBlank()) { results = emptyList(); open = false; return@LaunchedEffect }
+        delay(350)
+        runCatching { results = AniList.search(query.trim()) }
+        open = results.isNotEmpty()
+    }
+
+    Box(modifier) {
+        OutlinedTextField(
+            value = query, onValueChange = { query = it },
+            placeholder = { Text("Search anime…", style = MaterialTheme.typography.bodySmall) },
+            singleLine = true,
+            leadingIcon = { Text("🔍") },
+            trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Text("✕", color = Color.White.copy(alpha = 0.6f)) } },
+            modifier = Modifier.fillMaxWidth(),
+            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Accent, cursorColor = Accent),
+        )
+        DropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+            properties = androidx.compose.ui.window.PopupProperties(focusable = false),
+            modifier = Modifier.width(360.dp).heightIn(max = 460.dp),
+        ) {
+            results.take(10).forEach { a ->
+                DropdownMenuItem(
+                    onClick = { open = false; query = ""; onOpen(a) },
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            AsyncImage(
+                                model = a.cover, contentDescription = a.title, contentScale = CS.Crop,
+                                modifier = Modifier.width(38.dp).height(52.dp).clip(RoundedCornerShape(5.dp)).background(Color.White.copy(alpha = 0.06f)),
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(a.title, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    a.year?.let { Text("$it", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.5f)) }
+                                    a.score?.let { Text("★ ${it / 10.0}", style = MaterialTheme.typography.labelSmall, color = Color(0xFF7CD07C)) }
+                                    a.status?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.5f)) }
+                                }
+                            }
+                        }
+                    },
+                )
+            }
+        }
+    }
+}
+
 // ── Quick search (instant dropdown-style results, like the desktop header) ────
 
 @Composable
@@ -95,16 +152,21 @@ fun QuickSearchScreen(onOpen: (Anime) -> Unit, onBack: () -> Unit) {
 
 @Composable
 fun ContinueWatchingScreen(onPlay: () -> Unit) {
-    var rows by remember { mutableStateOf<List<Db.CwRow>>(emptyList()) }
+    var allRows by remember { mutableStateOf<List<Db.CwRow>>(emptyList()) }
+    var page by remember { mutableStateOf(0) }
     var resumingId by remember { mutableStateOf<Int?>(null) }
     val scope = rememberCoroutineScope()
-    LaunchedEffect(Unit) { runCatching { rows = Db.continueWatching(100) } }
+    LaunchedEffect(Unit) { runCatching { allRows = Db.continueWatching(1000) } }
+
+    val pageSize = 24
+    val pageCount = ((allRows.size + pageSize - 1) / pageSize).coerceAtLeast(1)
+    val rows = allRows.drop(page * pageSize).take(pageSize)
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         Text("Continue Watching", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(12.dp))
-        if (rows.isEmpty()) Text("Nothing in progress.", color = Color.White.copy(alpha = 0.4f))
-        LazyVerticalGrid(columns = GridCells.Adaptive(150.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        if (allRows.isEmpty()) Text("Nothing in progress.", color = Color.White.copy(alpha = 0.4f))
+        LazyVerticalGrid(columns = GridCells.Adaptive(150.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.weight(1f)) {
             items(rows.size) { i ->
                 val row = rows[i]
                 Column(Modifier.clickable {
@@ -136,6 +198,20 @@ fun ContinueWatchingScreen(onPlay: () -> Unit) {
                 }
             }
         }
+        if (pageCount > 1) Pager(page, pageCount) { page = it }
+    }
+}
+
+@Composable
+private fun Pager(page: Int, pageCount: Int, onPage: (Int) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 10.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TextButton(onClick = { if (page > 0) onPage(page - 1) }, enabled = page > 0) { Text("‹") }
+        Text("${page + 1} / $pageCount", color = Color.White.copy(alpha = 0.7f))
+        TextButton(onClick = { if (page + 1 < pageCount) onPage(page + 1) }, enabled = page + 1 < pageCount) { Text("›") }
     }
 }
 
@@ -144,11 +220,18 @@ fun ContinueWatchingScreen(onPlay: () -> Unit) {
 @Composable
 fun LatestScreen(onOpen: (Anime) -> Unit) {
     var list by remember { mutableStateOf<List<AniList.Airing>>(emptyList()) }
-    LaunchedEffect(Unit) { runCatching { list = AniList.recentEpisodes() } }
+    var page by remember { mutableStateOf(1) }
+    var hasNext by remember { mutableStateOf(false) }
+    LaunchedEffect(page) {
+        runCatching {
+            val (l, hn) = AniList.recentEpisodes(page)
+            list = l; hasNext = hn
+        }
+    }
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         Text("Latest Episodes", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(12.dp))
-        LazyVerticalGrid(columns = GridCells.Adaptive(180.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        LazyVerticalGrid(columns = GridCells.Adaptive(180.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.weight(1f)) {
             items(list.size) { i ->
                 val a = list[i]
                 Column(Modifier.clickable { onOpen(a.anime) }) {
@@ -165,6 +248,11 @@ fun LatestScreen(onOpen: (Anime) -> Unit) {
                     Text(a.anime.title, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis, color = Color.White.copy(alpha = 0.85f))
                 }
             }
+        }
+        Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = { if (page > 1) page-- }, enabled = page > 1) { Text("‹ Prev") }
+            Text("Page $page", color = Color.White.copy(alpha = 0.7f))
+            TextButton(onClick = { if (hasNext) page++ }, enabled = hasNext) { Text("Next ›") }
         }
     }
 }

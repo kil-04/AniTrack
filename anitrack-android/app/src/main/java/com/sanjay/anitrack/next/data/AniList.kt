@@ -89,8 +89,8 @@ object AniList {
 
     suspend fun trending(): List<Anime> = mediaList(
         gql(
-            """query { Page(perPage: 20) {
-                media(type: ANIME, sort: TRENDING_DESC, status_in: [RELEASING, NOT_YET_RELEASED]) { $MEDIA_FIELDS }
+            """query { Page(perPage: 30) {
+                media(type: ANIME, sort: TRENDING_DESC) { $MEDIA_FIELDS }
             } }""",
             JSONObject(),
         )
@@ -178,29 +178,33 @@ object AniList {
         )
     )
 
-    /** Recently aired episodes (the desktop app's "Latest Episodes" row). */
-    suspend fun recentEpisodes(): List<Airing> {
+    /** Recently aired episodes (the desktop app's "Latest Episodes"), paginated.
+     *  Returns the items and whether another page exists. */
+    suspend fun recentEpisodes(page: Int = 1): Pair<List<Airing>, Boolean> {
         val now = System.currentTimeMillis() / 1000
         val data = gql(
-            """query(${'$'}to: Int) {
-                Page(perPage: 30) {
+            """query(${'$'}to: Int, ${'$'}page: Int) {
+                Page(page: ${'$'}page, perPage: 30) {
+                    pageInfo { hasNextPage }
                     airingSchedules(airingAt_lesser: ${'$'}to, sort: TIME_DESC) {
                         airingAt episode
                         media { $MEDIA_FIELDS }
                     }
                 }
             }""",
-            JSONObject().put("to", now),
+            JSONObject().put("to", now).put("page", page),
         )
-        val arr = data.getJSONObject("Page").getJSONArray("airingSchedules")
+        val pg = data.getJSONObject("Page")
+        val arr = pg.getJSONArray("airingSchedules")
         val seen = HashSet<Int>()
-        return (0 until arr.length()).mapNotNull { i ->
+        val list = (0 until arr.length()).mapNotNull { i ->
             val o = arr.getJSONObject(i)
             val m = o.optJSONObject("media") ?: return@mapNotNull null
             if (m.optBoolean("isAdult", false)) return@mapNotNull null
             if (!seen.add(m.optInt("id"))) return@mapNotNull null
             Airing(Anime.fromMedia(m), o.optInt("episode"), o.optLong("airingAt"))
         }
+        return list to pg.getJSONObject("pageInfo").optBoolean("hasNextPage", false)
     }
 
     /** Top 10 by trending (the desktop app's Top 10 rail). */

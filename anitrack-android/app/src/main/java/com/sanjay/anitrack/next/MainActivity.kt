@@ -122,6 +122,12 @@ fun AppShell() {
                         )
                     }
                     Spacer(Modifier.weight(1f))
+                    // Inline search with a live results dropdown (desktop-style).
+                    com.sanjay.anitrack.next.ui.NavSearchBox(
+                        modifier = Modifier.width(280.dp),
+                        onOpen = openDetail,
+                    )
+                    Spacer(Modifier.width(12.dp))
                     // Profile → Settings
                     Box(
                         Modifier.size(34.dp).clip(RoundedCornerShape(50)).background(Accent)

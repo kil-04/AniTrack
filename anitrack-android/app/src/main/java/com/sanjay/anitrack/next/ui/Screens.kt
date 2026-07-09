@@ -103,7 +103,7 @@ fun HomeScreen(
         // Rows stream in as each lands (the client serializes requests anyway).
         runCatching { trending = AniList.trending() }
         loading = false
-        runCatching { latest = AniList.recentEpisodes() }
+        runCatching { latest = AniList.recentEpisodes().first }
         runCatching { topAiring = AniList.topAiring() }
         runCatching { popular = AniList.mostPopular() }
         // Anikoto Top 10 (Day/Week/Month) — same source as the desktop app.
@@ -124,7 +124,7 @@ fun HomeScreen(
             }
         }
         item {
-            if (trending.isNotEmpty()) HeroCarousel(trending.take(6), onOpen)
+            if (trending.isNotEmpty()) HeroCarousel(trending.take(10), onOpen)
             else Spacer(Modifier.height(16.dp))
         }
         if (cw.isNotEmpty()) {
@@ -588,19 +588,22 @@ fun SearchScreen(onOpen: (Anime) -> Unit) {
                 colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Accent, cursorColor = Accent),
             )
             Spacer(Modifier.height(10.dp))
-            // Filter dropdowns
+            // Filter dropdowns — auto-apply on any change (no need to press Filter).
+            val apply: () -> Unit = { page = 1; reload++ }
             FlowRowFilters(
-                genre = genre, onGenre = { genre = it },
-                format = format, onFormat = { format = it },
-                status = status, onStatus = { status = it },
-                season = season, onSeason = { season = it },
-                year = year, onYear = { year = it },
-                sort = sort, onSort = { sort = it },
-                onApply = { page = 1; reload++ },
+                genre = genre, onGenre = { genre = it; apply() },
+                format = format, onFormat = { format = it; apply() },
+                status = status, onStatus = { status = it; apply() },
+                season = season, onSeason = { season = it; apply() },
+                year = year, onYear = { year = it; apply() },
+                sort = sort, onSort = { sort = it; apply() },
+                onApply = apply,
             )
             Spacer(Modifier.height(12.dp))
             if (searching && results.isEmpty()) {
                 LinearProgressIndicator(Modifier.fillMaxWidth(), color = Accent)
+            } else if (!searching && results.isEmpty()) {
+                Text("No results — try different filters.", color = Color.White.copy(alpha = 0.4f))
             }
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(120.dp),
