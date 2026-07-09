@@ -100,6 +100,7 @@ fun PlayerScreen(onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     var index by remember { mutableStateOf(PlaySession.index) }
     var provider by remember { mutableStateOf(PlaySession.provider) }
+    var subType by remember { mutableStateOf(PlaySession.subType) }
     var switching by remember { mutableStateOf(false) }
     var switchError by remember { mutableStateOf<String?>(null) }
     var retry by remember { mutableStateOf(0) }
@@ -187,9 +188,10 @@ fun PlayerScreen(onBack: () -> Unit) {
     }
 
     var lastPlayedIndex by remember { mutableStateOf<Int?>(null) }
-    // `provider` participates so a server switch re-resolves even at the same index.
-    LaunchedEffect(index, retry, provider) {
+    // `provider`/`subType` participate so switching them re-resolves at the same index.
+    LaunchedEffect(index, retry, provider, subType) {
         if (index >= PlaySession.count) return@LaunchedEffect
+        PlaySession.subType = subType
         val epNum = PlaySession.episodeNumber(index)
         // Save the outgoing episode's position before switching.
         lastPlayedIndex?.takeIf { it != index }?.let { saveProgress(player, it) }
@@ -336,6 +338,7 @@ fun PlayerScreen(onBack: () -> Unit) {
             PlayerEpisodePanel(
                 modifier = mod,
                 provider = provider,
+                subType = subType,
                 current = index,
                 watched = watchedMap,
                 switching = switching,
@@ -343,6 +346,7 @@ fun PlayerScreen(onBack: () -> Unit) {
                 canSwitch = PlaySession.canSwitchServer,
                 onSelect = { index = it },
                 onServer = switchTo,
+                onSubType = { subType = it },
             )
         }
 
@@ -621,6 +625,7 @@ fun PlayerScreen(onBack: () -> Unit) {
 private fun PlayerEpisodePanel(
     modifier: Modifier,
     provider: String,
+    subType: String,
     current: Int,
     watched: Map<Float, Int>,
     switching: Boolean,
@@ -628,6 +633,7 @@ private fun PlayerEpisodePanel(
     canSwitch: Boolean,
     onSelect: (Int) -> Unit,
     onServer: (String) -> Unit,
+    onSubType: (String) -> Unit,
 ) {
     val count = PlaySession.count
     val RANGE = 100
@@ -679,6 +685,20 @@ private fun PlayerEpisodePanel(
                 color = Color(0xFFFF6B6B),
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp),
             )
+        }
+        // SUB TYPE (Anikoto only, like the desktop app).
+        if (provider == "anikoto") {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "SUB TYPE",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(alpha = 0.45f),
+                modifier = Modifier.padding(start = 14.dp, bottom = 6.dp),
+            )
+            Row(Modifier.padding(horizontal = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = subType == "soft", onClick = { onSubType("soft") }, label = { Text("Soft Sub") })
+                FilterChip(selected = subType == "hard", onClick = { onSubType("hard") }, label = { Text("Hard Sub") })
+            }
         }
         Spacer(Modifier.height(8.dp))
 

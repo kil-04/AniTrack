@@ -140,6 +140,44 @@ object AniList {
         }
     }
 
+    /** Filtered search (the desktop app's Filter page). Any arg may be null. */
+    suspend fun advancedSearch(
+        query: String?, genre: String?, year: Int?, season: String?,
+        format: String?, status: String?, sort: String, page: Int,
+    ): Pair<List<Anime>, Boolean> {
+        val args = mutableListOf("\$page: Int", "\$sort: [MediaSort]")
+        val mArgs = mutableListOf("type: ANIME", "isAdult: false", "sort: \$sort")
+        val vars = JSONObject().put("page", page).put("sort", org.json.JSONArray().put(sort))
+        query?.takeIf { it.isNotBlank() }?.let { args += "\$q: String"; mArgs += "search: \$q"; vars.put("q", it) }
+        genre?.let { args += "\$genre: String"; mArgs += "genre: \$genre"; vars.put("genre", it) }
+        year?.let { args += "\$year: Int"; mArgs += "seasonYear: \$year"; vars.put("year", it) }
+        season?.let { args += "\$season: MediaSeason"; mArgs += "season: \$season"; vars.put("season", it) }
+        format?.let { args += "\$format: MediaFormat"; mArgs += "format: \$format"; vars.put("format", it) }
+        status?.let { args += "\$status: MediaStatus"; mArgs += "status: \$status"; vars.put("status", it) }
+        val data = gql(
+            """query(${args.joinToString(", ")}) {
+                Page(page: ${'$'}page, perPage: 30) {
+                    pageInfo { hasNextPage }
+                    media(${mArgs.joinToString(", ")}) { $MEDIA_FIELDS }
+                }
+            }""",
+            vars,
+        )
+        val page1 = data.getJSONObject("Page")
+        val arr = page1.getJSONArray("media")
+        val list = (0 until arr.length()).map { Anime.fromMedia(arr.getJSONObject(it)) }
+        return list to page1.getJSONObject("pageInfo").optBoolean("hasNextPage", false)
+    }
+
+    suspend fun topRated(): List<Anime> = mediaList(
+        gql(
+            """query { Page(perPage: 12) {
+                media(type: ANIME, sort: SCORE_DESC, isAdult: false) { $MEDIA_FIELDS }
+            } }""",
+            JSONObject(),
+        )
+    )
+
     /** Recently aired episodes (the desktop app's "Latest Episodes" row). */
     suspend fun recentEpisodes(): List<Airing> {
         val now = System.currentTimeMillis() / 1000

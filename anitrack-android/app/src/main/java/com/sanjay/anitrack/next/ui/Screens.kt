@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
@@ -391,43 +392,121 @@ private fun RowPlaceholder() {
 
 // ── Search ────────────────────────────────────────────────────────────────────
 
+private val GENRES = listOf("Action", "Adventure", "Comedy", "Drama", "Fantasy", "Horror", "Mahou Shoujo", "Mecha", "Music", "Mystery", "Psychological", "Romance", "Sci-Fi", "Slice of Life", "Sports", "Supernatural", "Thriller")
+private val FORMATS = mapOf("Any type" to null, "TV" to "TV", "Movie" to "MOVIE", "OVA" to "OVA", "ONA" to "ONA", "Special" to "SPECIAL")
+private val STATUSES_F = mapOf("Any status" to null, "Airing" to "RELEASING", "Finished" to "FINISHED", "Upcoming" to "NOT_YET_RELEASED")
+private val SORTS = mapOf("Trending" to "TRENDING_DESC", "Popularity" to "POPULARITY_DESC", "Score" to "SCORE_DESC", "Newest" to "START_DATE_DESC", "Title" to "TITLE_ROMAJI")
+
 @Composable
 fun SearchScreen(onOpen: (Anime) -> Unit) {
     var query by remember { mutableStateOf("") }
-    var results by remember { mutableStateOf<List<Anime>>(emptyList()) }
-    var searching by remember { mutableStateOf(false) }
+    var genre by remember { mutableStateOf<String?>(null) }
+    var year by remember { mutableStateOf<Int?>(null) }
+    var format by remember { mutableStateOf<String?>(null) }
+    var status by remember { mutableStateOf<String?>(null) }
+    var sort by remember { mutableStateOf("TRENDING_DESC") }
+    var page by remember { mutableStateOf(1) }
+    var hasNext by remember { mutableStateOf(false) }
 
-    LaunchedEffect(query) {
-        if (query.isBlank()) { results = emptyList(); return@LaunchedEffect }
-        delay(400) // debounce
+    var results by remember { mutableStateOf<List<Anime>>(emptyList()) }
+    var topRated by remember { mutableStateOf<List<Anime>>(emptyList()) }
+    var searching by remember { mutableStateOf(false) }
+    var reload by remember { mutableStateOf(0) }
+
+    LaunchedEffect(Unit) { runCatching { topRated = AniList.topRated() } }
+    LaunchedEffect(reload, page) {
         searching = true
-        runCatching { results = AniList.search(query.trim()) }
+        runCatching {
+            val (r, hn) = AniList.advancedSearch(query, genre, year, null, format, status, sort, page)
+            results = r; hasNext = hn
+        }
         searching = false
     }
 
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            placeholder = { Text("Search anime…") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = Accent,
-                cursorColor = Accent,
-            ),
-        )
-        Spacer(Modifier.height(12.dp))
-        if (searching) {
-            LinearProgressIndicator(Modifier.fillMaxWidth(), color = Accent)
+    val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 820
+
+    Row(Modifier.fillMaxSize()) {
+        Column(Modifier.weight(1f).padding(16.dp)) {
+            Text("Filter", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(12.dp))
+            OutlinedTextField(
+                value = query, onValueChange = { query = it },
+                placeholder = { Text("Search…") }, singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Accent, cursorColor = Accent),
+            )
+            Spacer(Modifier.height(10.dp))
+            // Filter dropdowns
+            FlowRowFilters(
+                genre = genre, onGenre = { genre = it },
+                format = format, onFormat = { format = it },
+                status = status, onStatus = { status = it },
+                year = year, onYear = { year = it },
+                sort = sort, onSort = { sort = it },
+                onApply = { page = 1; reload++ },
+            )
+            Spacer(Modifier.height(12.dp))
+            if (searching && results.isEmpty()) {
+                LinearProgressIndicator(Modifier.fillMaxWidth(), color = Accent)
+            }
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(120.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                modifier = Modifier.weight(1f),
+            ) {
+                items(results, key = { it.id }) { a -> AnimeCard(a, onOpen) }
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.Center) {
+                        if (page > 1) TextButton(onClick = { page-- }) { Text("‹ Prev") }
+                        Text("Page $page", Modifier.align(Alignment.CenterVertically), color = Color.White.copy(alpha = 0.6f))
+                        if (hasNext) TextButton(onClick = { page++ }) { Text("Next ›") }
+                    }
+                }
+            }
         }
-        LazyVerticalGrid(
-            columns = GridCells.Adaptive(126.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            items(results, key = { it.id }) { a -> AnimeCard(a, onOpen) }
+        if (wide && topRated.isNotEmpty()) {
+            Column(Modifier.width(300.dp).fillMaxHeight().padding(16.dp)) {
+                Text("Top rated", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(12.dp))
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    items(topRated.size) { i -> Top10Row(i + 1, topRated[i], onOpen) }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun FlowRowFilters(
+    genre: String?, onGenre: (String?) -> Unit,
+    format: String?, onFormat: (String?) -> Unit,
+    status: String?, onStatus: (String?) -> Unit,
+    year: Int?, onYear: (Int?) -> Unit,
+    sort: String, onSort: (String) -> Unit,
+    onApply: () -> Unit,
+) {
+    val years = (2026 downTo 1990).map { it }
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterDropdown("Genre", genre ?: "Any genre", listOf("Any genre" to null) + GENRES.map { it to it }, onGenre)
+        FilterDropdown("Type", FORMATS.entries.firstOrNull { it.value == format }?.key ?: "Any type", FORMATS.map { it.key to it.value }, onFormat)
+        FilterDropdown("Status", STATUSES_F.entries.firstOrNull { it.value == status }?.key ?: "Any status", STATUSES_F.map { it.key to it.value }, onStatus)
+        FilterDropdown("Year", year?.toString() ?: "Any year", listOf("Any year" to null) + years.map { it.toString() to it }, onYear)
+        FilterDropdown("Sort", SORTS.entries.firstOrNull { it.value == sort }?.key ?: "Trending", SORTS.map { it.key to it.value }, { onSort(it ?: "TRENDING_DESC") })
+        Button(onClick = onApply, colors = ButtonDefaults.buttonColors(containerColor = Accent)) { Text("Filter") }
+    }
+}
+
+@Composable
+private fun <T> FilterDropdown(label: String, current: String, options: List<Pair<String, T>>, onPick: (T) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(onClick = { open = true }) { Text("$label: $current", style = MaterialTheme.typography.labelMedium) }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            options.forEach { (name, value) ->
+                DropdownMenuItem(text = { Text(name) }, onClick = { onPick(value); open = false })
+            }
         }
     }
 }

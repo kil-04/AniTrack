@@ -20,6 +20,7 @@ object PlaySession {
     // Anikoto
     var slug: String = ""
     var anikotoEps: List<Anikoto.Episode> = emptyList()
+    var subType: String = "soft"   // "soft" | "hard" (anikoto only)
 
     // AnimePahe
     var paheSession: String = ""
@@ -103,7 +104,7 @@ object PlaySession {
             // UA must match the kwik WebView's (session is fingerprint-bound).
             Resolved(s.url, s.referer, Pahe.MOBILE_UA, emptyList(), null, null, null, null)
         } else {
-            val s = Anikoto.resolve(slug, anikotoEps[i])
+            val s = Anikoto.resolve(slug, anikotoEps[i], preferHardSub = subType == "hard")
             Resolved(
                 s.url, s.referer,
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
