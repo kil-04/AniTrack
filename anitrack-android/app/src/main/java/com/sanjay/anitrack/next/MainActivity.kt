@@ -35,9 +35,10 @@ import androidx.navigation.compose.rememberNavController
 // media3 player → downloads → gist sync. The provider/downloader/DB logic
 // ports from the proven Kotlin plugins in ../android.
 
-// Desktop parity: the app background is pure black (index.css #000000).
+// Desktop parity: the app background is pure black (index.css #000000),
+// and the top/bottom bars blend into it (no gray strip).
 private val Bg = Color(0xFF000000)
-private val BgElev = Color(0xFF0E0E12)
+private val BgElev = Color(0xFF000000)
 private val Accent = Color(0xFFE50914)
 
 private val DarkColors = darkColorScheme(
@@ -65,6 +66,7 @@ class MainActivity : ComponentActivity() {
         com.sanjay.anitrack.next.data.Db.init(applicationContext)
         com.sanjay.anitrack.next.data.GistSync.init(applicationContext)
         com.sanjay.anitrack.next.data.Downloads.init(applicationContext)
+        com.sanjay.anitrack.next.data.Mal.init(applicationContext)
         com.sanjay.anitrack.next.data.Pahe.attach(this)
         // ExoPlayer's HttpURLConnection stack consults this for cookies — the
         // pahe/kwik CDN rejects segment requests without the WebView's cookies.
@@ -191,7 +193,11 @@ fun AppShell() {
                     composable("latest") { com.sanjay.anitrack.next.ui.LatestScreen(onOpen = openDetail) }
                     composable("anime/{id}") { entry ->
                         val id = entry.arguments?.getString("id")?.toIntOrNull() ?: 0
-                        com.sanjay.anitrack.next.ui.DetailScreen(id, onPlay = { nav.navigate("player") })
+                        com.sanjay.anitrack.next.ui.DetailScreen(
+                            id,
+                            onPlay = { nav.navigate("player") },
+                            onOpenAnime = { other -> nav.navigate("anime/$other") },
+                        )
                     }
                     composable("player") {
                         com.sanjay.anitrack.next.ui.PlayerScreen(

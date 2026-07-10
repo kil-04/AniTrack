@@ -18,6 +18,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.PlayArrow
@@ -743,7 +744,7 @@ private fun <T> FilterDropdown(placeholder: String, current: String?, options: L
 // ── Detail ────────────────────────────────────────────────────────────────────
 
 @Composable
-fun DetailScreen(animeId: Int, onPlay: () -> Unit) {
+fun DetailScreen(animeId: Int, onPlay: () -> Unit, onOpenAnime: (Int) -> Unit = {}) {
     var anime by remember { mutableStateOf<Anime?>(null) }
     LaunchedEffect(animeId) { anime = AniList.byId(animeId) }
 
@@ -809,8 +810,85 @@ fun DetailScreen(animeId: Int, onPlay: () -> Unit) {
             )
         }
         Spacer(Modifier.height(20.dp))
+        WatchOrderSection(a, onOpenAnime)
         EpisodesSection(a, onPlay)
         Spacer(Modifier.height(32.dp))
+    }
+}
+
+// ── Watch Order (franchise chain: PREQUEL hops back, SEQUEL forward) ──────────
+
+private val watchOrderCache = HashMap<Int, List<Anime>>()
+
+@Composable
+private fun WatchOrderSection(anime: Anime, onOpenAnime: (Int) -> Unit) {
+    var chain by remember(anime.id) { mutableStateOf(watchOrderCache[anime.id] ?: emptyList()) }
+
+    LaunchedEffect(anime.id) {
+        if (chain.isNotEmpty()) return@LaunchedEffect
+        runCatching {
+            fun pick(edges: List<AniList.Relation>, type: String): Anime? {
+                val cands = edges.filter { it.type == type && it.anime.id > 0 }
+                return (cands.firstOrNull { it.anime.format == "TV" } ?: cands.firstOrNull())?.anime
+            }
+            val before = ArrayDeque<Anime>()
+            var cur = anime
+            var guard = 0
+            while (guard++ < 10) {
+                val prev = pick(AniList.relations(cur.id), "PREQUEL") ?: break
+                if (before.any { it.id == prev.id } || prev.id == anime.id) break
+                before.addFirst(prev); cur = prev
+            }
+            val after = mutableListOf<Anime>()
+            cur = anime; guard = 0
+            while (guard++ < 10) {
+                val next = pick(AniList.relations(cur.id), "SEQUEL") ?: break
+                if (after.any { it.id == next.id } || next.id == anime.id) break
+                after.add(next); cur = next
+            }
+            val full = before.toList() + anime + after
+            if (full.size > 1) {
+                if (watchOrderCache.size > 200) watchOrderCache.clear()
+                full.forEach { watchOrderCache[it.id] = full }
+                chain = full
+            }
+        }
+    }
+
+    if (chain.size < 2) return
+    Column(Modifier.padding(bottom = 20.dp)) {
+        Text("Watch Order", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp))
+        Spacer(Modifier.height(10.dp))
+        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            items(chain.size) { i ->
+                val m = chain[i]
+                val isHere = m.id == anime.id
+                Column(Modifier.width(120.dp).clickable(enabled = !isHere) { onOpenAnime(m.id) }) {
+                    Box(
+                        Modifier.width(120.dp).height(170.dp).clip(RoundedCornerShape(10.dp))
+                            .background(Color.White.copy(alpha = 0.06f))
+                            .then(if (isHere) Modifier.border(2.dp, Accent, RoundedCornerShape(10.dp)) else Modifier),
+                    ) {
+                        AsyncImage(model = m.cover, contentDescription = m.title, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                        // Number badge
+                        Box(
+                            Modifier.align(Alignment.TopStart).padding(6.dp)
+                                .size(24.dp).clip(RoundedCornerShape(50)).background(Accent),
+                            contentAlignment = Alignment.Center,
+                        ) { Text("${i + 1}", color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold) }
+                        if (isHere) {
+                            Box(
+                                Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Accent).padding(vertical = 3.dp),
+                                contentAlignment = Alignment.Center,
+                            ) { Text("YOU ARE HERE", color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, letterSpacing = androidx.compose.ui.unit.TextUnit(1f, androidx.compose.ui.unit.TextUnitType.Sp)) }
+                        }
+                    }
+                    Spacer(Modifier.height(5.dp))
+                    Text(m.title, style = MaterialTheme.typography.labelMedium, maxLines = 2, overflow = TextOverflow.Ellipsis, color = Color.White.copy(alpha = 0.85f))
+                    m.year?.let { Text("$it", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.4f)) }
+                }
+            }
+        }
     }
 }
 
@@ -955,7 +1033,8 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: 
             val ranges = epUi.chunked(100)
             val current = ranges.getOrElse(rangeStart) { emptyList() }
 
-            // Action buttons (Open Player · Download range · Range).
+            // Action buttons (Open Player · Download N · Range), desktop style.
+            var rangeDialog by remember { mutableStateOf(false) }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Button(
                     onClick = { (epUi.firstOrNull { (watched[it.number] ?: 0) < 85 } ?: epUi.first()).play() },
@@ -965,15 +1044,60 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: 
                     Icon(Icons.Filled.PlayArrow, null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp)); Text("Open Player", fontWeight = FontWeight.Bold)
                 }
-                OutlinedButton(
-                    onClick = {
-                        current.forEach { ep -> com.sanjay.anitrack.next.data.Downloads.enqueue(anime.id, ep.number, anime.title, anime.cover, ep.resolveForDownload) }
-                    },
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                Row(
+                    Modifier.height(42.dp).clip(RoundedCornerShape(10.dp)).background(Color.White.copy(alpha = 0.08f))
+                        .clickable {
+                            current.forEach { ep -> com.sanjay.anitrack.next.data.Downloads.enqueue(anime.id, ep.number, anime.title, anime.cover, ep.resolveForDownload) }
+                        }
+                        .padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(Icons.Filled.FileDownload, null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp)); Text("Download ${current.size}")
+                    Icon(Icons.Filled.FileDownload, null, tint = Color.White, modifier = Modifier.size(17.dp))
+                    Spacer(Modifier.width(7.dp)); Text("Download ${current.size}", color = Color.White, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
                 }
+                Row(
+                    Modifier.height(42.dp).clip(RoundedCornerShape(10.dp)).background(Color.White.copy(alpha = 0.08f))
+                        .clickable { rangeDialog = true }
+                        .padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Filled.FileDownload, null, tint = Color.White, modifier = Modifier.size(17.dp))
+                    Spacer(Modifier.width(7.dp)); Text("Range", color = Color.White, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            // Range download dialog (desktop's custom episode range).
+            if (rangeDialog) {
+                var fromTxt by remember { mutableStateOf("") }
+                var toTxt by remember { mutableStateOf("") }
+                AlertDialog(
+                    onDismissRequest = { rangeDialog = false },
+                    title = { Text("Download a range") },
+                    text = {
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedTextField(
+                                value = fromTxt, onValueChange = { fromTxt = it.filter { c -> c.isDigit() }.take(4) },
+                                label = { Text("From") }, singleLine = true, modifier = Modifier.weight(1f),
+                                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Accent, cursorColor = Accent),
+                            )
+                            OutlinedTextField(
+                                value = toTxt, onValueChange = { toTxt = it.filter { c -> c.isDigit() }.take(4) },
+                                label = { Text("To") }, singleLine = true, modifier = Modifier.weight(1f),
+                                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Accent, cursorColor = Accent),
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            val from = fromTxt.toIntOrNull() ?: 1
+                            val to = toTxt.toIntOrNull() ?: from
+                            epUi.filter { it.number >= from && it.number <= to }.forEach { ep ->
+                                com.sanjay.anitrack.next.data.Downloads.enqueue(anime.id, ep.number, anime.title, anime.cover, ep.resolveForDownload)
+                            }
+                            rangeDialog = false
+                        }) { Text("Download", color = Accent) }
+                    },
+                    dismissButton = { TextButton(onClick = { rangeDialog = false }) { Text("Cancel") } },
+                )
             }
             Spacer(Modifier.height(12.dp))
 
@@ -1042,13 +1166,15 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: 
                             com.sanjay.anitrack.next.data.Downloads.Status.QUEUED ->
                                 Text("queued…", color = Color.White.copy(alpha = 0.5f), style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(end = 12.dp))
                             else -> Row(
-                                Modifier.clip(RoundedCornerShape(8.dp)).background(Color.White.copy(alpha = 0.08f))
+                                Modifier.clip(RoundedCornerShape(8.dp))
+                                    .background(Color.White.copy(alpha = 0.04f))
+                                    .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(8.dp))
                                     .clickable { com.sanjay.anitrack.next.data.Downloads.enqueue(anime.id, ep.number, anime.title, anime.cover, ep.resolveForDownload) }
                                     .padding(horizontal = 12.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Icon(Icons.Filled.FileDownload, null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(6.dp)); Text("Download", color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.labelMedium)
+                                Icon(Icons.Filled.Download, null, tint = Color.White.copy(alpha = 0.85f), modifier = Modifier.size(15.dp))
+                                Spacer(Modifier.width(6.dp)); Text("Download", color = Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.labelMedium)
                             }
                         }
                     }
@@ -1087,6 +1213,11 @@ private fun ListStatusButton(anime: Anime) {
                         scope.launch {
                             com.sanjay.anitrack.next.data.Db.setListStatus(anime.id, key, anime.title, anime.cover)
                             status = key
+                            // Two-way MAL sync: push the change (fire-and-forget).
+                            val malId = anime.malId
+                            if (malId != null && com.sanjay.anitrack.next.data.Mal.isConnected) {
+                                launch { runCatching { com.sanjay.anitrack.next.data.Mal.pushStatus(malId, key) } }
+                            }
                         }
                     },
                 )
@@ -1119,6 +1250,9 @@ fun SettingsScreen() {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
         Text("Settings", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(24.dp))
+
+        MalCard()
+        Spacer(Modifier.height(28.dp))
 
         Text("Cross-device Sync", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         Text(

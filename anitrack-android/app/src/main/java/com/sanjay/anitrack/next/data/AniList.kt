@@ -267,6 +267,47 @@ object AniList {
         return out
     }
 
+    /** Map MAL ids → AniList entries in batches (for the MAL list import). */
+    suspend fun byMalIds(malIds: List<Int>): List<Anime> {
+        val out = mutableListOf<Anime>()
+        for (chunk in malIds.distinct().chunked(50)) {
+            runCatching {
+                val data = gql(
+                    """query(${'$'}ids: [Int]) {
+                        Page(perPage: 50) { media(idMal_in: ${'$'}ids, type: ANIME) { $MEDIA_FIELDS } }
+                    }""",
+                    JSONObject().put("ids", org.json.JSONArray(chunk)),
+                )
+                val arr = data.getJSONObject("Page").getJSONArray("media")
+                for (i in 0 until arr.length()) out += Anime.fromMedia(arr.getJSONObject(i))
+            }
+        }
+        return out
+    }
+
+    data class Relation(val type: String, val anime: Anime)
+
+    /** Relation edges for the Watch Order chain (PREQUEL/SEQUEL hops). */
+    suspend fun relations(id: Int): List<Relation> = try {
+        val data = gql(
+            """query(${'$'}id: Int) {
+                Media(id: ${'$'}id, type: ANIME) {
+                    relations { edges { relationType node { type $MEDIA_FIELDS } } }
+                }
+            }""",
+            JSONObject().put("id", id),
+        )
+        val edges = data.getJSONObject("Media").getJSONObject("relations").getJSONArray("edges")
+        (0 until edges.length()).mapNotNull { i ->
+            val e = edges.getJSONObject(i)
+            val node = e.optJSONObject("node") ?: return@mapNotNull null
+            if (node.optString("type") != "ANIME") return@mapNotNull null   // skip manga nodes
+            Relation(e.optString("relationType"), Anime.fromMedia(node))
+        }
+    } catch (e: Exception) {
+        emptyList()
+    }
+
     suspend fun byId(id: Int): Anime? = try {
         val data = gql(
             """query(${'$'}id: Int) { Media(id: ${'$'}id, type: ANIME) { $MEDIA_FIELDS } }""",
