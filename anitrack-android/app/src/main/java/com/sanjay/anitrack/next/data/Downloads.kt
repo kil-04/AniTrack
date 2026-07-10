@@ -198,7 +198,7 @@ object Downloads {
     // TLS fingerprint, so segment/playlist fetches go through Cronet too.
     private var cronet: org.chromium.net.CronetEngine? = null
     private var cronetTried = false
-    private val cronetExecutor by lazy { java.util.concurrent.Executors.newFixedThreadPool(6) }
+    private val cronetExecutor by lazy { java.util.concurrent.Executors.newCachedThreadPool() }
     private fun cronetEngine(): org.chromium.net.CronetEngine? {
         if (!cronetTried) {
             cronetTried = true

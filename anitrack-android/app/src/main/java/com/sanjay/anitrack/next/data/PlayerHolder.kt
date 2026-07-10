@@ -24,7 +24,9 @@ object PlayerHolder {
     // Chromium network stack for CDN requests (built once; null → fallback).
     private var cronet: org.chromium.net.CronetEngine? = null
     private var cronetTried = false
-    private val cronetExecutor by lazy { java.util.concurrent.Executors.newFixedThreadPool(4) }
+    // Unbounded: HLS loads manifest + key + several segments concurrently; a
+    // small fixed pool can starve callbacks and hang a seek's re-request.
+    private val cronetExecutor by lazy { java.util.concurrent.Executors.newCachedThreadPool() }
     private fun cronetEngine(ctx: Context): org.chromium.net.CronetEngine? {
         if (!cronetTried) {
             cronetTried = true
@@ -73,6 +75,10 @@ object PlayerHolder {
                     .setUserAgent(s.userAgent)
                     .setDefaultRequestProperties(headers)
                     .setHandleSetCookieRequests(true)
+                    // A hung post-seek request now fails fast → onPlayerError
+                    // recovery re-prepares, instead of buffering forever.
+                    .setConnectionTimeoutMs(15_000)
+                    .setReadTimeoutMs(15_000)
             } else {
                 DefaultHttpDataSource.Factory()
                     .setUserAgent(s.userAgent)

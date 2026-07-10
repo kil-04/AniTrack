@@ -409,13 +409,19 @@ fun PlayerScreen(
             if (target != provider && !switching) {
                 switching = true; switchError = null
                 scope.launch {
-                    val ok = runCatching { PlaySession.switchProvider(target) }.getOrDefault(false)
+                    val result = runCatching { PlaySession.switchProvider(target) }
+                    val ok = result.getOrDefault(false)
+                    result.exceptionOrNull()?.let { android.util.Log.e("AniTrackNext", "switch to $target failed", it) }
                     if (ok) {
                         provider = PlaySession.provider
                         index = PlaySession.index
+                        retry++   // force a re-resolve even if index/provider look unchanged
                     } else {
-                        switchError = if (!PlaySession.canSwitchServer) "Reopen from the show page to switch servers"
-                        else "No source on that server"
+                        switchError = when {
+                            !PlaySession.canSwitchServer -> "Reopen from the show page to switch servers"
+                            else -> "No ${if (target == "anikoto") "Anikoto" else "AnimePahe"} source found"
+                        }
+                        android.util.Log.e("AniTrackNext", "switch to $target: ok=false canSwitch=${PlaySession.canSwitchServer}")
                     }
                     switching = false
                 }

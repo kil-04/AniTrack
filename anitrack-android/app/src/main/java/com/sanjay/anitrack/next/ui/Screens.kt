@@ -1007,8 +1007,13 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: 
                         },
                         resolveForDownload = {
                             val links = com.sanjay.anitrack.next.data.Pahe.links(m.source.session, ep.session)
-                            val best = links.maxByOrNull { (it.quality.filter { c -> c.isDigit() }.toIntOrNull() ?: 0) }
-                                ?: throw Exception("no link")
+                            // Highest resolution, and among equal resolutions the
+                            // sub (non-eng-dub) track — same choice as playback,
+                            // so we grab exactly ONE highest-quality file.
+                            val best = links.maxByOrNull {
+                                (it.quality.filter { c -> c.isDigit() }.toIntOrNull() ?: 0) * 10 +
+                                    (if (!it.audio.lowercase().contains("eng")) 1 else 0)
+                            } ?: throw Exception("no link")
                             val s = com.sanjay.anitrack.next.data.Pahe.resolveKwik(best.kwik)
                             Triple(s.url, s.referer, com.sanjay.anitrack.next.data.Pahe.MOBILE_UA)
                         },
