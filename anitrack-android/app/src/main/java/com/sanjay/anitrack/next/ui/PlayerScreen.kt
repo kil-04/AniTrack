@@ -169,6 +169,11 @@ fun PlayerScreen(
 
     // Poll playback state for the scrubber + time display.
     LaunchedEffect(player) {
+        // Buffering watchdog: if the player buffers >8s without loading anything
+        // (kwik seek pathology), re-prepare at the same position automatically.
+        var stallTicks = 0
+        var stallBufferedAt = 0L
+        var stallRecoveries = 0
         while (isActive) {
             if (!isSeeking) positionMs = player.currentPosition
             durationMs = player.duration.coerceAtLeast(0L)
@@ -176,6 +181,29 @@ fun PlayerScreen(
             // Reflect the play INTENT, not the momentary buffering state, so the
             // icon doesn't flip to ▶ every time a seek re-buffers.
             isPlaying = player.playWhenReady
+            val st = player.playbackState
+            if (st == Player.STATE_BUFFERING && player.playWhenReady) {
+                if (player.bufferedPosition > stallBufferedAt + 500) {
+                    stallBufferedAt = player.bufferedPosition
+                    stallTicks = 0
+                } else if (++stallTicks > 27 && stallRecoveries < 2) {   // ~8s frozen
+                    stallRecoveries++
+                    stallTicks = 0
+                    com.sanjay.anitrack.next.data.PlayerHolder.lastResolved?.let { s ->
+                        val t = player.currentPosition
+                        android.util.Log.w("AniTrackNext", "buffer stall — re-preparing at ${t}ms (attempt $stallRecoveries)")
+                        com.sanjay.anitrack.next.data.PlayerHolder.setMedia(context, s)
+                        player.seekTo(t)
+                        player.playWhenReady = true
+                    }
+                }
+            } else {
+                stallTicks = 0
+                if (st == Player.STATE_READY) {
+                    stallRecoveries = 0
+                    stallBufferedAt = player.bufferedPosition
+                }
+            }
             delay(300)
         }
     }

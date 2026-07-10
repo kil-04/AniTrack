@@ -94,12 +94,39 @@ object PlayerHolder {
                 .setSelectionFlags(if (i == 0) C.SELECTION_FLAG_DEFAULT else 0)
                 .build()
         }
-        val item = MediaItem.Builder().setUri(s.url).setSubtitleConfigurations(subtitleConfigs).build()
         // Clear quality pins from the previous stream — a 1080p pin must not
         // leak onto a stream that only has 720p (or a different provider).
         p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
             .clearVideoSizeConstraints().build()
-        p.setMediaSource(DefaultMediaSourceFactory(factory).createMediaSource(item))
+
+        val isHls = s.url.contains(".m3u8") || isLocal
+        if (isHls) {
+            // Kwik's TS segments are sloppily muxed (PesReader start-code spam)
+            // and don't signal IDR keyframes properly — a mid-playback seek then
+            // waits forever for a keyframe (silent infinite buffering). These
+            // flags make the TS reader accept non-IDR keyframes and detect
+            // access units itself, like browser players do.
+            val extractors = androidx.media3.exoplayer.hls.DefaultHlsExtractorFactory(
+                androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or
+                    androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS,
+                true,
+            )
+            val video = androidx.media3.exoplayer.hls.HlsMediaSource.Factory(factory)
+                .setExtractorFactory(extractors)
+                .setAllowChunklessPreparation(true)
+                .createMediaSource(MediaItem.Builder().setUri(s.url).build())
+            // HlsMediaSource ignores sideloaded subtitle configs — merge them in.
+            val subs = subtitleConfigs.map { cfg ->
+                androidx.media3.exoplayer.source.SingleSampleMediaSource.Factory(factory)
+                    .createMediaSource(cfg, C.TIME_UNSET)
+            }
+            val source = if (subs.isEmpty()) video
+            else androidx.media3.exoplayer.source.MergingMediaSource(video, *subs.toTypedArray())
+            p.setMediaSource(source)
+        } else {
+            val item = MediaItem.Builder().setUri(s.url).setSubtitleConfigurations(subtitleConfigs).build()
+            p.setMediaSource(DefaultMediaSourceFactory(factory).createMediaSource(item))
+        }
         p.prepare()
     }
 
