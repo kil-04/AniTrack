@@ -53,6 +53,35 @@ object PlayerHolder {
                 // Debug diagnosis: per-load lifecycle under the EventLogger tag
                 // (shows exactly which post-seek load hangs on the pahe CDN).
                 addAnalyticsListener(androidx.media3.exoplayer.util.EventLogger())
+                // Load lifecycle — distinguishes the stall modes: started-but-
+                // never-completed (blocked loader) vs never-started (load
+                // control) vs cancel loops.
+                addAnalyticsListener(object : androidx.media3.exoplayer.analytics.AnalyticsListener {
+                    private fun tail(u: android.net.Uri) = u.lastPathSegment ?: u.toString()
+                    override fun onLoadStarted(
+                        t: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                        l: androidx.media3.exoplayer.source.LoadEventInfo,
+                        m: androidx.media3.exoplayer.source.MediaLoadData,
+                        retryCount: Int,
+                    ) { android.util.Log.d("AniTrackLoads", "start ${tail(l.uri)} retry=$retryCount") }
+                    override fun onLoadCompleted(
+                        t: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                        l: androidx.media3.exoplayer.source.LoadEventInfo,
+                        m: androidx.media3.exoplayer.source.MediaLoadData,
+                    ) { android.util.Log.d("AniTrackLoads", "done  ${tail(l.uri)} ${l.bytesLoaded}B ${l.loadDurationMs}ms") }
+                    override fun onLoadCanceled(
+                        t: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                        l: androidx.media3.exoplayer.source.LoadEventInfo,
+                        m: androidx.media3.exoplayer.source.MediaLoadData,
+                    ) { android.util.Log.d("AniTrackLoads", "cancel ${tail(l.uri)} after ${l.loadDurationMs}ms") }
+                    override fun onLoadError(
+                        t: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                        l: androidx.media3.exoplayer.source.LoadEventInfo,
+                        m: androidx.media3.exoplayer.source.MediaLoadData,
+                        e: java.io.IOException,
+                        wasCanceled: Boolean,
+                    ) { android.util.Log.w("AniTrackLoads", "error ${tail(l.uri)} canceled=$wasCanceled: ${e.message}") }
+                })
             }
             .also { player = it }
 
@@ -126,6 +155,13 @@ object PlayerHolder {
             val video = androidx.media3.exoplayer.hls.HlsMediaSource.Factory(streamFactory)
                 .setExtractorFactory(extractors)
                 .setAllowChunklessPreparation(true)
+                // THE kwik seek fix (verified via load logs): post-seek chunk
+                // loads park forever inside TimestampAdjuster.waitUntilInitialized
+                // — the segment you jump to waits for an earlier "primary"
+                // segment to seed the shared HLS timestamp adjuster, which never
+                // comes. This timeout unblocks it (media3's escape hatch for
+                // exactly such streams); 2.5s keeps the post-seek pause short.
+                .setTimestampAdjusterInitializationTimeoutMs(2_500)
                 .createMediaSource(MediaItem.Builder().setUri(s.url).build())
             p.setMediaSource(video)
         } else {
