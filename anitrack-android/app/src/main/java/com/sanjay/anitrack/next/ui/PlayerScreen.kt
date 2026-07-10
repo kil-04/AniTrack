@@ -7,6 +7,7 @@ import android.net.Uri
 import android.util.Rational
 import androidx.annotation.OptIn
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -125,13 +126,16 @@ fun PlayerScreen(
     var seekPreviewMs by remember { mutableStateOf(0L) }
     var muted by remember { mutableStateOf(false) }
     var speed by remember { mutableStateOf(1f) }
-    var speedMenu by remember { mutableStateOf(false) }
     var ccOn by remember { mutableStateOf(true) }
-    // Caption style (persisted).
+    // Settings panel (desktop-style layered menu) + persisted caption style.
     val capPrefs = remember { context.getSharedPreferences("anitrack_next", android.content.Context.MODE_PRIVATE) }
     var capSize by remember { mutableStateOf(capPrefs.getFloat("cap_size", 0.055f)) }
     var capBg by remember { mutableStateOf(capPrefs.getInt("cap_bg", 0x40)) }   // alpha 0..255
-    var capSettings by remember { mutableStateOf(false) }
+    var capFont by remember { mutableStateOf(capPrefs.getString("cap_font", "Outfit") ?: "Outfit") }
+    var capColor by remember { mutableStateOf(capPrefs.getInt("cap_color", android.graphics.Color.WHITE)) }
+    var autoplay by remember { mutableStateOf(capPrefs.getBoolean("autoplay", true)) }
+    var autoNext by remember { mutableStateOf(capPrefs.getBoolean("auto_next", true)) }
+    var settingsMenu by remember { mutableStateOf<String?>(null) }  // null|main|speed|quality|subtitles
     fun flashControls() { controlsVisible = true }
 
     // Gesture feedback overlays
@@ -193,7 +197,7 @@ fun PlayerScreen(
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
-                if (state == Player.STATE_ENDED && index + 1 < PlaySession.count) index += 1
+                if (state == Player.STATE_ENDED && autoNext && index + 1 < PlaySession.count) index += 1
             }
         }
         player.addListener(listener)
@@ -226,6 +230,7 @@ fun PlayerScreen(
             stream = s
             // Shared loader: local file:// vs CDN (Referer/UA) data source.
             holder.setMedia(context, s)
+            player.playWhenReady = autoplay
             holder.loadedKey = holder.keyFor(index)
             holder.lastResolved = s
             // Resume mid-episode from the local DB (finished episodes restart).
@@ -384,14 +389,19 @@ fun PlayerScreen(
                 modifier = Modifier.fillMaxSize(),
                 update = { pv ->
                     // Apply the current caption style whenever it changes.
+                    val face = when (capFont) {
+                        "Mono" -> android.graphics.Typeface.MONOSPACE
+                        "Serif" -> android.graphics.Typeface.SERIF
+                        else -> null   // Outfit/Sans → system sans
+                    }
                     pv.subtitleView?.setStyle(
                         CaptionStyleCompat(
-                            android.graphics.Color.WHITE,
+                            capColor,
                             (capBg shl 24),
                             android.graphics.Color.TRANSPARENT,
                             CaptionStyleCompat.EDGE_TYPE_OUTLINE,
                             android.graphics.Color.BLACK,
-                            null,
+                            face,
                         ),
                     )
                     pv.subtitleView?.setFractionalTextSize(capSize)
@@ -551,20 +561,6 @@ fun PlayerScreen(
                             color = Color.White.copy(alpha = 0.85f),
                         )
                         Spacer(Modifier.weight(1f))
-                        // Playback speed
-                        Box {
-                            IconButton(onClick = { speedMenu = true; flashControls() }) {
-                                Icon(Icons.Filled.Speed, "Speed", tint = Color.White)
-                            }
-                            DropdownMenu(expanded = speedMenu, onDismissRequest = { speedMenu = false }) {
-                                listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f).forEach { sp ->
-                                    DropdownMenuItem(
-                                        text = { Text("${sp}×" + if (sp == speed) "  ✓" else "") },
-                                        onClick = { speed = sp; player.setPlaybackSpeed(sp); speedMenu = false },
-                                    )
-                                }
-                            }
-                        }
                         // CC toggle (only when there are subtitles)
                         if (stream?.subtitles?.isNotEmpty() == true) {
                             IconButton(onClick = {
@@ -576,9 +572,9 @@ fun PlayerScreen(
                                 Icon(if (ccOn) Icons.Filled.ClosedCaption else Icons.Filled.ClosedCaptionOff, "Subtitles", tint = Color.White)
                             }
                         }
-                        // Caption / settings gear
-                        IconButton(onClick = { capSettings = true; flashControls() }) {
-                            Icon(Icons.Filled.Settings, "Caption settings", tint = Color.White)
+                        // Settings gear → desktop-style layered panel
+                        IconButton(onClick = { settingsMenu = if (settingsMenu == null) "main" else null; flashControls() }) {
+                            Icon(Icons.Filled.Settings, "Settings", tint = Color.White)
                         }
                         IconButton(onClick = {
                             try {
@@ -597,40 +593,29 @@ fun PlayerScreen(
                 }
             }
 
-            // Caption settings dialog
-            if (capSettings) {
-                AlertDialog(
-                    onDismissRequest = { capSettings = false },
-                    confirmButton = { TextButton(onClick = { capSettings = false }) { Text("Done") } },
-                    title = { Text("Caption settings") },
-                    text = {
-                        Column {
-                            Text("Text size", style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.6f))
-                            Spacer(Modifier.height(4.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                listOf("S" to 0.04f, "M" to 0.055f, "L" to 0.07f, "XL" to 0.09f).forEach { (lbl, sz) ->
-                                    FilterChip(
-                                        selected = kotlin.math.abs(capSize - sz) < 0.001f,
-                                        onClick = { capSize = sz; capPrefs.edit().putFloat("cap_size", sz).apply() },
-                                        label = { Text(lbl) },
-                                    )
-                                }
-                            }
-                            Spacer(Modifier.height(12.dp))
-                            Text("Background", style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.6f))
-                            Spacer(Modifier.height(4.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                listOf("Off" to 0x00, "25%" to 0x40, "50%" to 0x80, "75%" to 0xC0).forEach { (lbl, a) ->
-                                    FilterChip(
-                                        selected = capBg == a,
-                                        onClick = { capBg = a; capPrefs.edit().putInt("cap_bg", a).apply() },
-                                        label = { Text(lbl) },
-                                    )
-                                }
-                            }
-                        }
-                    },
-                )
+            // Desktop-style settings panel (anchored above the control bar).
+            if (settingsMenu != null) {
+                Box(Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 92.dp)) {
+                    PlayerSettingsPanel(
+                        menu = settingsMenu!!,
+                        onMenu = { settingsMenu = it },
+                        speed = speed,
+                        onSpeed = { speed = it; player.setPlaybackSpeed(it) },
+                        hasSubs = stream?.subtitles?.isNotEmpty() == true,
+                        ccOn = ccOn,
+                        onCc = {
+                            ccOn = it
+                            player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !it).build()
+                        },
+                        capSize = capSize, onCapSize = { capSize = it; capPrefs.edit().putFloat("cap_size", it).apply() },
+                        capFont = capFont, onCapFont = { capFont = it; capPrefs.edit().putString("cap_font", it).apply() },
+                        capBg = capBg, onCapBg = { capBg = it; capPrefs.edit().putInt("cap_bg", it).apply() },
+                        capColor = capColor, onCapColor = { capColor = it; capPrefs.edit().putInt("cap_color", it).apply() },
+                        autoplay = autoplay, onAutoplay = { autoplay = it; capPrefs.edit().putBoolean("autoplay", it).apply() },
+                        autoNext = autoNext, onAutoNext = { autoNext = it; capPrefs.edit().putBoolean("auto_next", it).apply() },
+                    )
+                }
             }
 
             // Skip intro / outro
@@ -784,21 +769,33 @@ private fun PlayerEpisodePanel(
             } else {
                 Spacer(Modifier.weight(1f))
             }
-            OutlinedTextField(
-                value = find,
-                onValueChange = { v ->
-                    find = v.filter { it.isDigit() }.take(4)
-                    find.toIntOrNull()?.let { n ->
-                        val idx = (0 until count).firstOrNull { PlaySession.episodeNumber(it).toInt() == n }
-                        if (idx != null) range = idx / RANGE
-                    }
-                },
-                placeholder = { Text("Find", style = MaterialTheme.typography.labelSmall) },
-                singleLine = true,
-                textStyle = MaterialTheme.typography.labelMedium,
-                modifier = Modifier.width(86.dp).height(52.dp),
-                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Accent, cursorColor = Accent),
-            )
+            // Slim "Find number" box, like the desktop's.
+            Box(
+                Modifier.width(110.dp).height(34.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(Color.White.copy(alpha = 0.05f))
+                    .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(6.dp))
+                    .padding(horizontal = 10.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                androidx.compose.foundation.text.BasicTextField(
+                    value = find,
+                    onValueChange = { v ->
+                        find = v.filter { it.isDigit() }.take(4)
+                        find.toIntOrNull()?.let { n ->
+                            val idx = (0 until count).firstOrNull { PlaySession.episodeNumber(it).toInt() == n }
+                            if (idx != null) range = idx / RANGE
+                        }
+                    },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.labelMedium.copy(color = Color.White),
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(Accent),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (find.isEmpty()) {
+                    Text("Find number", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.35f))
+                }
+            }
         }
         Spacer(Modifier.height(6.dp))
 

@@ -144,6 +144,7 @@ object AniList {
     suspend fun advancedSearch(
         query: String?, genre: String?, year: Int?, season: String?,
         format: String?, status: String?, sort: String, page: Int,
+        source: String? = null, epMin: Int? = null, epMax: Int? = null,
     ): Pair<List<Anime>, Boolean> {
         val args = mutableListOf("\$page: Int", "\$sort: [MediaSort]")
         val mArgs = mutableListOf("type: ANIME", "isAdult: false", "sort: \$sort")
@@ -154,6 +155,9 @@ object AniList {
         season?.let { args += "\$season: MediaSeason"; mArgs += "season: \$season"; vars.put("season", it) }
         format?.let { args += "\$format: MediaFormat"; mArgs += "format: \$format"; vars.put("format", it) }
         status?.let { args += "\$status: MediaStatus"; mArgs += "status: \$status"; vars.put("status", it) }
+        source?.let { args += "\$src: MediaSource"; mArgs += "source: \$src"; vars.put("src", it) }
+        epMin?.let { args += "\$epMin: Int"; mArgs += "episodes_greater: \$epMin"; vars.put("epMin", it - 1) }
+        epMax?.let { args += "\$epMax: Int"; mArgs += "episodes_lesser: \$epMax"; vars.put("epMax", it + 1) }
         val data = gql(
             """query(${args.joinToString(", ")}) {
                 Page(page: ${'$'}page, perPage: 30) {

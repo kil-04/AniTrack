@@ -145,6 +145,34 @@ fun AppShell() {
                     ) { Text("A", color = Color.White, fontWeight = FontWeight.Bold) }
                 }
             }
+            // Portrait: same top bar, compact (logo + search pill + profile);
+            // nav items stay in the bottom bar.
+            if (!wideLayout && !hideChrome) {
+                Row(
+                    Modifier.fillMaxWidth().background(BgElev).padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("AniTrack", color = Accent, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold)
+                    Spacer(Modifier.width(12.dp))
+                    Row(
+                        Modifier.weight(1f).height(38.dp)
+                            .clip(RoundedCornerShape(50)).background(Color.White.copy(alpha = 0.07f))
+                            .clickable { nav.navigate("quicksearch") { launchSingleTop = true } }
+                            .padding(horizontal = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Filled.Search, null, tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Search anime…", color = Color.White.copy(alpha = 0.45f), style = MaterialTheme.typography.bodySmall)
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Box(
+                        Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(Accent)
+                            .clickable { go("settings") },
+                        contentAlignment = Alignment.Center,
+                    ) { Text("A", color = Color.White, fontWeight = FontWeight.Bold) }
+                }
+            }
             Box(Modifier.weight(1f)) {
                 NavHost(nav, startDestination = "home") {
                     composable("home") {
