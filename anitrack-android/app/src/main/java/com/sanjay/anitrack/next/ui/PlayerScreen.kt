@@ -139,6 +139,9 @@ fun PlayerScreen(
     // Manual quality: available video heights in the stream; 0 = highest.
     var videoHeights by remember { mutableStateOf<List<Int>>(emptyList()) }
     var quality by remember { mutableStateOf(0) }
+    // Transient-error recovery (Cronet re-request stalls after a seek).
+    var errorRetries by remember { mutableStateOf(0) }
+    var lastErrorAt by remember { mutableStateOf(0L) }
     fun flashControls() { controlsVisible = true }
 
     // Gesture feedback overlays
@@ -170,7 +173,9 @@ fun PlayerScreen(
             if (!isSeeking) positionMs = player.currentPosition
             durationMs = player.duration.coerceAtLeast(0L)
             bufferedMs = player.bufferedPosition
-            isPlaying = player.isPlaying
+            // Reflect the play INTENT, not the momentary buffering state, so the
+            // icon doesn't flip to ▶ every time a seek re-buffers.
+            isPlaying = player.playWhenReady
             delay(300)
         }
     }
@@ -228,7 +233,6 @@ fun PlayerScreen(
                 }
             }
             override fun onPlayerError(e: androidx.media3.common.PlaybackException) {
-                // Surface load failures (they were silent — "0:00/0:00").
                 var cause: Throwable? = e
                 var httpCode: Int? = null
                 while (cause != null) {
@@ -238,9 +242,22 @@ fun PlayerScreen(
                     cause = cause.cause
                 }
                 android.util.Log.e("AniTrackNext", "player error http=$httpCode provider=${PlaySession.provider}", e)
-                error = when {
-                    httpCode != null -> "Stream request failed (HTTP $httpCode) — the CDN rejected playback."
-                    else -> e.errorCodeName.removePrefix("ERROR_CODE_").replace('_', ' ').lowercase()
+                // Transient network/seek stalls (Cronet re-requests after a seek)
+                // are recoverable — re-prepare in place instead of dropping the
+                // control bar. Only surface a fatal error after repeated retries.
+                val now = System.currentTimeMillis()
+                if (now - lastErrorAt > 8000) errorRetries = 0
+                lastErrorAt = now
+                if (errorRetries < 3) {
+                    errorRetries++
+                    val pos = player.currentPosition
+                    player.prepare()
+                    if (pos > 0) player.seekTo(pos)
+                    player.playWhenReady = true
+                } else {
+                    error = if (httpCode != null)
+                        "Stream request failed (HTTP $httpCode) — the CDN rejected playback."
+                    else e.errorCodeName.removePrefix("ERROR_CODE_").replace('_', ' ').lowercase()
                         .replaceFirstChar { c -> c.uppercase() }
                 }
             }
@@ -593,7 +610,12 @@ fun PlayerScreen(
                         IconButton(onClick = { if (index > 0) { index -= 1; flashControls() } }, enabled = index > 0) {
                             Icon(Icons.Filled.SkipPrevious, "Previous", tint = Color.White)
                         }
-                        IconButton(onClick = { if (player.isPlaying) player.pause() else player.play(); flashControls() }) {
+                        IconButton(onClick = {
+                            // Toggle the play INTENT (works even mid-buffer, unlike isPlaying).
+                            player.playWhenReady = !player.playWhenReady
+                            isPlaying = player.playWhenReady
+                            flashControls()
+                        }) {
                             Icon(if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, "Play/Pause", tint = Color.White, modifier = Modifier.size(30.dp))
                         }
                         IconButton(onClick = { if (index + 1 < PlaySession.count) { index += 1; flashControls() } }, enabled = index + 1 < PlaySession.count) {

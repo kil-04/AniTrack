@@ -72,6 +72,12 @@ object PlaySession {
         if (target == provider) return true
         val a = anime ?: return false
         val currentNum = episodeNumber(index)
+        val prevIndex = index
+        // Match by episode NUMBER; if that fails (providers number differently),
+        // keep the SAME position rather than snapping back to episode 1.
+        fun match(nums: List<Float>): Int =
+            nums.indexOfFirst { kotlin.math.abs(it - currentNum) < 0.01f }
+                .takeIf { it >= 0 } ?: prevIndex.coerceIn(0, (nums.size - 1).coerceAtLeast(0))
         if (target == "animepahe") {
             if (paheEps.isEmpty()) {
                 val m = Pahe.matchFor(a) ?: return false
@@ -80,7 +86,7 @@ object PlaySession {
             }
             if (paheEps.isEmpty()) return false
             provider = "animepahe"
-            index = paheEps.indexOfFirst { it.number == currentNum }.takeIf { it >= 0 } ?: 0
+            index = match(paheEps.map { it.number })
         } else {
             if (anikotoEps.isEmpty()) {
                 val m = Anikoto.matchFor(a) ?: return false
@@ -89,7 +95,7 @@ object PlaySession {
             }
             if (anikotoEps.isEmpty()) return false
             provider = "anikoto"
-            index = anikotoEps.indexOfFirst { it.number == currentNum }.takeIf { it >= 0 } ?: 0
+            index = match(anikotoEps.map { it.number })
         }
         return true
     }

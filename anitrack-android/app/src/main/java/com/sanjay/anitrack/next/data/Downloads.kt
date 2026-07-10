@@ -194,34 +194,79 @@ object Downloads {
         File(dir, "index.m3u8").writeText(outLines.joinToString("\n"))
     }
 
-    private fun reqBuilder(url: String, ref: String, ua: String) = Request.Builder().url(url)
-        .header("User-Agent", ua)
-        .header("Referer", ref.trimEnd('/') + "/")
-        .header("Accept", "*/*")
+    // Chromium network stack — the pahe CDN (mewstream) 403s Java/OkHttp on
+    // TLS fingerprint, so segment/playlist fetches go through Cronet too.
+    private var cronet: org.chromium.net.CronetEngine? = null
+    private var cronetTried = false
+    private val cronetExecutor by lazy { java.util.concurrent.Executors.newFixedThreadPool(6) }
+    private fun cronetEngine(): org.chromium.net.CronetEngine? {
+        if (!cronetTried) {
+            cronetTried = true
+            cronet = try { androidx.media3.datasource.cronet.CronetUtil.buildCronetEngine(appCtx) } catch (e: Throwable) { null }
+        }
+        return cronet
+    }
 
-    private fun execRetry(url: String, ref: String, ua: String, maxRetries: Int = 6): okhttp3.Response {
+    /** Blocking GET returning the body bytes, via Cronet (Chrome TLS) if
+     *  available, else OkHttp. 429-aware retry either way. */
+    private fun getBytes(url: String, ref: String, ua: String, maxRetries: Int = 6): ByteArray {
+        val cookie = runCatching { android.webkit.CookieManager.getInstance().getCookie(url) }.getOrNull()
+        val engine = cronetEngine()
         var attempt = 0
         while (true) {
-            val resp = http.newCall(reqBuilder(url, ref, ua).build()).execute()
-            if (resp.code == 429 && attempt < maxRetries) {
-                resp.close()
-                val wait = (resp.header("Retry-After")?.toLongOrNull()?.times(1000) ?: (1000L * (attempt + 1))).coerceAtMost(8000)
-                Thread.sleep(wait); attempt++; continue
+            if (engine != null) {
+                val (code, body) = cronetGet(engine, url, ref, ua, cookie)
+                if (code == 429 && attempt < maxRetries) { Thread.sleep((1000L * (attempt + 1)).coerceAtMost(8000)); attempt++; continue }
+                if (code !in 200..299) throw Exception("HTTP $code for $url")
+                return body
+            } else {
+                val req = Request.Builder().url(url).header("User-Agent", ua)
+                    .header("Referer", ref.trimEnd('/') + "/").header("Accept", "*/*")
+                    .apply { if (!cookie.isNullOrBlank()) header("Cookie", cookie) }.build()
+                http.newCall(req).execute().use { resp ->
+                    if (resp.code == 429 && attempt < maxRetries) { Thread.sleep((1000L * (attempt + 1)).coerceAtMost(8000)); attempt++; return@use }
+                    if (!resp.isSuccessful) throw Exception("HTTP ${resp.code} for $url")
+                    return resp.body!!.bytes()
+                }
             }
-            if (!resp.isSuccessful) { val c = resp.code; resp.close(); throw Exception("HTTP $c for $url") }
-            return resp
         }
     }
 
-    private fun httpText(url: String, ref: String, ua: String): String =
-        execRetry(url, ref, ua).use { it.body?.string() ?: throw Exception("empty playlist") }
+    private fun cronetGet(
+        engine: org.chromium.net.CronetEngine, url: String, ref: String, ua: String, cookie: String?,
+    ): Pair<Int, ByteArray> {
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val out = java.io.ByteArrayOutputStream()
+        var status = 0
+        var err: Exception? = null
+        val cb = object : org.chromium.net.UrlRequest.Callback() {
+            override fun onRedirectReceived(r: org.chromium.net.UrlRequest, i: org.chromium.net.UrlResponseInfo?, newUrl: String?) = r.followRedirect()
+            override fun onResponseStarted(r: org.chromium.net.UrlRequest, i: org.chromium.net.UrlResponseInfo) {
+                status = i.httpStatusCode
+                r.read(java.nio.ByteBuffer.allocateDirect(64 * 1024))
+            }
+            override fun onReadCompleted(r: org.chromium.net.UrlRequest, i: org.chromium.net.UrlResponseInfo, bb: java.nio.ByteBuffer) {
+                bb.flip(); val arr = ByteArray(bb.remaining()); bb.get(arr); out.write(arr); bb.clear(); r.read(bb)
+            }
+            override fun onSucceeded(r: org.chromium.net.UrlRequest, i: org.chromium.net.UrlResponseInfo) = latch.countDown()
+            override fun onFailed(r: org.chromium.net.UrlRequest, i: org.chromium.net.UrlResponseInfo?, e: org.chromium.net.CronetException) { err = e; latch.countDown() }
+            override fun onCanceled(r: org.chromium.net.UrlRequest, i: org.chromium.net.UrlResponseInfo?) = latch.countDown()
+        }
+        val b = engine.newUrlRequestBuilder(url, cb, cronetExecutor)
+            .addHeader("User-Agent", ua).addHeader("Referer", ref.trimEnd('/') + "/").addHeader("Accept", "*/*")
+        if (!cookie.isNullOrBlank()) b.addHeader("Cookie", cookie)
+        b.build().start()
+        if (!latch.await(90, TimeUnit.SECONDS)) throw Exception("timeout for $url")
+        err?.let { throw it }
+        return status to out.toByteArray()
+    }
+
+    private fun httpText(url: String, ref: String, ua: String): String = String(getBytes(url, ref, ua))
 
     private fun httpToFile(url: String, file: File, ref: String, ua: String) {
-        execRetry(url, ref, ua).use { resp ->
-            val tmp = File(file.parentFile, file.name + ".part")
-            resp.body?.byteStream()?.use { input -> tmp.outputStream().use { input.copyTo(it) } }
-            tmp.renameTo(file)
-        }
+        val tmp = File(file.parentFile, file.name + ".part")
+        tmp.writeBytes(getBytes(url, ref, ua))
+        tmp.renameTo(file)
     }
 
     private fun absolutize(uri: String, base: String): String = when {
