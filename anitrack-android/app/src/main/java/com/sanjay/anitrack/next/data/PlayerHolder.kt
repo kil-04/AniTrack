@@ -104,6 +104,13 @@ object PlayerHolder {
         p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
             .clearVideoSizeConstraints().build()
 
+        // Wrap the CDN factory so every kwik .m3u8 reload is normalized to a
+        // static VOD playlist. Without this, kwik re-serves the manifest with
+        // no #EXT-X-ENDLIST after a seek → ExoPlayer flips it to live/dynamic →
+        // the seek target is out of the "live" window → infinite buffering.
+        val streamFactory: DataSource.Factory =
+            if (isLocal) factory else VodManifestDataSource.Factory(factory)
+
         val isHls = s.url.contains(".m3u8") || isLocal
         if (isHls && subtitleConfigs.isEmpty()) {
             // Kwik's TS is loosely muxed (PesReader start-code spam) — these
@@ -116,7 +123,7 @@ object PlayerHolder {
                     androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS,
                 true,
             )
-            val video = androidx.media3.exoplayer.hls.HlsMediaSource.Factory(factory)
+            val video = androidx.media3.exoplayer.hls.HlsMediaSource.Factory(streamFactory)
                 .setExtractorFactory(extractors)
                 .setAllowChunklessPreparation(true)
                 .createMediaSource(MediaItem.Builder().setUri(s.url).build())
@@ -125,7 +132,7 @@ object PlayerHolder {
             // Subtitled streams go through DefaultMediaSourceFactory, which
             // transcodes sideloaded subs to media3 cues (the supported path).
             val item = MediaItem.Builder().setUri(s.url).setSubtitleConfigurations(subtitleConfigs).build()
-            p.setMediaSource(DefaultMediaSourceFactory(factory).createMediaSource(item))
+            p.setMediaSource(DefaultMediaSourceFactory(streamFactory).createMediaSource(item))
         }
         p.prepare()
     }
