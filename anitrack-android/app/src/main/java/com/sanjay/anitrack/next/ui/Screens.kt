@@ -811,8 +811,60 @@ fun DetailScreen(animeId: Int, onPlay: () -> Unit, onOpenAnime: (Int) -> Unit = 
         }
         Spacer(Modifier.height(20.dp))
         WatchOrderSection(a, onOpenAnime)
+        RelatedSection(a, onOpenAnime)
         EpisodesSection(a, onPlay)
         Spacer(Modifier.height(32.dp))
+    }
+}
+
+// ── Related (side stories / specials — non-chain relations, like desktop) ─────
+
+private val relationLabels = mapOf(
+    "SIDE_STORY" to "Side Story", "SPIN_OFF" to "Spin Off", "ALTERNATIVE" to "Alternative",
+    "SPECIAL" to "Special", "SUMMARY" to "Summary", "PARENT" to "Parent",
+    "CHARACTER" to "Character", "OTHER" to "Other",
+)
+
+@Composable
+private fun RelatedSection(anime: Anime, onOpenAnime: (Int) -> Unit) {
+    var rels by remember(anime.id) { mutableStateOf<List<AniList.Relation>>(emptyList()) }
+    LaunchedEffect(anime.id) { runCatching { rels = AniList.relations(anime.id) } }
+    val related = rels.filter { it.type != "PREQUEL" && it.type != "SEQUEL" }
+    if (related.isEmpty()) return
+
+    Column(Modifier.padding(bottom = 20.dp)) {
+        Text("Related", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp))
+        Spacer(Modifier.height(10.dp))
+        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            items(related.size) { i ->
+                val r = related[i]
+                Column(Modifier.width(120.dp).clickable { onOpenAnime(r.anime.id) }) {
+                    Box(
+                        Modifier.width(120.dp).height(170.dp).clip(RoundedCornerShape(10.dp))
+                            .background(Color.White.copy(alpha = 0.06f)),
+                    ) {
+                        AsyncImage(model = r.anime.cover, contentDescription = r.anime.title, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                        // Relation label strip (desktop's "Side Story" tag).
+                        Box(
+                            Modifier.align(Alignment.BottomStart).fillMaxWidth()
+                                .background(
+                                    androidx.compose.ui.graphics.Brush.verticalGradient(
+                                        listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f)),
+                                    ),
+                                )
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                        ) {
+                            Text(
+                                relationLabels[r.type] ?: r.type.lowercase().replaceFirstChar { c -> c.uppercase() },
+                                style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.85f),
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(5.dp))
+                    Text(r.anime.title, style = MaterialTheme.typography.labelMedium, maxLines = 2, overflow = TextOverflow.Ellipsis, color = Color.White.copy(alpha = 0.85f))
+                }
+            }
+        }
     }
 }
 
@@ -1166,15 +1218,15 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: 
                             com.sanjay.anitrack.next.data.Downloads.Status.QUEUED ->
                                 Text("queued…", color = Color.White.copy(alpha = 0.5f), style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(end = 12.dp))
                             else -> Row(
+                                // Desktop style: filled dark box, no border.
                                 Modifier.clip(RoundedCornerShape(8.dp))
-                                    .background(Color.White.copy(alpha = 0.04f))
-                                    .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(8.dp))
+                                    .background(Color.White.copy(alpha = 0.1f))
                                     .clickable { com.sanjay.anitrack.next.data.Downloads.enqueue(anime.id, ep.number, anime.title, anime.cover, ep.resolveForDownload) }
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    .padding(horizontal = 14.dp, vertical = 9.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Icon(Icons.Filled.Download, null, tint = Color.White.copy(alpha = 0.85f), modifier = Modifier.size(15.dp))
-                                Spacer(Modifier.width(6.dp)); Text("Download", color = Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.labelMedium)
+                                Icon(Icons.Filled.Download, null, tint = Color.White.copy(alpha = 0.9f), modifier = Modifier.size(15.dp))
+                                Spacer(Modifier.width(7.dp)); Text("Download", color = Color.White.copy(alpha = 0.9f), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
                             }
                         }
                     }

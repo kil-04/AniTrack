@@ -624,59 +624,91 @@ private val statusLabels = mapOf(
 
 @Composable
 fun MyListScreen(onOpen: (Int) -> Unit) {
-    var status by remember { mutableStateOf("watching") }
-    var rows by remember { mutableStateOf<List<Db.ListRow>>(emptyList()) }
-    val scope = rememberCoroutineScope()
+    var tab by remember { mutableStateOf("all") }
+    var byStatus by remember { mutableStateOf<Map<String, List<Db.ListRow>>>(emptyMap()) }
 
-    LaunchedEffect(status) {
-        runCatching { rows = Db.listByStatus(status) }
+    LaunchedEffect(Unit) {
+        runCatching {
+            val m = LinkedHashMap<String, List<Db.ListRow>>()
+            for (s in Db.STATUSES) m[s] = Db.listByStatus(s)
+            byStatus = m
+        }
+    }
+    val rows = if (tab == "all") byStatus.values.flatten() else byStatus[tab].orEmpty()
+    val total = byStatus.values.sumOf { it.size }
+
+    @Composable
+    fun TabItem(key: String, label: String, count: Int) {
+        val selected = tab == key
+        Column(Modifier.width(IntrinsicSize.Max).clickable { tab = key }) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 8.dp)) {
+                Text(
+                    label,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                    color = if (selected) Color.White else Color.White.copy(alpha = 0.55f),
+                )
+                Spacer(Modifier.width(7.dp))
+                Box(Modifier.clip(RoundedCornerShape(50)).background(Color.White.copy(alpha = 0.1f)).padding(horizontal = 8.dp, vertical = 1.dp)) {
+                    Text("$count", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.55f))
+                }
+            }
+            Box(Modifier.height(3.dp).fillMaxWidth().clip(RoundedCornerShape(2.dp)).background(if (selected) Accent else Color.Transparent))
+        }
     }
 
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Text("My List", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(12.dp))
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 20.dp)) {
+        Text("My list", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(20.dp))
+        // Desktop tabs: All + 5 statuses with count chips, red underline.
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
+            item { TabItem("all", "All", total) }
             items(Db.STATUSES.size) { i ->
                 val s = Db.STATUSES[i]
-                FilterChip(
-                    selected = status == s,
-                    onClick = { status = s },
-                    label = { Text(statusLabels[s] ?: s) },
-                )
+                TabItem(s, statusLabels[s] ?: s, byStatus[s]?.size ?: 0)
             }
         }
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(20.dp))
         if (rows.isEmpty()) {
             Text("Nothing here yet.", color = Color.White.copy(alpha = 0.4f))
         }
-        LazyColumn {
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(150.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
+        ) {
             items(rows.size) { i ->
                 val r = rows[i]
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(Color.White.copy(alpha = 0.05f))
-                        .clickable { onOpen(r.animeId) }
-                        .padding(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                Box(
+                    Modifier.fillMaxWidth().aspectRatio(2f / 3f)
+                        .clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha = 0.05f))
+                        .clickable { onOpen(r.animeId) },
                 ) {
                     AsyncImage(
-                        model = r.cover,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.width(44.dp).height(60.dp).clip(RoundedCornerShape(6.dp)),
+                        model = r.cover, contentDescription = r.title, contentScale = CS.Crop,
+                        modifier = Modifier.fillMaxSize(),
                     )
-                    Spacer(Modifier.width(12.dp))
-                    Text(r.title, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    TextButton(onClick = {
-                        scope.launch {
-                            Db.removeFromList(r.animeId)
-                            rows = Db.listByStatus(status)
-                        }
-                    }) { Text("Remove", color = Color.White.copy(alpha = 0.5f)) }
+                    Box(
+                        Modifier.fillMaxSize().background(
+                            androidx.compose.ui.graphics.Brush.verticalGradient(
+                                0f to Color.Transparent, 0.6f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.9f),
+                            ),
+                        ),
+                    )
+                    r.score?.takeIf { it > 0 }?.let {
+                        Box(
+                            Modifier.align(Alignment.TopEnd).padding(8.dp)
+                                .clip(RoundedCornerShape(6.dp)).background(Color.Black.copy(alpha = 0.65f))
+                                .padding(horizontal = 7.dp, vertical = 2.dp),
+                        ) { Text("★ $it", style = MaterialTheme.typography.labelSmall, color = Color(0xFFE8C34A), fontWeight = FontWeight.Bold) }
+                    }
+                    Text(
+                        r.title,
+                        style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = Color.White,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.align(Alignment.BottomStart).padding(10.dp),
+                    )
                 }
-                Spacer(Modifier.height(8.dp))
             }
         }
     }

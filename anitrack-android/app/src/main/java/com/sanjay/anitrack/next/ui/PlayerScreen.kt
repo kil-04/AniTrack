@@ -267,6 +267,8 @@ fun PlayerScreen(
             }
             status = ""
         } catch (e: Exception) {
+            // Tagged so `adb logcat -s AniTrackNext` captures provider failures.
+            android.util.Log.e("AniTrackNext", "resolve failed provider=$provider ep=$epNum", e)
             error = e.message ?: "Failed to resolve stream"
         }
     }
