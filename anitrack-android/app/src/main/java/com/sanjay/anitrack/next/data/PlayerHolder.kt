@@ -21,6 +21,22 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 object PlayerHolder {
     private var player: ExoPlayer? = null
 
+    // Chromium network stack for CDN requests (built once; null → fallback).
+    private var cronet: org.chromium.net.CronetEngine? = null
+    private var cronetTried = false
+    private val cronetExecutor by lazy { java.util.concurrent.Executors.newFixedThreadPool(4) }
+    private fun cronetEngine(ctx: Context): org.chromium.net.CronetEngine? {
+        if (!cronetTried) {
+            cronetTried = true
+            cronet = try {
+                androidx.media3.datasource.cronet.CronetUtil.buildCronetEngine(ctx.applicationContext)
+            } catch (e: Throwable) {
+                null
+            }
+        }
+        return cronet
+    }
+
     /** Which stream is loaded, so re-entering the player doesn't restart it. */
     var loadedKey: String? = null
     var lastResolved: PlaySession.Resolved? = null
@@ -45,10 +61,24 @@ object PlayerHolder {
         val factory: DataSource.Factory = if (isLocal) {
             DefaultDataSource.Factory(ctx.applicationContext)
         } else {
-            DefaultHttpDataSource.Factory()
-                .setUserAgent(s.userAgent)
-                .setDefaultRequestProperties(mapOf("Referer" to s.referer + "/"))
-                .setAllowCrossProtocolRedirects(true)
+            val headers = mutableMapOf("Referer" to s.referer + "/")
+            // Send the WebView's cookies for the stream host (kwik binding).
+            runCatching {
+                android.webkit.CookieManager.getInstance().getCookie(s.url)
+                    ?.takeIf { it.isNotBlank() }?.let { headers["Cookie"] = it }
+            }
+            val engine = cronetEngine(ctx)
+            if (engine != null) {
+                androidx.media3.datasource.cronet.CronetDataSource.Factory(engine, cronetExecutor)
+                    .setUserAgent(s.userAgent)
+                    .setDefaultRequestProperties(headers)
+                    .setHandleSetCookieRequests(true)
+            } else {
+                DefaultHttpDataSource.Factory()
+                    .setUserAgent(s.userAgent)
+                    .setDefaultRequestProperties(headers)
+                    .setAllowCrossProtocolRedirects(true)
+            }
         }
         val subtitleConfigs = s.subtitles.mapIndexed { i, sub ->
             MediaItem.SubtitleConfiguration.Builder(Uri.parse(sub.url))

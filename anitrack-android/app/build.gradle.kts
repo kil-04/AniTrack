@@ -59,6 +59,11 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:1.6.1")
     implementation("androidx.media3:media3-exoplayer-hls:1.6.1")
     implementation("androidx.media3:media3-ui:1.6.1")
+    // Cronet = Chromium's network stack. The pahe CDN TLS-fingerprints
+    // clients (browser stacks pass, Java/OkHttp get 403) — stream through
+    // Cronet so playback looks like Chrome on the wire.
+    implementation("androidx.media3:media3-datasource-cronet:1.6.1")
+    implementation("com.google.android.gms:play-services-cronet:18.1.0")
 
     // HTTP for AniList/gist/providers
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
