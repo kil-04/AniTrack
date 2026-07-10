@@ -48,7 +48,12 @@ object PlayerHolder {
 
     fun get(ctx: Context): ExoPlayer =
         player ?: ExoPlayer.Builder(ctx.applicationContext).build()
-            .apply { playWhenReady = true }
+            .apply {
+                playWhenReady = true
+                // Debug diagnosis: per-load lifecycle under the EventLogger tag
+                // (shows exactly which post-seek load hangs on the pahe CDN).
+                addAnalyticsListener(androidx.media3.exoplayer.util.EventLogger())
+            }
             .also { player = it }
 
     fun peek(): ExoPlayer? = player
@@ -100,12 +105,12 @@ object PlayerHolder {
             .clearVideoSizeConstraints().build()
 
         val isHls = s.url.contains(".m3u8") || isLocal
-        if (isHls) {
-            // Kwik's TS segments are sloppily muxed (PesReader start-code spam)
-            // and don't signal IDR keyframes properly — a mid-playback seek then
-            // waits forever for a keyframe (silent infinite buffering). These
-            // flags make the TS reader accept non-IDR keyframes and detect
-            // access units itself, like browser players do.
+        if (isHls && subtitleConfigs.isEmpty()) {
+            // Kwik's TS is loosely muxed (PesReader start-code spam) — these
+            // flags make the TS reader tolerant like a browser player.
+            // Only used when there are no sideloaded subs: hand-built subtitle
+            // sources feed legacy text/vtt samples that media3's TextRenderer
+            // rejects ("Legacy decoding is disabled" crash on Anikoto).
             val extractors = androidx.media3.exoplayer.hls.DefaultHlsExtractorFactory(
                 androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or
                     androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS,
@@ -115,15 +120,10 @@ object PlayerHolder {
                 .setExtractorFactory(extractors)
                 .setAllowChunklessPreparation(true)
                 .createMediaSource(MediaItem.Builder().setUri(s.url).build())
-            // HlsMediaSource ignores sideloaded subtitle configs — merge them in.
-            val subs = subtitleConfigs.map { cfg ->
-                androidx.media3.exoplayer.source.SingleSampleMediaSource.Factory(factory)
-                    .createMediaSource(cfg, C.TIME_UNSET)
-            }
-            val source = if (subs.isEmpty()) video
-            else androidx.media3.exoplayer.source.MergingMediaSource(video, *subs.toTypedArray())
-            p.setMediaSource(source)
+            p.setMediaSource(video)
         } else {
+            // Subtitled streams go through DefaultMediaSourceFactory, which
+            // transcodes sideloaded subs to media3 cues (the supported path).
             val item = MediaItem.Builder().setUri(s.url).setSubtitleConfigurations(subtitleConfigs).build()
             p.setMediaSource(DefaultMediaSourceFactory(factory).createMediaSource(item))
         }

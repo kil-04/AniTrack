@@ -300,6 +300,10 @@ fun PlayerScreen(
     LaunchedEffect(index, retry, provider, subType) {
         if (index >= PlaySession.count) return@LaunchedEffect
         PlaySession.subType = subType
+        // Keep the session in sync with in-player navigation — otherwise a
+        // server switch matches the episode you STARTED on, not the one
+        // you're watching (the "came back to ep 58" bug).
+        PlaySession.index = index
         val epNum = PlaySession.episodeNumber(index)
         // Already loaded (returning from the mini player)? Don't restart it.
         val holder = com.sanjay.anitrack.next.data.PlayerHolder
