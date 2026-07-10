@@ -50,6 +50,10 @@ object PlayerHolder {
         player ?: ExoPlayer.Builder(ctx.applicationContext).build()
             .apply {
                 playWhenReady = true
+                // Kwik's TS can't be exact-seeked (garbled keyframe signaling →
+                // decoder never resyncs, silent black after a seek). Snap seeks
+                // to the nearest sync sample instead — like hls.js/browsers do.
+                setSeekParameters(androidx.media3.exoplayer.SeekParameters.CLOSEST_SYNC)
                 // Debug diagnosis: per-load lifecycle under the EventLogger tag
                 // (shows exactly which post-seek load hangs on the pahe CDN).
                 addAnalyticsListener(androidx.media3.exoplayer.util.EventLogger())

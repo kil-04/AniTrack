@@ -226,7 +226,7 @@ fun PlayerScreen(
         onDispose {
             PlaySession.playerActive = false
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-            insets?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            // Don't re-show system bars — the whole app runs immersive now.
         }
     }
 

@@ -72,11 +72,25 @@ class MainActivity : ComponentActivity() {
         // pahe/kwik CDN rejects segment requests without the WebView's cookies.
         java.net.CookieHandler.setDefault(com.sanjay.anitrack.next.data.WebkitCookieHandler())
         enableEdgeToEdge()
+        hideSystemBars()
         setContent {
             MaterialTheme(colorScheme = DarkColors) {
                 AppShell()
             }
         }
+    }
+
+    // Hide the Android status + taskbar app-wide; a swipe from an edge reveals
+    // them transiently, then they auto-hide again.
+    private fun hideSystemBars() {
+        val c = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+        c.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        c.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) hideSystemBars()   // re-hide after dialogs / app switches
     }
 
     // YouTube behaviour: leaving the app while watching drops into PiP.
