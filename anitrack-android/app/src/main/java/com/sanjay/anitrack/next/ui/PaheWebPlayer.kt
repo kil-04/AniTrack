@@ -86,9 +86,12 @@ fun PaheWebVideo(
                 webViewClient = android.webkit.WebViewClient()
                 controller.webView = this
                 // Load with the kwik origin as base URL so hls.js requests carry
-                // the Referer the CDN validates.
+                // the Referer the CDN validates. hls.js is INLINED — a relative
+                // <script src> would resolve to kwik.cx and 404.
                 val base = referer.trimEnd('/') + "/"
+                val hlsJs = ctx.assets.open("hls.min.js").bufferedReader().use { it.readText() }
                 val html = ctx.assets.open("pahe_player.html").bufferedReader().use { it.readText() }
+                    .replace("<!--HLS_JS-->", "<script>$hlsJs</script>")
                 loadDataWithBaseURL(base, html, "text/html", "utf-8", null)
             }
         },
