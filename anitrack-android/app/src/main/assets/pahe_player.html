@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden; }
+  #v { width: 100%; height: 100%; object-fit: contain; background: #000; display: block; }
+</style>
+<script src="hls.min.js"></script>
+</head>
+<body>
+<video id="v" playsinline webkit-playsinline></video>
+<script>
+  var v = document.getElementById('v');
+  var hls = null;
+
+  function load(url, startAt) {
+    try {
+      startAt = startAt || 0;
+      if (hls) { hls.destroy(); hls = null; }
+      if (window.Hls && Hls.isSupported()) {
+        // hls.js drives MSE, which tolerates kwik's loosely-muxed TS and seeks
+        // cleanly — the exact reason the native decoder couldn't.
+        hls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60, lowLatencyMode: false });
+        hls.loadSource(url);
+        hls.attachMedia(v);
+        hls.on(Hls.Events.MANIFEST_PARSED, function () {
+          if (startAt > 0) { try { v.currentTime = startAt; } catch (e) {} }
+          v.play().catch(function(){});
+        });
+        hls.on(Hls.Events.ERROR, function (e, d) {
+          if (d && d.fatal) {
+            if (d.type === 'networkError' && hls) { try { hls.startLoad(); } catch (x) {} }
+            else if (d.type === 'mediaError' && hls) { try { hls.recoverMediaError(); } catch (x) {} }
+            else if (window.Android) Android.onError(String(d.type) + ':' + String(d.details));
+          }
+        });
+      } else {
+        v.src = url;
+        v.addEventListener('loadedmetadata', function () { if (startAt > 0) v.currentTime = startAt; }, { once: true });
+        v.play().catch(function(){});
+      }
+    } catch (e) { if (window.Android) Android.onError(String(e)); }
+  }
+
+  function play() { v.play().catch(function(){}); }
+  function pause() { v.pause(); }
+  function seek(t) { try { v.currentTime = t; } catch (e) {} }
+  function rate(r) { v.playbackRate = r; }
+  function vol(x) { v.volume = x; }
+
+  // Report state to Kotlin every 300ms.
+  setInterval(function () {
+    if (!window.Android) return;
+    var buf = 0;
+    try { if (v.buffered.length) buf = v.buffered.end(v.buffered.length - 1); } catch (e) {}
+    Android.onState(v.currentTime || 0, isFinite(v.duration) ? v.duration : 0, v.paused ? 1 : 0, buf);
+  }, 300);
+
+  v.addEventListener('ended', function () { if (window.Android) Android.onEnded(); });
+</script>
+</body>
+</html>

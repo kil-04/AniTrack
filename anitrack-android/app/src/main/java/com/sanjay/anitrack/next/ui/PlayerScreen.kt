@@ -75,6 +75,24 @@ private fun fmtTime(ms: Long): String {
     return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
 }
 
+// Web (AnimePahe/hls.js) progress save — uses the mirrored position/duration.
+internal suspend fun saveWebProgress(index: Int, posMs: Long, durMs: Long) {
+    if (index >= PlaySession.count || durMs <= 0) return
+    val epNum = PlaySession.episodeNumber(index)
+    val now = System.currentTimeMillis()
+    val key = PlaySession.resumeKey()
+    com.sanjay.anitrack.next.data.Db.save(
+        PlaySession.animeId, epNum, posMs / 1000.0, durMs / 1000.0,
+        PlaySession.animeTitle, PlaySession.animeCover, key, updatedAt = now,
+    )
+    com.sanjay.anitrack.next.data.GistSync.pushProgress(
+        com.sanjay.anitrack.next.data.Db.CwRow(
+            PlaySession.animeId, epNum, posMs / 1000.0, durMs / 1000.0,
+            PlaySession.animeTitle, PlaySession.animeCover, key, now,
+        ),
+    )
+}
+
 internal suspend fun saveProgress(player: ExoPlayer, index: Int) {
     if (index >= PlaySession.count) return
     val epNum = PlaySession.episodeNumber(index)
@@ -142,6 +160,10 @@ fun PlayerScreen(
     // Transient-error recovery (Cronet re-request stalls after a seek).
     var errorRetries by remember { mutableStateOf(0) }
     var lastErrorAt by remember { mutableStateOf(0L) }
+    // AnimePahe plays through a WebView + hls.js (kwik can't be seeked natively).
+    val webCtl = remember { WebController() }
+    var webResumeMs by remember { mutableStateOf(0L) }
+    val useWeb = provider == "animepahe" && PlaySession.localFile == null
     fun flashControls() { controlsVisible = true }
 
     // Gesture feedback overlays
@@ -167,6 +189,18 @@ fun PlayerScreen(
     val player = remember { com.sanjay.anitrack.next.data.PlayerHolder.get(context) }
     LaunchedEffect(Unit) { com.sanjay.anitrack.next.data.PlayerHolder.miniActive.value = false }
 
+    // Unified controls that dispatch to the active backend (ExoPlayer / WebView).
+    fun curPos(): Long = if (useWeb) webCtl.positionMs.value else player.currentPosition
+    fun doSeek(ms: Long) { positionMs = ms; if (useWeb) webCtl.seekTo(ms) else player.seekTo(ms) }
+    fun doTogglePlay() {
+        if (useWeb) {
+            if (webCtl.paused.value) webCtl.play() else webCtl.pause()
+        } else {
+            player.playWhenReady = !player.playWhenReady
+            isPlaying = player.playWhenReady
+        }
+    }
+
     // Poll playback state for the scrubber + time display.
     LaunchedEffect(player) {
         // Buffering watchdog: if the player buffers >8s without loading anything
@@ -175,6 +209,15 @@ fun PlayerScreen(
         var stallBufferedAt = 0L
         var stallRecoveries = 0
         while (isActive) {
+            // AnimePahe (WebView) — mirror the hls.js state instead of ExoPlayer.
+            if (provider == "animepahe" && PlaySession.localFile == null) {
+                if (!isSeeking) positionMs = webCtl.positionMs.value
+                durationMs = webCtl.durationMs.value
+                bufferedMs = webCtl.bufferedMs.value
+                isPlaying = !webCtl.paused.value
+                delay(300)
+                continue
+            }
             if (!isSeeking) positionMs = player.currentPosition
             durationMs = player.duration.coerceAtLeast(0L)
             bufferedMs = player.bufferedPosition
@@ -210,6 +253,10 @@ fun PlayerScreen(
     // Auto-hide the bar while playing.
     LaunchedEffect(controlsVisible, isPlaying, isSeeking) {
         if (controlsVisible && isPlaying && !isSeeking) { delay(3500); controlsVisible = false }
+    }
+    // WebView (pahe) auto-next when hls.js reports the episode ended.
+    LaunchedEffect(webCtl.ended.value) {
+        if (webCtl.ended.value && autoNext && index + 1 < PlaySession.count) index += 1
     }
 
     DisposableEffect(Unit) {
@@ -314,7 +361,9 @@ fun PlayerScreen(
             return@LaunchedEffect
         }
         // Save the outgoing episode's position before switching.
-        lastPlayedIndex?.takeIf { it != index }?.let { saveProgress(player, it) }
+        lastPlayedIndex?.takeIf { it != index }?.let {
+            if (useWeb) saveWebProgress(it, webCtl.positionMs.value, durationMs) else saveProgress(player, it)
+        }
         lastPlayedIndex = index
         error = null
         status = "Resolving Episode ${epNum.toInt()}…"
@@ -322,14 +371,21 @@ fun PlayerScreen(
         try {
             val s = PlaySession.resolve(index)
             stream = s
-            // Shared loader: local file:// vs CDN (Referer/UA) data source.
-            holder.setMedia(context, s)
-            player.playWhenReady = autoplay
-            holder.loadedKey = holder.keyFor(index)
-            holder.lastResolved = s
-            // Resume mid-episode from the local DB (finished episodes restart).
-            com.sanjay.anitrack.next.data.Db.resumeFor(PlaySession.animeId, epNum)?.let { pos ->
-                player.seekTo((pos * 1000).toLong())
+            val resumeMs = (com.sanjay.anitrack.next.data.Db.resumeFor(PlaySession.animeId, epNum) ?: 0.0) * 1000
+            if (useWeb) {
+                // WebView + hls.js: the WebView itself is (re)mounted for the URL;
+                // pass the resume position so hls.js seeks once the manifest loads.
+                player.stop()
+                webResumeMs = resumeMs.toLong()
+                webCtl.load(s.url, webResumeMs / 1000.0)
+                holder.loadedKey = null
+            } else {
+                // Shared loader: local file:// vs CDN (Referer/UA) data source.
+                holder.setMedia(context, s)
+                player.playWhenReady = autoplay
+                holder.loadedKey = holder.keyFor(index)
+                holder.lastResolved = s
+                if (resumeMs > 0) player.seekTo(resumeMs.toLong())
             }
             status = ""
         } catch (e: Exception) {
@@ -345,15 +401,16 @@ fun PlayerScreen(
         var sinceSave = 0
         while (isActive) {
             val s = stream
-            val pos = player.currentPosition / 1000
+            val pos = curPos() / 1000
             val si = s?.introEnd != null && pos >= (s.introStart ?: 0) && pos < s.introEnd!!
             val so = s?.outroEnd != null && pos >= (s.outroStart ?: 0) && pos < s.outroEnd!!
             if (si != showSkipIntro) showSkipIntro = si
             if (so != showSkipOutro) showSkipOutro = so
             sinceSave += 1
-            if (sinceSave >= 20 && player.isPlaying) { // 20 * 500ms = 10s
+            val playing = if (useWeb) !webCtl.paused.value else player.isPlaying
+            if (sinceSave >= 20 && playing) { // 20 * 500ms = 10s
                 sinceSave = 0
-                saveProgress(player, index)
+                if (useWeb) saveWebProgress(index, curPos(), durationMs) else saveProgress(player, index)
             }
             delay(500)
         }
@@ -368,8 +425,8 @@ fun PlayerScreen(
             } else {
                 holder.release()
             }
-            val dur = player.duration
-            val posMs = player.currentPosition
+            val dur = if (useWeb) durationMs else player.duration
+            val posMs = if (useWeb) webCtl.positionMs.value else player.currentPosition
             val savedIndex = index
             if (savedIndex < PlaySession.count && dur > 0) {
                 val epNum = PlaySession.episodeNumber(savedIndex)
@@ -479,7 +536,23 @@ fun PlayerScreen(
         // Video surface + overlays. Extracted so both orientations reuse it.
         val videoArea: @Composable (Modifier) -> Unit = { mod ->
         Box(mod, contentAlignment = Alignment.Center) {
-            AndroidView(
+            if (useWeb) {
+                // AnimePahe via WebView + hls.js. Keyed on the resolved URL so a
+                // server/episode change remounts with the new stream.
+                key(stream?.url) {
+                    val s = stream
+                    if (s != null) {
+                        PaheWebVideo(
+                            controller = webCtl,
+                            url = s.url,
+                            referer = s.referer,
+                            userAgent = s.userAgent,
+                            modifier = Modifier.fillMaxSize(),
+                            onEnded = { if (autoNext && index + 1 < PlaySession.count) index += 1 },
+                        )
+                    }
+                }
+            } else AndroidView(
                 factory = { ctx ->
                     PlayerView(ctx).apply {
                         this.player = player
@@ -526,28 +599,28 @@ fun PlayerScreen(
                                             if (!chainForward || chainSecs == 0) chainSecs = 0
                                             chainForward = false
                                             chainSecs += 10
-                                            player.seekTo((player.currentPosition - 10_000).coerceAtLeast(0))
+                                            doSeek((curPos() - 10_000).coerceAtLeast(0))
                                             seekFeedback = false to chainSecs
                                         }
                                         offset.x > w * 0.65f -> {
                                             if (chainForward.not() || chainSecs == 0) chainSecs = 0
                                             chainForward = true
                                             chainSecs += 10
-                                            player.seekTo(player.currentPosition + 10_000)
+                                            doSeek(curPos() + 10_000)
                                             seekFeedback = true to chainSecs
                                         }
-                                        else -> if (player.isPlaying) player.pause() else player.play()
+                                        else -> doTogglePlay()
                                     }
                                 },
                                 onLongPress = {
                                     speedActive = true
-                                    player.setPlaybackSpeed(2f)
+                                    if (useWeb) webCtl.setRate(2f) else player.setPlaybackSpeed(2f)
                                 },
                                 onPress = {
                                     tryAwaitRelease()
                                     if (speedActive) {
                                         speedActive = false
-                                        player.setPlaybackSpeed(1f)
+                                        if (useWeb) webCtl.setRate(speed) else player.setPlaybackSpeed(speed)
                                     }
                                 },
                             )
@@ -558,9 +631,9 @@ fun PlayerScreen(
                                 onDragEnd = { volumeFeedback = null },
                                 onDrag = { change, drag ->
                                     if (change.position.x > size.width / 2) {
-                                        val delta = -drag.y / size.height * 1.4f
-                                        player.volume = (player.volume + delta).coerceIn(0f, 1f)
-                                        volumeFeedback = player.volume
+                                        val nv = ((if (muted) 0f else 1f) + (-drag.y / size.height * 1.4f)).coerceIn(0f, 1f)
+                                        if (useWeb) webCtl.setVolume(nv) else player.volume = nv
+                                        volumeFeedback = nv
                                     }
                                 },
                             )
@@ -619,14 +692,14 @@ fun PlayerScreen(
                             .pointerInput(dur) {
                                 detectTapGestures { off ->
                                     val t = (off.x / size.width * dur).toLong().coerceIn(0, dur)
-                                    player.seekTo(t); positionMs = t; flashControls()
+                                    doSeek(t); flashControls()
                                 }
                             }
                             .pointerInput(dur) {
                                 detectHorizontalDragGestures(
                                     onDragStart = { off -> isSeeking = true; seekPreviewMs = (off.x / size.width * dur).toLong().coerceIn(0, dur) },
                                     onHorizontalDrag = { change, _ -> seekPreviewMs = (change.position.x / size.width * dur).toLong().coerceIn(0, dur) },
-                                    onDragEnd = { player.seekTo(seekPreviewMs); positionMs = seekPreviewMs; isSeeking = false },
+                                    onDragEnd = { doSeek(seekPreviewMs); isSeeking = false },
                                 )
                             },
                     ) {
@@ -648,18 +721,17 @@ fun PlayerScreen(
                         IconButton(onClick = { if (index > 0) { index -= 1; flashControls() } }, enabled = index > 0) {
                             Icon(Icons.Filled.SkipPrevious, "Previous", tint = Color.White)
                         }
-                        IconButton(onClick = {
-                            // Toggle the play INTENT (works even mid-buffer, unlike isPlaying).
-                            player.playWhenReady = !player.playWhenReady
-                            isPlaying = player.playWhenReady
-                            flashControls()
-                        }) {
+                        IconButton(onClick = { doTogglePlay(); flashControls() }) {
                             Icon(if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, "Play/Pause", tint = Color.White, modifier = Modifier.size(30.dp))
                         }
                         IconButton(onClick = { if (index + 1 < PlaySession.count) { index += 1; flashControls() } }, enabled = index + 1 < PlaySession.count) {
                             Icon(Icons.Filled.SkipNext, "Next", tint = Color.White)
                         }
-                        IconButton(onClick = { muted = !muted; player.volume = if (muted) 0f else 1f; flashControls() }) {
+                        IconButton(onClick = {
+                            muted = !muted
+                            if (useWeb) webCtl.setVolume(if (muted) 0f else 1f) else player.volume = if (muted) 0f else 1f
+                            flashControls()
+                        }) {
                             Icon(if (muted) Icons.Filled.VolumeOff else Icons.Filled.VolumeUp, "Mute", tint = Color.White)
                         }
                         Text(
@@ -707,7 +779,7 @@ fun PlayerScreen(
                         menu = settingsMenu!!,
                         onMenu = { settingsMenu = it },
                         speed = speed,
-                        onSpeed = { speed = it; player.setPlaybackSpeed(it) },
+                        onSpeed = { speed = it; if (useWeb) webCtl.setRate(it) else player.setPlaybackSpeed(it) },
                         qualities = videoHeights,
                         quality = quality,
                         onQuality = { quality = it; applyQuality() },
@@ -734,7 +806,7 @@ fun PlayerScreen(
                     onClick = {
                         val s = stream ?: return@Button
                         val end = (if (showSkipIntro) s.introEnd else s.outroEnd) ?: return@Button
-                        player.seekTo(end * 1000)
+                        doSeek(end * 1000)
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color.Black.copy(alpha = 0.75f)),
                     modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 96.dp),
