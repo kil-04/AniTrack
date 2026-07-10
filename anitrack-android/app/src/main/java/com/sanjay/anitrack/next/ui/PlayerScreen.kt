@@ -136,6 +136,9 @@ fun PlayerScreen(
     var autoplay by remember { mutableStateOf(capPrefs.getBoolean("autoplay", true)) }
     var autoNext by remember { mutableStateOf(capPrefs.getBoolean("auto_next", true)) }
     var settingsMenu by remember { mutableStateOf<String?>(null) }  // null|main|speed|quality|subtitles
+    // Manual quality: available video heights in the stream; 0 = highest.
+    var videoHeights by remember { mutableStateOf<List<Int>>(emptyList()) }
+    var quality by remember { mutableStateOf(0) }
     fun flashControls() { controlsVisible = true }
 
     // Gesture feedback overlays
@@ -194,10 +197,35 @@ fun PlayerScreen(
         }
     }
 
+    // Pin the selected (or highest) rendition — the DEFAULT is best quality,
+    // not adaptive ramp-up.
+    fun applyQuality(heights: List<Int> = videoHeights) {
+        val target = when {
+            quality > 0 && heights.contains(quality) -> quality
+            heights.isNotEmpty() -> heights.max()
+            else -> return
+        }
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+            .setMinVideoSize(0, target)
+            .setMaxVideoSize(Int.MAX_VALUE, target)
+            .build()
+    }
+
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_ENDED && autoNext && index + 1 < PlaySession.count) index += 1
+            }
+            override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+                // Collect the stream's video renditions for the Quality menu.
+                val heights = tracks.groups
+                    .filter { it.type == C.TRACK_TYPE_VIDEO }
+                    .flatMap { g -> (0 until g.length).map { g.getTrackFormat(it).height } }
+                    .filter { it > 0 }.distinct().sortedDescending()
+                if (heights != videoHeights) {
+                    videoHeights = heights
+                    applyQuality(heights)
+                }
             }
         }
         player.addListener(listener)
@@ -601,6 +629,9 @@ fun PlayerScreen(
                         onMenu = { settingsMenu = it },
                         speed = speed,
                         onSpeed = { speed = it; player.setPlaybackSpeed(it) },
+                        qualities = videoHeights,
+                        quality = quality,
+                        onQuality = { quality = it; applyQuality() },
                         hasSubs = stream?.subtitles?.isNotEmpty() == true,
                         ccOn = ccOn,
                         onCc = {

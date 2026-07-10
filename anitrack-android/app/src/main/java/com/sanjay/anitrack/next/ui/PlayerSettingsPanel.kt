@@ -6,6 +6,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Hd
 import androidx.compose.material.icons.filled.Speed
@@ -36,6 +39,7 @@ internal fun PlayerSettingsPanel(
     menu: String,
     onMenu: (String?) -> Unit,
     speed: Float, onSpeed: (Float) -> Unit,
+    qualities: List<Int>, quality: Int, onQuality: (Int) -> Unit,
     hasSubs: Boolean,
     ccOn: Boolean, onCc: (Boolean) -> Unit,
     capSize: Float, onCapSize: (Float) -> Unit,
@@ -58,8 +62,8 @@ internal fun PlayerSettingsPanel(
             Spacer(Modifier.width(12.dp))
             Text(label, color = Color.White, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
             Text(value, color = Color.White.copy(alpha = 0.5f), style = MaterialTheme.typography.bodySmall)
-            Spacer(Modifier.width(6.dp))
-            Text(">", color = Color.White.copy(alpha = 0.5f))
+            Spacer(Modifier.width(4.dp))
+            Icon(Icons.Filled.ChevronRight, null, tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(18.dp))
         }
     }
 
@@ -83,8 +87,8 @@ internal fun PlayerSettingsPanel(
             Modifier.fillMaxWidth().clickable { onMenu("main") }.padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("<", color = Color.White, style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.width(10.dp))
+            Icon(Icons.Filled.ChevronLeft, null, tint = Color.White, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(8.dp))
             Text(title, color = Color.White, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
         }
     }
@@ -124,15 +128,38 @@ internal fun PlayerSettingsPanel(
                             if (sp == 1f) "Normal" else "${sp}x",
                             color = Color.White, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f),
                         )
-                        if (sp == speed) Text("*", color = Accent, fontWeight = FontWeight.Bold)
+                        if (sp == speed) Icon(Icons.Filled.Check, null, tint = Accent, modifier = Modifier.size(18.dp))
                     }
                 }
             }
             "quality" -> {
                 BackHeader("Quality")
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
-                    Text("Auto", color = Color.White, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                    Text("*", color = Accent, fontWeight = FontWeight.Bold)
+                // 0 = highest available (the default); otherwise a pinned height.
+                Row(
+                    Modifier.fillMaxWidth().clickable { onQuality(0); onMenu("main") }.padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Highest" + (qualities.maxOrNull()?.let { " (${it}p)" } ?: ""),
+                        color = Color.White, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f),
+                    )
+                    if (quality == 0) Icon(Icons.Filled.Check, null, tint = Accent, modifier = Modifier.size(18.dp))
+                }
+                qualities.forEach { h ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { onQuality(h); onMenu("main") }.padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("${h}p", color = Color.White, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                        if (quality == h) Icon(Icons.Filled.Check, null, tint = Accent, modifier = Modifier.size(18.dp))
+                    }
+                }
+                if (qualities.isEmpty()) {
+                    Text(
+                        "Single-quality stream", color = Color.White.copy(alpha = 0.4f),
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    )
                 }
             }
             "subtitles" -> {
@@ -183,7 +210,11 @@ internal fun PlayerSettingsPanel(
             }
             else -> {
                 MenuRow(Icons.Filled.Speed, "Playback speed", speedLabel, "speed")
-                MenuRow(Icons.Filled.Hd, "Quality", "Auto", "quality")
+                MenuRow(
+                    Icons.Filled.Hd, "Quality",
+                    if (quality > 0) "${quality}p" else "Highest" + (qualities.maxOrNull()?.let { " (${it}p)" } ?: ""),
+                    "quality",
+                )
                 if (hasSubs) MenuRow(Icons.Filled.ClosedCaption, "Subtitles", if (ccOn) "On" else "Off", "subtitles")
                 HorizontalDivider(color = Color.White.copy(alpha = 0.08f), modifier = Modifier.padding(vertical = 4.dp))
                 ToggleRow("Autoplay", autoplay, onAutoplay)

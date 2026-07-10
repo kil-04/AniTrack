@@ -35,8 +35,9 @@ import androidx.navigation.compose.rememberNavController
 // media3 player → downloads → gist sync. The provider/downloader/DB logic
 // ports from the proven Kotlin plugins in ../android.
 
-private val Bg = Color(0xFF0B0B0F)
-private val BgElev = Color(0xFF141419)
+// Desktop parity: the app background is pure black (index.css #000000).
+private val Bg = Color(0xFF000000)
+private val BgElev = Color(0xFF0E0E12)
 private val Accent = Color(0xFFE50914)
 
 private val DarkColors = darkColorScheme(

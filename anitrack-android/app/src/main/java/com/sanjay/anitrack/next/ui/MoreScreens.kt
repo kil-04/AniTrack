@@ -21,8 +21,15 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.border
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.EditCalendar
+import androidx.compose.material.icons.filled.KeyboardDoubleArrowLeft
+import androidx.compose.material.icons.filled.KeyboardDoubleArrowRight
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -65,7 +72,7 @@ fun NavSearchBox(modifier: Modifier = Modifier, onOpen: (Anime) -> Unit, onViewA
             singleLine = true,
             shape = RoundedCornerShape(50),   // pill, like the desktop header
             leadingIcon = { Icon(Icons.Filled.Search, null, tint = Color.White.copy(alpha = 0.5f)) },
-            trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Text("✕", color = Color.White.copy(alpha = 0.6f)) } },
+            trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Filled.Close, "Clear", tint = Color.White.copy(alpha = 0.6f), modifier = Modifier.size(16.dp)) } },
             modifier = Modifier.fillMaxWidth().height(52.dp),
             textStyle = MaterialTheme.typography.bodyMedium,
             colors = OutlinedTextFieldDefaults.colors(
@@ -119,7 +126,7 @@ fun NavSearchBox(modifier: Modifier = Modifier, onOpen: (Anime) -> Unit, onViewA
                 text = {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text("View all results for \"$query\"", style = MaterialTheme.typography.labelLarge, color = Color.White.copy(alpha = 0.8f), modifier = Modifier.weight(1f))
-                        Text("→", color = Color.White.copy(alpha = 0.6f))
+                        Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = Color.White.copy(alpha = 0.6f), modifier = Modifier.size(16.dp))
                     }
                 },
             )
@@ -262,7 +269,7 @@ fun ContinueWatchingScreen(onPlay: () -> Unit) {
                                     }
                                 },
                             contentAlignment = Alignment.Center,
-                        ) { Text("✕", color = Color.White, style = MaterialTheme.typography.labelSmall) }
+                        ) { Icon(Icons.Filled.Close, "Dismiss", tint = Color.White, modifier = Modifier.size(12.dp)) }
                         if (resumingId == row.animeId) {
                             Box(Modifier.matchParentSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Accent, modifier = Modifier.size(28.dp)) }
                         }
@@ -294,15 +301,15 @@ internal fun NumberedPager(page: Int, pageCount: Int, onPage: (Int) -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         @Composable
-        fun navBtn(label: String, enabled: Boolean, target: Int) {
+        fun navBtn(icon: androidx.compose.ui.graphics.vector.ImageVector, enabled: Boolean, target: Int) {
             Box(
                 Modifier.size(32.dp).clip(RoundedCornerShape(6.dp))
                     .clickable(enabled = enabled) { onPage(target) },
                 contentAlignment = Alignment.Center,
-            ) { Text(label, color = Color.White.copy(alpha = if (enabled) 0.5f else 0.2f)) }
+            ) { Icon(icon, null, tint = Color.White.copy(alpha = if (enabled) 0.5f else 0.2f), modifier = Modifier.size(16.dp)) }
         }
-        navBtn("«", page > 0, 0)
-        navBtn("‹", page > 0, page - 1)
+        navBtn(Icons.Filled.KeyboardDoubleArrowLeft, page > 0, 0)
+        navBtn(Icons.Filled.ChevronLeft, page > 0, page - 1)
         val pages = (0 until pageCount).filter { kotlin.math.abs(it - page) <= 2 || it == 0 || it == pageCount - 1 }
         var prev = -1
         for (p in pages) {
@@ -317,8 +324,8 @@ internal fun NumberedPager(page: Int, pageCount: Int, onPage: (Int) -> Unit) {
                 contentAlignment = Alignment.Center,
             ) { Text("${p + 1}", color = if (p == page) Color.Black else Color.White.copy(alpha = 0.6f), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold) }
         }
-        navBtn("›", page + 1 < pageCount, page + 1)
-        navBtn("»", page + 1 < pageCount, pageCount - 1)
+        navBtn(Icons.Filled.ChevronRight, page + 1 < pageCount, page + 1)
+        navBtn(Icons.Filled.KeyboardDoubleArrowRight, page + 1 < pageCount, pageCount - 1)
     }
 }
 
@@ -543,10 +550,16 @@ fun ScheduleScreen(onOpen: (Int) -> Unit) {
         return
     }
 
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 24.dp, vertical = 20.dp)) {
         item {
-            Text("Schedule", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.EditCalendar, null, tint = Accent, modifier = Modifier.size(24.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Schedule", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(2.dp))
+            Text("Upcoming episodes for the next 7 days.", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.4f))
+            Spacer(Modifier.height(16.dp))
         }
         for ((day, list) in grouped) {
             item {

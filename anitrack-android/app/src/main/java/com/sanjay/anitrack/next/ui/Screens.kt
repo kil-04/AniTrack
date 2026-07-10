@@ -17,6 +17,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
@@ -325,7 +327,7 @@ private fun HeroBanner(anime: Anime, onOpen: (Anime) -> Unit) {
         Box(
             Modifier.fillMaxSize().background(
                 androidx.compose.ui.graphics.Brush.verticalGradient(
-                    0f to Color.Transparent, 0.55f to Color(0xFF0B0B0F).copy(alpha = 0.65f), 1f to Color(0xFF0B0B0F),
+                    0f to Color.Transparent, 0.55f to Color.Black.copy(alpha = 0.65f), 1f to Color.Black,
                 ),
             ),
         )
@@ -454,7 +456,7 @@ private fun ContinueCardWide(
                 Modifier.size(24.dp).clip(RoundedCornerShape(50)).background(Color.Black.copy(alpha = 0.7f))
                     .clickable { onDismiss() },
                 contentAlignment = Alignment.Center,
-            ) { Text("✕", color = Color.White, style = MaterialTheme.typography.labelSmall) }
+            ) { Icon(Icons.Filled.Close, "Dismiss", tint = Color.White, modifier = Modifier.size(13.dp)) }
             if (total != null) {
                 val hasNew = total > row.episode
                 Box(
@@ -723,8 +725,8 @@ private fun <T> FilterDropdown(placeholder: String, current: String?, options: L
                 style = MaterialTheme.typography.bodySmall,
                 color = if (current != null) Color.White else Color.White.copy(alpha = 0.6f),
             )
-            Spacer(Modifier.width(8.dp))
-            Text("▾", color = Color.White.copy(alpha = 0.5f), style = MaterialTheme.typography.bodySmall)
+            Spacer(Modifier.width(6.dp))
+            Icon(Icons.Filled.KeyboardArrowDown, null, tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(16.dp))
         }
         DropdownMenu(
             expanded = open, onDismissRequest = { open = false },
@@ -764,7 +766,7 @@ fun DetailScreen(animeId: Int, onPlay: () -> Unit) {
             Box(
                 Modifier.fillMaxSize().background(
                     androidx.compose.ui.graphics.Brush.verticalGradient(
-                        listOf(Color.Transparent, Color(0xFF0B0B0F)),
+                        listOf(Color.Transparent, Color.Black),
                     ),
                 ),
             )
