@@ -59,6 +59,10 @@ object PlayerHolder {
                 .build()
         }
         val item = MediaItem.Builder().setUri(s.url).setSubtitleConfigurations(subtitleConfigs).build()
+        // Clear quality pins from the previous stream — a 1080p pin must not
+        // leak onto a stream that only has 720p (or a different provider).
+        p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
+            .clearVideoSizeConstraints().build()
         p.setMediaSource(DefaultMediaSourceFactory(factory).createMediaSource(item))
         p.prepare()
     }

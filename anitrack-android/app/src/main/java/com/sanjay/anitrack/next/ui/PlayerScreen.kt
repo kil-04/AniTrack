@@ -227,6 +227,23 @@ fun PlayerScreen(
                     applyQuality(heights)
                 }
             }
+            override fun onPlayerError(e: androidx.media3.common.PlaybackException) {
+                // Surface load failures (they were silent — "0:00/0:00").
+                var cause: Throwable? = e
+                var httpCode: Int? = null
+                while (cause != null) {
+                    if (cause is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException) {
+                        httpCode = cause.responseCode; break
+                    }
+                    cause = cause.cause
+                }
+                android.util.Log.e("AniTrackNext", "player error http=$httpCode provider=${PlaySession.provider}", e)
+                error = when {
+                    httpCode != null -> "Stream request failed (HTTP $httpCode) — the CDN rejected playback."
+                    else -> e.errorCodeName.removePrefix("ERROR_CODE_").replace('_', ' ').lowercase()
+                        .replaceFirstChar { c -> c.uppercase() }
+                }
+            }
         }
         player.addListener(listener)
         // No release here — PlayerHolder owns the instance (mini player).
