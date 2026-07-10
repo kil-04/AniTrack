@@ -16,6 +16,7 @@ import androidx.compose.ui.viewinterop.AndroidView
  */
 class WebController {
     var webView: WebView? = null
+    var bridge: Any? = null   // strong ref so the JS interface isn't GC'd
 
     // Latest media state, pushed from JS ~every 300ms.
     val positionMs = mutableStateOf(0L)
@@ -70,7 +71,9 @@ fun PaheWebVideo(
                 // Persist kwik cookies so hls.js's segment fetches are accepted.
                 android.webkit.CookieManager.getInstance().setAcceptCookie(true)
                 android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-                addJavascriptInterface(object {
+                // Strong ref to the bridge (addJavascriptInterface alone let it
+                // GC → "Java object is gone").
+                val bridge = object {
                     @JavascriptInterface
                     fun onState(pos: Double, dur: Double, isPaused: Int, buffered: Double) {
                         controller.positionMs.value = (pos * 1000).toLong()
@@ -82,19 +85,42 @@ fun PaheWebVideo(
                     fun onEnded() { controller.ended.value = true; post { onEnded() } }
                     @JavascriptInterface
                     fun onError(msg: String) { controller.error.value = msg }
-                }, "Android")
-                webViewClient = android.webkit.WebViewClient()
+                }
+                controller.bridge = bridge
+                addJavascriptInterface(bridge, "Android")
+                webViewClient = object : android.webkit.WebViewClient() {
+                    // Serve hls.js from assets (correct MIME) — a relative
+                    // <script src> resolves to the kwik baseURL and 404s.
+                    override fun shouldInterceptRequest(
+                        view: WebView, request: android.webkit.WebResourceRequest,
+                    ): android.webkit.WebResourceResponse? {
+                        if (request.url.toString().endsWith("/hls.min.js")) {
+                            return android.webkit.WebResourceResponse(
+                                "application/javascript", "utf-8", ctx.assets.open("hls.min.js"),
+                            )
+                        }
+                        return null
+                    }
+                    // The kwik CDN serves an incomplete cert chain the WebView
+                    // can't validate (net_error -202); the full-browser apps
+                    // tolerate it. Proceed so segments load.
+                    override fun onReceivedSslError(
+                        view: WebView, handler: android.webkit.SslErrorHandler, error: android.net.http.SslError,
+                    ) { handler.proceed() }
+                }
                 controller.webView = this
-                // Load with the kwik origin as base URL so hls.js requests carry
-                // the Referer the CDN validates. hls.js is INLINED — a relative
-                // <script src> would resolve to kwik.cx and 404.
+                // Load with the kwik origin as base URL so hls.js's fetches carry
+                // the Referer the CDN validates.
                 val base = referer.trimEnd('/') + "/"
-                val hlsJs = ctx.assets.open("hls.min.js").bufferedReader().use { it.readText() }
                 val html = ctx.assets.open("pahe_player.html").bufferedReader().use { it.readText() }
-                    .replace("<!--HLS_JS-->", "<script>$hlsJs</script>")
                 loadDataWithBaseURL(base, html, "text/html", "utf-8", null)
             }
         },
         update = { /* controller.load() is driven from the resolve effect */ },
+        onRelease = { wv ->
+            // Stop the old instance's JS timer from calling a gone bridge.
+            runCatching { wv.loadUrl("about:blank"); wv.removeJavascriptInterface("Android"); wv.destroy() }
+            if (controller.webView === wv) { controller.webView = null; controller.bridge = null }
+        },
     )
 }
