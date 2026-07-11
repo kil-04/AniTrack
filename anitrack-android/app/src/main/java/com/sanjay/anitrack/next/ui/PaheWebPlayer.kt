@@ -51,9 +51,11 @@ fun PaheWebVideo(
     url: String,
     referer: String,
     userAgent: String,
+    startMs: Long = 0,
     modifier: Modifier = Modifier,
     onEnded: () -> Unit,
 ) {
+    fun q(s: String) = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
     AndroidView(
         modifier = modifier,
         factory = { ctx ->
@@ -107,6 +109,12 @@ fun PaheWebVideo(
                     override fun onReceivedSslError(
                         view: WebView, handler: android.webkit.SslErrorHandler, error: android.net.http.SslError,
                     ) { handler.proceed() }
+                    // Load the stream only once the page's JS (hls.js + load())
+                    // is ready — calling load() from the resolve effect fired
+                    // before this and silently no-op'd.
+                    override fun onPageFinished(view: WebView, u: String?) {
+                        view.evaluateJavascript("load(${q(url)}, ${startMs / 1000.0});", null)
+                    }
                 }
                 controller.webView = this
                 // Load with the kwik origin as base URL so hls.js's fetches carry

@@ -373,11 +373,11 @@ fun PlayerScreen(
             stream = s
             val resumeMs = (com.sanjay.anitrack.next.data.Db.resumeFor(PlaySession.animeId, epNum) ?: 0.0) * 1000
             if (useWeb) {
-                // WebView + hls.js: the WebView itself is (re)mounted for the URL;
-                // pass the resume position so hls.js seeks once the manifest loads.
+                // WebView + hls.js: the WebView is (re)mounted for this URL and
+                // calls load() itself in onPageFinished (when the page JS is
+                // ready). We just publish the resume position + stream here.
                 player.stop()
                 webResumeMs = resumeMs.toLong()
-                webCtl.load(s.url, webResumeMs / 1000.0)
                 holder.loadedKey = null
             } else {
                 // Shared loader: local file:// vs CDN (Referer/UA) data source.
@@ -547,6 +547,7 @@ fun PlayerScreen(
                             url = s.url,
                             referer = s.referer,
                             userAgent = s.userAgent,
+                            startMs = webResumeMs,
                             modifier = Modifier.fillMaxSize(),
                             onEnded = { if (autoNext && index + 1 < PlaySession.count) index += 1 },
                         )
