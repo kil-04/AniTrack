@@ -61,16 +61,39 @@ function request(hostname, apiPath, method = "GET", body, headers = {}, options 
   });
 }
 
-async function releaseByTag({ allowMissing = false } = {}) {
-  requireRepositoryMetadata();
-  return request(
+async function listedReleaseByTag() {
+  const releases = await request(
     "api.github.com",
-    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/releases/tags/${encodeURIComponent(tag)}`,
-    "GET",
-    undefined,
-    {},
-    { allow404: allowMissing },
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/releases?per_page=100`,
   );
+  if (!Array.isArray(releases)) throw new Error("GitHub returned an invalid release list");
+  const matching = releases.filter((release) => release?.tag_name === tag);
+  if (matching.length > 1) throw new Error(`GitHub returned duplicate releases for ${tag}`);
+  return matching[0] || null;
+}
+
+async function releaseByTag({ allowMissing = false, retries = allowMissing ? 0 : 5 } = {}) {
+  requireRepositoryMetadata();
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    const direct = await request(
+      "api.github.com",
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/releases/tags/${encodeURIComponent(tag)}`,
+      "GET",
+      undefined,
+      {},
+      { allow404: true },
+    );
+    if (direct) return direct;
+
+    // GitHub can temporarily (and for some authenticated drafts, consistently)
+    // return 404 from the tag endpoint while exposing the same draft in the
+    // authenticated release list.
+    const listed = await listedReleaseByTag();
+    if (listed) return listed;
+    if (attempt < retries) await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+  }
+  if (allowMissing) return null;
+  throw new Error(`GitHub release ${tag} does not exist after bounded retries`);
 }
 
 function assertDraftRelease(release, { allowMissing = false } = {}) {
@@ -90,6 +113,7 @@ module.exports = {
   repo,
   tag,
   request,
+  listedReleaseByTag,
   releaseByTag,
   assertDraftRelease,
 };
