@@ -20,7 +20,9 @@ function git(args) {
   if (result.error || result.status !== 0) {
     throw new Error(`git ${args.join(" ")} failed: ${(result.error?.message || result.stderr || result.stdout || "unknown error").trim()}`);
   }
-  return result.stdout.trim();
+  // Porcelain status uses meaningful leading spaces for its two status
+  // columns. Preserve those while still removing the trailing newline.
+  return result.stdout.trimEnd();
 }
 
 function assertReleaseProvenance(allowGeneratedManifest = false) {
