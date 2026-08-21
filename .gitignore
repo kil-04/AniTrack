@@ -11,6 +11,7 @@ resources/mpv
 build/icon_tmp
 .claude
 .release-secrets/
+.device-backups/
 *.jks
 *.keystore
 anitrack-android/.gradle/

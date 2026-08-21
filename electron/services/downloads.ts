@@ -3,6 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DownloadItem } from "../../shared/types";
 import { getRuntimeConfig } from "./remote-config";
+import {
+  getAuthorizedPaheRequestHeaders,
+  type AuthorizedPaheRequestHeaders,
+} from "./providers/animepahe";
 
 /**
  * Desktop (Electron) offline downloader — mirrors the Android AniTrackDownloader
@@ -107,15 +111,21 @@ async function runDownload(o: StartOpts): Promise<void> {
   try {
     fs.mkdirSync(dir, { recursive: true });
     emit(o, "downloading", 0, 0, 0, 0);
+    const paheAuthorization = o.providerId === "animepahe"
+      ? getAuthorizedPaheRequestHeaders(o.hlsUrl)
+      : null;
+    if (o.providerId === "animepahe" && (!paheAuthorization || !paheAuthorization.cookie)) {
+      throw new Error("AnimePahe stream authorization expired. Retry to resolve a fresh stream.");
+    }
     const ref = o.referer && o.referer.length
       ? o.referer.replace(/\/$/, "")
-      : o.hlsUrl.includes("animepahe") ? "https://animepahe.pw" : "";
+      : paheAuthorization?.referer ?? "";
 
     let playlistUrl = o.hlsUrl;
-    let playlist = await httpGetText(playlistUrl, ref);
+    let playlist = await httpGetText(playlistUrl, ref, paheAuthorization);
     if (playlist.includes("#EXT-X-STREAM-INF")) {
       const variant = pickVariant(playlist, playlistUrl);
-      if (variant) { playlistUrl = variant; playlist = await httpGetText(playlistUrl, ref); }
+      if (variant) { playlistUrl = variant; playlist = await httpGetText(playlistUrl, ref, paheAuthorization); }
     }
 
     const base = playlistUrl.slice(0, playlistUrl.lastIndexOf("/") + 1);
@@ -165,7 +175,7 @@ async function runDownload(o: StartOpts): Promise<void> {
       while (idx < toDownload.length) {
         if (cancelled.has(o.id)) throw new Error("cancelled");
         const d = toDownload[idx++];
-        await httpDownloadToFile(d.url, d.file, ref);
+        await httpDownloadToFile(d.url, d.file, ref, paheAuthorization);
         done++;
         if (done % 4 === 0 || done === total) emit(o, "downloading", Math.floor((done * 100) / total), done, total, 0);
       }
@@ -173,7 +183,7 @@ async function runDownload(o: StartOpts): Promise<void> {
     await Promise.all(Array.from({ length: 6 }, () => worker()));
 
     if (o.subtitleUrl) {
-      try { await httpDownloadToFile(o.subtitleUrl, path.join(dir, "subs.vtt"), ref); } catch { /* best-effort */ }
+      try { await httpDownloadToFile(o.subtitleUrl, path.join(dir, "subs.vtt"), ref, paheAuthorization); } catch { /* best-effort */ }
     }
 
     let sizeBytes = 0;
@@ -189,16 +199,29 @@ async function runDownload(o: StartOpts): Promise<void> {
 
 // ── HTTP helpers ──────────────────────────────────────────────────────────────
 
-function reqHeaders(ref: string): Record<string, string> {
+function reqHeaders(url: string, ref: string, paheAuthorization: AuthorizedPaheRequestHeaders | null): Record<string, string> {
   const h: Record<string, string> = { "User-Agent": UA };
   if (ref) { h["Referer"] = ref + "/"; h["Origin"] = ref; }
+  if (paheAuthorization) {
+    const host = new URL(url).hostname.toLowerCase();
+    if (host === paheAuthorization.host) {
+      h["Referer"] = paheAuthorization.referer + "/";
+      h["Origin"] = paheAuthorization.referer;
+      if (paheAuthorization.cookie) h["Cookie"] = paheAuthorization.cookie;
+    }
+  }
   return h;
 }
 
-async function execWithRetry(url: string, ref: string, maxRetries = 6): Promise<Response> {
+async function execWithRetry(
+  url: string,
+  ref: string,
+  paheAuthorization: AuthorizedPaheRequestHeaders | null,
+  maxRetries = 6,
+): Promise<Response> {
   let attempt = 0;
   for (;;) {
-    const resp = await net.fetch(url, { headers: reqHeaders(ref) });
+    const resp = await net.fetch(url, { headers: reqHeaders(url, ref, paheAuthorization) });
     if (resp.ok) return resp;
     const retryable = resp.status === 429 || resp.status === 408 || resp.status >= 500;
     if (!retryable || attempt >= maxRetries) throw new Error(`HTTP ${resp.status} for ${url}`);
@@ -209,14 +232,19 @@ async function execWithRetry(url: string, ref: string, maxRetries = 6): Promise<
   }
 }
 
-async function httpGetText(url: string, ref: string): Promise<string> {
-  const resp = await execWithRetry(url, ref);
+async function httpGetText(url: string, ref: string, paheAuthorization: AuthorizedPaheRequestHeaders | null): Promise<string> {
+  const resp = await execWithRetry(url, ref, paheAuthorization);
   return resp.text();
 }
 
-async function httpDownloadToFile(url: string, file: string, ref: string): Promise<void> {
+async function httpDownloadToFile(
+  url: string,
+  file: string,
+  ref: string,
+  paheAuthorization: AuthorizedPaheRequestHeaders | null,
+): Promise<void> {
   if (fs.existsSync(file) && fs.statSync(file).size > 0) return; // resume: skip complete segments
-  const resp = await execWithRetry(url, ref);
+  const resp = await execWithRetry(url, ref, paheAuthorization);
   const buf = Buffer.from(await resp.arrayBuffer());
   const tmp = file + ".part";
   fs.writeFileSync(tmp, buf);

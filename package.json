@@ -1,6 +1,6 @@
 {
   "name": "anitrack",
-  "version": "6.3.11",
+  "version": "6.3.12",
   "description": "Anime tracker + local player with Discord RPC, MAL two-way sync and legal-site launcher",
   "main": "dist-electron/electron/main.js",
   "author": "Sanjay",
@@ -22,6 +22,7 @@
     "automation:sign": "node --env-file-if-exists=.env scripts/sign-automation.js",
     "automation:verify": "node scripts/sign-automation.js --verify",
     "providers:health": "node scripts/provider-health.js",
+    "providers:smoke:electron": "npm run build:electron && electron scripts/electron-provider-smoke.js",
     "android:keygen": "node scripts/generate-android-signing-key.js",
     "android:next:debug": "anitrack-android\\gradlew.bat -p anitrack-android :app:assembleDebug",
     "android:next:release": "node --env-file-if-exists=.env scripts/run-native-gradle.js :app:assembleRelease",

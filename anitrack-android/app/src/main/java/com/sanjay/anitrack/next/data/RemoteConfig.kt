@@ -358,10 +358,10 @@ object RemoteConfig {
                     !route.contains("://") && !route.contains(Regex("[\\r\\n\\u0000]"))) {
                     "$provider route $name is invalid"
                 }
-                val placeholders = Regex("\\{([A-Za-z][A-Za-z0-9]*)}").findAll(route)
+                val placeholders = Regex("""\{([A-Za-z][A-Za-z0-9]*)\}""").findAll(route)
                     .map { it.groupValues[1] }.toList()
                 require(placeholders.size == required.size && placeholders.toSet() == required &&
-                    !route.replace(Regex("\\{[A-Za-z][A-Za-z0-9]*}"), "").contains('{')) {
+                    !route.replace(Regex("""\{[A-Za-z][A-Za-z0-9]*\}"""), "").contains('{')) {
                     "$provider route $name has invalid placeholders"
                 }
             }

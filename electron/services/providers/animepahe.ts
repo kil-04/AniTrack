@@ -594,13 +594,20 @@ const VIDEO_RE = /https?:\/\/[^"'\s<>]+\.(?:m3u8|mp4)(?:\?[^"'\s<>]*)?/;
 let _lastKwikCookies = "";
 let _lastKwikCookiesAt = 0;
 const COOKIE_TTL_MS = 30 * 60_000; // refresh cookies after 30 min
-const _authorizedStreamHosts = new Map<string, number>();
+export interface AuthorizedPaheRequestHeaders {
+  host: string;
+  referer: string;
+  cookie: string;
+}
+
+const _authorizedStreamHosts = new Map<string, { authorizedAt: number; referer: string }>();
 
 export function getKwikCookies(): string { return animePaheEnabled() ? _lastKwikCookies : ""; }
 
-function authorizeStreamUrl(raw: string) {
+function authorizeStreamUrl(raw: string, kwikUrl: string) {
   assertAnimePaheEnabled();
   const url = new URL(raw);
+  const kwik = new URL(kwikUrl);
   const rules = getRuntimeConfig().providers.animepahe.streamHostFragments;
   const host = url.hostname.toLowerCase();
   const trustedHost = rules.some((rule) => host === rule || host.endsWith(`.${rule}`));
@@ -609,7 +616,7 @@ function authorizeStreamUrl(raw: string) {
       !(path.endsWith(".m3u8") || path.endsWith(".mp4"))) {
     throw new Error("Kwik returned an untrusted stream URL");
   }
-  _authorizedStreamHosts.set(host, Date.now());
+  _authorizedStreamHosts.set(host, { authorizedAt: Date.now(), referer: kwik.origin });
 }
 
 function assertTrustedKwikUrl(raw: string) {
@@ -630,15 +637,28 @@ export function isAuthorizedPaheStreamUrl(raw: string): boolean {
     const url = new URL(raw);
     if (url.protocol !== "https:" || url.username || url.password) return false;
     const host = url.hostname.toLowerCase();
-    const authorizedAt = _authorizedStreamHosts.get(host);
-    if (!authorizedAt || Date.now() - authorizedAt > URL_TTL_MS) {
-      if (authorizedAt) _authorizedStreamHosts.delete(host);
+    const authorization = _authorizedStreamHosts.get(host);
+    if (!authorization || Date.now() - authorization.authorizedAt > URL_TTL_MS) {
+      if (authorization) _authorizedStreamHosts.delete(host);
       return false;
     }
     return true;
   } catch {
     return false;
   }
+}
+
+export function getAuthorizedPaheRequestHeaders(raw: string): AuthorizedPaheRequestHeaders | null {
+  if (!isAuthorizedPaheStreamUrl(raw)) return null;
+  const url = new URL(raw);
+  const host = url.hostname.toLowerCase();
+  const authorization = _authorizedStreamHosts.get(host);
+  if (!authorization) return null;
+  return {
+    host,
+    referer: authorization.referer,
+    cookie: getKwikCookies(),
+  };
 }
 
 // Resolved URL cache — avoids re-resolving the same kwik URL within a session.
@@ -732,7 +752,7 @@ export async function resolveKwik(
   // 1. URL cache hit
   const cached = _kwikUrlCache.get(kwikUrl);
   if (cached && Date.now() - cached.at < URL_TTL_MS) {
-    authorizeStreamUrl(cached.url);
+    authorizeStreamUrl(cached.url, kwikUrl);
     return { url: cached.url, cookies: _lastKwikCookies };
   }
 
@@ -746,13 +766,13 @@ export async function resolveKwik(
   const promise = (cookiesFresh
     ? resolveKwikFast(kwikUrl)
         .then((url) => {
-          authorizeStreamUrl(url);
+          authorizeStreamUrl(url, kwikUrl);
           _kwikUrlCacheSet(kwikUrl, { url, at: Date.now() });
           return { url, cookies: _lastKwikCookies };
         })
         .catch(() => _resolveKwikBrowser(kwikUrl))
     : _resolveKwikBrowser(kwikUrl)).then((result) => {
-      authorizeStreamUrl(result.url);
+      authorizeStreamUrl(result.url, kwikUrl);
       return result;
     });
 
@@ -1026,6 +1046,6 @@ export class AnimePaheProvider implements StreamProvider {
   async resolveStream(linkId: string): Promise<StreamData> {
     assertAnimePaheEnabled();
     const { url, cookies } = await resolveKwik(linkId);
-    return { url, cookies };
+    return { url, cookies, referer: new URL(linkId).origin };
   }
 }

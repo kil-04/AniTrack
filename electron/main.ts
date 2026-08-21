@@ -15,9 +15,8 @@ import { IPC } from "../shared/types";
 import { flushDirty } from "./services/mal";
 import {
   prewarm as pahePrewarm,
-  getKwikCookies,
   getPaheBaseUrl,
-  isAuthorizedPaheStreamUrl,
+  getAuthorizedPaheRequestHeaders,
 } from "./services/providers/animepahe";
 import { registerPaheIpc } from "./ipc/pahe";
 import { registerAuthIpc } from "./ipc/auth";
@@ -197,13 +196,14 @@ function registerWebRequestHandlers() {
             headers["Origin"] = "https://megaplay.buzz";
           }
         } else {
-          headers["Referer"] = "https://kwik.cx/";
-          headers["Origin"] = "https://kwik.cx";
-          const kwikCookies = getKwikCookies();
+          const authorization = getAuthorizedPaheRequestHeaders(details.url);
+          const kwikOrigin = authorization?.referer || "https://kwik.cx";
+          headers["Referer"] = kwikOrigin + "/";
+          headers["Origin"] = kwikOrigin;
           // Cookies are intentionally copied across origins for AnimePahe's
           // hotlink protection, but only to a concrete stream host captured
           // from a successful resolver result — never merely to a broad rule.
-          if (kwikCookies && isAuthorizedPaheStreamUrl(details.url)) headers["Cookie"] = kwikCookies;
+          if (authorization?.cookie) headers["Cookie"] = authorization.cookie;
         }
 
         callback({ requestHeaders: headers });

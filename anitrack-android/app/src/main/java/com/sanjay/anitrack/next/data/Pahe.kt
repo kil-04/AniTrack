@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.content.SharedPreferences
+import android.util.Log
 import android.webkit.CookieManager
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -76,7 +77,7 @@ object Pahe {
     private fun route(name: String, values: Map<String, Any> = emptyMap()): String {
         var value = RemoteConfig.current().animepahe.routes[name]
             ?: error("Missing signed AnimePahe route: $name")
-        Regex("\\{([A-Za-z][A-Za-z0-9]*)}").findAll(value).toList().forEach { match ->
+        Regex("""\{([A-Za-z][A-Za-z0-9]*)\}""").findAll(value).toList().forEach { match ->
             val key = match.groupValues[1]
             val replacement = values[key] ?: error("Missing AnimePahe route value: $key")
             value = value.replace(match.value, android.net.Uri.encode(replacement.toString()))
@@ -516,10 +517,21 @@ object Pahe {
             anime.titleRomaji?.let { if (it.lowercase() != anime.title.lowercase()) add(it) }
         }
         val candidates = LinkedHashMap<String, SearchResult>()
+        var successfulSearches = 0
+        var lastSearchError: Throwable? = null
         for (q in queries) {
-            for (r in runCatching { search(q) }.getOrDefault(emptyList())) {
+            val result = runCatching { search(q) }
+                .onSuccess { successfulSearches++ }
+                .onFailure {
+                    lastSearchError = it
+                    Log.w("AniTrack/AnimePahe", "Search failed for '$q': ${it.message}")
+                }
+            for (r in result.getOrDefault(emptyList())) {
                 candidates.putIfAbsent(r.session, r)
             }
+        }
+        if (successfulSearches == 0 && lastSearchError != null) {
+            throw IOException("AnimePahe search failed: ${lastSearchError?.message}", lastSearchError)
         }
         if (candidates.isEmpty()) return null
         val airing = anime.status == "RELEASING"
@@ -529,7 +541,9 @@ object Pahe {
             }
             .filter { it.second >= 20 }
             .maxByOrNull { it.second }?.first ?: return null
-        val eps = runCatching { episodesAll(best.session) }.getOrNull() ?: return null
+        val eps = runCatching { episodesAll(best.session) }
+            .onFailure { Log.w("AniTrack/AnimePahe", "Episode lookup failed: ${it.message}") }
+            .getOrElse { throw IOException("AnimePahe episode lookup failed: ${it.message}", it) }
         if (eps.isEmpty()) return null
         return Matched(best, eps)
     }

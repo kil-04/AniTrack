@@ -1,5 +1,6 @@
 package com.sanjay.anitrack.next.data
 
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -37,7 +38,7 @@ object Anikoto {
     private fun route(name: String, values: Map<String, Any> = emptyMap()): String {
         var value = RemoteConfig.current().anikoto.routes[name]
             ?: error("Missing signed Anikoto route: $name")
-        Regex("\\{([A-Za-z][A-Za-z0-9]*)}").findAll(value).toList().forEach { match ->
+        Regex("""\{([A-Za-z][A-Za-z0-9]*)\}""").findAll(value).toList().forEach { match ->
             val key = match.groupValues[1]
             val replacement = values[key] ?: error("Missing Anikoto route value: $key")
             value = value.replace(match.value, android.net.Uri.encode(replacement.toString()))
@@ -350,10 +351,21 @@ object Anikoto {
             anime.titleRomaji?.let { if (it.lowercase() != anime.title.lowercase()) add(it) }
         }
         val candidates = LinkedHashMap<String, SearchResult>()
+        var successfulSearches = 0
+        var lastSearchError: Throwable? = null
         for (q in queries) {
-            for (r in runCatching { search(q) }.getOrDefault(emptyList())) {
+            val result = runCatching { search(q) }
+                .onSuccess { successfulSearches++ }
+                .onFailure {
+                    lastSearchError = it
+                    Log.w("AniTrack/Anikoto", "Search failed for '$q': ${it.message}")
+                }
+            for (r in result.getOrDefault(emptyList())) {
                 candidates.putIfAbsent(r.slug, r)
             }
+        }
+        if (successfulSearches == 0 && lastSearchError != null) {
+            throw java.io.IOException("Anikoto search failed: ${lastSearchError?.message}", lastSearchError)
         }
         if (candidates.isEmpty()) return null
 
@@ -378,8 +390,16 @@ object Anikoto {
         val pool = (scored.take(3) + rejects).ifEmpty { return null }
 
         // Serial verification, early exit — one episodes fetch in the common case.
+        var lastEpisodeError: Throwable? = null
+        var successfulEpisodeLists = 0
         for ((i, cand) in pool.withIndex()) {
-            val list = runCatching { episodes(cand.slug) }.getOrNull() ?: continue
+            val result = runCatching { episodes(cand.slug) }
+                .onSuccess { successfulEpisodeLists++ }
+                .onFailure {
+                    lastEpisodeError = it
+                    Log.w("AniTrack/Anikoto", "Episode lookup failed for ${cand.slug}: ${it.message}")
+                }
+            val list = result.getOrNull() ?: continue
             val mal = list.malId
             if (anime.malId != null && mal == anime.malId) return Matched(cand, list, verified = true)
             if (i == 0 && (anime.malId == null || mal == null)) return Matched(cand, list, verified = false)
@@ -387,7 +407,17 @@ object Anikoto {
         }
         // Nothing verified — fall back to the top-scored candidate.
         val top = pool.first()
-        val list = runCatching { episodes(top.slug) }.getOrNull() ?: return null
+        val finalResult = runCatching { episodes(top.slug) }
+            .onSuccess { successfulEpisodeLists++ }
+            .onFailure {
+                lastEpisodeError = it
+                Log.w("AniTrack/Anikoto", "Fallback episode lookup failed for ${top.slug}: ${it.message}")
+            }
+        val list = finalResult.getOrNull()
+        if (list == null && successfulEpisodeLists == 0 && lastEpisodeError != null) {
+            throw java.io.IOException("Anikoto episode lookup failed: ${lastEpisodeError?.message}", lastEpisodeError)
+        }
+        if (list == null) return null
         return Matched(top, list, verified = false)
     }
 }

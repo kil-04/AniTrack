@@ -968,6 +968,7 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: 
     var paheMatch by remember { mutableStateOf<com.sanjay.anitrack.next.data.Pahe.Matched?>(null) }
     var loading by remember { mutableStateOf(false) }
     var failed by remember { mutableStateOf(false) }
+    var failureMessage by remember { mutableStateOf<String?>(null) }
     var rangeStart by remember { mutableStateOf(0) }
     var watched by remember { mutableStateOf<Map<Float, Int>>(emptyMap()) }
 
@@ -976,17 +977,17 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: 
     }
     // Load the selected server on demand.
     LaunchedEffect(anime.id, server) {
-        rangeStart = 0; failed = false
+        rangeStart = 0; failed = false; failureMessage = null
         if (server == "anikoto" && anikotoMatch == null) {
             loading = true
             runCatching { anikotoMatch = com.sanjay.anitrack.next.data.Anikoto.matchFor(anime) }
-                .onFailure { failed = true }
+                .onFailure { failed = true; failureMessage = it.message }
             if (anikotoMatch == null) failed = true
             loading = false
         } else if (server == "animepahe" && paheMatch == null) {
             loading = true
             runCatching { paheMatch = com.sanjay.anitrack.next.data.Pahe.matchFor(anime) }
-                .onFailure { failed = true }
+                .onFailure { failed = true; failureMessage = it.message }
             if (paheMatch == null) failed = true
             loading = false
         }
@@ -1091,7 +1092,11 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: 
             )
         }
         if (!loading && failed && epUi.isEmpty()) {
-            Text("No source on this server.", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.4f))
+            Text(
+                failureMessage?.let { "No source: ${it.take(160)}" } ?: "No source on this server.",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(alpha = 0.55f),
+            )
         }
         Spacer(Modifier.height(10.dp))
 
