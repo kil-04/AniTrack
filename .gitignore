@@ -13,3 +13,8 @@ build/icon_tmp
 .release-secrets/
 *.jks
 *.keystore
+anitrack-android/.gradle/
+anitrack-android/.kotlin/
+anitrack-android/build/
+anitrack-android/app/build/
+anitrack-android/local.properties

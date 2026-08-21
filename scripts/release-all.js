@@ -35,7 +35,10 @@ function assertReleaseProvenance(allowGeneratedManifest = false) {
     return !allowGeneratedManifest || !allowed.has(file);
   });
   if (unexpected.length) {
-    throw new Error("Release checkout contains unreviewed changes; commit and review every source file before publishing");
+    throw new Error(
+      "Release checkout contains unreviewed changes; commit and review every source file before publishing:\n" +
+      unexpected.join("\n"),
+    );
   }
   const head = git(["rev-parse", "HEAD"]);
   const tagged = git(["rev-list", "-n", "1", expectedTag]);

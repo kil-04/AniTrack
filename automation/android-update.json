@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "sequence": 2,
-  "issuedAt": "2026-08-20T22:41:40.100Z",
+  "issuedAt": "2026-08-21T08:54:19.557Z",
   "applicationId": "com.sanjay.anitrack.next",
   "versionCode": 2,
   "versionName": "0.2.0",
-  "apkUrl": "https://github.com/kil-04/AniTrack/releases/download/v6.3.9/AniTrack-Android-Next-0.2.0.apk",
+  "apkUrl": "https://github.com/kil-04/AniTrack/releases/download/v6.3.10/AniTrack-Android-Next-0.2.0.apk",
   "sha256": "22398b81c9ee00e1b0aa3aa4593996c206a05eaaaab11e54e129edc8adb9f355",
   "sizeBytes": 16019413,
   "mandatory": false,
