@@ -14,12 +14,22 @@
     "build:electron": "tsc -p tsconfig.electron.json",
     "build": "npm run build:vite && npm run build:electron",
     "pack": "npm run build && electron-builder",
-    "publish": "npm run build && electron-builder --publish always",
+    "publish": "npm run release:all",
+    "release:all": "node --env-file-if-exists=.env scripts/release-all.js",
+    "release:preflight": "node --env-file-if-exists=.env scripts/preflight-release.js",
+    "github:configure": "node --env-file-if-exists=.env scripts/configure-github-production.js",
+    "automation:keygen": "node scripts/generate-automation-key.js",
+    "automation:sign": "node --env-file-if-exists=.env scripts/sign-automation.js",
+    "automation:verify": "node scripts/sign-automation.js --verify",
+    "providers:health": "node scripts/provider-health.js",
+    "android:keygen": "node scripts/generate-android-signing-key.js",
+    "android:next:debug": "anitrack-android\\gradlew.bat -p anitrack-android :app:assembleDebug",
+    "android:next:release": "node --env-file-if-exists=.env scripts/run-native-gradle.js :app:assembleRelease",
+    "android:next:verify": "node scripts/android-release-common.js",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
-    "android:sync": "npm run build:vite && npx cap sync android",
-    "android:open": "npx cap open android",
-    "android:build": "npm run android:sync && cd android && gradlew.bat assembleRelease",
-    "android:publish": "npm run android:build && node scripts/upload-apk.js"
+    "legacy:capacitor:sync": "npm run build:vite && npx cap sync android",
+    "legacy:capacitor:open": "npx cap open android",
+    "legacy:capacitor:build": "npm run legacy:capacitor:sync && cd android && gradlew.bat assembleRelease"
   },
   "dependencies": {
     "@capacitor-community/sqlite": "^6.0.2",
@@ -47,6 +57,7 @@
     "cross-env": "^7.0.3",
     "electron": "^32.1.2",
     "electron-builder": "^25.0.5",
+    "libsodium-wrappers": "^0.7.15",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.13",
     "typescript": "^5.6.2",
@@ -82,6 +93,7 @@
     ],
     "icon": "build/icon.ico",
     "win": {
+      "artifactName": "AniTrack-Setup-${version}.${ext}",
       "target": [
         {
           "target": "nsis",
@@ -108,7 +120,7 @@
       "provider": "github",
       "owner": "kil-04",
       "repo": "AniTrack",
-      "releaseType": "release"
+      "releaseType": "draft"
     }
   }
 }

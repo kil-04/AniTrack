@@ -3,9 +3,13 @@ dist
 dist-electron
 release
 .env
-.env.local
+.env.*
+!.env.example
 .DS_Store
 *.log
 resources/mpv
 build/icon_tmp
 .claude
+.release-secrets/
+*.jks
+*.keystore

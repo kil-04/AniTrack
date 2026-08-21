@@ -22,19 +22,48 @@ import { StreamProvider, AnimeInfo, EpisodeInfo, StreamLink, StreamData } from "
 
 import { BrowserWindow, net, session as electronSession } from "electron";
 import { SimpleStore } from "../store";
+import { getRuntimeConfig } from "../remote-config";
 
 interface PaheSettings { baseUrl?: string }
 const _paheStore = new SimpleStore<PaheSettings>("anitrack-pahe-settings");
+let _activeConfiguredPaheBase = "";
+
+function animePaheEnabled(): boolean {
+  const runtime = getRuntimeConfig();
+  return runtime.providers.animepahe.enabled && runtime.features.animepaheStreaming;
+}
+
+function assertAnimePaheEnabled(): void {
+  if (!animePaheEnabled()) {
+    throw new Error("AnimePahe is temporarily disabled by the automation configuration.");
+  }
+}
 
 export function getPaheBaseUrl(): string {
-  return _paheStore.get("baseUrl") ?? "https://animepahe.pw";
+  const manual = _paheStore.get("baseUrl");
+  if (manual) return manual;
+  const bases = getRuntimeConfig().providers.animepahe.baseUrls.map((base) => base.replace(/\/+$/, ""));
+  if (!bases.includes(_activeConfiguredPaheBase)) _activeConfiguredPaheBase = bases[0];
+  return _activeConfiguredPaheBase;
 }
 
 export function setPaheBaseUrl(url: string): void {
   let clean = url.trim().replace(/\/$/, "");
-  // Auto-prepend https:// if missing, validate it parses as a URL.
-  if (!/^https?:\/\//i.test(clean)) clean = "https://" + clean;
-  try { new URL(clean); } catch { throw new Error(`Invalid URL: ${url}`); }
+  // Manual overrides are trusted only as public HTTPS origins. This prevents a
+  // typo or imported setting from turning privileged provider requests into an
+  // SSRF path to localhost/private services.
+  if (!/^https:\/\//i.test(clean)) clean = "https://" + clean.replace(/^https?:\/\//i, "");
+  let parsed: URL;
+  try { parsed = new URL(clean); } catch { throw new Error(`Invalid URL: ${url}`); }
+  const host = parsed.hostname.toLowerCase();
+  const second172 = /^172\.(\d+)\./.exec(host)?.[1];
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.search || parsed.hash ||
+      parsed.pathname !== "/" || host === "localhost" || host === "::1" || host.endsWith(".local") ||
+      /^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) ||
+      (second172 != null && inRange(Number(second172), 16, 31))) {
+    throw new Error("AnimePahe URL must be a public HTTPS origin without a path, query, or credentials.");
+  }
+  clean = parsed.origin;
   _paheStore.set("baseUrl", clean);
   // Force the CF window to reload against the new domain next time it's needed.
   if (_win && !_win.isDestroyed()) {
@@ -50,8 +79,37 @@ export function setPaheBaseUrl(url: string): void {
   _lastKwikCookiesAt = 0;
 }
 
+function inRange(value: number, min: number, max: number): boolean {
+  return value >= min && value <= max;
+}
+
 // Dynamic getter so every call picks up runtime changes.
 function BASE() { return getPaheBaseUrl(); }
+
+function paheRoute(name: string, values: Record<string, string | number> = {}): string {
+  const template = getRuntimeConfig().providers.animepahe.routes[name];
+  if (!template) throw new Error(`Missing signed AnimePahe route: ${name}`);
+  const route = template.replace(/\{([A-Za-z][A-Za-z0-9]*)\}/g, (_match, key: string) => {
+    if (!(key in values)) throw new Error(`Missing AnimePahe route value: ${key}`);
+    return encodeURIComponent(String(values[key]));
+  });
+  if (route.includes("{")) throw new Error(`Unresolved AnimePahe route: ${name}`);
+  return route;
+}
+
+function paheSelector(name: string): string {
+  const value = getRuntimeConfig().providers.animepahe.selectors[name];
+  if (!value) throw new Error(`Missing signed AnimePahe selector: ${name}`);
+  return value;
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function tagAttribute(tag: string, name: string): string | null {
+  return new RegExp(`(?:^|\\s)${escapeRegex(name)}\\s*=\\s*(["'])(.*?)\\1`, "i").exec(tag)?.[2] ?? null;
+}
 
 // ─── Persistent hidden window ─────────────────────────────────────────────────
 
@@ -59,7 +117,20 @@ let _win: BrowserWindow | null = null;
 let _ready = false;
 let _readyPromise: Promise<void> | null = null;
 
+function selectConfiguredPaheBase(base: string) {
+  if (_paheStore.get("baseUrl")) return;
+  const clean = base.replace(/\/+$/, "");
+  if (_activeConfiguredPaheBase && _activeConfiguredPaheBase !== clean) {
+    if (_win && !_win.isDestroyed()) _win.destroy();
+    _win = null;
+    _ready = false;
+    _readyPromise = null;
+  }
+  _activeConfiguredPaheBase = clean;
+}
+
 function getPaheWindow(): Promise<BrowserWindow> {
+  assertAnimePaheEnabled();
   if (_win && !_win.isDestroyed() && _ready) {
     return Promise.resolve(_win);
   }
@@ -134,7 +205,7 @@ function getPaheWindow(): Promise<BrowserWindow> {
       } catch { /* page mid-navigation — wait for the next load */ }
     };
     _win!.webContents.on("did-finish-load", checkLoad);
-    _win!.loadURL(BASE() + "/");
+    _win!.loadURL(BASE() + paheRoute("home"));
     _win!.on("closed", () => {
       clearTimeout(showTimer);
       clearTimeout(hardTimeout);
@@ -229,7 +300,7 @@ async function paheNavFetchHtml(url: string): Promise<string | null> {
   return p;
 }
 
-async function paheWindowFetch(url: string, retried = false): Promise<any> {
+async function paheWindowFetchOnce(url: string, retried = false): Promise<any> {
   const win = await getPaheWindow();
   // `session` is valid at runtime in Electron 32 but absent from TS types.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -238,7 +309,7 @@ async function paheWindowFetch(url: string, retried = false): Promise<any> {
     headers: {
       Accept: "application/json, text/plain, */*",
       "X-Requested-With": "XMLHttpRequest",
-      Referer: BASE() + "/",
+      Referer: BASE() + paheRoute("home"),
     },
   });
   if (!resp.ok) {
@@ -257,13 +328,34 @@ async function paheWindowFetch(url: string, retried = false): Promise<any> {
         _win = null;
         _ready = false;
         _readyPromise = null;
-        return paheWindowFetch(url, true);
+        return paheWindowFetchOnce(url, true);
       }
     }
     const body = await resp.text().catch(() => "");
     throw new Error(`HTTP ${resp.status} ${resp.statusText}: ${body.slice(0, 120)}`);
   }
   return resp.json();
+}
+
+async function paheWindowFetch(url: string): Promise<any> {
+  const manual = _paheStore.get("baseUrl");
+  const bases = manual
+    ? [manual.replace(/\/+$/, "")]
+    : getRuntimeConfig().providers.animepahe.baseUrls.map((base) => base.replace(/\/+$/, ""));
+  let parsed: URL | null = null;
+  try { parsed = new URL(url); } catch {}
+  if (!parsed || !bases.includes(parsed.origin)) return paheWindowFetchOnce(url);
+  const ordered = [getPaheBaseUrl(), ...bases.filter((base) => base !== getPaheBaseUrl())];
+  let lastError: unknown = null;
+  for (const base of ordered) {
+    selectConfiguredPaheBase(base);
+    try {
+      return await paheWindowFetchOnce(`${base}${parsed.pathname}${parsed.search}${parsed.hash}`);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Every signed AnimePahe origin failed");
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -314,7 +406,7 @@ export async function getLatestEpisodes(
   page = 1,
 ): Promise<{ data: PaheLatestEpisode[]; total: number; lastPage: number }> {
   const data = await paheWindowFetch(
-    `${BASE()}/api?m=airing&l=${count}&sort=session_id_desc&page=${page}`,
+    `${BASE()}${paheRoute("latest", { count, page })}`,
   );
   return {
     data: (data.data ?? []) as PaheLatestEpisode[],
@@ -348,6 +440,7 @@ export async function getAnimeIds(
   paheNumericId: number,
   session: string,
 ): Promise<{ malId?: number; anilistId?: number; kitsuId?: number }> {
+  assertAnimePaheEnabled();
   const cacheKey = String(paheNumericId);
   if (_idsCache.has(cacheKey)) return _idsCache.get(cacheKey)!;
 
@@ -376,9 +469,9 @@ export async function getAnimeIds(
   // ── 2. AnimePahe page meta tags (CF-cleared session) ───────────────────────
   try {
     const win = await getPaheWindow();
-    const resp = await (net.fetch as any)(`${BASE()}/anime/${session}`, {
+    const resp = await (net.fetch as any)(`${BASE()}${paheRoute("anime", { session })}`, {
       session: win.webContents.session,
-      headers: { Referer: BASE() + "/" },
+      headers: { Referer: BASE() + paheRoute("home") },
     });
     if (resp.ok) {
       const html: string = await resp.text();
@@ -430,6 +523,7 @@ export async function findByExternalId(
   anilistId?: number,
   malId?: number,
 ): Promise<PaheAnime | null> {
+  assertAnimePaheEnabled();
   const cacheKey = `al:${anilistId ?? "?"}/mal:${malId ?? "?"}`;
   if (_reverseCache.has(cacheKey)) return _reverseCache.get(cacheKey)!;
 
@@ -500,8 +594,52 @@ const VIDEO_RE = /https?:\/\/[^"'\s<>]+\.(?:m3u8|mp4)(?:\?[^"'\s<>]*)?/;
 let _lastKwikCookies = "";
 let _lastKwikCookiesAt = 0;
 const COOKIE_TTL_MS = 30 * 60_000; // refresh cookies after 30 min
+const _authorizedStreamHosts = new Map<string, number>();
 
-export function getKwikCookies(): string { return _lastKwikCookies; }
+export function getKwikCookies(): string { return animePaheEnabled() ? _lastKwikCookies : ""; }
+
+function authorizeStreamUrl(raw: string) {
+  assertAnimePaheEnabled();
+  const url = new URL(raw);
+  const rules = getRuntimeConfig().providers.animepahe.streamHostFragments;
+  const host = url.hostname.toLowerCase();
+  const trustedHost = rules.some((rule) => host === rule || host.endsWith(`.${rule}`));
+  const path = url.pathname.toLowerCase();
+  if (url.protocol !== "https:" || url.username || url.password || !trustedHost ||
+      !(path.endsWith(".m3u8") || path.endsWith(".mp4"))) {
+    throw new Error("Kwik returned an untrusted stream URL");
+  }
+  _authorizedStreamHosts.set(host, Date.now());
+}
+
+function assertTrustedKwikUrl(raw: string) {
+  assertAnimePaheEnabled();
+  const url = new URL(raw);
+  const rules = getRuntimeConfig().providers.animepahe.streamHostFragments
+    .filter((rule) => rule.startsWith("kwik."));
+  const host = url.hostname.toLowerCase();
+  const trustedHost = rules.some((rule) => host === rule || host.endsWith(`.${rule}`));
+  if (url.protocol !== "https:" || url.username || url.password || !trustedHost) {
+    throw new Error("Untrusted Kwik embed URL");
+  }
+}
+
+export function isAuthorizedPaheStreamUrl(raw: string): boolean {
+  try {
+    if (!animePaheEnabled()) return false;
+    const url = new URL(raw);
+    if (url.protocol !== "https:" || url.username || url.password) return false;
+    const host = url.hostname.toLowerCase();
+    const authorizedAt = _authorizedStreamHosts.get(host);
+    if (!authorizedAt || Date.now() - authorizedAt > URL_TTL_MS) {
+      if (authorizedAt) _authorizedStreamHosts.delete(host);
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // Resolved URL cache — avoids re-resolving the same kwik URL within a session.
 const _kwikUrlCache = new Map<string, { url: string; at: number }>();
@@ -530,6 +668,7 @@ let _kwikWin: BrowserWindow | null = null;
 let _kwikInterceptCb: ((url: string) => void) | null = null;
 
 function getKwikWindow(): BrowserWindow {
+  assertAnimePaheEnabled();
   if (_kwikWin && !_kwikWin.isDestroyed()) return _kwikWin;
 
   _kwikWin = new BrowserWindow({
@@ -547,6 +686,11 @@ function getKwikWindow(): BrowserWindow {
   // session and routes every intercepted URL to whatever callback is current.
   const sess = _kwikWin.webContents.session;
   sess.webRequest.onBeforeRequest({ urls: CDN_HOSTS }, async (details, callback) => {
+    if (!animePaheEnabled()) {
+      _kwikInterceptCb = null;
+      callback({ cancel: true });
+      return;
+    }
     const url = details.url;
     const isStream = url.includes(".m3u8") || url.includes(".mp4") || CDN_RE.test(url);
     if (!isStream || !_kwikInterceptCb) { callback({}); return; }
@@ -584,9 +728,11 @@ function getKwikWindow(): BrowserWindow {
 export async function resolveKwik(
   kwikUrl: string,
 ): Promise<{ url: string; cookies: string }> {
+  assertTrustedKwikUrl(kwikUrl);
   // 1. URL cache hit
   const cached = _kwikUrlCache.get(kwikUrl);
   if (cached && Date.now() - cached.at < URL_TTL_MS) {
+    authorizeStreamUrl(cached.url);
     return { url: cached.url, cookies: _lastKwikCookies };
   }
 
@@ -597,14 +743,18 @@ export async function resolveKwik(
 
   // 3. Choose fast or slow path
   const cookiesFresh = _lastKwikCookies && (Date.now() - _lastKwikCookiesAt < COOKIE_TTL_MS);
-  const promise = cookiesFresh
+  const promise = (cookiesFresh
     ? resolveKwikFast(kwikUrl)
         .then((url) => {
+          authorizeStreamUrl(url);
           _kwikUrlCacheSet(kwikUrl, { url, at: Date.now() });
           return { url, cookies: _lastKwikCookies };
         })
         .catch(() => _resolveKwikBrowser(kwikUrl))
-    : _resolveKwikBrowser(kwikUrl);
+    : _resolveKwikBrowser(kwikUrl)).then((result) => {
+      authorizeStreamUrl(result.url);
+      return result;
+    });
 
   _kwikPending.set(kwikUrl, promise);
   // .catch on the derived chain so a rejected resolve doesn't surface as an
@@ -615,6 +765,7 @@ export async function resolveKwik(
 
 /** Pre-resolve a kwik URL silently in the background (call while current ep plays). */
 export function prefetchKwik(kwikUrl: string): void {
+  if (!animePaheEnabled()) return;
   if (_kwikPending.has(kwikUrl)) return;
   const cached = _kwikUrlCache.get(kwikUrl);
   if (cached && Date.now() - cached.at < URL_TTL_MS) return;
@@ -645,7 +796,7 @@ async function _resolveKwikBrowser(
       resolve({ url, cookies: _lastKwikCookies });
     };
 
-    win.loadURL(kwikUrl, { httpReferrer: BASE() + "/" }).catch((e) => {
+    win.loadURL(kwikUrl, { httpReferrer: BASE() + paheRoute("home") }).catch((e) => {
       if (!settled) {
         settled = true;
         clearTimeout(timeout);
@@ -659,12 +810,13 @@ async function _resolveKwikBrowser(
 // ─── Fast JS-unpack fallback (no cookies, used only when browser times out) ──
 
 async function resolveKwikFast(kwikUrl: string): Promise<string> {
+  assertAnimePaheEnabled();
   const KWIK_UA =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
   const resp = await net.fetch(kwikUrl, {
-    headers: { Referer: BASE() + "/", Accept: "text/html,*/*", "User-Agent": KWIK_UA },
+    headers: { Referer: BASE() + paheRoute("home"), Accept: "text/html,*/*", "User-Agent": KWIK_UA },
   } as RequestInit);
   if (!resp.ok) throw new Error(`kwik HTTP ${resp.status}`);
   const html = await resp.text();
@@ -733,6 +885,7 @@ function unpackJs(packed: string): string {
 }
 
 export function prewarm(): void {
+  if (!animePaheEnabled()) return;
   getPaheWindow().catch(() => {
     /* ignore */
   });
@@ -747,8 +900,9 @@ export class AnimePaheProvider implements StreamProvider {
   private readonly LINKS_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
 
   async search(query: string): Promise<AnimeInfo[]> {
+    assertAnimePaheEnabled();
     const data = await paheWindowFetch(
-      BASE() + "/api?m=search&q=" + encodeURIComponent(query),
+      BASE() + paheRoute("search", { query }),
     );
     const results = (data.data ?? []) as PaheAnime[];
     return results.map(r => ({
@@ -768,8 +922,9 @@ export class AnimePaheProvider implements StreamProvider {
   }
 
   async getEpisodes(animeId: string, page = 1): Promise<{ data: EpisodeInfo[]; total: number; lastPage: number }> {
+    assertAnimePaheEnabled();
     const data = await paheWindowFetch(
-      BASE() + "/api?m=release&id=" + animeId + "&sort=episode_asc&page=" + page,
+      BASE() + paheRoute("episodes", { animeId, page }),
     );
     const results = (data.data ?? []) as PaheEpisode[];
     return {
@@ -786,6 +941,7 @@ export class AnimePaheProvider implements StreamProvider {
   }
 
   async getStreamLinks(episodeId: string, animeId: string): Promise<StreamLink[]> {
+    assertAnimePaheEnabled();
     const cacheKey = `${animeId}:${episodeId}`;
     const cached = this.linksCache.get(cacheKey);
     if (cached && (Date.now() - cached.timestamp < this.LINKS_CACHE_TTL)) {
@@ -793,7 +949,7 @@ export class AnimePaheProvider implements StreamProvider {
       return cached.links;
     }
 
-    const playUrl = BASE() + "/play/" + animeId + "/" + episodeId;
+    const playUrl = BASE() + paheRoute("play", { animeId, episodeId });
 
     async function fetchPlayPage(retried = false): Promise<string> {
       const win = await getPaheWindow();
@@ -802,7 +958,7 @@ export class AnimePaheProvider implements StreamProvider {
         session: win.webContents.session,
         headers: {
           Accept: "text/html,application/xhtml+xml,*/*",
-          Referer: BASE() + "/",
+          Referer: BASE() + paheRoute("home"),
         },
       });
       if (!resp.ok) {
@@ -834,14 +990,12 @@ export class AnimePaheProvider implements StreamProvider {
     let tagM;
     while ((tagM = tagRe.exec(html)) !== null) {
       const tag = tagM[0];
-      const srcM = /data-src="([^"]+)"/.exec(tag);
-      if (!srcM || !srcM[1].includes("kwik")) continue;
-      const resM = /data-resolution="([^"]*)"/.exec(tag);
-      const audM = /data-audio="([^"]*)"/.exec(tag);
+      const source = tagAttribute(tag, paheSelector("streamUrlAttribute"));
+      if (!source || !source.includes("kwik")) continue;
       links.push({
-        id: srcM[1],
-        quality: resM?.[1] ?? "?",
-        audio: audM?.[1] ?? "jpn",
+        id: source,
+        quality: tagAttribute(tag, paheSelector("resolutionAttribute")) ?? "?",
+        audio: tagAttribute(tag, paheSelector("audioAttribute")) ?? "jpn",
       });
     }
 
@@ -870,6 +1024,7 @@ export class AnimePaheProvider implements StreamProvider {
   }
 
   async resolveStream(linkId: string): Promise<StreamData> {
+    assertAnimePaheEnabled();
     const { url, cookies } = await resolveKwik(linkId);
     return { url, cookies };
   }

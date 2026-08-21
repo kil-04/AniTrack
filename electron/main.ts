@@ -17,14 +17,32 @@ import {
   prewarm as pahePrewarm,
   getKwikCookies,
   getPaheBaseUrl,
+  isAuthorizedPaheStreamUrl,
 } from "./services/providers/animepahe";
-import { autoUpdater } from "electron-updater";
 import { registerPaheIpc } from "./ipc/pahe";
 import { registerAuthIpc } from "./ipc/auth";
 import { registerDbIpc } from "./ipc/db";
 import { registerDownloadsIpc } from "./ipc/downloads";
 import { downloadsDir } from "./services/downloads";
-import { prewarmAnikoto, getAnikotoPlayerOrigin } from "./services/providers/anikoto";
+import {
+  prewarmAnikoto,
+  getAnikotoPlayerOrigin,
+  getAnikotoPlayerOriginForUrl,
+} from "./services/providers/anikoto";
+import {
+  getRuntimeConfig,
+  getRuntimeConfigStatus,
+  initRuntimeConfig,
+  refreshRuntimeConfig,
+  subscribeRuntimeConfig,
+} from "./services/remote-config";
+import {
+  checkForDesktopUpdates,
+  getDesktopUpdateState,
+  initDesktopUpdater,
+  installDesktopUpdate,
+  stopDesktopUpdater,
+} from "./services/updater";
 
 const isDev = process.env.NODE_ENV === "development";
 
@@ -44,9 +62,39 @@ let malFlushTimer: NodeJS.Timeout | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
 
+function sendToRenderer(channel: string, payload?: unknown) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
+}
+
 // Web request interceptors — installed once at startup, re-installed when the
 // AnimePahe base URL changes (so the snapshot/CDN host derivations stay current).
 function registerWebRequestHandlers() {
+  const runtime = getRuntimeConfig();
+  const paheRules = runtime.providers.animepahe;
+  const anikotoRules = runtime.providers.anikoto;
+  const paheStreamingEnabled = paheRules.enabled && runtime.features.animepaheStreaming;
+  const anikotoStreamingEnabled = anikotoRules.enabled && runtime.features.anikotoStreaming;
+
+  const parseRequestUrl = (raw: string) => {
+    try {
+      const parsed = new URL(raw);
+      return { host: parsed.hostname.toLowerCase(), path: parsed.pathname.toLowerCase() };
+    } catch {
+      return { host: "", path: "" };
+    }
+  };
+  const matchesHostRule = (host: string, rule: string, allowBareFamilyLabels = false) => {
+    const value = rule.toLowerCase();
+    if (!host || !value) return false;
+    if (value.endsWith(".")) return host.startsWith(value);
+    if (value.includes(".")) return host === value || host.endsWith(`.${value}`);
+    return allowBareFamilyLabels && host.split(".").some((label) => label === value || label.startsWith(`${value}-`));
+  };
+  const matchesAnyHostRule = (host: string, rules: string[], allowBareFamilyLabels = false) =>
+    rules.some((rule) => matchesHostRule(host, rule, allowBareFamilyLabels));
+  const hasMediaExtension = (pathname: string, extensions: string[]) =>
+    extensions.some((extension) => pathname.endsWith(extension));
+
   // Derive the current AnimePahe host from settings so domain hops (.pw → .si)
   // don't need a release.
   let paheHost = "animepahe.pw";
@@ -56,6 +104,9 @@ function registerWebRequestHandlers() {
   // hosts so old DB references keep working after a domain switch.
   const snapshotHosts = new Set([
     `i.${paheHost}`,
+    ...paheRules.baseUrls.map((base) => {
+      try { return `i.${new URL(base).hostname.toLowerCase()}`; } catch { return ""; }
+    }).filter(Boolean),
     "i.animepahe.ru",
     "i.animepahe.pw",
     "i.animepahe.si",
@@ -71,8 +122,8 @@ function registerWebRequestHandlers() {
     },
     (details, callback) => {
       // Snapshot thumbnails need a Referer from the AnimePahe site.
-      let urlHost = "";
-      try { urlHost = new URL(details.url).hostname; } catch {}
+      const parsedRequest = parseRequestUrl(details.url);
+      const urlHost = parsedRequest.host;
       if (snapshotHosts.has(urlHost)) {
         const headers: Record<string, string> = { ...details.requestHeaders as Record<string, string> };
         headers["Referer"] = `https://${paheHost}/`;
@@ -80,39 +131,29 @@ function registerWebRequestHandlers() {
         return;
       }
 
-      const isPaheCdn =
-        details.url.includes("owocdn.top") || 
-        details.url.includes("owocdn.com") || 
-        details.url.includes("uwucdn.top") || 
-        details.url.includes("llnwi.net") ||
-        details.url.includes(`cdn.${paheHost}`);
+      const isPaheCdn = paheStreamingEnabled &&
+        (matchesAnyHostRule(urlHost, paheRules.streamHostFragments) || urlHost === `cdn.${paheHost}`);
 
-      const isKwik = details.url.includes("kwik.si") || details.url.includes("kwik.cx");
+      const isKwik = paheStreamingEnabled &&
+        matchesAnyHostRule(urlHost, paheRules.streamHostFragments.filter((rule) => rule.startsWith("kwik.")));
 
-      const isApiHost = 
-        details.url.includes("myanimelist.net") ||
-        details.url.includes("malsync.moe") ||
-        details.url.includes("anilist.co") ||
-        details.url.includes("anikoto.cz") ||
-        details.url.includes("anikototv.to") ||
-        details.url.includes("animepahe");
+      const apiHosts = [
+        "myanimelist.net", "malsync.moe", "anilist.co",
+        ...anikotoRules.baseUrls.map((base) => new URL(base).hostname),
+        ...paheRules.baseUrls.map((base) => new URL(base).hostname),
+      ];
+      const isApiHost = apiHosts.some((host) => urlHost === host || urlHost.endsWith(`.${host}`));
 
       // Megaplay / Kiwi-Stream rotating CDN domains
+      const mappedPlayerOrigin = getAnikotoPlayerOriginForUrl(details.url);
       const isMegaplayStream =
-        !isApiHost && (
-          details.url.includes("/anime/") ||
-          details.url.includes(".vtt") ||
-          details.url.includes("subtitles") ||
-          details.url.includes("/public/stream/") ||
-          details.url.includes("vibeplayer") ||
-          details.url.includes("mewcdn") ||
-          details.url.includes("mewstream") ||
-          details.url.includes("nekostream") ||
-          details.url.includes("megaplay") ||
-          details.url.includes("vidtube") ||
-          details.url.includes("vibe") ||
-          details.url.includes("lostproject") ||
-          details.url.includes("streamzone")
+        anikotoStreamingEnabled && !isApiHost && (
+          Boolean(mappedPlayerOrigin) ||
+          matchesAnyHostRule(urlHost, anikotoRules.streamHostFragments, true) ||
+          parsedRequest.path.includes("/anime/") ||
+          parsedRequest.path.includes("subtitles") ||
+          parsedRequest.path.includes("/public/stream/") ||
+          (Boolean(getAnikotoPlayerOrigin()) && hasMediaExtension(parsedRequest.path, anikotoRules.mediaExtensions))
         );
 
       if (isPaheCdn || isKwik || isMegaplayStream) {
@@ -144,7 +185,7 @@ function registerWebRequestHandlers() {
           // embedded the stream — which we captured at resolve time. Use it so
           // the spoofed Referer stays correct across domain hops; fall back to
           // per-family defaults if no resolve has happened yet this session.
-          const playerOrigin = getAnikotoPlayerOrigin();
+          const playerOrigin = mappedPlayerOrigin || getAnikotoPlayerOrigin();
           if (playerOrigin) {
             headers["Referer"] = playerOrigin + "/";
             headers["Origin"] = playerOrigin;
@@ -159,7 +200,10 @@ function registerWebRequestHandlers() {
           headers["Referer"] = "https://kwik.cx/";
           headers["Origin"] = "https://kwik.cx";
           const kwikCookies = getKwikCookies();
-          if (kwikCookies) headers["Cookie"] = kwikCookies;
+          // Cookies are intentionally copied across origins for AnimePahe's
+          // hotlink protection, but only to a concrete stream host captured
+          // from a successful resolver result — never merely to a broad rule.
+          if (kwikCookies && isAuthorizedPaheStreamUrl(details.url)) headers["Cookie"] = kwikCookies;
         }
 
         callback({ requestHeaders: headers });
@@ -175,36 +219,27 @@ function registerWebRequestHandlers() {
       urls: ["*://*/*"],
     },
     (details, callback) => {
-      const isPaheCdn = 
-        details.url.includes("owocdn.top") || 
-        details.url.includes("owocdn.com") || 
-        details.url.includes("uwucdn.top") || 
-        details.url.includes("llnwi.net") ||
-        details.url.includes(`cdn.${paheHost}`);
+      const parsedRequest = parseRequestUrl(details.url);
+      const isPaheCdn = paheStreamingEnabled &&
+        (matchesAnyHostRule(parsedRequest.host, paheRules.streamHostFragments) ||
+          parsedRequest.host === `cdn.${paheHost}`);
 
-      const isApiHost = 
-        details.url.includes("myanimelist.net") ||
-        details.url.includes("malsync.moe") ||
-        details.url.includes("anilist.co") ||
-        details.url.includes("anikoto.cz") ||
-        details.url.includes("anikototv.to") ||
-        details.url.includes("animepahe");
+      const apiHosts = [
+        "myanimelist.net", "malsync.moe", "anilist.co",
+        ...anikotoRules.baseUrls.map((base) => new URL(base).hostname),
+        ...paheRules.baseUrls.map((base) => new URL(base).hostname),
+      ];
+      const isApiHost = apiHosts.some((host) => parsedRequest.host === host || parsedRequest.host.endsWith(`.${host}`));
 
+      const mappedPlayerOrigin = getAnikotoPlayerOriginForUrl(details.url);
       const isMegaplayStream =
-        !isApiHost && (
-          details.url.includes("/anime/") ||
-          details.url.includes(".vtt") ||
-          details.url.includes("subtitles") ||
-          details.url.includes("/public/stream/") ||
-          details.url.includes("vibeplayer") ||
-          details.url.includes("mewcdn") ||
-          details.url.includes("mewstream") ||
-          details.url.includes("nekostream") ||
-          details.url.includes("megaplay") ||
-          details.url.includes("vidtube") ||
-          details.url.includes("vibe") ||
-          details.url.includes("lostproject") ||
-          details.url.includes("streamzone")
+        anikotoStreamingEnabled && !isApiHost && (
+          Boolean(mappedPlayerOrigin) ||
+          matchesAnyHostRule(parsedRequest.host, anikotoRules.streamHostFragments, true) ||
+          parsedRequest.path.includes("/anime/") ||
+          parsedRequest.path.includes("subtitles") ||
+          parsedRequest.path.includes("/public/stream/") ||
+          (Boolean(getAnikotoPlayerOrigin()) && hasMediaExtension(parsedRequest.path, anikotoRules.mediaExtensions))
         );
 
       if (isPaheCdn || isMegaplayStream) {
@@ -326,23 +361,37 @@ function handleProtocolUrl(_url: string) {
   // the in-app BrowserWindow approach in mal.ts.
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // Load a previously verified automation config first, then make one bounded
+  // refresh attempt before providers and request interception are initialized.
+  await initRuntimeConfig();
   registerWebRequestHandlers();
+  subscribeRuntimeConfig((configStatus) => {
+    sendToRenderer("automation:status", configStatus);
+    // Electron permits one listener per webRequest event. Re-registering here
+    // atomically replaces both handlers with rules from the new revision.
+    registerWebRequestHandlers();
+  });
 
   // Serve offline downloads: anitrack-dl://d/<folder>/<file> → userData/anitrack_downloads/<folder>/<file>
   protocol.handle("anitrack-dl", async (req) => {
     try {
       const u = new URL(req.url);
       const rel = decodeURIComponent(u.pathname.replace(/^\/+/, ""));
-      const filePath = path.join(downloadsDir(), rel);
       const root = path.resolve(downloadsDir());
-      if (!path.resolve(filePath).startsWith(root) || !fs.existsSync(filePath)) {
+      const filePath = path.resolve(root, rel);
+      const relative = path.relative(root, filePath);
+      if (relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) || !fs.existsSync(filePath)) {
         return new Response("", { status: 404 });
       }
       const ext = path.extname(filePath).toLowerCase();
       const type = ext === ".m3u8" ? "application/vnd.apple.mpegurl"
         : ext === ".vtt" ? "text/vtt"
         : ext === ".ts" ? "video/mp2t"
+        : ext === ".m4s" ? "video/iso.segment"
+        : ext === ".mp4" ? "video/mp4"
+        : ext === ".aac" ? "audio/aac"
+        : ext === ".mp3" ? "audio/mpeg"
         : ext === ".key" ? "application/octet-stream"
         : "application/octet-stream";
       return new Response(fs.readFileSync(filePath), {
@@ -400,34 +449,13 @@ app.whenReady().then(() => {
   pahePrewarm();
   prewarmAnikoto();
 
-  // Auto-updater
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
-  autoUpdater.checkForUpdates().catch(() => {});
-
-  function sendToRenderer(channel: string, payload?: unknown) {
-    mainWindow?.webContents.send(channel, payload);
-  }
-
-  autoUpdater.on("update-available", (info) => {
-    sendToRenderer("update:available", { version: info.version });
-  });
-  autoUpdater.on("update-not-available", () => {
-    sendToRenderer("update:not-available");
-  });
-  autoUpdater.on("download-progress", (p) => {
-    sendToRenderer("update:progress", { percent: Math.round(p.percent) });
-  });
-  autoUpdater.on("update-downloaded", (info) => {
-    sendToRenderer("update:downloaded", { version: info.version });
-  });
-  autoUpdater.on("error", (err) => {
-    sendToRenderer("update:error", err.message);
-  });
+  initDesktopUpdater(sendToRenderer);
 
   // Background flush of dirty list entries to MAL every 30s.
   malFlushTimer = setInterval(() => {
-    flushDirty().catch((e) => console.warn("MAL flush failed", e));
+    if (getRuntimeConfig().features.malSync) {
+      flushDirty().catch((e) => console.warn("MAL flush failed", e));
+    }
   }, 30_000);
 
   app.on("activate", () => {
@@ -437,6 +465,7 @@ app.whenReady().then(() => {
 
 app.on("before-quit", () => {
   isQuitting = true;
+  stopDesktopUpdater();
   // Move CWD away from the install directory so autoInstallOnAppQuit
   // doesn't fail with a directory lock when the NSIS installer runs.
   if (process.platform === "win32") {
@@ -468,21 +497,17 @@ function registerIpc() {
   registerPaheIpc(registerWebRequestHandlers);
   registerDownloadsIpc(getMainWindow);
 
-  ipcMain.handle(IPC.UPDATE_CHECK, async () => {
-    try {
-      const result = await autoUpdater.checkForUpdates();
-      return { ok: true, version: result?.updateInfo?.version ?? null };
-    } catch (e: any) {
-      return { ok: false, reason: e.message };
-    }
-  });
+  ipcMain.handle(IPC.UPDATE_CHECK, () => checkForDesktopUpdates(true));
+  ipcMain.handle(IPC.UPDATE_STATUS, () => getDesktopUpdateState());
   ipcMain.handle(IPC.UPDATE_INSTALL, () => {
+    if (getDesktopUpdateState().phase !== "ready") return false;
     isQuitting = true;
     if (malFlushTimer) { clearInterval(malFlushTimer); malFlushTimer = null; }
     if (process.platform === "win32") {
       try { process.chdir(app.getPath("temp")); } catch {}
     }
-    autoUpdater.quitAndInstall(false, true);
+    return installDesktopUpdate();
   });
+  ipcMain.handle(IPC.AUTOMATION_STATUS, () => getRuntimeConfigStatus());
+  ipcMain.handle(IPC.AUTOMATION_REFRESH, () => refreshRuntimeConfig());
 }
-

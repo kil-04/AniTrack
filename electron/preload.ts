@@ -58,7 +58,12 @@ contextBridge.exposeInMainWorld("api", {
   },
   updater: {
     check: () => ipcRenderer.invoke(IPC.UPDATE_CHECK),
+    status: () => ipcRenderer.invoke(IPC.UPDATE_STATUS),
     install: () => ipcRenderer.invoke(IPC.UPDATE_INSTALL),
+  },
+  automation: {
+    status: () => ipcRenderer.invoke(IPC.AUTOMATION_STATUS),
+    refresh: () => ipcRenderer.invoke(IPC.AUTOMATION_REFRESH),
   },
   downloads: {
     start: (opts: unknown) => ipcRenderer.invoke(IPC.DOWNLOAD_START, opts),

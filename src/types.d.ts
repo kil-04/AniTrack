@@ -63,7 +63,12 @@ interface ApiBridge {
   };
   updater: {
     check(): Promise<{ ok: boolean; version?: string | null; reason?: string }>;
+    status?(): Promise<import("../shared/types").DesktopUpdateState>;
     install(): Promise<void>;
+  };
+  automation?: {
+    status(): Promise<import("../shared/runtime-config").RuntimeConfigStatus>;
+    refresh(): Promise<import("../shared/runtime-config").RuntimeConfigStatus>;
   };
   downloads?: {
     start(opts: any): Promise<{ ok: boolean }>;

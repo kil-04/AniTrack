@@ -958,7 +958,12 @@ private const val DESKTOP_UA =
 @OptIn(ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
 @Composable
 private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: () -> Unit) {
-    var server by remember { mutableStateOf("anikoto") } // "anikoto" | "animepahe"
+    val runtime = com.sanjay.anitrack.next.data.RemoteConfig.current()
+    val enabledServers = runtime.providerOrder.filter { id ->
+        if (id == "anikoto") runtime.anikoto.enabled && runtime.features.anikotoStreaming
+        else runtime.animepahe.enabled && runtime.features.animepaheStreaming
+    }
+    var server by remember(anime.id) { mutableStateOf(enabledServers.firstOrNull() ?: "anikoto") }
     var anikotoMatch by remember { mutableStateOf<com.sanjay.anitrack.next.data.Anikoto.Matched?>(null) }
     var paheMatch by remember { mutableStateOf<com.sanjay.anitrack.next.data.Pahe.Matched?>(null) }
     var loading by remember { mutableStateOf(false) }
@@ -1066,8 +1071,12 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: 
         Spacer(Modifier.height(8.dp))
         // Server toggle
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = server == "anikoto", onClick = { server = "anikoto" }, label = { Text("Anikoto") })
-            FilterChip(selected = server == "animepahe", onClick = { server = "animepahe" }, label = { Text("AnimePahe") })
+            if ("anikoto" in enabledServers) {
+                FilterChip(selected = server == "anikoto", onClick = { server = "anikoto" }, label = { Text("Anikoto") })
+            }
+            if ("animepahe" in enabledServers) {
+                FilterChip(selected = server == "animepahe", onClick = { server = "animepahe" }, label = { Text("AnimePahe") })
+            }
             if (loading) {
                 Spacer(Modifier.width(4.dp))
                 CircularProgressIndicator(Modifier.size(16.dp).align(Alignment.CenterVertically), strokeWidth = 2.dp, color = Accent)
@@ -1268,13 +1277,14 @@ private fun ListStatusButton(anime: Anime) {
                     onClick = {
                         open = false
                         scope.launch {
-                            com.sanjay.anitrack.next.data.Db.setListStatus(anime.id, key, anime.title, anime.cover)
+                            val connected = com.sanjay.anitrack.next.data.Mal.isConnected
+                            com.sanjay.anitrack.next.data.Db.setListStatus(
+                                anime.id, key, anime.title, anime.cover,
+                                malId = anime.malId,
+                                queueForMal = connected,
+                            )
                             status = key
-                            // Two-way MAL sync: push the change (fire-and-forget).
-                            val malId = anime.malId
-                            if (malId != null && com.sanjay.anitrack.next.data.Mal.isConnected) {
-                                launch { runCatching { com.sanjay.anitrack.next.data.Mal.pushStatus(malId, key) } }
-                            }
+                            if (connected) com.sanjay.anitrack.next.data.Mal.requestFlush()
                         }
                     },
                 )
@@ -1285,8 +1295,14 @@ private fun ListStatusButton(anime: Anime) {
                     onClick = {
                         open = false
                         scope.launch {
-                            com.sanjay.anitrack.next.data.Db.removeFromList(anime.id)
+                            val connected = com.sanjay.anitrack.next.data.Mal.isConnected
+                            com.sanjay.anitrack.next.data.Db.removeFromList(
+                                anime.id,
+                                malId = anime.malId,
+                                queueForMal = connected,
+                            )
                             status = null
+                            if (connected) com.sanjay.anitrack.next.data.Mal.requestFlush()
                         }
                     },
                 )
@@ -1307,6 +1323,9 @@ fun SettingsScreen() {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
         Text("Settings", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(24.dp))
+
+        AutomationCard()
+        Spacer(Modifier.height(28.dp))
 
         MalCard()
         Spacer(Modifier.height(28.dp))

@@ -58,6 +58,7 @@ import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import com.sanjay.anitrack.next.data.Anikoto
 import com.sanjay.anitrack.next.data.PlaySession
+import com.sanjay.anitrack.next.PipState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -176,7 +177,7 @@ fun PlayerScreen(
     var showSkipOutro by remember { mutableStateOf(false) }
 
     // PiP heuristic: the PiP window is tiny — hide all chrome in it.
-    val inPipLikely = LocalConfiguration.current.screenWidthDp < 400
+    val inPipMode by PipState.active
     // Old-app layout: episode panel beside the video on wide screens.
     val wide = LocalConfiguration.current.screenWidthDp >= 820
     var watchedMap by remember { mutableStateOf<Map<Float, Int>>(emptyMap()) }
@@ -254,11 +255,6 @@ fun PlayerScreen(
     LaunchedEffect(controlsVisible, isPlaying, isSeeking) {
         if (controlsVisible && isPlaying && !isSeeking) { delay(3500); controlsVisible = false }
     }
-    // WebView (pahe) auto-next when hls.js reports the episode ended.
-    LaunchedEffect(webCtl.ended.value) {
-        if (webCtl.ended.value && autoNext && index + 1 < PlaySession.count) index += 1
-    }
-
     DisposableEffect(Unit) {
         PlaySession.playerActive = true
         // Immersive: hide the Android status + navigation bars for the whole
@@ -434,9 +430,16 @@ fun PlayerScreen(
                 // Fire-and-forget on a background thread; the composable is gone.
                 Thread {
                     kotlinx.coroutines.runBlocking {
+                        val now = System.currentTimeMillis()
                         com.sanjay.anitrack.next.data.Db.save(
                             PlaySession.animeId, epNum, posMs / 1000.0, dur / 1000.0,
-                            PlaySession.animeTitle, PlaySession.animeCover, key,
+                            PlaySession.animeTitle, PlaySession.animeCover, key, updatedAt = now,
+                        )
+                        com.sanjay.anitrack.next.data.GistSync.pushProgress(
+                            com.sanjay.anitrack.next.data.Db.CwRow(
+                                PlaySession.animeId, epNum, posMs / 1000.0, dur / 1000.0,
+                                PlaySession.animeTitle, PlaySession.animeCover, key, now,
+                            ),
                         )
                     }
                 }.start()
@@ -451,7 +454,7 @@ fun PlayerScreen(
 
     Column(Modifier.fillMaxSize().background(Color.Black)) {
         // Immersive while PiP'd or locked to landscape (the old app's fullscreen).
-        if (!inPipLikely && !landscapeLocked) {
+        if (!inPipMode && !landscapeLocked) {
             // Desktop-style header: "⌂ Home | <Title> — Episode N" with the
             // title clickable → detail page.
             Row(
@@ -586,7 +589,7 @@ fun PlayerScreen(
 
             // Gesture layer — sits under the control bar. Single tap toggles
             // the bar; double-tap seeks; long-press = 2×; right-half drag = vol.
-            if (!inPipLikely && error == null) {
+            if (!inPipMode && error == null) {
                 Box(
                     Modifier
                         .fillMaxSize()
@@ -669,7 +672,7 @@ fun PlayerScreen(
             }
 
             // ── Custom control bar (desktop-style) ──
-            if (controlsVisible && !inPipLikely && error == null && status.isEmpty()) {
+            if (controlsVisible && !inPipMode && error == null && status.isEmpty()) {
                 Column(
                     Modifier
                         .align(Alignment.BottomCenter)
@@ -831,7 +834,7 @@ fun PlayerScreen(
 
         when {
             // PiP / fullscreen-landscape lock: video only, no chrome.
-            inPipLikely || landscapeLocked -> videoArea(Modifier.weight(1f).fillMaxWidth())
+            inPipMode || landscapeLocked -> videoArea(Modifier.weight(1f).fillMaxWidth())
             // Landscape / tablet: panel beside the video (desktop app layout).
             wide -> Row(Modifier.weight(1f).fillMaxWidth()) {
                 panel(Modifier.width(300.dp).fillMaxHeight())

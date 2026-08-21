@@ -18,6 +18,7 @@ import {
   upsertAnime,
 } from "./db";
 import { getByMalId } from "./anilist";
+import { getRuntimeConfig } from "./remote-config";
 import type { MalAuthState, WatchStatus } from "../../shared/types";
 
 // Default public MAL client (no secret needed — registered as "other" app type).
@@ -284,6 +285,9 @@ const TO_MAL_STATUS: Record<WatchStatus, string> = {
 export async function pullList(
   onProgress?: (n: number) => void,
 ): Promise<{ imported: number }> {
+  if (!getRuntimeConfig().features.malSync) {
+    throw new Error("MAL sync is temporarily disabled by signed automation rules.");
+  }
   let url: string | null =
     "/users/@me/animelist?fields=list_status,num_episodes,my_list_status,main_picture,start_season,mean,status&limit=100&nsfw=true";
   let count = 0;
@@ -369,6 +373,7 @@ async function pushOne(
 
 // Drain all dirty entries to MAL. Called debounced from main process.
 export async function flushDirty(): Promise<{ pushed: number; errors: number }> {
+  if (!getRuntimeConfig().features.malSync) return { pushed: 0, errors: 0 };
   const t = await refreshIfNeeded();
   if (!t) return { pushed: 0, errors: 0 };
   const dirty = getDirtyEntries();

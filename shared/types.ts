@@ -129,6 +129,14 @@ export interface DownloadItem {
   episodeSession?: string;
 }
 
+export interface DesktopUpdateState {
+  phase: "disabled" | "idle" | "checking" | "available" | "downloading" | "ready" | "error";
+  version?: string;
+  percent?: number;
+  message?: string;
+  checkedAt?: number;
+}
+
 // IPC channel names. Keeping them in one place avoids drift.
 export const IPC = {
   // MAL
@@ -176,7 +184,11 @@ export const IPC = {
   PROGRESS_GET_FOR_ANIME: "progress:get-for-anime",
   // Updater
   UPDATE_CHECK: "update:check",
+  UPDATE_STATUS: "update:status",
   UPDATE_INSTALL: "update:install",
+  // Signed automation config
+  AUTOMATION_STATUS: "automation:status",
+  AUTOMATION_REFRESH: "automation:refresh",
   // Offline downloads (desktop)
   DOWNLOAD_START: "download:start",
   DOWNLOAD_LIST: "download:list",

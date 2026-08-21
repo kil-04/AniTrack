@@ -70,6 +70,9 @@ object PlaySession {
      */
     suspend fun switchProvider(target: String): Boolean {
         if (target == provider) return true
+        val runtime = RemoteConfig.current()
+        if (target == "animepahe" && (!runtime.animepahe.enabled || !runtime.features.animepaheStreaming)) return false
+        if (target == "anikoto" && (!runtime.anikoto.enabled || !runtime.features.anikotoStreaming)) return false
         val a = anime ?: return false
         val currentNum = episodeNumber(index)
         val prevIndex = index
@@ -107,6 +110,16 @@ object PlaySession {
         localFile?.let { path ->
             // Downloaded HLS — play the local index.m3u8 directly.
             return Resolved(java.io.File(path).toURI().toString(), "", "", emptyList(), null, null, null, null)
+        }
+        val runtime = RemoteConfig.current()
+        if (provider == "animepahe") {
+            check(runtime.animepahe.enabled && runtime.features.animepaheStreaming) {
+                "AnimePahe is temporarily disabled. Refresh automatic fixes in Settings."
+            }
+        } else {
+            check(runtime.anikoto.enabled && runtime.features.anikotoStreaming) {
+                "Anikoto is temporarily disabled. Refresh automatic fixes in Settings."
+            }
         }
         return if (provider == "animepahe") {
             val ep = paheEps[i]

@@ -7,6 +7,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -103,6 +106,14 @@ object Downloads {
         resolve: suspend () -> Triple<String, String, String>,
     ) {
         val id = idOf(animeId, episode)
+        if (!RemoteConfig.current().features.downloads) {
+            items.removeAll { it.id == id }
+            items += Item(
+                id, animeId, episode, title, cover, Status.FAILED, 0,
+                error = "Downloads are temporarily disabled by the automation configuration.",
+            )
+            return
+        }
         if (items.any { it.id == id && it.status != Status.FAILED }) return
         items.removeAll { it.id == id }
         val item = Item(id, animeId, episode, title, cover, Status.QUEUED, 0)
@@ -182,10 +193,16 @@ object Downloads {
         var done = 0
         // Sequential-ish with light parallelism (chunks of 6) + 429 retry.
         for (chunk in toDownload.chunked(6)) {
-            val jobs = chunk.map { d ->
-                scope.launch { httpToFile(d.url, d.file, referer, ua) }
+            // Children belong to this download, not the app-wide SupervisorJob,
+            // so any failed key/segment aborts the item instead of producing a
+            // broken playlist that is incorrectly marked DONE.
+            coroutineScope {
+                chunk.map { d ->
+                    async(Dispatchers.IO) {
+                        httpToFile(d.url, d.file, referer, ua)
+                    }
+                }.awaitAll()
             }
-            jobs.forEach { it.join() }
             done += chunk.size
             onProgress((done * 100 / total).coerceIn(0, 99))
         }
@@ -235,14 +252,49 @@ object Downloads {
     private fun cronetGet(
         engine: org.chromium.net.CronetEngine, url: String, ref: String, ua: String, cookie: String?,
     ): Pair<Int, ByteArray> {
+        val f = cronetGetFull(engine, url, ref, ua, cookie)
+        return f.status to f.body
+    }
+
+    class Fetched(
+        val status: Int,
+        val reason: String,
+        val headers: Map<String, String>,
+        val body: ByteArray,
+    )
+
+    /** Blocking Cronet GET used by the pahe WebView proxy (shouldInterceptRequest):
+     *  Chrome TLS + Referer/UA/cookies, returns content type for the response. */
+    fun proxyGet(
+        url: String,
+        ref: String,
+        ua: String,
+        requestHeaders: Map<String, String> = emptyMap(),
+    ): Fetched? = try {
+        val engine = cronetEngine() ?: return null
+        val cookie = runCatching { android.webkit.CookieManager.getInstance().getCookie(url) }.getOrNull()
+        cronetGetFull(engine, url, ref, ua, cookie, requestHeaders)
+    } catch (e: Exception) {
+        android.util.Log.w("AniTrackNext", "proxyGet failed ${e.message} for $url")
+        null
+    }
+
+    private fun cronetGetFull(
+        engine: org.chromium.net.CronetEngine, url: String, ref: String, ua: String, cookie: String?,
+        extraHeaders: Map<String, String> = emptyMap(),
+    ): Fetched {
         val latch = java.util.concurrent.CountDownLatch(1)
         val out = java.io.ByteArrayOutputStream()
         var status = 0
+        var reason = "OK"
+        var responseHeaders: Map<String, String> = emptyMap()
         var err: Exception? = null
         val cb = object : org.chromium.net.UrlRequest.Callback() {
             override fun onRedirectReceived(r: org.chromium.net.UrlRequest, i: org.chromium.net.UrlResponseInfo?, newUrl: String?) = r.followRedirect()
             override fun onResponseStarted(r: org.chromium.net.UrlRequest, i: org.chromium.net.UrlResponseInfo) {
                 status = i.httpStatusCode
+                reason = i.httpStatusText.takeIf { it.isNotBlank() } ?: "OK"
+                responseHeaders = i.allHeaders.mapValues { it.value.joinToString(", ") }
                 r.read(java.nio.ByteBuffer.allocateDirect(64 * 1024))
             }
             override fun onReadCompleted(r: org.chromium.net.UrlRequest, i: org.chromium.net.UrlResponseInfo, bb: java.nio.ByteBuffer) {
@@ -255,10 +307,19 @@ object Downloads {
         val b = engine.newUrlRequestBuilder(url, cb, cronetExecutor)
             .addHeader("User-Agent", ua).addHeader("Referer", ref.trimEnd('/') + "/").addHeader("Accept", "*/*")
         if (!cookie.isNullOrBlank()) b.addHeader("Cookie", cookie)
+        // Preserve range/conditional requests made by hls.js. Do not forward
+        // headers whose values are controlled above or by Cronet itself.
+        val blocked = setOf(
+            "user-agent", "referer", "cookie", "host", "connection", "content-length",
+            "accept-encoding", "transfer-encoding",
+        )
+        for ((name, value) in extraHeaders) {
+            if (name.lowercase() !in blocked && value.isNotBlank()) b.addHeader(name, value)
+        }
         b.build().start()
         if (!latch.await(90, TimeUnit.SECONDS)) throw Exception("timeout for $url")
         err?.let { throw it }
-        return status to out.toByteArray()
+        return Fetched(status, reason, responseHeaders, out.toByteArray())
     }
 
     private fun httpText(url: String, ref: String, ua: String): String = String(getBytes(url, ref, ua))
@@ -266,7 +327,10 @@ object Downloads {
     private fun httpToFile(url: String, file: File, ref: String, ua: String) {
         val tmp = File(file.parentFile, file.name + ".part")
         tmp.writeBytes(getBytes(url, ref, ua))
-        tmp.renameTo(file)
+        if (!tmp.renameTo(file)) {
+            tmp.delete()
+            throw Exception("Could not finalize ${file.name}")
+        }
     }
 
     private fun absolutize(uri: String, base: String): String = when {

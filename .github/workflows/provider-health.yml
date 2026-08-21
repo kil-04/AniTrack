@@ -1,0 +1,62 @@
+name: Provider health monitor
+
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: provider-health-monitor
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+
+      - name: Probe every signed provider origin
+        id: health
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/provider-health.js | tee provider-health.md
+
+      - name: Open or update one outage issue
+        if: steps.health.outcome == 'failure'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_TITLE: "Provider health monitor detected an outage"
+        run: |
+          issue_number="$(gh issue list --state open --search "${ISSUE_TITLE} in:title" --json number --jq '.[0].number // empty')"
+          if [[ -z "$issue_number" ]]; then
+            gh issue create --title "$ISSUE_TITLE" --body-file provider-health.md
+          else
+            gh issue comment "$issue_number" --body-file provider-health.md
+          fi
+
+      - name: Close a recovered outage issue
+        if: steps.health.outcome == 'success'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_TITLE: "Provider health monitor detected an outage"
+        run: |
+          issue_number="$(gh issue list --state open --search "${ISSUE_TITLE} in:title" --json number --jq '.[0].number // empty')"
+          if [[ -n "$issue_number" ]]; then
+            gh issue close "$issue_number" --comment "All enabled providers have at least one reachable signed origin again."
+          fi
+
+      - name: Fail the workflow after recording diagnostics
+        if: steps.health.outcome == 'failure'
+        run: exit 1

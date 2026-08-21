@@ -5,6 +5,7 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 
@@ -23,13 +24,12 @@ class WebController {
     val durationMs = mutableStateOf(0L)
     val bufferedMs = mutableStateOf(0L)
     val paused = mutableStateOf(false)
-    val ended = mutableStateOf(false)
     val error = mutableStateOf<String?>(null)
 
     private fun js(code: String) { webView?.post { webView?.evaluateJavascript(code, null) } }
 
     fun load(url: String, startSec: Double = 0.0) {
-        ended.value = false; error.value = null
+        error.value = null
         js("load(${quote(url)}, $startSec);")
     }
     fun play() { js("play();") }
@@ -56,6 +56,7 @@ fun PaheWebVideo(
     onEnded: () -> Unit,
 ) {
     fun q(s: String) = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+    val currentOnEnded = rememberUpdatedState(onEnded)
     AndroidView(
         modifier = modifier,
         factory = { ctx ->
@@ -68,7 +69,7 @@ fun PaheWebVideo(
                     userAgentString = userAgent
                     allowFileAccess = true
                     allowContentAccess = true
-                    mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                    mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
                 }
                 // Persist kwik cookies so hls.js's segment fetches are accepted.
                 android.webkit.CookieManager.getInstance().setAcceptCookie(true)
@@ -84,31 +85,73 @@ fun PaheWebVideo(
                         controller.paused.value = isPaused == 1
                     }
                     @JavascriptInterface
-                    fun onEnded() { controller.ended.value = true; post { onEnded() } }
+                    fun onEnded() { post { currentOnEnded.value() } }
                     @JavascriptInterface
                     fun onError(msg: String) { controller.error.value = msg }
                 }
                 controller.bridge = bridge
                 addJavascriptInterface(bridge, "Android")
+                webChromeClient = object : android.webkit.WebChromeClient() {
+                    override fun onConsoleMessage(m: android.webkit.ConsoleMessage): Boolean {
+                        android.util.Log.d("PaheWeb", "${m.messageLevel()} ${m.message()}")
+                        return true
+                    }
+                }
                 webViewClient = object : android.webkit.WebViewClient() {
-                    // Serve hls.js from assets (correct MIME) — a relative
-                    // <script src> resolves to the kwik baseURL and 404s.
+                    // ALL stream traffic (m3u8/keys/segments) is proxied through
+                    // Cronet with CORS headers injected — the CDN sends none, so
+                    // hls.js's cross-origin XHRs (page origin = kwik, segments on
+                    // the vault host) would be silently blocked. This mirrors the
+                    // desktop app's Electron webRequest CORS injection.
                     override fun shouldInterceptRequest(
                         view: WebView, request: android.webkit.WebResourceRequest,
                     ): android.webkit.WebResourceResponse? {
-                        if (request.url.toString().endsWith("/hls.min.js")) {
+                        val u = request.url.toString()
+                        if (u.endsWith("/hls.min.js")) {
                             return android.webkit.WebResourceResponse(
                                 "application/javascript", "utf-8", ctx.assets.open("hls.min.js"),
                             )
                         }
-                        return null
+                        if (!u.startsWith("http") || request.method != "GET") return null
+                        val f = com.sanjay.anitrack.next.data.Downloads.proxyGet(
+                            u, referer, userAgent, request.requestHeaders,
+                        ) ?: return null
+                        val contentType = f.headers.entries.firstOrNull {
+                            it.key.equals("Content-Type", ignoreCase = true)
+                        }?.value
+                        val mime = contentType?.substringBefore(';')?.trim()
+                            ?: if (u.contains(".m3u8")) "application/vnd.apple.mpegurl" else "application/octet-stream"
+                        val headers = f.headers.filterKeys {
+                            !it.equals("Content-Encoding", ignoreCase = true) &&
+                                !it.equals("Content-Length", ignoreCase = true) &&
+                                !it.equals("Transfer-Encoding", ignoreCase = true) &&
+                                !it.equals("Access-Control-Allow-Origin", ignoreCase = true) &&
+                                !it.equals("Access-Control-Allow-Headers", ignoreCase = true) &&
+                                !it.equals("Access-Control-Allow-Methods", ignoreCase = true) &&
+                                !it.equals("Access-Control-Expose-Headers", ignoreCase = true)
+                        }.toMutableMap().apply {
+                            put("Content-Length", f.body.size.toString())
+                            put("Access-Control-Allow-Origin", "*")
+                            put("Access-Control-Allow-Headers", "*")
+                            put("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+                            put("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges")
+                        }
+                        // WebResourceResponse rejects redirects; Cronet follows
+                        // them, so a normal final response should be 200..599.
+                        val status = if (f.status in 200..299 || f.status in 400..599) f.status else 500
+                        return android.webkit.WebResourceResponse(
+                            mime, null, status, if (status == 500) "Proxy Error" else f.reason.ifBlank { "OK" }, headers,
+                            java.io.ByteArrayInputStream(f.body),
+                        )
                     }
-                    // The kwik CDN serves an incomplete cert chain the WebView
-                    // can't validate (net_error -202); the full-browser apps
-                    // tolerate it. Proceed so segments load.
                     override fun onReceivedSslError(
                         view: WebView, handler: android.webkit.SslErrorHandler, error: android.net.http.SslError,
-                    ) { handler.proceed() }
+                    ) {
+                        // Never bypass certificate validation for an arbitrary
+                        // host loaded by JavaScript or a compromised playlist.
+                        handler.cancel()
+                        controller.error.value = "Secure connection failed for ${error.url}"
+                    }
                     // Load the stream only once the page's JS (hls.js + load())
                     // is ready — calling load() from the resolve effect fired
                     // before this and silently no-op'd.

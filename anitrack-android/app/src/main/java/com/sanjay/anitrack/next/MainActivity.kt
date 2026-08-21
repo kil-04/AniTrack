@@ -1,6 +1,7 @@
 package com.sanjay.anitrack.next
 
 import android.os.Bundle
+import android.content.res.Configuration
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -41,6 +42,10 @@ private val Bg = Color(0xFF000000)
 private val BgElev = Color(0xFF000000)
 private val Accent = Color(0xFFE50914)
 
+object PipState {
+    val active = mutableStateOf(false)
+}
+
 private val DarkColors = darkColorScheme(
     primary = Accent,
     background = Bg,
@@ -63,6 +68,9 @@ private val destinations = listOf(
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        PipState.active.value = isInPictureInPictureMode
+        com.sanjay.anitrack.next.update.AppUpdater.init(applicationContext)
+        com.sanjay.anitrack.next.data.RemoteConfig.init(applicationContext)
         com.sanjay.anitrack.next.data.Db.init(applicationContext)
         com.sanjay.anitrack.next.data.GistSync.init(applicationContext)
         com.sanjay.anitrack.next.data.Downloads.init(applicationContext)
@@ -93,6 +101,19 @@ class MainActivity : ComponentActivity() {
         if (hasFocus) hideSystemBars()   // re-hide after dialogs / app switches
     }
 
+    override fun onResume() {
+        super.onResume()
+        com.sanjay.anitrack.next.update.AppUpdater.resumePendingInstall(this)
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: Configuration,
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        PipState.active.value = isInPictureInPictureMode
+    }
+
     // YouTube behaviour: leaving the app while watching drops into PiP.
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
@@ -109,6 +130,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        if (isFinishing) PipState.active.value = false
         // The shared player outlives the player screen (mini player) — free it
         // when the whole activity goes away.
         if (isFinishing) com.sanjay.anitrack.next.data.PlayerHolder.release()

@@ -1,0 +1,6 @@
+* text=auto
+automation/*.json text eol=lf
+automation/*.sig text eol=lf
+shared/*.json text eol=lf
+scripts/*.js text eol=lf
+.github/workflows/*.yml text eol=lf

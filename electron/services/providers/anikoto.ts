@@ -1,7 +1,68 @@
 import { BrowserWindow, net, session } from "electron";
 import { StreamProvider, AnimeInfo, EpisodeInfo, StreamLink, StreamData } from "./types";
+import { getRuntimeConfig } from "../remote-config";
 
-const BASE_URL = "https://anikototv.to";
+let _activeAnikotoBase = "";
+
+function anikotoBases(): string[] {
+  return getRuntimeConfig().providers.anikoto.baseUrls.map((base) => base.replace(/\/+$/, ""));
+}
+
+function anikotoBaseUrl(): string {
+  const config = getRuntimeConfig();
+  if (!config.providers.anikoto.enabled || !config.features.anikotoStreaming) {
+    throw new Error("Anikoto is temporarily disabled by the automation configuration.");
+  }
+  const bases = anikotoBases();
+  if (!bases.includes(_activeAnikotoBase)) _activeAnikotoBase = bases[0];
+  return _activeAnikotoBase;
+}
+
+function anikotoRoute(name: string, values: Record<string, string | number> = {}): string {
+  const template = getRuntimeConfig().providers.anikoto.routes[name];
+  if (!template) throw new Error(`Missing signed Anikoto route: ${name}`);
+  const route = template.replace(/\{([A-Za-z][A-Za-z0-9]*)\}/g, (_match, key: string) => {
+    if (!(key in values)) throw new Error(`Missing Anikoto route value: ${key}`);
+    return encodeURIComponent(String(values[key]));
+  });
+  if (route.includes("{")) throw new Error(`Unresolved Anikoto route: ${name}`);
+  return route;
+}
+
+function anikotoUrl(name: string, values: Record<string, string | number> = {}): string {
+  return `${anikotoBaseUrl()}${anikotoRoute(name, values)}`;
+}
+
+function anikotoSelector(name: string): string {
+  const value = getRuntimeConfig().providers.anikoto.selectors[name];
+  if (!value) throw new Error(`Missing signed Anikoto selector: ${name}`);
+  return value;
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function htmlAttribute(tag: string, name: string): string | null {
+  const match = new RegExp(`(?:^|\\s)${escapeRegex(name)}\\s*=\\s*(["'])(.*?)\\1`, "i").exec(tag);
+  return match?.[2] ?? null;
+}
+
+function elementAttributeById(html: string, id: string, attribute: string): string | null {
+  const tag = new RegExp(`<[^>]+\\sid\\s*=\\s*(["'])${escapeRegex(id)}\\1[^>]*>`, "i").exec(html)?.[0];
+  return tag ? htmlAttribute(tag, attribute) : null;
+}
+
+function extractRouteValue(value: string, routeName: string, key: string): string | null {
+  const template = getRuntimeConfig().providers.anikoto.routes[routeName];
+  const marker = `{${key}}`;
+  const at = template?.indexOf(marker) ?? -1;
+  if (!template || at < 0) return null;
+  const pattern = new RegExp(`${escapeRegex(template.slice(0, at))}([^/?&#]+)${escapeRegex(template.slice(at + marker.length))}`);
+  const match = pattern.exec(value);
+  if (!match) return null;
+  try { return decodeURIComponent(match[1]); } catch { return match[1]; }
+}
 
 // Origin of the player iframe that served the most-recently-resolved stream
 // (e.g. https://vidtube.site). The segment CDNs (mewstream.buzz, nekostream.site)
@@ -10,11 +71,44 @@ const BASE_URL = "https://anikototv.to";
 // to spoof the correct Referer/Origin on CDN requests.
 let _lastPlayerOrigin = "";
 export function getAnikotoPlayerOrigin(): string { return _lastPlayerOrigin; }
+const streamOrigins = new Map<string, { origin: string; expiresAt: number }>();
+
+function rememberAnikotoStreamOrigin(data: StreamData, playerOrigin: string) {
+  const expiresAt = Date.now() + 45 * 60 * 1000;
+  for (const candidate of [data.url, ...(data.subtitles ?? []).map((track: any) => track.file ?? track.src ?? "")]) {
+    try { streamOrigins.set(new URL(candidate).hostname.toLowerCase(), { origin: playerOrigin, expiresAt }); } catch {}
+  }
+}
+
+export function getAnikotoPlayerOriginForUrl(url: string): string {
+  let host = "";
+  try { host = new URL(url).hostname.toLowerCase(); } catch { return ""; }
+  const mapped = streamOrigins.get(host);
+  if (!mapped) return "";
+  if (mapped.expiresAt <= Date.now()) {
+    streamOrigins.delete(host);
+    return "";
+  }
+  return mapped.origin;
+}
 
 let _anikotoWin: BrowserWindow | null = null;
 let _anikotoReady = false;
 let _anikotoReadyPromise: Promise<void> | null = null;
 let _anikotoTimeout: NodeJS.Timeout | null = null;
+
+function resetAnikotoWindow() {
+  if (_anikotoWin && !_anikotoWin.isDestroyed()) _anikotoWin.destroy();
+  _anikotoWin = null;
+  _anikotoReady = false;
+  _anikotoReadyPromise = null;
+}
+
+function selectAnikotoBase(base: string) {
+  const clean = base.replace(/\/+$/, "");
+  if (_activeAnikotoBase && _activeAnikotoBase !== clean) resetAnikotoWindow();
+  _activeAnikotoBase = clean;
+}
 
 function resetAnikotoTimeout() {
   if (_anikotoTimeout) {
@@ -33,6 +127,7 @@ function resetAnikotoTimeout() {
 }
 
 export function getAnikotoWindow(): Promise<BrowserWindow> {
+  const baseUrl = anikotoBaseUrl();
   resetAnikotoTimeout();
   if (_anikotoWin && !_anikotoWin.isDestroyed() && _anikotoReady) {
     return Promise.resolve(_anikotoWin);
@@ -66,7 +161,7 @@ export function getAnikotoWindow(): Promise<BrowserWindow> {
     }
     _anikotoWin!.webContents.on("did-finish-load", done);
     setTimeout(done, 15_000);
-    _anikotoWin!.loadURL(BASE_URL + "/");
+    _anikotoWin!.loadURL(baseUrl + "/");
     _anikotoWin!.on("closed", () => {
       _anikotoWin = null;
       _anikotoReady = false;
@@ -86,34 +181,64 @@ export function prewarmAnikoto(): void {
   });
 }
 
-async function anikotoFetch(url: string, options: any = {}, retried = false): Promise<any> {
-  const win = await getAnikotoWindow();
-  const sess = session.fromPartition("persist:anikoto");
-  
+async function anikotoFetch(url: string, options: any = {}): Promise<any> {
   const headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     ...(options.headers || {})
   };
 
-  const resp = await (net.fetch as any)(url, {
-    ...options,
-    session: sess,
-    headers
-  });
-
-  if (!resp.ok) {
-    if (!retried && (resp.status === 403 || resp.status === 503 || resp.status === 429)) {
-      console.log(`[Anikoto] Fetch failed with status ${resp.status}. Refreshing session...`);
-      if (_anikotoWin && !_anikotoWin.isDestroyed()) {
-        _anikotoWin.destroy();
+  const bases = anikotoBases();
+  let parsed: URL | null = null;
+  try { parsed = new URL(url); } catch {}
+  const providerRequest = parsed ? bases.includes(parsed.origin) : false;
+  const orderedBases = providerRequest
+    ? [anikotoBaseUrl(), ...bases.filter((base) => base !== anikotoBaseUrl())]
+    : [""];
+  let lastResponse: any = null;
+  let lastError: unknown = null;
+  for (const candidateBase of orderedBases) {
+    const candidateUrl = providerRequest && parsed
+      ? `${candidateBase}${parsed.pathname}${parsed.search}${parsed.hash}`
+      : url;
+    if (providerRequest) selectAnikotoBase(candidateBase);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await getAnikotoWindow();
+        const candidateHeaders = { ...headers } as Record<string, string>;
+        for (const [name, value] of Object.entries(candidateHeaders)) {
+          if (name.toLowerCase() !== "referer") continue;
+          try {
+            const referer = new URL(value);
+            if (bases.includes(referer.origin) && providerRequest) {
+              candidateHeaders[name] = `${candidateBase}${referer.pathname}${referer.search}${referer.hash}`;
+            }
+          } catch {}
+        }
+        const resp = await (net.fetch as any)(candidateUrl, {
+          ...options,
+          session: session.fromPartition("persist:anikoto"),
+          headers: candidateHeaders,
+        });
+        lastResponse = resp;
+        if (resp.ok) return resp;
+        const retryable = resp.status === 403 || resp.status === 429 || resp.status === 503;
+        if (attempt === 0 && retryable) {
+          console.log(`[Anikoto] ${candidateBase || "stream host"} returned ${resp.status}; refreshing session.`);
+          resetAnikotoWindow();
+          continue;
+        }
+        if (!providerRequest || (resp.status < 500 && !retryable && resp.status !== 404)) return resp;
+        break;
+      } catch (error) {
+        lastError = error;
+        resetAnikotoWindow();
+        if (attempt === 0) continue;
+        break;
       }
-      _anikotoWin = null;
-      _anikotoReady = false;
-      _anikotoReadyPromise = null;
-      return anikotoFetch(url, options, true);
     }
   }
-  return resp;
+  if (lastResponse) return lastResponse;
+  throw lastError instanceof Error ? lastError : new Error("Every signed Anikoto origin failed");
 }
 
 // Parse Anikoto's home-page "Top anime" sidebar into day/week/month lists.
@@ -129,14 +254,16 @@ export function parseAnikotoTop(html: string): { day: any[]; week: any[]; month:
     const end = i + 1 < markers.length ? markers[i + 1].index! : sec.length;
     const block = sec.slice(start, end);
     const items: any[] = [];
-    for (const p of block.split(/<a class="item/).slice(1, 11)) {
+    const itemClass = escapeRegex(anikotoSelector("searchItemClass"));
+    const itemStart = new RegExp(`<a\\s+class=["'][^"']*\\b${itemClass}\\b[^"']*["']`, "i");
+    for (const p of block.split(itemStart).slice(1, 11)) {
       const href = (p.match(/href="([^"]+)"/) || [])[1] || "";
-      const slug = (href.match(/\/watch\/([^"?/]+)/) || [])[1] || "";
+      const slug = extractRouteValue(href, "watch", "animeId") || "";
       const poster = (p.match(/<img[^>]+src="([^"]+)"/) || [])[1] || "";
       const alt = (p.match(/alt="([^"]*)"/) || [])[1] || "";
       const nameM = p.match(/class="name[^"]*"[^>]*>\s*([^<]+?)\s*</);
       const title = ((nameM && nameM[1]) || alt).trim();
-      const titleJp = (p.match(/data-jp="([^"]*)"/) || [])[1] || "";
+      const titleJp = htmlAttribute(p, anikotoSelector("searchTitleAttribute")) || "";
       const showId = (p.match(/data-tip="([^"]*)"/) || [])[1] || "";
       const sub = (p.match(/ep-status sub[\s\S]*?<span>\s*(\d+)/) || [])[1];
       const dub = (p.match(/ep-status dub[\s\S]*?<span>\s*(\d+)/) || [])[1];
@@ -149,7 +276,7 @@ export function parseAnikotoTop(html: string): { day: any[]; week: any[]; month:
 
 export async function getAnikotoTop(): Promise<{ day: any[]; week: any[]; month: any[] }> {
   try {
-    const resp = await anikotoFetch(`${BASE_URL}/home`);
+    const resp = await anikotoFetch(anikotoUrl("home"));
     const html = await resp.text();
     return parseAnikotoTop(html);
   } catch (e) {
@@ -182,6 +309,7 @@ export class AnikotoProvider implements StreamProvider {
       if (firstKey !== undefined) this.resolveCache.delete(firstKey);
     }
     this.resolveCache.set(linkId, { data, timestamp: Date.now() });
+    if (data.referer) rememberAnikotoStreamOrigin(data, data.referer);
   }
 
   async search(query: string): Promise<AnimeInfo[]> {
@@ -189,30 +317,34 @@ export class AnikotoProvider implements StreamProvider {
     
     const fetchPage = async (pageNo: number) => {
       try {
-        const resp = await anikotoFetch(`${BASE_URL}/filter?keyword=${encodeURIComponent(query)}&page=${pageNo}`);
+        const resp = await anikotoFetch(anikotoUrl("search", { query, page: pageNo }));
         if (!resp.ok) return;
         const html = await resp.text();
         
-        const blocks = html.split(/<div class="item\s*/);
+        const itemClass = escapeRegex(anikotoSelector("searchItemClass"));
+        const blocks = html.split(new RegExp(`<div\\s+class=["'][^"']*\\b${itemClass}\\b[^"']*["'][^>]*>`, "i"));
         for (let i = 1; i < blocks.length; i++) {
           const block = blocks[i];
           
-          const hrefM = /href="[^"]*\/watch\/([^/"]+)/.exec(block);
-          const href = hrefM ? hrefM[1] : null;
+          const hrefValue = htmlAttribute(block, "href") || /href="([^"]+)"/.exec(block)?.[1] || "";
+          const href = extractRouteValue(hrefValue, "watch", "animeId");
           if (!href) continue;
           
           const imgM = /<img src="([^"]+)" alt="([^"]+)"/.exec(block);
           const imgSrc = imgM ? imgM[1] : null;
           const imgAlt = imgM ? imgM[2] : null;
           
-          const jpM = /data-jp="([^"]+)"/.exec(block);
-          const dataJp = jpM ? jpM[1].replace(/&#039;/g, "'") : null;
+          const dataJp = (htmlAttribute(block, anikotoSelector("searchTitleAttribute")) || "").replace(/&#039;/g, "'") || null;
           
-          const totalM = /class="ep-status total"[^>]*>\s*<span>\s*(\d+)\s*<\/span>/.exec(block);
+          const countFor = (selector: string) => new RegExp(
+            `class=["'][^"']*\\bep-status\\b[^"']*\\b${escapeRegex(selector)}\\b[^"']*["'][^>]*>\\s*<span>\\s*(\\d+)`,
+            "i",
+          ).exec(block);
+          const totalM = countFor(anikotoSelector("totalClass"));
           const totalEps = totalM ? parseInt(totalM[1], 10) : undefined;
           // Anikoto cards also carry per-language availability badges.
-          const subM = /class="ep-status sub"[^>]*>\s*<span>\s*(\d+)\s*<\/span>/.exec(block);
-          const dubM = /class="ep-status dub"[^>]*>\s*<span>\s*(\d+)\s*<\/span>/.exec(block);
+          const subM = countFor(anikotoSelector("subClass"));
+          const dubM = countFor(anikotoSelector("dubClass"));
           const subCount = subM ? parseInt(subM[1], 10) : undefined;
           const dubCount = dubM ? parseInt(dubM[1], 10) : undefined;
 
@@ -278,18 +410,21 @@ export class AnikotoProvider implements StreamProvider {
 
     const promise = (async () => {
       console.log(`[Anikoto] Fetching watch page HTML for showId: ${animeId}`);
-      const resp = await anikotoFetch(`${BASE_URL}/watch/${animeId}`);
+      const resp = await anikotoFetch(anikotoUrl("watch", { animeId }));
       if (!resp.ok) throw new Error(`Failed to load watch page: status ${resp.status}`);
       const html = await resp.text();
 
       // Extract show/anime ID (data-id) from watch page HTML
-      const idMatch = html.match(/id="watch-main"[^>]*data-id="([^"]+)"/) || html.match(/data-id="([^"]+)"/);
-      if (!idMatch) throw new Error("Failed to extract anime show ID from watch page HTML");
-      const showId = idMatch[1];
+      const showId = elementAttributeById(
+        html,
+        anikotoSelector("watchContainerId"),
+        anikotoSelector("showIdAttribute"),
+      );
+      if (!showId) throw new Error("Failed to extract anime show ID from watch page HTML");
       console.log(`[Anikoto] Extracted showId: ${showId} for ${animeId}`);
 
       // Direct AJAX fetch to get episodes list
-      const listResp = await anikotoFetch(`${BASE_URL}/ajax/episode/list/${showId}`, {
+      const listResp = await anikotoFetch(anikotoUrl("episodeList", { showId }), {
         headers: {
           'X-Requested-With': 'XMLHttpRequest'
         }
@@ -300,28 +435,27 @@ export class AnikotoProvider implements StreamProvider {
 
       // Harvest the MAL id the episode anchors carry (data-mal) — used to
       // verify search matches against AniList/MAL ids.
-      const malM = /data-mal="(\d+)"/.exec(listHtml);
+      const malM = new RegExp(`${escapeRegex(anikotoSelector("malIdAttribute"))}=["'](\\d+)["']`, "i").exec(listHtml);
       this.malIdCache.set(animeId, malM ? parseInt(malM[1], 10) : null);
 
       // Parse episodes from returned HTML using fast regex
       const episodes: EpisodeInfo[] = [];
-      const regex = /<a[^>]+data-id="([^"]+)"[^>]+data-slug="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+      const regex = /<a\b[^>]*>([\s\S]*?)<\/a>/gi;
       let match;
       while ((match = regex.exec(listHtml)) !== null) {
-        const dataId = match[1];
-        const dataSlug = match[2];
-        const text = match[3].trim();
-        
         const tag = match[0];
-        const numM = /data-num="([^"]*)"/.exec(tag);
+        const dataId = htmlAttribute(tag, anikotoSelector("episodeIdAttribute"));
+        const dataSlug = htmlAttribute(tag, anikotoSelector("episodeSlugAttribute"));
+        if (!dataId || !dataSlug) continue;
+        const text = match[1].replace(/<[^>]+>/g, "").trim();
+        const numValue = htmlAttribute(tag, anikotoSelector("episodeNumberAttribute"));
         const titleM = /title="([^"]*)"/.exec(tag);
         
-        const num = numM ? numM[1] : text;
+        const num = numValue || text;
         const title = titleM ? titleM[1] : `Episode ${num}`;
         
         // Extract the server list parameter 'data-ids'
-        const idsM = /data-ids="([^"]*)"/.exec(tag);
-        const serversParam = idsM ? idsM[1] : "";
+        const serversParam = htmlAttribute(tag, anikotoSelector("episodeServersAttribute")) || "";
         
         const slugStr = `ep-${dataSlug}`;
         // Encode: slug:dataId:serversParam
@@ -386,7 +520,7 @@ export class AnikotoProvider implements StreamProvider {
     }
 
     try {
-      const serversResp = await anikotoFetch(`${BASE_URL}/ajax/server/list?servers=${encodeURIComponent(serversParam)}`, {
+      const serversResp = await anikotoFetch(anikotoUrl("serverList", { servers: serversParam }), {
         headers: {
           'X-Requested-With': 'XMLHttpRequest'
         }
@@ -441,6 +575,7 @@ export class AnikotoProvider implements StreamProvider {
     const cached = this.resolveCache.get(linkId);
     if (cached && (Date.now() - cached.timestamp < this.RESOLVE_CACHE_TTL)) {
       console.log(`[Anikoto] resolveStream cache HIT for: ${linkId}`);
+      if (cached.data.referer) rememberAnikotoStreamOrigin(cached.data, cached.data.referer);
       return cached.data;
     }
 
@@ -461,13 +596,16 @@ export class AnikotoProvider implements StreamProvider {
       // Fallback: If serversParam is missing (should not happen in browserless flow), fetch watch page list
       if (!serversParam) {
         console.log(`[Anikoto] Fallback: serversParam missing from episodeId. Fetching list...`);
-        const resp = await anikotoFetch(`${BASE_URL}/watch/${animeId}`);
+        const resp = await anikotoFetch(anikotoUrl("watch", { animeId }));
         if (resp.ok) {
           const html = await resp.text();
-          const idMatch = html.match(/id="watch-main"[^>]*data-id="([^"]+)"/) || html.match(/data-id="([^"]+)"/);
-          if (idMatch) {
-            const showId = idMatch[1];
-            const listResp = await anikotoFetch(`${BASE_URL}/ajax/episode/list/${showId}`, {
+          const showId = elementAttributeById(
+            html,
+            anikotoSelector("watchContainerId"),
+            anikotoSelector("showIdAttribute"),
+          );
+          if (showId) {
+            const listResp = await anikotoFetch(anikotoUrl("episodeList", { showId }), {
               headers: {
                 'X-Requested-With': 'XMLHttpRequest'
               }
@@ -475,13 +613,11 @@ export class AnikotoProvider implements StreamProvider {
             if (listResp.ok) {
               const listJson = await listResp.json() as any;
               const listHtml = listJson.result || "";
-              const targetRe = new RegExp(`<a[^>]+data-id="${dataId}"[^>]*>`);
-              const tagMatch = targetRe.exec(listHtml);
+              const tagMatch = [...listHtml.matchAll(/<a\b[^>]*>/gi)]
+                .map((match) => match[0])
+                .find((tag) => htmlAttribute(tag, anikotoSelector("episodeIdAttribute")) === dataId);
               if (tagMatch) {
-                const idsM = /data-ids="([^"]*)"/.exec(tagMatch[0]);
-                if (idsM) {
-                  serversParam = idsM[1];
-                }
+                serversParam = htmlAttribute(tagMatch, anikotoSelector("episodeServersAttribute")) || "";
               }
             }
           }
@@ -494,7 +630,7 @@ export class AnikotoProvider implements StreamProvider {
 
       // Fetch server list AJAX
       console.log(`[Anikoto] Fetching servers list for episode: ${dataId}`);
-      const serversResp = await anikotoFetch(`${BASE_URL}/ajax/server/list?servers=${encodeURIComponent(serversParam)}`, {
+      const serversResp = await anikotoFetch(anikotoUrl("serverList", { servers: serversParam }), {
         headers: {
           'X-Requested-With': 'XMLHttpRequest'
         }
@@ -512,13 +648,15 @@ export class AnikotoProvider implements StreamProvider {
         const labelM = /<label[^>]*>([\s\S]*?)<\/label>/.exec(typeHtml);
         const label = labelM ? labelM[1].replace(/<[^>]+>/g, '').trim() : '';
         
-        const liRe = /<li[^>]+data-link-id="([^"]+)"[^>]*>([\s\S]*?)<\/li>/g;
+        const liRe = /<li\b[^>]*>([\s\S]*?)<\/li>/gi;
         let liMatch;
         const items = [];
         while ((liMatch = liRe.exec(typeHtml)) !== null) {
+          const linkId = htmlAttribute(liMatch[0], anikotoSelector("serverLinkAttribute"));
+          if (!linkId) continue;
           items.push({
-            linkId: liMatch[1],
-            name: liMatch[2].replace(/<[^>]+>/g, '').trim()
+            linkId,
+            name: liMatch[1].replace(/<[^>]+>/g, '').trim()
           });
         }
         types.push({ label, items });
@@ -567,9 +705,9 @@ export class AnikotoProvider implements StreamProvider {
         const win = await getAnikotoWindow();
         
         // Load watch page if not already loaded
-        const watchUrl = `${BASE_URL}/watch/${animeId}`;
+        const watchUrl = anikotoUrl("watch", { animeId });
         const currentUrl = win.webContents.getURL();
-        if (!currentUrl.includes(`/watch/${animeId}`)) {
+        if (!currentUrl.includes(anikotoRoute("watch", { animeId }))) {
           console.log(`[Anikoto] Browser loading watch page: ${watchUrl}`);
           await win.loadURL(watchUrl);
         }
@@ -683,15 +821,18 @@ export class AnikotoProvider implements StreamProvider {
         }
 
         // Extract Megaplay ID by fetching the player iframe page HTML.
-        const megaplayResp = await anikotoFetch(attIframeUrl, { headers: { 'Referer': `${BASE_URL}/` } });
+        const megaplayResp = await anikotoFetch(attIframeUrl, { headers: { 'Referer': `${anikotoBaseUrl()}/` } });
         if (!megaplayResp.ok) throw new Error(`Failed to fetch Megaplay iframe: status ${megaplayResp.status}`);
         const megaplayHtml = await megaplayResp.text();
-        const m = megaplayHtml.match(/id="megaplay-player"[^>]*data-id="([^"]+)"/) || megaplayHtml.match(/data-id="([^"]+)"/);
-        if (!m) throw new Error("Failed to extract data-id from Megaplay iframe HTML");
-        const megaplayId = m[1];
+        const megaplayId = elementAttributeById(
+          megaplayHtml,
+          anikotoSelector("playerContainerId"),
+          anikotoSelector("playerIdAttribute"),
+        );
+        if (!megaplayId) throw new Error("Failed to extract player id from iframe HTML");
         console.log(`[Anikoto] Extracted Megaplay player source ID: ${megaplayId}`);
 
-        const sourcesResp = await anikotoFetch(`${playerOrigin}/stream/getSources?id=${megaplayId}`, {
+        const sourcesResp = await anikotoFetch(`${playerOrigin}${anikotoRoute("sources", { playerId: megaplayId })}`, {
           headers: { 'Referer': attIframeUrl, 'X-Requested-With': 'XMLHttpRequest' },
         });
         if (!sourcesResp.ok) throw new Error(`getSources failed: status ${sourcesResp.status}`);
@@ -712,6 +853,7 @@ export class AnikotoProvider implements StreamProvider {
         const a = await attempt(iframeUrl, serverGetJson);
         result = a.data;
         _lastPlayerOrigin = a.playerOrigin;
+        rememberAnikotoStreamOrigin(a.data, a.playerOrigin);
       } else {
         // Try each server in the matched sub-type until one resolves. The first
         // server is frequently dead for a given episode — that's what made soft
@@ -725,7 +867,7 @@ export class AnikotoProvider implements StreamProvider {
         let firstResolved: { data: StreamData; playerOrigin: string } | null = null;
         for (const cand of candidateLinkIds) {
           try {
-            const serverGetResp = await anikotoFetch(`${BASE_URL}/ajax/server?get=${encodeURIComponent(cand)}`, {
+            const serverGetResp = await anikotoFetch(anikotoUrl("serverResolve", { linkId: cand }), {
               headers: { 'X-Requested-With': 'XMLHttpRequest' },
             });
             if (!serverGetResp.ok) throw new Error(`server iframe status ${serverGetResp.status}`);
@@ -740,6 +882,7 @@ export class AnikotoProvider implements StreamProvider {
             if (subType !== "soft" || (a.data.subtitles && a.data.subtitles.length > 0)) {
               result = a.data;
               _lastPlayerOrigin = a.playerOrigin;
+              rememberAnikotoStreamOrigin(a.data, a.playerOrigin);
               break;
             }
             console.log(`[Anikoto] Soft-sub server has no caption tracks (hard-subbed); trying next…`);
@@ -752,6 +895,7 @@ export class AnikotoProvider implements StreamProvider {
           // No soft-sub-with-tracks server found — fall back to the first that resolved.
           result = firstResolved.data;
           _lastPlayerOrigin = firstResolved.playerOrigin;
+          rememberAnikotoStreamOrigin(firstResolved.data, firstResolved.playerOrigin);
         }
         if (!result) throw lastErr ?? new Error("All Anikoto servers failed to resolve");
       }

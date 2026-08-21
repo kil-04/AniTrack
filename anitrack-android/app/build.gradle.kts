@@ -4,6 +4,22 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val trustJson = rootProject.file("../shared/automation-trust.json").readText()
+fun trustValue(name: String): String = Regex("\"$name\"\\s*:\\s*\"([^\"]+)\"")
+    .find(trustJson)?.groupValues?.get(1)
+    ?: throw GradleException("Missing $name in shared/automation-trust.json")
+
+val releaseStorePath = System.getenv("ANITRACK_ANDROID_KEYSTORE_FILE")
+val releaseStorePassword = System.getenv("ANITRACK_ANDROID_KEYSTORE_PASSWORD")
+val releaseKeyAlias = System.getenv("ANITRACK_ANDROID_KEY_ALIAS")
+val releaseKeyPassword = System.getenv("ANITRACK_ANDROID_KEY_PASSWORD")
+val releaseSigningReady = listOf(
+    releaseStorePath,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all { !it.isNullOrBlank() }
+
 android {
     namespace = "com.sanjay.anitrack.next"
     compileSdk = 36
@@ -16,18 +32,38 @@ android {
         applicationId = "com.sanjay.anitrack.next"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
+
+        buildConfigField("String", "AUTOMATION_PUBLIC_KEY_B64", "\"${trustValue("publicKeySpkiBase64")}\"")
+        buildConfigField("String", "ANDROID_RELEASE_CERT_SHA256", "\"${trustValue("androidReleaseCertSha256")}\"")
+        buildConfigField("String", "AUTOMATION_CONFIG_URL", "\"${trustValue("configUrl")}\"")
+        buildConfigField("String", "AUTOMATION_CONFIG_SIGNATURE_URL", "\"${trustValue("configSignatureUrl")}\"")
+        buildConfigField("String", "ANDROID_UPDATE_MANIFEST_URL", "\"${trustValue("androidUpdateManifestUrl")}\"")
+        buildConfigField("String", "ANDROID_UPDATE_SIGNATURE_URL", "\"${trustValue("androidUpdateSignatureUrl")}\"")
+    }
+
+    signingConfigs {
+        if (releaseSigningReady) {
+            create("release") {
+                storeFile = rootProject.file(releaseStorePath!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (releaseSigningReady) signingConfig = signingConfigs.getByName("release")
         }
     }
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     compileOptions {
@@ -51,6 +87,7 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.navigation:navigation-compose:2.8.9")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
+    implementation("androidx.work:work-runtime-ktx:2.10.1")
 
     // Images
     implementation("io.coil-kt:coil-compose:2.7.0")
@@ -69,4 +106,11 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+}
+
+if (gradle.startParameter.taskNames.any { it.contains("release", ignoreCase = true) } && !releaseSigningReady) {
+    throw GradleException(
+        "Release signing is not configured. Run the Android key generator and build through the release script; " +
+            "release builds never fall back to a debug certificate.",
+    )
 }

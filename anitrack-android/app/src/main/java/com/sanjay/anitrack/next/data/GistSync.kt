@@ -10,6 +10,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -38,11 +39,30 @@ object GistSync {
     fun init(ctx: Context) {
         if (::prefs.isInitialized) return
         prefs = ctx.applicationContext.getSharedPreferences("anitrack_next", Context.MODE_PRIVATE)
+        runCatching {
+            val saved = JSONObject(prefs.getString("gist_pending_deletes", "{}") ?: "{}")
+            for (key in saved.keys()) {
+                val timestamp = saved.getLong(key)
+                pendingDeletes[key] = timestamp
+                tombstones[key] = timestamp
+            }
+        }
     }
 
     var token: String
         get() = prefs.getString("gist_token", "") ?: ""
-        set(v) { prefs.edit().putString("gist_token", v).apply() }
+        set(v) {
+            if (v == token) return
+            prefs.edit().putString("gist_token", v).remove("gist_id").apply()
+            synchronized(this) {
+                cache.clear()
+                tombstones.clear()
+                pendingDeletes.clear()
+                dirty.clear()
+                cacheLoaded = false
+                persistPendingDeletes()
+            }
+        }
     private var gistId: String
         get() = prefs.getString("gist_id", "") ?: ""
         set(v) { prefs.edit().putString("gist_id", v).apply() }
@@ -57,24 +77,31 @@ object GistSync {
     // In-memory mirror of the gist + pending local changes.
     private val cache = mutableMapOf<String, JSONObject>()
     private val tombstones = mutableMapOf<String, Long>()
-    private val dirty = mutableSetOf<String>()
+    private val dirty = mutableMapOf<String, Long>()
+    private var dirtyGeneration = 0L
+    private val pendingDeletes = mutableMapOf<String, Long>()
     private var cacheLoaded = false
 
     private fun req(url: String) = Request.Builder().url(url)
         .header("Authorization", "token $token")
         .header("Accept", "application/vnd.github+json")
 
+    private fun persistPendingDeletes() {
+        val json = JSONObject()
+        for ((animeId, timestamp) in pendingDeletes) json.put(animeId, timestamp)
+        prefs.edit().putString("gist_pending_deletes", json.toString()).apply()
+    }
+
     private fun ensureGistId(): String? {
         if (gistId.isNotEmpty()) return gistId
         try {
             http.newCall(req("$GH/gists?per_page=100").build()).execute().use { res ->
-                if (res.isSuccessful) {
-                    val arr = org.json.JSONArray(res.body?.string() ?: "[]")
-                    for (i in 0 until arr.length()) {
-                        val g = arr.getJSONObject(i)
-                        if (g.optJSONObject("files")?.has(FILE) == true) {
-                            gistId = g.getString("id"); return gistId
-                        }
+                if (!res.isSuccessful) return null
+                val arr = org.json.JSONArray(res.body?.string() ?: return null)
+                for (i in 0 until arr.length()) {
+                    val g = arr.getJSONObject(i)
+                    if (g.optJSONObject("files")?.has(FILE) == true) {
+                        gistId = g.getString("id"); return gistId
                     }
                 }
             }
@@ -94,35 +121,42 @@ object GistSync {
         return null
     }
 
-    private fun loadRemote(id: String): Pair<Map<String, JSONObject>, Map<String, Long>> {
+    private data class RemoteDoc(val rows: Map<String, JSONObject>, val deleted: Map<String, Long>)
+
+    /** A failed/partial GET is not an empty document. Callers must never PATCH
+     *  after null, otherwise a transient GitHub error can erase remote history. */
+    private fun loadRemote(id: String): RemoteDoc? {
         try {
             http.newCall(req("$GH/gists/$id").build()).execute().use { res ->
-                if (!res.isSuccessful) return emptyMap<String, JSONObject>() to emptyMap()
+                if (!res.isSuccessful) {
+                    if (res.code == 404 && gistId == id) gistId = ""
+                    return null
+                }
                 val file = JSONObject(res.body?.string() ?: "{}").optJSONObject("files")?.optJSONObject(FILE)
-                    ?: return emptyMap<String, JSONObject>() to emptyMap()
+                    ?: return null
                 var content = file.optString("content", "")
                 if (file.optBoolean("truncated", false)) {
                     val raw = file.optString("raw_url", "")
-                    if (raw.isNotEmpty()) {
-                        http.newCall(req(raw).build()).execute().use { r2 ->
-                            if (r2.isSuccessful) content = r2.body?.string() ?: content
-                        }
+                    if (raw.isEmpty()) return null
+                    http.newCall(req(raw).build()).execute().use { r2 ->
+                        if (!r2.isSuccessful) return null
+                        content = r2.body?.string() ?: return null
                     }
                 }
-                if (content.isEmpty()) return emptyMap<String, JSONObject>() to emptyMap()
+                if (content.isBlank()) return null
                 val doc = JSONObject(content)
+                val playback = doc.optJSONObject("playback") ?: return null
                 val rows = mutableMapOf<String, JSONObject>()
-                doc.optJSONObject("playback")?.let { pb ->
-                    for (k in pb.keys()) rows[k] = pb.getJSONObject(k)
-                }
+                for (k in playback.keys()) rows[k] = playback.getJSONObject(k)
                 val deleted = mutableMapOf<String, Long>()
-                doc.optJSONObject("deleted")?.let { d ->
+                if (doc.has("deleted") && !doc.isNull("deleted")) {
+                    val d = doc.optJSONObject("deleted") ?: return null
                     for (k in d.keys()) deleted[k] = d.getLong(k)
                 }
-                return rows to deleted
+                return RemoteDoc(rows, deleted)
             }
         } catch (e: Exception) {
-            return emptyMap<String, JSONObject>() to emptyMap()
+            return null
         }
     }
 
@@ -143,18 +177,21 @@ object GistSync {
     }
 
     private fun writeGist(id: String): Boolean {
-        // Prune ancient tombstones (90 days).
+        // Build a pruned snapshot without mutating memory before PATCH succeeds.
+        // Unsent deletions are never pruned.
         val cutoff = System.currentTimeMillis() - 90L * 24 * 3600 * 1000
-        tombstones.entries.removeAll { it.value < cutoff }
+        val sentTombstones = tombstones.filter { (key, value) -> value >= cutoff || pendingDeletes[key] == value }
         val pb = JSONObject(); for ((k, v) in cache) pb.put(k, v)
-        val del = JSONObject(); for ((k, v) in tombstones) del.put(k, v)
+        val del = JSONObject(); for ((k, v) in sentTombstones) del.put(k, v)
         val content = JSONObject().put("playback", pb).put("deleted", del).toString()
         val body = JSONObject().put("files", JSONObject().put(FILE, JSONObject().put("content", content)))
-        return try {
+        val success = try {
             http.newCall(
                 req("$GH/gists/$id").patch(body.toString().toRequestBody("application/json".toMediaType())).build(),
             ).execute().use { it.isSuccessful }
         } catch (e: Exception) { false }
+        if (success) tombstones.entries.removeAll { (key, value) -> value < cutoff && pendingDeletes[key] != value }
+        return success
     }
 
     private fun rowJson(r: Db.CwRow): JSONObject = JSONObject()
@@ -175,11 +212,15 @@ object GistSync {
         if (!configured()) return
         synchronized(this) {
             val ts = tombstones[row.animeId.toString()]
-            if (ts != null && row.updatedAt > ts) tombstones.remove(row.animeId.toString())
+            if (ts != null && row.updatedAt > ts) {
+                tombstones.remove(row.animeId.toString())
+                pendingDeletes.remove(row.animeId.toString())
+                persistPendingDeletes()
+            }
             val key = keyOf(row.animeId, row.episode)
             val cur = cache[key]
             if (cur == null || row.updatedAt >= cur.optLong("updatedAt")) cache[key] = rowJson(row)
-            dirty += key
+            dirty[key] = ++dirtyGeneration
         }
         flushJob?.cancel()
         flushJob = scope.launch { delay(7000); flush() }
@@ -187,38 +228,45 @@ object GistSync {
 
     fun deleteAnime(animeId: Int) {
         if (!configured()) return
-        scope.launch {
-            lock.withLock {
-                val id = ensureGistId() ?: return@withLock
-                val (rows, deleted) = loadRemote(id)
-                mergeRemote(rows, deleted)
-                tombstones[animeId.toString()] = System.currentTimeMillis()
-                cache.keys.removeAll { it.substringBefore(':') == animeId.toString() }
-                writeGist(id)
-            }
+        synchronized(this) {
+            val key = animeId.toString()
+            val timestamp = System.currentTimeMillis()
+            tombstones[key] = timestamp
+            pendingDeletes[key] = timestamp
+            cache.keys.removeAll { it.substringBefore(':') == key }
+            persistPendingDeletes()
         }
+        flushJob?.cancel()
+        flushJob = scope.launch { flush() }
     }
 
     suspend fun flush() {
-        if (!configured()) return
+        if (!configured() || !RemoteConfig.current().features.gistSync) return
         lock.withLock {
-            val pending = synchronized(this) { dirty.toList().also { dirty.clear() } }
-            if (pending.isEmpty()) return
-            val id = ensureGistId() ?: run { synchronized(this) { dirty += pending }; return }
-            val (rows, deleted) = loadRemote(id)
-            mergeRemote(rows, deleted)
-            if (!writeGist(id)) synchronized(this) { dirty += pending }
+            val pending = synchronized(this) { dirty.toMap() }
+            val deleteSnapshot = synchronized(this) { pendingDeletes.toMap() }
+            if (pending.isEmpty() && deleteSnapshot.isEmpty()) return
+            val id = ensureGistId() ?: return
+            val remote = loadRemote(id) ?: return
+            mergeRemote(remote.rows, remote.deleted)
+            if (writeGist(id)) synchronized(this) {
+                for ((key, generation) in pending) if (dirty[key] == generation) dirty.remove(key)
+                for ((key, timestamp) in deleteSnapshot) {
+                    if (pendingDeletes[key] == timestamp) pendingDeletes.remove(key)
+                }
+                persistPendingDeletes()
+            }
         }
     }
 
     /** Two-way reconcile: pull newer remote rows into the DB, apply tombstones,
      *  push back local rows the gist is missing. Returns true if local changed. */
-    suspend fun pullAndMerge(): Boolean {
-        if (!configured()) return false
+    suspend fun pullAndMerge(): Boolean = withContext(Dispatchers.IO) {
+        if (!configured() || !RemoteConfig.current().features.gistSync) return@withContext false
         lock.withLock {
-            val id = ensureGistId() ?: return false
-            val (rows, deleted) = loadRemote(id)
-            mergeRemote(rows, deleted)
+            val id = ensureGistId() ?: throw java.io.IOException("Could not find or create the sync gist")
+            val remote = loadRemote(id) ?: throw java.io.IOException("Could not read the sync gist")
+            mergeRemote(remote.rows, remote.deleted)
             var changed = false
 
             for ((k, v) in cache) {
@@ -261,8 +309,17 @@ object GistSync {
                     needWrite = true
                 }
             }
-            if (needWrite) writeGist(id)
-            return changed
+            val deleteSnapshot = synchronized(this) { pendingDeletes.toMap() }
+            if ((needWrite || deleteSnapshot.isNotEmpty()) && !writeGist(id)) {
+                throw java.io.IOException("Could not upload merged sync data")
+            }
+            if (deleteSnapshot.isNotEmpty()) synchronized(this) {
+                for ((key, timestamp) in deleteSnapshot) {
+                    if (pendingDeletes[key] == timestamp) pendingDeletes.remove(key)
+                }
+                persistPendingDeletes()
+            }
+            return@withLock changed
         }
     }
 }

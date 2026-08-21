@@ -14,7 +14,7 @@ object Db {
 
     fun init(ctx: Context) {
         if (::helper.isInitialized) return
-        helper = object : SQLiteOpenHelper(ctx.applicationContext, "anitrack_next.db", null, 2) {
+        helper = object : SQLiteOpenHelper(ctx.applicationContext, "anitrack_next.db", null, 3) {
             override fun onCreate(db: SQLiteDatabase) {
                 db.execSQL(
                     """CREATE TABLE IF NOT EXISTS playback(
@@ -30,9 +30,14 @@ object Db {
                     )""",
                 )
                 createListTable(db)
+                createMalOutbox(db)
             }
             override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) {
                 if (old < 2) createListTable(db)
+                if (old < 3) {
+                    runCatching { db.execSQL("ALTER TABLE list_entry ADD COLUMN mal_id INTEGER") }
+                    createMalOutbox(db)
+                }
             }
         }
     }
@@ -41,11 +46,26 @@ object Db {
         db.execSQL(
             """CREATE TABLE IF NOT EXISTS list_entry(
                 anime_id   INTEGER PRIMARY KEY,
+                mal_id     INTEGER,
                 status     TEXT NOT NULL,
                 title      TEXT,
                 cover      TEXT,
                 score      REAL,
                 updated_at INTEGER NOT NULL
+            )""",
+        )
+    }
+
+    private fun createMalOutbox(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS mal_outbox(
+                anime_id         INTEGER PRIMARY KEY,
+                op_id            TEXT NOT NULL,
+                mal_id           INTEGER NOT NULL,
+                operation        TEXT NOT NULL CHECK(operation IN ('upsert','delete')),
+                status           TEXT,
+                episodes_watched INTEGER,
+                created_at       INTEGER NOT NULL
             )""",
         )
     }
@@ -56,17 +76,141 @@ object Db {
 
     data class ListRow(val animeId: Int, val status: String, val title: String, val cover: String?, val score: Double?)
 
-    suspend fun setListStatus(animeId: Int, status: String, title: String, cover: String?) = withContext(Dispatchers.IO) {
+    suspend fun setListStatus(
+        animeId: Int,
+        status: String,
+        title: String,
+        cover: String?,
+        malId: Int? = null,
+        queueForMal: Boolean = false,
+        episodesWatched: Int? = null,
+    ) = withContext(Dispatchers.IO) {
+        require(status in STATUSES) { "Invalid list status" }
+        val db = helper.writableDatabase
         val cv = ContentValues().apply {
-            put("anime_id", animeId); put("status", status)
+            put("status", status)
             put("title", title); put("cover", cover)
+            if (malId != null) put("mal_id", malId)
             put("updated_at", System.currentTimeMillis())
         }
-        helper.writableDatabase.insertWithOnConflict("list_entry", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+        db.beginTransaction()
+        try {
+            if (db.update("list_entry", cv, "anime_id=?", arrayOf(animeId.toString())) == 0) {
+                cv.put("anime_id", animeId)
+                db.insertOrThrow("list_entry", null, cv)
+            }
+            if (queueForMal && malId != null) {
+                queueMalOp(db, animeId, malId, "upsert", status, episodesWatched)
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
     }
 
-    suspend fun removeFromList(animeId: Int) = withContext(Dispatchers.IO) {
-        helper.writableDatabase.delete("list_entry", "anime_id=?", arrayOf(animeId.toString()))
+    suspend fun removeFromList(
+        animeId: Int,
+        malId: Int? = null,
+        queueForMal: Boolean = false,
+    ) = withContext(Dispatchers.IO) {
+        val db = helper.writableDatabase
+        var effectiveMalId = malId
+        if (effectiveMalId == null) {
+            db.rawQuery("SELECT mal_id FROM list_entry WHERE anime_id=?", arrayOf(animeId.toString())).use { cursor ->
+                if (cursor.moveToFirst() && !cursor.isNull(0)) effectiveMalId = cursor.getInt(0)
+            }
+        }
+        db.beginTransaction()
+        try {
+            if (queueForMal && effectiveMalId != null) {
+                queueMalOp(db, animeId, effectiveMalId!!, "delete", null, null)
+            }
+            db.delete("list_entry", "anime_id=?", arrayOf(animeId.toString()))
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    private fun queueMalOp(
+        db: SQLiteDatabase,
+        animeId: Int,
+        malId: Int,
+        operation: String,
+        status: String?,
+        episodesWatched: Int?,
+    ) {
+        val values = ContentValues().apply {
+            put("anime_id", animeId)
+            put("op_id", java.util.UUID.randomUUID().toString())
+            put("mal_id", malId)
+            put("operation", operation)
+            put("status", status)
+            put("episodes_watched", episodesWatched)
+            put("created_at", System.currentTimeMillis())
+        }
+        db.insertWithOnConflict("mal_outbox", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    data class MalOp(
+        val animeId: Int,
+        val opId: String,
+        val malId: Int,
+        val operation: String,
+        val status: String?,
+        val episodesWatched: Int?,
+    )
+
+    suspend fun pendingMalOps(): List<MalOp> = withContext(Dispatchers.IO) {
+        val out = mutableListOf<MalOp>()
+        helper.readableDatabase.rawQuery(
+            "SELECT anime_id, op_id, mal_id, operation, status, episodes_watched FROM mal_outbox ORDER BY created_at",
+            null,
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                out += MalOp(
+                    cursor.getInt(0), cursor.getString(1), cursor.getInt(2), cursor.getString(3),
+                    if (cursor.isNull(4)) null else cursor.getString(4),
+                    if (cursor.isNull(5)) null else cursor.getInt(5),
+                )
+            }
+        }
+        out
+    }
+
+    suspend fun ackMalOp(animeId: Int, opId: String) = withContext(Dispatchers.IO) {
+        helper.writableDatabase.delete(
+            "mal_outbox",
+            "anime_id=? AND op_id=?",
+            arrayOf(animeId.toString(), opId),
+        )
+    }
+
+    suspend fun applyMalListStatus(
+        animeId: Int,
+        malId: Int,
+        status: String,
+        title: String,
+        cover: String?,
+    ): Boolean = withContext(Dispatchers.IO) {
+        val db = helper.writableDatabase
+        val pending = db.rawQuery("SELECT 1 FROM mal_outbox WHERE anime_id=?", arrayOf(animeId.toString())).use {
+            it.moveToFirst()
+        }
+        if (pending) return@withContext false
+        val cv = ContentValues().apply {
+            put("status", status); put("title", title); put("cover", cover)
+            put("mal_id", malId); put("updated_at", System.currentTimeMillis())
+        }
+        if (db.update("list_entry", cv, "anime_id=?", arrayOf(animeId.toString())) == 0) {
+            cv.put("anime_id", animeId)
+            db.insertOrThrow("list_entry", null, cv)
+        }
+        true
+    }
+
+    fun clearMalOutbox() {
+        if (::helper.isInitialized) helper.writableDatabase.delete("mal_outbox", null, null)
     }
 
     suspend fun listStatusOf(animeId: Int): String? = withContext(Dispatchers.IO) {

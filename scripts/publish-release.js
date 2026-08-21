@@ -1,85 +1,71 @@
-const fs = require("fs");
-const path = require("path");
-const https = require("https");
+#!/usr/bin/env node
+const {
+  pkg,
+  owner,
+  repo,
+  tag,
+  request,
+  releaseByTag,
+  assertDraftRelease,
+} = require("./github-release-common");
+const { readAndroidMetadata } = require("./android-release-common");
 
-const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "../package.json"), "utf8"));
-const version = pkg.version;
-const token = process.env.GH_TOKEN;
-const owner = pkg.build.publish.owner;
-const repo = pkg.build.publish.repo;
-
-if (!token) {
-  console.error("GH_TOKEN environment variable is not set.");
-  process.exit(1);
-}
-
-function apiRequest(method, urlPath, body = null) {
-  return new Promise((resolve, reject) => {
-    const options = {
-      hostname: "api.github.com",
-      path: urlPath,
-      method: method,
-      headers: {
-        Authorization: `token ${token}`,
-        Accept: "application/vnd.github+json",
-        "User-Agent": "anitrack-publish",
-      },
-    };
-    if (body) {
-      options.headers["Content-Type"] = "application/json";
-      options.headers["Content-Length"] = Buffer.byteLength(JSON.stringify(body));
+function assertCompleteAssetSet(release) {
+  if (pkg.build?.win?.artifactName !== "AniTrack-Setup-${version}.${ext}") {
+    throw new Error("Desktop artifactName must remain the exact versioned release template");
+  }
+  const { versionName } = readAndroidMetadata();
+  const required = new Map([
+    [`AniTrack-Setup-${pkg.version}.exe`, 1_000_000],
+    [`AniTrack-Setup-${pkg.version}.exe.blockmap`, 100],
+    ["latest.yml", 50],
+    [`AniTrack-Android-Next-${versionName}.apk`, 1_000_000],
+    ["anitrack-next-update.json", 100],
+    ["anitrack-next-update.sig", 50],
+  ]);
+  const assets = Array.isArray(release.assets) ? release.assets : [];
+  if (assets.length !== required.size || assets.some((asset) => !required.has(asset.name))) {
+    const unexpected = assets.filter((asset) => !required.has(asset.name)).map((asset) => asset.name);
+    throw new Error(
+      `Draft ${tag} must contain only the ${required.size} approved assets` +
+      (unexpected.length ? `; unexpected: ${unexpected.join(", ")}` : ""),
+    );
+  }
+  for (const [name, minimumSize] of required) {
+    const matching = assets.filter((asset) => asset.name === name);
+    if (matching.length !== 1) throw new Error(`Draft ${tag} must contain exactly one required asset named ${name}`);
+    const asset = matching[0];
+    if (asset.state !== "uploaded" || !Number.isSafeInteger(asset.size) || asset.size < minimumSize) {
+      throw new Error(`Required draft asset ${name} is incomplete or unexpectedly small`);
     }
-    const req = https.request(options, (res) => {
-      let data = "";
-      res.on("data", (c) => (data += c));
-      res.on("end", () => {
-        try {
-          resolve(JSON.parse(data));
-        } catch (e) {
-          resolve(data);
-        }
-      });
-    });
-    req.on("error", reject);
-    if (body) {
-      req.write(JSON.stringify(body));
-    }
-    req.end();
-  });
+  }
+  console.log(`Verified all ${required.size} required exact-name release assets.`);
 }
 
 async function main() {
-  console.log(`Finding release for v${version}...`);
-  const releases = await apiRequest("GET", `/repos/${owner}/${repo}/releases`);
-  if (!Array.isArray(releases)) {
-    console.error("Failed to fetch releases:", releases);
-    process.exit(1);
+  const release = await releaseByTag();
+  assertDraftRelease(release);
+  assertCompleteAssetSet(release);
+  console.log(`Publishing verified draft ${tag} (release ${release.id})...`);
+  const body = Buffer.from(JSON.stringify({ draft: false }), "utf8");
+  const result = await request(
+    "api.github.com",
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/releases/${release.id}`,
+    "PATCH",
+    body,
+    { "Content-Type": "application/json", "Content-Length": String(body.length) },
+  );
+  if (!result || result.tag_name !== tag || result.draft !== false) {
+    throw new Error(`GitHub did not confirm publication of ${tag}`);
   }
-  const release = releases.find((r) => r.tag_name === `v${version}`);
-  if (!release) {
-    console.error(`No GitHub release found for v${version}.`);
-    process.exit(1);
-  }
-
-  if (!release.draft) {
-    console.log(`Release v${version} is already published!`);
-    return;
-  }
-
-  console.log(`Updating release v${version} (ID: ${release.id}) draft status to false...`);
-  const result = await apiRequest("PATCH", `/repos/${owner}/${repo}/releases/${release.id}`, {
-    draft: false
-  });
-  
-  if (result.draft === false) {
-    console.log(`Successfully published release: ${result.html_url}`);
-  } else {
-    console.error("Failed to publish release:", result);
-    process.exit(1);
-  }
+  console.log(`Published ${tag}: ${result.html_url}`);
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error.message || error);
+    process.exit(1);
+  });
+}
+
+module.exports = { assertCompleteAssetSet };

@@ -59,7 +59,46 @@ object Pahe {
         prefs = act.applicationContext.getSharedPreferences("anitrack_next", Context.MODE_PRIVATE)
     }
 
-    private fun baseUrl(): String = prefs.getString("pahe_base_url", "https://animepahe.pw") ?: "https://animepahe.pw"
+    private fun baseUrl(): String {
+        val config = RemoteConfig.current()
+        check(config.animepahe.enabled && config.features.animepaheStreaming) {
+            "AnimePahe is temporarily disabled by the automation configuration."
+        }
+        val configured = config.animepahe.baseUrls.first()
+        val discoveredAtRevision = prefs.getLong("pahe_base_revision", -1)
+        return if (discoveredAtRevision == config.revision) {
+            prefs.getString("pahe_base_url", configured) ?: configured
+        } else configured
+    }
+
+    private fun configuredBases(): List<String> = RemoteConfig.current().animepahe.baseUrls.map { it.trimEnd('/') }
+
+    private fun route(name: String, values: Map<String, Any> = emptyMap()): String {
+        var value = RemoteConfig.current().animepahe.routes[name]
+            ?: error("Missing signed AnimePahe route: $name")
+        Regex("\\{([A-Za-z][A-Za-z0-9]*)}").findAll(value).toList().forEach { match ->
+            val key = match.groupValues[1]
+            val replacement = values[key] ?: error("Missing AnimePahe route value: $key")
+            value = value.replace(match.value, android.net.Uri.encode(replacement.toString()))
+        }
+        check(!value.contains('{')) { "Unresolved AnimePahe route: $name" }
+        return value
+    }
+
+    private fun selector(name: String): String = RemoteConfig.current().animepahe.selectors[name]
+        ?: error("Missing signed AnimePahe selector: $name")
+
+    private fun attribute(tag: String, name: String): String? = Regex(
+        "(?:^|\\s)${Regex.escape(name)}\\s*=\\s*([\"'])(.*?)\\1",
+        RegexOption.IGNORE_CASE,
+    ).find(tag)?.groupValues?.get(2)
+
+    private fun rememberRedirectedBase(url: String) {
+        prefs.edit()
+            .putString("pahe_base_url", url)
+            .putLong("pahe_base_revision", RemoteConfig.current().revision)
+            .apply()
+    }
 
     // ── CF session ────────────────────────────────────────────────────────────
 
@@ -110,7 +149,7 @@ object Pahe {
                         val p = java.net.URL(url)
                         val redirected = "${p.protocol}://${p.host}"
                         if (p.host.contains("animepahe") && redirected != baseUrl()) {
-                            prefs.edit().putString("pahe_base_url", redirected).apply()
+                            rememberRedirectedBase(redirected)
                         }
                     } catch (e: Exception) { /* ignore */ }
                 }
@@ -160,7 +199,7 @@ object Pahe {
                 try { root?.addView(wv) } catch (e: Exception) { /* ignore */ }
             }
 
-            wv.loadUrl(baseUrl() + "/")
+            wv.loadUrl(baseUrl() + route("home"))
 
             scope.launch {
                 var waited = 0
@@ -307,26 +346,51 @@ object Pahe {
             .build()
     }
 
-    private suspend fun paheGet(path: String, retried: Boolean = false, interactive: Boolean = true): JSONObject {
-        waitForCf(forceSolve = retried, interactive = interactive)
-        val url = if (path.startsWith("http")) path else baseUrl() + path
-        val req = Request.Builder().url(url)
-            .header("Accept", "application/json, text/plain, */*")
-            .header("X-Requested-With", "XMLHttpRequest")
-            .header("Referer", baseUrl() + "/")
-            .header("User-Agent", MOBILE_UA)
-            .build()
-        val resp = withContext(Dispatchers.IO) { client.newCall(req).execute() }
-        if (!resp.isSuccessful) {
-            resp.close()
-            if (!retried && resp.code in listOf(403, 503, 429)) {
-                cfReady = false; cfReadyJob = null
-                activity?.runOnUiThread { cfWebView?.destroy(); cfWebView = null }
-                return paheGet(path, retried = true, interactive = interactive)
+    private fun resetCfSession() {
+        cfReady = false
+        cfReadyJob = null
+        activity?.runOnUiThread { cfWebView?.destroy(); cfWebView = null }
+    }
+
+    private suspend fun paheGet(
+        path: String,
+        retried: Boolean = false,
+        interactive: Boolean = true,
+        attemptedBases: Set<String> = emptySet(),
+    ): JSONObject {
+        val currentBase = baseUrl()
+        val attempted = attemptedBases + currentBase
+        try {
+            waitForCf(forceSolve = retried, interactive = interactive)
+            val url = if (path.startsWith("http")) path else currentBase + path
+            val req = Request.Builder().url(url)
+                .header("Accept", "application/json, text/plain, */*")
+                .header("X-Requested-With", "XMLHttpRequest")
+                .header("Referer", currentBase + route("home"))
+                .header("User-Agent", MOBILE_UA)
+                .build()
+            val resp = withContext(Dispatchers.IO) { client.newCall(req).execute() }
+            if (!resp.isSuccessful) {
+                val code = resp.code
+                resp.close()
+                if (!retried && code in listOf(403, 503, 429)) {
+                    resetCfSession()
+                    return paheGet(path, retried = true, interactive = interactive, attemptedBases = attemptedBases)
+                }
+                throw IOException("AnimePahe HTTP $code")
             }
-            throw IOException("AnimePahe HTTP ${resp.code}")
+            return JSONObject(resp.body!!.string())
+        } catch (error: Exception) {
+            if (!path.startsWith("http")) {
+                val fallback = configuredBases().firstOrNull { it !in attempted }
+                if (fallback != null) {
+                    rememberRedirectedBase(fallback)
+                    resetCfSession()
+                    return paheGet(path, retried = false, interactive = interactive, attemptedBases = attempted)
+                }
+            }
+            throw error
         }
-        return JSONObject(resp.body!!.string())
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -337,7 +401,7 @@ object Pahe {
     data class Stream(val url: String, val referer: String)
 
     suspend fun search(query: String): List<SearchResult> {
-        val data = paheGet("/api?m=search&q=${java.net.URLEncoder.encode(query, "UTF-8")}")
+        val data = paheGet(route("search", mapOf("query" to query)))
         val arr = data.optJSONArray("data") ?: JSONArray()
         return (0 until arr.length()).map { i ->
             val o = arr.getJSONObject(i)
@@ -356,7 +420,7 @@ object Pahe {
         var page = 1
         var lastPage = 1
         while (page <= minOf(lastPage, maxPages)) {
-            val data = paheGet("/api?m=release&id=$session&sort=episode_asc&page=$page")
+            val data = paheGet(route("episodes", mapOf("animeId" to session, "page" to page)))
             lastPage = data.optInt("last_page", 1)
             val arr = data.optJSONArray("data") ?: JSONArray()
             for (i in 0 until arr.length()) {
@@ -369,16 +433,20 @@ object Pahe {
     }
 
     suspend fun links(animeSession: String, epSession: String): List<Link> {
-        val html = navFetchHtml("/play/$animeSession/$epSession", "kwik")
+        val html = navFetchHtml(
+            route("play", mapOf("animeId" to animeSession, "episodeId" to epSession)),
+            selector("streamUrlAttribute"),
+        )
         val out = mutableListOf<Link>()
-        val srcRe = Regex("""data-src="([^"]+)"""")
-        val resRe = Regex("""data-resolution="([^"]*)"""")
-        val audRe = Regex("""data-audio="([^"]*)"""")
         for (tag in Regex("""<button[^>]*>""").findAll(html)) {
             val t = tag.value
-            val src = srcRe.find(t)?.groupValues?.get(1) ?: continue
+            val src = attribute(t, selector("streamUrlAttribute")) ?: continue
             if (!src.contains("kwik")) continue
-            out += Link(src, resRe.find(t)?.groupValues?.get(1) ?: "?", audRe.find(t)?.groupValues?.get(1) ?: "jpn")
+            out += Link(
+                src,
+                attribute(t, selector("resolutionAttribute")) ?: "?",
+                attribute(t, selector("audioAttribute")) ?: "jpn",
+            )
         }
         if (out.isEmpty()) {
             for (m in Regex("""https?://kwik\.[^\s"'<>]+""").findAll(html)) {
@@ -417,11 +485,12 @@ object Pahe {
                     )
                 }
                 override fun onReceivedError(view: WebView, req: WebResourceRequest, err: WebResourceError) {
-                    if (!deferred.isCompleted) deferred.completeExceptionally(IOException("kwik error: ${err.description}"))
+                    if (!req.isForMainFrame || deferred.isCompleted) return
+                    deferred.completeExceptionally(IOException("kwik error: ${err.description}"))
                     act.runOnUiThread { wv.destroy() }
                 }
             }
-            wv.loadUrl(kwikUrl, mutableMapOf("Referer" to baseUrl() + "/"))
+            wv.loadUrl(kwikUrl, mutableMapOf("Referer" to baseUrl() + route("home")))
             scope.launch {
                 delay(15_000)
                 if (!deferred.isCompleted) {

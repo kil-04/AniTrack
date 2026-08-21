@@ -2,7 +2,12 @@ package com.sanjay.anitrack.next.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -10,6 +15,8 @@ import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
+import java.io.IOException
+import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
 
 /**
@@ -26,21 +33,38 @@ object Mal {
     private lateinit var prefs: SharedPreferences
     private val http = OkHttpClient.Builder().callTimeout(30, TimeUnit.SECONDS).build()
     private val refreshLock = Mutex()   // MAL rotates refresh tokens — never race two refreshes
+    private val flushLock = Mutex()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var flushJob: Job? = null
 
     fun init(ctx: Context) {
         if (::prefs.isInitialized) return
         prefs = ctx.applicationContext.getSharedPreferences("anitrack_mal", Context.MODE_PRIVATE)
+        requestFlush()
     }
 
     val username: String? get() = prefs.getString("username", null)
     val isConnected: Boolean get() = prefs.getString("refresh_token", null) != null
 
-    fun disconnect() = prefs.edit().clear().apply()
+    fun disconnect() {
+        prefs.edit().clear().apply()
+        Db.clearMalOutbox()
+    }
+
+    private fun invalidateTokens() {
+        prefs.edit()
+            .remove("access_token")
+            .remove("refresh_token")
+            .remove("expires_at")
+            .remove("username")
+            .apply()
+    }
 
     /** PKCE plain verifier: 64 chars from the allowed set. */
     fun newVerifier(): String {
         val chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
-        return (1..64).map { chars.random() }.joinToString("")
+        val random = SecureRandom()
+        return buildString(64) { repeat(64) { append(chars[random.nextInt(chars.length)]) } }
     }
 
     fun authUrl(verifier: String): String =
@@ -69,6 +93,7 @@ object Mal {
         runCatching {
             api("/users/@me")?.let { me -> prefs.edit().putString("username", me.optString("name")).apply() }
         }
+        requestFlush()
         true
     }
 
@@ -94,7 +119,7 @@ object Mal {
             res.use {
                 if (!it.isSuccessful) {
                     // Revoked → force reconnect (same as desktop).
-                    if (it.code == 400 || it.code == 401) disconnect()
+                    if (it.code == 400 || it.code == 401) invalidateTokens()
                     return@withContext null
                 }
                 val j = JSONObject(it.body!!.string())
@@ -119,12 +144,15 @@ object Mal {
 
     /** Full list pull with paging (same fields as the desktop). */
     suspend fun pullList(): List<Entry> {
+        if (!RemoteConfig.current().features.malSync) {
+            throw IOException("MAL sync is temporarily disabled by signed automation rules")
+        }
         val out = mutableListOf<Entry>()
         var path: String? = "/users/@me/animelist?fields=list_status,num_episodes,main_picture&limit=100&nsfw=true"
         var guard = 0
         while (path != null && guard++ < 30) {
-            val j = api(path) ?: break
-            val data = j.optJSONArray("data") ?: break
+            val j = api(path) ?: throw IOException("MAL list request failed on page ${guard}")
+            val data = j.optJSONArray("data") ?: throw IOException("MAL returned an invalid list page")
             for (i in 0 until data.length()) {
                 val node = data.getJSONObject(i).getJSONObject("node")
                 val ls = data.getJSONObject(i).optJSONObject("list_status") ?: continue
@@ -153,6 +181,47 @@ object Mal {
                     .patch(form.build()).build(),
             ).execute()
             res.use { it.isSuccessful }
+        }
+    }
+
+    private suspend fun deleteStatus(malId: Int): Boolean {
+        val token = accessToken() ?: return false
+        return withContext(Dispatchers.IO) {
+            val response = http.newCall(
+                Request.Builder().url("$API_BASE/anime/$malId/my_list_status")
+                    .header("Authorization", "Bearer $token")
+                    .delete()
+                    .build(),
+            ).execute()
+            response.use { it.isSuccessful || it.code == 404 }
+        }
+    }
+
+    /** Drain the durable SQLite outbox. An acknowledgement includes the op id,
+     *  so an older in-flight PATCH cannot erase a newer DELETE/re-add. */
+    suspend fun flushPending(): Boolean = flushLock.withLock {
+        if (!isConnected || !RemoteConfig.current().features.malSync) return@withLock false
+        for (op in Db.pendingMalOps()) {
+            val delivered = if (op.operation == "delete") {
+                deleteStatus(op.malId)
+            } else {
+                pushStatus(op.malId, op.status ?: "plan_to_watch", op.episodesWatched)
+            }
+            if (!delivered) return@withLock false
+            Db.ackMalOp(op.animeId, op.opId)
+        }
+        true
+    }
+
+    fun requestFlush() {
+        flushJob?.cancel()
+        flushJob = scope.launch {
+            var waitMs = 0L
+            while (isConnected) {
+                if (waitMs > 0) delay(waitMs)
+                if (flushPending()) return@launch
+                waitMs = if (waitMs == 0L) 30_000L else (waitMs * 2).coerceAtMost(30 * 60_000L)
+            }
         }
     }
 }

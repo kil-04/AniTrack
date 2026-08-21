@@ -1,0 +1,65 @@
+name: Sign automation configuration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - automation/remote-config.json
+
+permissions:
+  contents: write
+
+concurrency:
+  group: automation-config-production
+  cancel-in-progress: false
+
+jobs:
+  sign:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+
+      - name: Validate, sign, and verify exact config bytes
+        env:
+          ANITRACK_AUTOMATION_PRIVATE_KEY_B64: ${{ secrets.ANITRACK_AUTOMATION_PRIVATE_KEY_B64 }}
+          PREVIOUS_MAIN_SHA: ${{ github.event.before }}
+        run: |
+          args=(--config-only)
+          if [[ ! "$PREVIOUS_MAIN_SHA" =~ ^0+$ ]]; then
+            previous_config=false
+            previous_signature=false
+            git cat-file -e "$PREVIOUS_MAIN_SHA:automation/remote-config.json" 2>/dev/null && previous_config=true
+            git cat-file -e "$PREVIOUS_MAIN_SHA:automation/remote-config.sig" 2>/dev/null && previous_signature=true
+            if [ "$previous_config" = true ] && [ "$previous_signature" = true ]; then
+              git show "$PREVIOUS_MAIN_SHA:automation/remote-config.json" > "$RUNNER_TEMP/previous-remote-config.json"
+              git show "$PREVIOUS_MAIN_SHA:automation/remote-config.sig" > "$RUNNER_TEMP/previous-remote-config.sig"
+              args+=(--previous-config "$RUNNER_TEMP/previous-remote-config.json")
+              args+=(--previous-signature "$RUNNER_TEMP/previous-remote-config.sig")
+            elif [ "$previous_config" != "$previous_signature" ]; then
+              echo "Previous revision has incomplete signing material" >&2
+              exit 1
+            fi
+          fi
+          node scripts/sign-automation.js "${args[@]}"
+          node scripts/sign-automation.js --verify --config-only
+
+      - name: Publish detached signature
+        run: |
+          git add -- automation/remote-config.sig
+          if git diff --cached --quiet -- automation/remote-config.sig; then
+            echo "Signature already current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: sign automation config"
+          git push origin HEAD:main

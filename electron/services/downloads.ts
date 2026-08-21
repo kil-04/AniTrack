@@ -2,6 +2,7 @@ import { app, net } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import type { DownloadItem } from "../../shared/types";
+import { getRuntimeConfig } from "./remote-config";
 
 /**
  * Desktop (Electron) offline downloader — mirrors the Android AniTrackDownloader
@@ -24,6 +25,7 @@ function itemDir(id: string): string { return path.join(downloadsDir(), folderNa
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 const cancelled = new Set<string>();
+const running = new Set<string>();
 
 export interface StartOpts {
   id: string; animeId: number; episode: number; title: string; coverUrl?: string | null;
@@ -34,6 +36,11 @@ export interface StartOpts {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export function startDownload(opts: StartOpts): void {
+  if (!getRuntimeConfig().features.downloads) {
+    emit(opts, "failed", 0, 0, 0, 0, "Downloads are temporarily disabled by signed automation rules.");
+    return;
+  }
+  if (running.has(opts.id)) return;
   cancelled.delete(opts.id);
   void runDownload(opts);
 }
@@ -45,7 +52,21 @@ export function listDownloads(): { items: DownloadItem[] } {
       if (!d.isDirectory()) continue;
       const meta = path.join(downloadsDir(), d.name, "meta.json");
       if (fs.existsSync(meta)) {
-        try { items.push(JSON.parse(fs.readFileSync(meta, "utf-8"))); } catch { /* skip */ }
+        try {
+          let item = JSON.parse(fs.readFileSync(meta, "utf-8")) as DownloadItem;
+          // Downloads are process-bound. A persisted in-progress state with no
+          // matching worker means Electron exited before the job settled.
+          if ((item.status === "downloading" || item.status === "queued") && !running.has(item.id)) {
+            item = {
+              ...item,
+              status: "failed",
+              error: "Download was interrupted. Retry to continue.",
+              updatedAt: Date.now(),
+            };
+            fs.writeFileSync(meta, JSON.stringify(item));
+          }
+          items.push(item);
+        } catch { /* skip */ }
       }
     }
   } catch { /* dir may not exist yet */ }
@@ -82,9 +103,10 @@ function emit(o: StartOpts, status: DownloadItem["status"], progress: number, do
 
 async function runDownload(o: StartOpts): Promise<void> {
   const dir = itemDir(o.id);
-  fs.mkdirSync(dir, { recursive: true });
-  emit(o, "downloading", 0, 0, 0, 0);
+  running.add(o.id);
   try {
+    fs.mkdirSync(dir, { recursive: true });
+    emit(o, "downloading", 0, 0, 0, 0);
     const ref = o.referer && o.referer.length
       ? o.referer.replace(/\/$/, "")
       : o.hlsUrl.includes("animepahe") ? "https://animepahe.pw" : "";
@@ -99,19 +121,36 @@ async function runDownload(o: StartOpts): Promise<void> {
     const base = playlistUrl.slice(0, playlistUrl.lastIndexOf("/") + 1);
     const out: string[] = [];
     const toDownload: { url: string; file: string }[] = [];
-    let seg = 0, key = 0;
+    const localByUrl = new Map<string, string>();
+    let seg = 0, key = 0, init = 0;
+    const queueAsset = (url: string, prefix: "seg" | "key" | "init", fallbackExt: string): string => {
+      const absolute = absolutize(url, base);
+      const existing = localByUrl.get(absolute);
+      if (existing) return existing;
+      const sequence = prefix === "seg" ? seg++ : prefix === "key" ? key++ : init++;
+      const width = prefix === "seg" ? 5 : 2;
+      const ext = safeMediaExtension(absolute, fallbackExt);
+      const name = `${prefix}${String(sequence).padStart(width, "0")}${ext}`;
+      localByUrl.set(absolute, name);
+      toDownload.push({ url: absolute, file: path.join(dir, name) });
+      return name;
+    };
     for (const raw of playlist.split("\n")) {
       const line = raw.replace(/\r$/, "");
       if (line.startsWith("#EXT-X-KEY") || line.startsWith("#EXT-X-SESSION-KEY")) {
         const m = line.match(/URI="([^"]+)"/);
         if (m) {
-          const name = `key${key++}.key`;
-          toDownload.push({ url: absolutize(m[1], base), file: path.join(dir, name) });
+          const name = queueAsset(m[1], "key", ".key");
+          out.push(line.replace(m[0], `URI="${name}"`));
+        } else out.push(line);
+      } else if (line.startsWith("#EXT-X-MAP")) {
+        const m = line.match(/URI="([^"]+)"/);
+        if (m) {
+          const name = queueAsset(m[1], "init", ".mp4");
           out.push(line.replace(m[0], `URI="${name}"`));
         } else out.push(line);
       } else if (line.length && !line.startsWith("#")) {
-        const name = `seg${String(seg++).padStart(5, "0")}.ts`;
-        toDownload.push({ url: absolutize(line, base), file: path.join(dir, name) });
+        const name = queueAsset(line, "seg", ".ts");
         out.push(name);
       } else out.push(line);
     }
@@ -143,6 +182,8 @@ async function runDownload(o: StartOpts): Promise<void> {
   } catch (e: any) {
     if (cancelled.has(o.id)) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } }
     else emit(o, "failed", 0, 0, 0, 0, e?.message ?? "download failed");
+  } finally {
+    running.delete(o.id);
   }
 }
 
@@ -190,6 +231,14 @@ function absolutize(uri: string, base: string): string {
     return root + uri;
   }
   return base + uri;
+}
+
+function safeMediaExtension(url: string, fallback: string): string {
+  try {
+    const ext = path.extname(new URL(url).pathname).toLowerCase();
+    if ([".ts", ".m4s", ".mp4", ".aac", ".mp3", ".key"].includes(ext)) return ext;
+  } catch { /* use the known-safe fallback */ }
+  return fallback;
 }
 
 function pickVariant(playlist: string, base: string): string | null {

@@ -20,7 +20,62 @@ import java.util.concurrent.TimeUnit
  *    display share one fetch.
  */
 object Anikoto {
-    private const val BASE = "https://anikototv.to"
+    @Volatile private var activeBase = ""
+
+    private fun bases(): List<String> = RemoteConfig.current().anikoto.baseUrls.map { it.trimEnd('/') }
+
+    private fun base(): String {
+        val config = RemoteConfig.current()
+        check(config.anikoto.enabled && config.features.anikotoStreaming) {
+            "Anikoto is temporarily disabled by the automation configuration."
+        }
+        val available = bases()
+        if (activeBase !in available) activeBase = available.first()
+        return activeBase
+    }
+
+    private fun route(name: String, values: Map<String, Any> = emptyMap()): String {
+        var value = RemoteConfig.current().anikoto.routes[name]
+            ?: error("Missing signed Anikoto route: $name")
+        Regex("\\{([A-Za-z][A-Za-z0-9]*)}").findAll(value).toList().forEach { match ->
+            val key = match.groupValues[1]
+            val replacement = values[key] ?: error("Missing Anikoto route value: $key")
+            value = value.replace(match.value, android.net.Uri.encode(replacement.toString()))
+        }
+        check(!value.contains('{')) { "Unresolved Anikoto route: $name" }
+        return value
+    }
+
+    private fun providerUrl(name: String, values: Map<String, Any> = emptyMap()) = base() + route(name, values)
+
+    private fun selector(name: String): String = RemoteConfig.current().anikoto.selectors[name]
+        ?: error("Missing signed Anikoto selector: $name")
+
+    private fun extractRouteValue(value: String, routeName: String, key: String): String? {
+        val template = RemoteConfig.current().anikoto.routes[routeName] ?: return null
+        val marker = "{$key}"
+        val at = template.indexOf(marker)
+        if (at < 0) return null
+        val pattern = Regex(
+            Regex.escape(template.substring(0, at)) + "([^/?&#]+)" +
+                Regex.escape(template.substring(at + marker.length)),
+        )
+        val encoded = pattern.find(value)?.groupValues?.get(1) ?: return null
+        return runCatching { android.net.Uri.decode(encoded) }.getOrDefault(encoded)
+    }
+
+    private fun attribute(tag: String, name: String): String? = Regex(
+        "(?:^|\\s)${Regex.escape(name)}\\s*=\\s*([\"'])(.*?)\\1",
+        RegexOption.IGNORE_CASE,
+    ).find(tag)?.groupValues?.get(2)
+
+    private fun elementAttributeById(html: String, id: String, attribute: String): String? {
+        val tag = Regex(
+            "<[^>]+\\sid\\s*=\\s*([\"'])${Regex.escape(id)}\\1[^>]*>",
+            RegexOption.IGNORE_CASE,
+        ).find(html)?.value
+        return tag?.let { attribute(it, attribute) }
+    }
     private const val UA =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 
@@ -51,15 +106,40 @@ object Anikoto {
     }
     private const val EPS_TTL_MS = 15 * 60 * 1000L
 
-    private fun get(url: String, referer: String = "$BASE/", xhr: Boolean = false): String {
-        val b = Request.Builder().url(url)
-            .header("User-Agent", UA)
-            .header("Referer", referer)
-        if (xhr) b.header("X-Requested-With", "XMLHttpRequest")
-        http.newCall(b.build()).execute().use { res ->
-            if (!res.isSuccessful) throw Exception("Anikoto ${res.code} for $url")
-            return res.body?.string() ?: throw Exception("empty body")
+    private fun get(url: String, referer: String = "${base()}/", xhr: Boolean = false): String {
+        val available = bases()
+        val parsed = runCatching { java.net.URI(url) }.getOrNull()
+        val origin = parsed?.let { "${it.scheme}://${it.host}" }
+        val providerRequest = origin in available
+        val ordered = if (providerRequest) listOf(base()) + available.filter { it != base() } else listOf("")
+        var lastError: Exception? = null
+        for (candidateBase in ordered) {
+            val candidateUrl = if (providerRequest && parsed != null) {
+                "$candidateBase${parsed.rawPath}${parsed.rawQuery?.let { "?$it" }.orEmpty()}"
+            } else url
+            val candidateReferer = runCatching {
+                val ref = java.net.URI(referer)
+                val refOrigin = "${ref.scheme}://${ref.host}"
+                if (providerRequest && refOrigin in available) {
+                    "$candidateBase${ref.rawPath}${ref.rawQuery?.let { "?$it" }.orEmpty()}"
+                } else referer
+            }.getOrDefault(referer)
+            try {
+                val b = Request.Builder().url(candidateUrl)
+                    .header("User-Agent", UA)
+                    .header("Referer", candidateReferer)
+                if (xhr) b.header("X-Requested-With", "XMLHttpRequest")
+                http.newCall(b.build()).execute().use { res ->
+                    if (!res.isSuccessful) throw Exception("Anikoto ${res.code} for $candidateUrl")
+                    val body = res.body?.string() ?: throw Exception("empty body")
+                    if (providerRequest) activeBase = candidateBase
+                    return body
+                }
+            } catch (error: Exception) {
+                lastError = error
+            }
         }
+        throw lastError ?: Exception("Every signed Anikoto origin failed")
     }
 
     /** Year parsed from a title, the same imperfect way the JS did (titles can
@@ -80,7 +160,7 @@ object Anikoto {
     suspend fun top(): Map<String, List<TopItem>> = withContext(Dispatchers.IO) {
         val out = linkedMapOf("day" to emptyList<TopItem>(), "week" to emptyList(), "month" to emptyList())
         try {
-            val html = get("$BASE/home")
+            val html = get(providerUrl("home"))
             val secStart = html.indexOf("id=\"top-anime\"")
             if (secStart < 0) return@withContext out
             val sec = html.substring(secStart, minOf(secStart + 80000, html.length))
@@ -93,7 +173,7 @@ object Anikoto {
                 val items = mutableListOf<TopItem>()
                 for (p in block.split(Regex("""<a class="item""")).drop(1).take(10)) {
                     val href = Regex("""href="([^"]+)"""").find(p)?.groupValues?.get(1) ?: ""
-                    val slug = Regex("""/watch/([^"?/]+)""").find(href)?.groupValues?.get(1) ?: continue
+                    val slug = extractRouteValue(href, "watch", "animeId") ?: continue
                     val poster = Regex("""<img[^>]+src="([^"]+)"""").find(p)?.groupValues?.get(1)
                     val alt = Regex("""alt="([^"]*)"""").find(p)?.groupValues?.get(1) ?: ""
                     val nameM = Regex("""class="name[^"]*"[^>]*>\s*([^<]+?)\s*<""").find(p)?.groupValues?.get(1)
@@ -110,13 +190,15 @@ object Anikoto {
         val out = mutableListOf<SearchResult>()
         for (page in 1..2) {
             val html = try {
-                get("$BASE/filter?keyword=${java.net.URLEncoder.encode(query, "UTF-8")}&page=$page")
+                get(providerUrl("search", mapOf("query" to query, "page" to page)))
             } catch (e: Exception) { break }
-            val blocks = html.split(Regex("""<div class="item\s*"""))
+            val itemClass = Regex.escape(selector("searchItemClass"))
+            val blocks = html.split(Regex("""<div\s+class=["'][^"']*\b$itemClass\b[^"']*["'][^>]*>""", RegexOption.IGNORE_CASE))
             for (i in 1 until blocks.size) {
                 val block = blocks[i]
-                val slug = Regex("""href="[^"]*/watch/([^/"]+)""").find(block)?.groupValues?.get(1) ?: continue
-                val jp = Regex("""data-jp="([^"]+)"""").find(block)?.groupValues?.get(1)?.replace("&#039;", "'")
+                val href = attribute(block, "href") ?: continue
+                val slug = extractRouteValue(href, "watch", "animeId") ?: continue
+                val jp = attribute(block, selector("searchTitleAttribute"))?.replace("&#039;", "'")
                 val alt = Regex("""<img src="[^"]+" alt="([^"]+)"""").find(block)?.groupValues?.get(1)
                 val title = jp ?: alt ?: "Untitled"
                 val total = Regex("""class="ep-status total"[^>]*>\s*<span>\s*(\d+)\s*</span>""")
@@ -137,22 +219,24 @@ object Anikoto {
         synchronized(epsCache) {
             epsCache[slug]?.let { (at, v) -> if (System.currentTimeMillis() - at < EPS_TTL_MS) return@withContext v }
         }
-        val watchHtml = get("$BASE/watch/$slug")
-        val showId = Regex("""id="watch-main"[^>]*data-id="([^"]+)"""").find(watchHtml)?.groupValues?.get(1)
-            ?: Regex("""data-id="([^"]+)"""").find(watchHtml)?.groupValues?.get(1)
+        val watchUrl = providerUrl("watch", mapOf("animeId" to slug))
+        val watchHtml = get(watchUrl)
+        val showId = elementAttributeById(watchHtml, selector("watchContainerId"), selector("showIdAttribute"))
             ?: throw Exception("no show id on watch page")
-        val listJson = get("$BASE/ajax/episode/list/$showId", referer = "$BASE/watch/$slug", xhr = true)
+        val listJson = get(providerUrl("episodeList", mapOf("showId" to showId)), referer = watchUrl, xhr = true)
         val listHtml = JSONObject(listJson).optString("result", "")
 
-        val malId = Regex("""data-mal="(\d+)"""").find(listHtml)?.groupValues?.get(1)?.toIntOrNull()
+        val malId = Regex("""${Regex.escape(selector("malIdAttribute"))}=["'](\d+)["']""", RegexOption.IGNORE_CASE)
+            .find(listHtml)?.groupValues?.get(1)?.toIntOrNull()
 
         val episodes = mutableListOf<Episode>()
-        for (m in Regex("""<a[^>]+data-id="([^"]+)"[^>]+data-slug="([^"]+)"[^>]*>""").findAll(listHtml)) {
+        for (m in Regex("""<a\b[^>]*>""", RegexOption.IGNORE_CASE).findAll(listHtml)) {
             val tag = m.value
-            val dataId = m.groupValues[1]
-            val num = Regex("""data-num="([^"]*)"""").find(tag)?.groupValues?.get(1)?.toFloatOrNull() ?: 0f
+            val dataId = attribute(tag, selector("episodeIdAttribute")) ?: continue
+            if (attribute(tag, selector("episodeSlugAttribute")) == null) continue
+            val num = attribute(tag, selector("episodeNumberAttribute"))?.toFloatOrNull() ?: 0f
             val title = Regex("""title="([^"]*)"""").find(tag)?.groupValues?.get(1) ?: "Episode ${num.toInt()}"
-            val token = Regex("""data-ids="([^"]*)"""").find(tag)?.groupValues?.get(1) ?: ""
+            val token = attribute(tag, selector("episodeServersAttribute")) ?: ""
             episodes += Episode(num, title, dataId, token)
         }
         val result = EpisodeList(malId, episodes)
@@ -174,17 +258,16 @@ object Anikoto {
         val outroStart: Long?, val outroEnd: Long?,
     )
 
-    private fun enc(s: String) = java.net.URLEncoder.encode(s, "UTF-8")
-
     /** Resolve a playable HLS stream for one episode. Port of the proven
      *  Capacitor flow: server list → server?get → megaplay iframe →
      *  getSources (same rotating origin as the iframe). */
     suspend fun resolve(slug: String, ep: Episode, preferHardSub: Boolean = false): Stream = withContext(Dispatchers.IO) {
         // Warm cookies the way the site expects.
-        runCatching { get("$BASE/watch/$slug") }
+        val watchUrl = providerUrl("watch", mapOf("animeId" to slug))
+        runCatching { get(watchUrl) }
 
         val serversHtml = JSONObject(
-            get("$BASE/ajax/server/list?servers=${enc(ep.serversToken)}", referer = "$BASE/watch/$slug", xhr = true),
+            get(providerUrl("serverList", mapOf("servers" to ep.serversToken)), referer = watchUrl, xhr = true),
         ).optString("result", "")
 
         data class ServerType(val label: String, val linkIds: List<String>)
@@ -192,7 +275,8 @@ object Anikoto {
             val body = tm.groupValues[1]
             val label = Regex("""<label[^>]*>([\s\S]*?)</label>""").find(body)
                 ?.groupValues?.get(1)?.replace(Regex("<[^>]+>"), "")?.trim() ?: ""
-            val ids = Regex("""<li[^>]+data-link-id="([^"]+)"""").findAll(body).map { it.groupValues[1] }.toList()
+            val ids = Regex("""<li\b[^>]*>""", RegexOption.IGNORE_CASE).findAll(body)
+                .mapNotNull { attribute(it.value, selector("serverLinkAttribute")) }.toList()
             ServerType(label, ids)
         }.toList()
 
@@ -208,7 +292,7 @@ object Anikoto {
         val linkId = target.linkIds.firstOrNull() ?: throw Exception("no server link id")
         val actualHard = isHard(target.label)
 
-        val serverGet = JSONObject(get("$BASE/ajax/server?get=${enc(linkId)}", xhr = true))
+        val serverGet = JSONObject(get(providerUrl("serverResolve", mapOf("linkId" to linkId)), xhr = true))
         val iframeUrl = serverGet.optJSONObject("result")?.optString("url").orEmpty()
         if (iframeUrl.isEmpty()) throw Exception("server iframe URL missing")
 
@@ -225,18 +309,17 @@ object Anikoto {
             if (hash.isNotEmpty()) {
                 val decoded = String(android.util.Base64.decode(hash, android.util.Base64.DEFAULT))
                 val (inS, inE) = skip(skipData, "intro"); val (outS, outE) = skip(skipData, "outro")
-                return@withContext Stream(decoded, "$BASE/", emptyList(), inS, inE, outS, outE)
+                return@withContext Stream(decoded, "${base()}/", emptyList(), inS, inE, outS, outE)
             }
         }
 
-        val megaHtml = get(iframeUrl, referer = "$BASE/")
-        val megaId = Regex("""id="megaplay-player"[^>]*data-id="([^"]+)"""").find(megaHtml)?.groupValues?.get(1)
-            ?: Regex("""data-id="([^"]+)"""").find(megaHtml)?.groupValues?.get(1)
+        val megaHtml = get(iframeUrl, referer = "${base()}/")
+        val megaId = elementAttributeById(megaHtml, selector("playerContainerId"), selector("playerIdAttribute"))
             ?: throw Exception("megaplay data-id missing")
 
         // getSources lives on the SAME (rotating) origin as the iframe.
         val playerOrigin = java.net.URI(iframeUrl).let { "${it.scheme}://${it.host}" }
-        val src = JSONObject(get("$playerOrigin/stream/getSources?id=$megaId", referer = iframeUrl, xhr = true))
+        val src = JSONObject(get("$playerOrigin${route("sources", mapOf("playerId" to megaId))}", referer = iframeUrl, xhr = true))
 
         val streamUrl = src.optJSONObject("sources")?.optString("file").orEmpty()
         if (streamUrl.isEmpty()) throw Exception("stream URL missing in getSources")

@@ -1467,6 +1467,9 @@ export default function StreamPlayer({
   async function changeQuality(idx: number) {
     const link = linksRef.current[idx];
     if (!link) return;
+    // resetPlayer() clears the media element (and currentTime), so capture the
+    // live playhead before switching quality or Anikoto subtitle type.
+    const resumePosition = videoRef.current?.currentTime ?? 0;
     setSelectedLink(idx);
     if (providerId === "anikoto") {
       try { localStorage.setItem("anitrack-anikoto-subtype", JSON.parse(link.id).subType || "soft"); } catch {}
@@ -1483,8 +1486,7 @@ export default function StreamPlayer({
       }
       // Store the current position in pendingSeekRef so onCanPlay applies it
       // after the new stream is ready — same pattern as episode resume.
-      const pos = videoRef.current?.currentTime ?? 0;
-      pendingSeekRef.current = pos > 1 ? pos : null;
+      pendingSeekRef.current = resumePosition > 1 ? resumePosition : null;
 
       let activeSubs = subtitles;
       try {

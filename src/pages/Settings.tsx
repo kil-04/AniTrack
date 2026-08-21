@@ -3,6 +3,7 @@ import { Capacitor } from "@capacitor/core";
 import { useAppStore } from "../store/useAppStore";
 import { RefreshCcw } from "lucide-react";
 import type { AniListAuthState } from "../../shared/types";
+import type { RuntimeConfigStatus } from "../../shared/runtime-config";
 import { getSyncConfig, setSyncConfig, clearSyncConfig, pullAndMerge, pushAllProgress } from "../lib/supabase-sync";
 
 export default function Settings() {
@@ -30,8 +31,22 @@ export default function Settings() {
     | { phase: "ready"; version: string }
     | { phase: "error"; message: string };
   const [updateState, setUpdateState] = useState<UpdateState>({ phase: "idle" });
+  const [automationStatus, setAutomationStatus] = useState<RuntimeConfigStatus | null>(null);
+  const [automationBusy, setAutomationBusy] = useState(false);
 
   useEffect(() => {
+    const applySnapshot = (snapshot: any) => {
+      switch (snapshot?.phase) {
+        case "checking": setUpdateState({ phase: "checking" }); break;
+        case "available": setUpdateState({ phase: "available", version: snapshot.version ?? "?" }); break;
+        case "downloading": setUpdateState({ phase: "downloading", percent: snapshot.percent ?? 0 }); break;
+        case "ready": setUpdateState({ phase: "ready", version: snapshot.version ?? "?" }); break;
+        case "error": setUpdateState({ phase: "error", message: snapshot.message ?? "Update failed" }); break;
+        case "idle": if (snapshot.checkedAt) setUpdateState({ phase: "not-available" }); break;
+      }
+    };
+    (window.api.updater as any).status?.().then(applySnapshot).catch(() => {});
+    const unState = window.api.on("update:state", applySnapshot);
     const unAvail = window.api.on("update:available", (info: unknown) => {
       const v = (info as any)?.version ?? "?";
       setUpdateState({ phase: "available", version: v });
@@ -49,7 +64,15 @@ export default function Settings() {
     const unErr = window.api.on("update:error", (msg: unknown) => {
       setUpdateState({ phase: "error", message: String(msg) });
     });
-    return () => { unAvail(); unNot(); unProg(); unDone(); unErr(); };
+    return () => { unState(); unAvail(); unNot(); unProg(); unDone(); unErr(); };
+  }, []);
+
+  useEffect(() => {
+    if (!window.api.automation) return;
+    window.api.automation.status().then(setAutomationStatus).catch(() => {});
+    return window.api.on("automation:status", (value: unknown) => {
+      setAutomationStatus(value as RuntimeConfigStatus);
+    });
   }, []);
 
   async function checkForUpdates() {
@@ -420,6 +443,44 @@ export default function Settings() {
           )}
         </div>
       </section>
+
+      {window.api.automation && automationStatus && (
+        <section className="mb-10 rounded-lg border border-white/10 bg-bg-card p-6">
+          <h2 className="mb-2 text-xl font-semibold">Automatic Provider Fixes</h2>
+          <p className="mb-4 text-sm text-muted">
+            Signed provider and network rules update independently of the desktop installer. The last verified
+            configuration remains active if an update cannot be verified.
+          </p>
+          <div className="mb-4 grid gap-2 text-sm sm:grid-cols-2">
+            <div><span className="text-muted">Revision:</span> {automationStatus.revision} ({automationStatus.source})</div>
+            <div><span className="text-muted">Anikoto:</span> {automationStatus.config.providers.anikoto.baseUrls[0]}</div>
+            <div><span className="text-muted">AnimePahe:</span> {automationStatus.config.providers.animepahe.baseUrls[0]}</div>
+            <div>
+              <span className="text-muted">Last checked:</span>{" "}
+              {automationStatus.lastCheckedAt ? new Date(automationStatus.lastCheckedAt).toLocaleString() : "Not yet"}
+            </div>
+          </div>
+          <button
+            disabled={automationBusy}
+            onClick={async () => {
+              setAutomationBusy(true);
+              try { setAutomationStatus(await window.api.automation!.refresh()); }
+              finally { setAutomationBusy(false); }
+            }}
+            className="rounded-md border border-white/10 px-4 py-2 text-sm hover:bg-white/5 disabled:opacity-50"
+          >
+            {automationBusy ? "Refreshing…" : "Refresh provider fixes"}
+          </button>
+          {automationStatus.error && (
+            <p className="mt-3 text-sm text-amber-400">
+              Refresh failed; continuing with the last verified rules. {automationStatus.error}
+            </p>
+          )}
+          {automationStatus.config.notice && (
+            <p className="mt-3 text-sm text-muted">{automationStatus.config.notice}</p>
+          )}
+        </section>
+      )}
 
       <section className="rounded-lg border border-white/10 bg-bg-card p-6">
         <h2 className="mb-4 text-xl font-semibold">Cross-device Sync</h2>

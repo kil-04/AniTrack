@@ -1,6 +1,7 @@
 import { StreamProvider, AnimeInfo, EpisodeInfo, StreamLink, StreamData } from "./types";
 import { AnimePaheProvider } from "./animepahe";
 import { AnikotoProvider } from "./anikoto";
+import { getRuntimeConfig } from "../remote-config";
 
 export class ProviderManager {
   private providers: Map<string, StreamProvider> = new Map();
@@ -17,11 +18,23 @@ export class ProviderManager {
   getProvider(id: string): StreamProvider {
     const p = this.providers.get(id);
     if (!p) throw new Error(`Provider not found: ${id}`);
+    const runtime = getRuntimeConfig();
+    const enabled = id === "anikoto"
+      ? runtime.providers.anikoto.enabled && runtime.features.anikotoStreaming
+      : runtime.providers.animepahe.enabled && runtime.features.animepaheStreaming;
+    if (!enabled) throw new Error(`${p.name} is temporarily disabled by the automation configuration.`);
     return p;
   }
 
   async searchAll(query: string): Promise<AnimeInfo[]> {
-    const promises = Array.from(this.providers.values()).map(p => 
+    const runtime = getRuntimeConfig();
+    const activeProviders = runtime.providerOrder
+      .map((id) => this.providers.get(id))
+      .filter((provider): provider is StreamProvider => Boolean(provider))
+      .filter((provider) => provider.id === "anikoto"
+        ? runtime.providers.anikoto.enabled && runtime.features.anikotoStreaming
+        : runtime.providers.animepahe.enabled && runtime.features.animepaheStreaming);
+    const promises = activeProviders.map(p =>
       p.search(query).catch(err => {
         console.error(`[ProviderManager] Search failed for ${p.id}:`, err);
         return [] as AnimeInfo[];
@@ -31,13 +44,12 @@ export class ProviderManager {
     const resultsArray = await Promise.all(promises);
     const flat = resultsArray.flat();
 
-    // Prioritize AnimePahe first, so sort AnimePahe to the front
+    const priority = new Map(runtime.providerOrder.map((id, index) => [id, index]));
     const sorted = [...flat].sort((a, b) => {
       const aId = a.providerId ?? "animepahe";
       const bId = b.providerId ?? "animepahe";
-      if (aId === "animepahe" && bId !== "animepahe") return -1;
-      if (aId !== "animepahe" && bId === "animepahe") return 1;
-      return 0;
+      return (priority.get(aId as "anikoto" | "animepahe") ?? 99) -
+        (priority.get(bId as "anikoto" | "animepahe") ?? 99);
     });
 
     return sorted;

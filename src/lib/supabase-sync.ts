@@ -88,6 +88,24 @@ let cacheAt = 0; // when the cache last saw the remote gist
 const CACHE_STALE_MS = 60_000;
 const dirty = new Set<string>();
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
+const FLUSH_DEBOUNCE_MS = 7_000;
+const FLUSH_RETRY_MAX_MS = 5 * 60_000;
+let flushRetryMs = FLUSH_DEBOUNCE_MS;
+let gistNetworkEnabled = true;
+
+function applyAutomationStatus(value: unknown) {
+  const next = (value as any)?.config?.features?.gistSync;
+  if (typeof next !== "boolean") return;
+  const wasEnabled = gistNetworkEnabled;
+  gistNetworkEnabled = next;
+  if (!wasEnabled && next && dirty.size) scheduleFlushRetry();
+}
+
+if (typeof window !== "undefined") {
+  const api = window.api;
+  void api?.automation?.status().then(applyAutomationStatus).catch(() => {});
+  api?.on?.("automation:status", applyAutomationStatus);
+}
 
 function rowKey(animeId: number, episode: number) {
   return `${animeId}:${episode}`;
@@ -101,6 +119,57 @@ function tombstoneCovers(animeId: number | string, updatedAt: number | undefined
 interface RemoteDoc {
   rows: Record<string, PlaybackRow>;
   deleted: Record<string, number>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseRemoteDoc(document: unknown): RemoteDoc {
+  if (!isRecord(document) || !isRecord(document.playback)) {
+    throw new Error("The sync gist has an invalid playback document.");
+  }
+
+  const rows: Record<string, PlaybackRow> = {};
+  for (const [key, value] of Object.entries(document.playback)) {
+    if (
+      !isRecord(value) ||
+      typeof value.animeId !== "number" || !Number.isFinite(value.animeId) ||
+      typeof value.episode !== "number" || !Number.isFinite(value.episode) ||
+      typeof value.positionSec !== "number" || !Number.isFinite(value.positionSec) ||
+      typeof value.durationSec !== "number" || !Number.isFinite(value.durationSec) ||
+      typeof value.updatedAt !== "number" || !Number.isFinite(value.updatedAt) ||
+      (value.animeTitle != null && typeof value.animeTitle !== "string") ||
+      (value.animeCoverUrl != null && typeof value.animeCoverUrl !== "string") ||
+      (value.animePaheSession != null && typeof value.animePaheSession !== "string")
+    ) {
+      throw new Error(`The sync gist contains an invalid playback row (${key}).`);
+    }
+    rows[key] = {
+      animeId: value.animeId,
+      episode: value.episode,
+      positionSec: value.positionSec,
+      durationSec: value.durationSec,
+      updatedAt: value.updatedAt,
+      animeTitle: typeof value.animeTitle === "string" ? value.animeTitle : undefined,
+      animeCoverUrl: typeof value.animeCoverUrl === "string" ? value.animeCoverUrl : undefined,
+      animePaheSession: typeof value.animePaheSession === "string" ? value.animePaheSession : undefined,
+    };
+  }
+
+  const deletedValue = document.deleted;
+  if (deletedValue != null && !isRecord(deletedValue)) {
+    throw new Error("The sync gist has an invalid deletion map.");
+  }
+  const deleted: Record<string, number> = {};
+  for (const [animeId, timestamp] of Object.entries(deletedValue ?? {})) {
+    if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) {
+      throw new Error(`The sync gist contains an invalid deletion (${animeId}).`);
+    }
+    deleted[animeId] = timestamp;
+  }
+
+  return { rows, deleted };
 }
 
 /** Fold remote rows + tombstones into the cache, keeping whichever side is
@@ -152,28 +221,37 @@ async function ensureGistId(cfg: SyncConfig): Promise<string | null> {
   return null;
 }
 
-const EMPTY_DOC: RemoteDoc = { rows: {}, deleted: {} };
-
 async function loadRemote(cfg: SyncConfig, gistId: string): Promise<RemoteDoc> {
-  try {
-    const res = await fetch(`${GH}/gists/${gistId}`, { headers: ghHeaders(cfg.token) });
-    if (!res.ok) return EMPTY_DOC;
-    const j = (await res.json()) as any;
-    const file = j?.files?.[GIST_FILE];
-    if (!file) return EMPTY_DOC;
-    let content: string = file.content ?? "";
-    if (file.truncated && file.raw_url) {
-      content = await fetch(file.raw_url, { headers: ghHeaders(cfg.token) }).then((r) => (r.ok ? r.text() : "")).catch(() => "");
-    }
-    if (!content) return EMPTY_DOC;
-    const parsed = JSON.parse(content);
-    return {
-      rows: (parsed?.playback ?? {}) as Record<string, PlaybackRow>,
-      deleted: (parsed?.deleted ?? {}) as Record<string, number>,
-    };
-  } catch {
-    return EMPTY_DOC;
+  const res = await fetch(`${GH}/gists/${gistId}`, { headers: ghHeaders(cfg.token) });
+  if (!res.ok) {
+    throw new Error(`Could not read the sync gist (GitHub returned ${res.status}).`);
   }
+
+  const payload: unknown = await res.json();
+  if (!isRecord(payload) || !isRecord(payload.files)) {
+    throw new Error("GitHub returned an invalid sync gist response.");
+  }
+  const file = payload.files[GIST_FILE];
+  if (!isRecord(file)) {
+    throw new Error(`The sync gist is missing ${GIST_FILE}.`);
+  }
+
+  let content = typeof file.content === "string" ? file.content : "";
+  if (file.truncated === true) {
+    if (typeof file.raw_url !== "string" || !file.raw_url) {
+      throw new Error("The truncated sync gist has no raw download URL.");
+    }
+    const raw = await fetch(file.raw_url, { headers: ghHeaders(cfg.token) });
+    if (!raw.ok) {
+      throw new Error(`Could not read the full sync gist (GitHub returned ${raw.status}).`);
+    }
+    content = await raw.text();
+  }
+  if (!content.trim()) {
+    throw new Error("The sync gist is empty.");
+  }
+
+  return parseRemoteDoc(JSON.parse(content));
 }
 
 async function writeGist(
@@ -207,25 +285,38 @@ async function ensureCacheLoaded(cfg: SyncConfig, gistId: string) {
 async function flush() {
   flushTimer = null;
   if (!dirty.size) return;
+  if (!gistNetworkEnabled) return;
   const cfg = getSyncConfig();
   if (!cfg) return;
   const gistId = await ensureGistId(cfg);
-  if (!gistId) return;
+  if (!gistId) {
+    scheduleFlushRetry();
+    return;
+  }
   const flushed = Array.from(dirty);
   dirty.clear();
   try {
     mergeRemoteIntoCache(await loadRemote(cfg, gistId));
-    await writeGist(cfg, gistId, cache);
+    const ok = await writeGist(cfg, gistId, cache);
+    if (!ok) throw new Error("GitHub rejected the sync gist update.");
+    flushRetryMs = FLUSH_DEBOUNCE_MS;
   } catch {
     // Restore the un-flushed keys so the next push retries them — clearing
     // them on failure silently dropped progress until the next reconcile.
     for (const k of flushed) dirty.add(k);
+    scheduleFlushRetry();
   }
 }
 
-function scheduleFlush() {
+function scheduleFlush(delay = FLUSH_DEBOUNCE_MS) {
   if (flushTimer) return; // batch rapid 10s saves into one write
-  flushTimer = setTimeout(flush, 7000);
+  flushTimer = setTimeout(flush, delay);
+}
+
+function scheduleFlushRetry() {
+  const delay = flushRetryMs;
+  flushRetryMs = Math.min(flushRetryMs * 2, FLUSH_RETRY_MAX_MS);
+  scheduleFlush(delay);
 }
 
 // Last-chance flush when the app/window is closing: the debounce above would
@@ -237,11 +328,21 @@ function scheduleFlush() {
 // flush just before the last position lands in the cache.
 export function flushOnQuit() {
   if (!dirty.size) return;
+  if (!gistNetworkEnabled) return;
   const cfg = getSyncConfig();
   if (!cfg?.gistId) return;
   if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+  const flushed = Array.from(dirty);
   dirty.clear();
-  void writeGist(cfg, cfg.gistId, cache, true).catch(() => {});
+  void writeGist(cfg, cfg.gistId, cache, true)
+    .then((ok) => {
+      if (!ok) throw new Error("GitHub rejected the sync gist update.");
+      flushRetryMs = FLUSH_DEBOUNCE_MS;
+    })
+    .catch(() => {
+      for (const k of flushed) dirty.add(k);
+      scheduleFlushRetry();
+    });
 }
 
 if (typeof window !== "undefined") {
@@ -265,6 +366,7 @@ export async function pushProgress(p: PlaybackRow): Promise<void> {
 
 /** One-shot seed: push every local continue-watching row to the gist. */
 export async function pushAllProgress(): Promise<number> {
+  if (!gistNetworkEnabled) throw new Error("Gist sync is temporarily disabled by signed automation rules.");
   const cfg = getSyncConfig();
   if (!cfg) return 0;
   const gistId = await ensureGistId(cfg);
@@ -274,16 +376,26 @@ export async function pushAllProgress(): Promise<number> {
   const paged = await window.api.list.continueWatchingPaged(1, 10000).catch(() => ({ items: [] }));
   const items: any[] = (paged as any).items ?? paged;
   let n = 0;
+  const pushedKeys: string[] = [];
   for (const item of items) {
     const row = localItemToRow(item);
     if (!row) continue;
     if (tombstoneCovers(row.animeId, row.updatedAt)) continue;
-    cache[rowKey(row.animeId, row.episode)] = row;
+    const key = rowKey(row.animeId, row.episode);
+    cache[key] = row;
+    pushedKeys.push(key);
     n++;
   }
   cacheLoaded = true;
-  const ok = await writeGist(cfg, gistId, cache);
-  if (!ok) throw new Error("Failed to write to the gist.");
+  try {
+    const ok = await writeGist(cfg, gistId, cache);
+    if (!ok) throw new Error("Failed to write to the gist.");
+  } catch (error) {
+    for (const key of pushedKeys) dirty.add(key);
+    if (pushedKeys.length) scheduleFlushRetry();
+    throw error;
+  }
+  flushRetryMs = FLUSH_DEBOUNCE_MS;
   cacheAt = Date.now();
   return n;
 }
@@ -291,9 +403,6 @@ export async function pushAllProgress(): Promise<number> {
 export async function deleteAnimeProgress(animeId: number): Promise<void> {
   const cfg = getSyncConfig();
   if (!cfg) return;
-  const gistId = await ensureGistId(cfg);
-  if (!gistId) return;
-  await ensureCacheLoaded(cfg, gistId);
   // Tombstone FIRST — deleting the rows alone isn't durable: the other
   // device's push-back would re-upload its local copies and resurrect the
   // show. The tombstone tells every device "dismissed at T; ignore and drop
@@ -302,13 +411,17 @@ export async function deleteAnimeProgress(animeId: number): Promise<void> {
   for (const k of Object.keys(cache)) {
     if (k.startsWith(`${animeId}:`)) { delete cache[k]; dirty.delete(k); }
   }
-  try { await writeGist(cfg, gistId, cache); } catch { /* ignore */ }
+  const deleteKey = `deleted:${animeId}`;
+  dirty.add(deleteKey);
+  if (!gistNetworkEnabled) return;
+  await flush();
 }
 
 /** Freshest cloud position for one episode (used for pull-before-resume).
  *  Refetches the gist when the cache is older than a minute, so a long-open
  *  app still resumes from where the *other* device just left off. */
 export async function pullRemoteProgress(animeId: number, episode: number): Promise<PlaybackRow | null> {
+  if (!gistNetworkEnabled) return null;
   const cfg = getSyncConfig();
   if (!cfg) return null;
   const gistId = await ensureGistId(cfg);
@@ -349,6 +462,7 @@ let syncInFlight: Promise<number> | null = null;
  * Returns how many rows were pulled into the local DB.
  */
 export async function pullAndMerge(): Promise<number> {
+  if (!gistNetworkEnabled) return 0;
   if (syncInFlight) return syncInFlight;
   syncInFlight = (async () => {
     const cfg = getSyncConfig();
@@ -402,6 +516,7 @@ export async function pullAndMerge(): Promise<number> {
     // made while offline, or an app killed before the debounced flush ran).
     // Tombstoned rows stay out — that's exactly how dismissed shows used to
     // resurrect themselves.
+    const pushBackKeys: string[] = [];
     try {
       const paged = await window.api.list.continueWatchingPaged(1, 10000).catch(() => ({ items: [] }));
       const items: any[] = (paged as any).items ?? paged;
@@ -413,12 +528,20 @@ export async function pullAndMerge(): Promise<number> {
         const key = rowKey(row.animeId, row.episode);
         if (!cache[key] || (row.updatedAt ?? 0) > (cache[key].updatedAt ?? 0)) {
           cache[key] = row;
+          pushBackKeys.push(key);
           needWrite = true;
         }
       }
-      if (needWrite) await writeGist(cfg, gistId, cache);
+      if (needWrite) {
+        const ok = await writeGist(cfg, gistId, cache);
+        if (!ok) throw new Error("GitHub rejected the sync gist update.");
+        flushRetryMs = FLUSH_DEBOUNCE_MS;
+      }
     } catch {
-      /* push-back is best-effort; the debounced flush will catch up */
+      // The cache now contains these local rows, so mark them dirty explicitly;
+      // otherwise the next reconcile would see its own cache and never retry.
+      for (const key of pushBackKeys) dirty.add(key);
+      if (pushBackKeys.length) scheduleFlushRetry();
     }
 
     return changedLocal;
