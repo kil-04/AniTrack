@@ -17,6 +17,7 @@ import {
   prewarm as pahePrewarm,
   getPaheBaseUrl,
   getAuthorizedPaheRequestHeaders,
+  syncPaheRuntimeConfig,
 } from "./services/providers/animepahe";
 import { registerPaheIpc } from "./ipc/pahe";
 import { registerAuthIpc } from "./ipc/auth";
@@ -368,6 +369,7 @@ app.whenReady().then(async () => {
   registerWebRequestHandlers();
   subscribeRuntimeConfig((configStatus) => {
     sendToRenderer("automation:status", configStatus);
+    syncPaheRuntimeConfig();
     // Electron permits one listener per webRequest event. Re-registering here
     // atomically replaces both handlers with rules from the new revision.
     registerWebRequestHandlers();
@@ -381,7 +383,7 @@ app.whenReady().then(async () => {
       const root = path.resolve(downloadsDir());
       const filePath = path.resolve(root, rel);
       const relative = path.relative(root, filePath);
-      if (relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) || !fs.existsSync(filePath)) {
+      if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) || !fs.existsSync(filePath)) {
         return new Response("", { status: 404 });
       }
       const ext = path.extname(filePath).toLowerCase();

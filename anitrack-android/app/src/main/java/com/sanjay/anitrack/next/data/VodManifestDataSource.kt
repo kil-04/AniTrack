@@ -38,7 +38,8 @@ class VodManifestDataSource(private val upstream: DataSource) : DataSource {
         // Use a range-less spec so we always get the full document to rewrite.
         val fullSpec = dataSpec.buildUpon().setPosition(0).setLength(C_LENGTH_UNSET).build()
         val raw = DataSourceInputStream(upstream, fullSpec).use { it.readBytes() }
-        val fixed = normalize(String(raw)).toByteArray()
+        val manifest = String(raw)
+        val fixed = normalize(manifest).toByteArray()
         // Honor any requested position/length on the (rewritten) bytes.
         val start = dataSpec.position.toInt().coerceIn(0, fixed.size)
         val end = if (dataSpec.length == C_LENGTH_UNSET) fixed.size

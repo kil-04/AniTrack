@@ -93,7 +93,9 @@ async function main() {
     `manifest/media HTTP 200, host ${host}.`,
   );
   if (downloadSmoke) {
-    const id = `smoke:${providerId}:${Date.now()}`;
+    // Keep the same numeric anime:episode schema used by the renderer so the
+    // IPC/service validation exercised here matches production.
+    const id = `0:${Date.now()}`;
     await new Promise((resolve, reject) => {
       let settled = false;
       const finish = (error) => {

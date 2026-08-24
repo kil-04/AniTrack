@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -142,6 +143,8 @@ fun AppShell() {
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
     val current = backStack?.destination?.route
+    var malConnected by remember { mutableStateOf(com.sanjay.anitrack.next.data.Mal.isConnected) }
+    var malUsername by remember { mutableStateOf(com.sanjay.anitrack.next.data.Mal.username) }
     // Tablet (or landscape phone) gets a nav rail; portrait phone a bottom bar.
     val wideLayout = LocalConfiguration.current.screenWidthDp >= 820
     val hideChrome = current == "player"
@@ -176,12 +179,12 @@ fun AppShell() {
                         onViewAll = { go("search") },
                     )
                     Spacer(Modifier.width(12.dp))
-                    // Profile → Settings (rounded square, like the desktop).
-                    Box(
-                        Modifier.size(36.dp).clip(RoundedCornerShape(10.dp)).background(Accent)
-                            .clickable { go("settings") },
-                        contentAlignment = Alignment.Center,
-                    ) { Text("A", color = Color.White, fontWeight = FontWeight.Bold) }
+                    MalProfileButton(
+                        connected = malConnected,
+                        username = malUsername,
+                        showUsername = true,
+                        onClick = { go("settings") },
+                    )
                 }
             }
             // Portrait: same top bar, compact (logo + search pill + profile);
@@ -205,11 +208,12 @@ fun AppShell() {
                         Text("Search anime…", color = Color.White.copy(alpha = 0.45f), style = MaterialTheme.typography.bodySmall)
                     }
                     Spacer(Modifier.width(10.dp))
-                    Box(
-                        Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(Accent)
-                            .clickable { go("settings") },
-                        contentAlignment = Alignment.Center,
-                    ) { Text("A", color = Color.White, fontWeight = FontWeight.Bold) }
+                    MalProfileButton(
+                        connected = malConnected,
+                        username = malUsername,
+                        showUsername = false,
+                        onClick = { go("settings") },
+                    )
                 }
             }
             Box(Modifier.weight(1f)) {
@@ -254,7 +258,12 @@ fun AppShell() {
                             onOpenAnime = { id -> nav.navigate("anime/$id") },
                         )
                     }
-                    composable("settings") { com.sanjay.anitrack.next.ui.SettingsScreen() }
+                    composable("settings") {
+                        com.sanjay.anitrack.next.ui.SettingsScreen { connected, username ->
+                            malConnected = connected
+                            malUsername = username
+                        }
+                    }
                 }
                 // Floating mini player (the desktop's bottom-right persistent player).
                 val miniOn by com.sanjay.anitrack.next.data.PlayerHolder.miniActive
@@ -280,6 +289,42 @@ fun AppShell() {
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun MalProfileButton(
+    connected: Boolean,
+    username: String?,
+    showUsername: Boolean,
+    onClick: () -> Unit,
+) {
+    val displayName = if (connected) username?.takeIf { it.isNotBlank() } ?: "MAL user" else "Sign in"
+    val initial = if (connected) username?.trim()?.firstOrNull()?.uppercaseChar()?.toString() ?: "?" else "?"
+
+    Row(
+        Modifier.clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick)
+            .padding(end = if (showUsername) 8.dp else 0.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(if (showUsername) 36.dp else 34.dp)
+                .clip(RoundedCornerShape(10.dp)).background(Accent),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(initial, color = Color.White, fontWeight = FontWeight.Bold)
+        }
+        if (showUsername) {
+            Spacer(Modifier.width(8.dp))
+            Text(
+                displayName,
+                color = Color.White.copy(alpha = 0.72f),
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 150.dp),
+            )
         }
     }
 }

@@ -50,42 +50,41 @@ object PlayerHolder {
         player ?: ExoPlayer.Builder(ctx.applicationContext).build()
             .apply {
                 playWhenReady = true
-                // Kwik's TS can't be exact-seeked (garbled keyframe signaling →
-                // decoder never resyncs, silent black after a seek). Snap seeks
-                // to the nearest sync sample instead — like hls.js/browsers do.
+                // Safe default for local AnimePahe TS. setMedia() switches
+                // Anikoto to exact seeks once the active provider is known.
                 setSeekParameters(androidx.media3.exoplayer.SeekParameters.CLOSEST_SYNC)
-                // Debug diagnosis: per-load lifecycle under the EventLogger tag
-                // (shows exactly which post-seek load hangs on the pahe CDN).
-                addAnalyticsListener(androidx.media3.exoplayer.util.EventLogger())
-                // Load lifecycle — distinguishes the stall modes: started-but-
-                // never-completed (blocked loader) vs never-started (load
-                // control) vs cancel loops.
-                addAnalyticsListener(object : androidx.media3.exoplayer.analytics.AnalyticsListener {
-                    private fun tail(u: android.net.Uri) = u.lastPathSegment ?: u.toString()
-                    override fun onLoadStarted(
-                        t: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
-                        l: androidx.media3.exoplayer.source.LoadEventInfo,
-                        m: androidx.media3.exoplayer.source.MediaLoadData,
-                        retryCount: Int,
-                    ) { android.util.Log.d("AniTrackLoads", "start ${tail(l.uri)} retry=$retryCount") }
-                    override fun onLoadCompleted(
-                        t: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
-                        l: androidx.media3.exoplayer.source.LoadEventInfo,
-                        m: androidx.media3.exoplayer.source.MediaLoadData,
-                    ) { android.util.Log.d("AniTrackLoads", "done  ${tail(l.uri)} ${l.bytesLoaded}B ${l.loadDurationMs}ms") }
-                    override fun onLoadCanceled(
-                        t: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
-                        l: androidx.media3.exoplayer.source.LoadEventInfo,
-                        m: androidx.media3.exoplayer.source.MediaLoadData,
-                    ) { android.util.Log.d("AniTrackLoads", "cancel ${tail(l.uri)} after ${l.loadDurationMs}ms") }
-                    override fun onLoadError(
-                        t: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
-                        l: androidx.media3.exoplayer.source.LoadEventInfo,
-                        m: androidx.media3.exoplayer.source.MediaLoadData,
-                        e: java.io.IOException,
-                        wasCanceled: Boolean,
-                    ) { android.util.Log.w("AniTrackLoads", "error ${tail(l.uri)} canceled=$wasCanceled: ${e.message}") }
-                })
+                // Per-segment EventLogger output is useful for diagnosing CDN
+                // stalls, but doing it in release builds adds work to every
+                // HLS load and exposes expiring stream paths in device logs.
+                if (com.sanjay.anitrack.next.BuildConfig.DEBUG) {
+                    addAnalyticsListener(androidx.media3.exoplayer.util.EventLogger())
+                    addAnalyticsListener(object : androidx.media3.exoplayer.analytics.AnalyticsListener {
+                        private fun tail(u: android.net.Uri) = u.lastPathSegment ?: u.toString()
+                        override fun onLoadStarted(
+                            t: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                            l: androidx.media3.exoplayer.source.LoadEventInfo,
+                            m: androidx.media3.exoplayer.source.MediaLoadData,
+                            retryCount: Int,
+                        ) { android.util.Log.d("AniTrackLoads", "start ${tail(l.uri)} retry=$retryCount") }
+                        override fun onLoadCompleted(
+                            t: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                            l: androidx.media3.exoplayer.source.LoadEventInfo,
+                            m: androidx.media3.exoplayer.source.MediaLoadData,
+                        ) { android.util.Log.d("AniTrackLoads", "done  ${tail(l.uri)} ${l.bytesLoaded}B ${l.loadDurationMs}ms") }
+                        override fun onLoadCanceled(
+                            t: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                            l: androidx.media3.exoplayer.source.LoadEventInfo,
+                            m: androidx.media3.exoplayer.source.MediaLoadData,
+                        ) { android.util.Log.d("AniTrackLoads", "cancel ${tail(l.uri)} after ${l.loadDurationMs}ms") }
+                        override fun onLoadError(
+                            t: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                            l: androidx.media3.exoplayer.source.LoadEventInfo,
+                            m: androidx.media3.exoplayer.source.MediaLoadData,
+                            e: java.io.IOException,
+                            wasCanceled: Boolean,
+                        ) { android.util.Log.w("AniTrackLoads", "error ${tail(l.uri)} canceled=$wasCanceled: ${e.message}") }
+                    })
+                }
             }
             .also { player = it }
 
@@ -98,6 +97,13 @@ object PlayerHolder {
     fun setMedia(ctx: Context, s: PlaySession.Resolved) {
         val p = get(ctx)
         val isLocal = s.url.startsWith("file:")
+        p.setSeekParameters(
+            if (PlaySession.provider == "anikoto") {
+                androidx.media3.exoplayer.SeekParameters.EXACT
+            } else {
+                androidx.media3.exoplayer.SeekParameters.CLOSEST_SYNC
+            },
+        )
         val factory: DataSource.Factory = if (isLocal) {
             DefaultDataSource.Factory(ctx.applicationContext)
         } else {

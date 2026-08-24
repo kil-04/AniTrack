@@ -14,9 +14,10 @@
   var v = document.getElementById('v');
   var hls = null;
 
-  function load(url, startAt) {
+  function load(url, startAt, shouldPlay) {
     try {
       startAt = startAt || 0;
+      shouldPlay = shouldPlay !== false;
       if (hls) { hls.destroy(); hls = null; }
       if (window.Hls && Hls.isSupported()) {
         // hls.js drives MSE, which tolerates kwik's loosely-muxed TS and seeks
@@ -26,7 +27,7 @@
         hls.attachMedia(v);
         hls.on(Hls.Events.MANIFEST_PARSED, function () {
           if (startAt > 0) { try { v.currentTime = startAt; } catch (e) {} }
-          v.play().catch(function(){});
+          if (shouldPlay) v.play().catch(function(){}); else v.pause();
         });
         hls.on(Hls.Events.ERROR, function (e, d) {
           if (d && d.fatal) {
@@ -38,7 +39,7 @@
       } else {
         v.src = url;
         v.addEventListener('loadedmetadata', function () { if (startAt > 0) v.currentTime = startAt; }, { once: true });
-        v.play().catch(function(){});
+        if (shouldPlay) v.play().catch(function(){}); else v.pause();
       }
     } catch (e) { if (window.Android) Android.onError(String(e)); }
   }

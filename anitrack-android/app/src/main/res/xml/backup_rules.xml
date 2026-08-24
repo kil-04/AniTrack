@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Never upload GitHub Gist or MAL credentials to Android cloud backup. -->
+    <exclude domain="sharedpref" path="anitrack_next.xml" />
+    <exclude domain="sharedpref" path="anitrack_mal.xml" />
+</full-backup-content>

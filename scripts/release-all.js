@@ -2,11 +2,18 @@
 const path = require("path");
 const { spawnSync } = require("child_process");
 const { ROOT, loadLocalEnv } = require("./automation-common");
+const { readAndroidMetadata } = require("./android-release-common");
 const pkg = require(path.join(ROOT, "package.json"));
 
 loadLocalEnv();
 if (!process.env.GH_TOKEN) throw new Error("GH_TOKEN is missing from .env/CI secrets");
 const expectedTag = `v${pkg.version}`;
+const androidMetadata = readAndroidMetadata();
+if (androidMetadata.versionName !== pkg.version) {
+  throw new Error(
+    `Android versionName ${androidMetadata.versionName} must match desktop/package version ${pkg.version}`,
+  );
+}
 const expectedRepo = `${pkg.build.publish.owner}/${pkg.build.publish.repo}`.toLowerCase();
 const canonicalRemote = `https://github.com/${pkg.build.publish.owner}/${pkg.build.publish.repo}.git`;
 if (process.env.GITHUB_ACTIONS === "true") {

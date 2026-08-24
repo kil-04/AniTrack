@@ -39,7 +39,7 @@ private val Accent = Color(0xFFE50914)
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun MalCard() {
+fun MalCard(onProfileChanged: (connected: Boolean, username: String?) -> Unit = { _, _ -> }) {
     var connected by remember { mutableStateOf(Mal.isConnected) }
     var username by remember { mutableStateOf(Mal.username) }
     var authOpen by remember { mutableStateOf(false) }
@@ -94,6 +94,7 @@ fun MalCard() {
                 Spacer(Modifier.width(10.dp))
                 OutlinedButton(onClick = {
                     Mal.disconnect(); connected = false; username = null; syncMsg = null
+                    onProfileChanged(false, null)
                 }) { Text("Disconnect") }
             }
         } else {
@@ -136,7 +137,11 @@ fun MalCard() {
                                         if (code != null) {
                                             scope.launch {
                                                 val ok = runCatching { Mal.exchange(code, verifier) }.getOrDefault(false)
-                                                if (ok) { connected = true; username = Mal.username }
+                                                if (ok) {
+                                                    connected = true
+                                                    username = Mal.username
+                                                    onProfileChanged(true, username)
+                                                }
                                                 authOpen = false
                                             }
                                         } else authOpen = false

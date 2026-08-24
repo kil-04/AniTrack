@@ -59,6 +59,7 @@ import androidx.media3.ui.PlayerView
 import com.sanjay.anitrack.next.data.Anikoto
 import com.sanjay.anitrack.next.data.PlaySession
 import com.sanjay.anitrack.next.PipState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -129,6 +130,8 @@ fun PlayerScreen(
     var switching by remember { mutableStateOf(false) }
     var switchError by remember { mutableStateOf<String?>(null) }
     var retry by remember { mutableStateOf(0) }
+    var pendingSwitchPositionMs by remember { mutableStateOf<Long?>(null) }
+    var pendingSwitchPlayWhenReady by remember { mutableStateOf<Boolean?>(null) }
     var status by remember { mutableStateOf("Resolving stream…") }
     var error by remember { mutableStateOf<String?>(null) }
     var stream by remember { mutableStateOf<PlaySession.Resolved?>(null) }
@@ -158,12 +161,15 @@ fun PlayerScreen(
     // Manual quality: available video heights in the stream; 0 = highest.
     var videoHeights by remember { mutableStateOf<List<Int>>(emptyList()) }
     var quality by remember { mutableStateOf(0) }
-    // Transient-error recovery (Cronet re-request stalls after a seek).
+    // Transient native-player error recovery (Anikoto/local playback).
     var errorRetries by remember { mutableStateOf(0) }
     var lastErrorAt by remember { mutableStateOf(0L) }
-    // AnimePahe plays through a WebView + hls.js (kwik can't be seeked natively).
+    // AnimePahe's later encrypted TS chunks are not independently decodable;
+    // Media3 can start them but cannot render after a seek. hls.js/MSE is the
+    // seek-capable path and its WebView is now persistent + memory-bounded.
     val webCtl = remember { WebController() }
     var webResumeMs by remember { mutableStateOf(0L) }
+    var webPlayWhenReady by remember { mutableStateOf(true) }
     val useWeb = provider == "animepahe" && PlaySession.localFile == null
     fun flashControls() { controlsVisible = true }
 
@@ -203,19 +209,20 @@ fun PlayerScreen(
     }
 
     // Poll playback state for the scrubber + time display.
-    LaunchedEffect(player) {
+    LaunchedEffect(player, useWeb) {
         // Buffering watchdog: if the player buffers >8s without loading anything
         // (kwik seek pathology), re-prepare at the same position automatically.
         var stallTicks = 0
         var stallBufferedAt = 0L
         var stallRecoveries = 0
         while (isActive) {
-            // AnimePahe (WebView) — mirror the hls.js state instead of ExoPlayer.
-            if (provider == "animepahe" && PlaySession.localFile == null) {
+            // AnimePahe WebView — mirror hls.js state instead of ExoPlayer.
+            if (useWeb) {
                 if (!isSeeking) positionMs = webCtl.positionMs.value
                 durationMs = webCtl.durationMs.value
                 bufferedMs = webCtl.bufferedMs.value
                 isPlaying = !webCtl.paused.value
+                webCtl.error.value?.let { if (error != it) error = it }
                 delay(300)
                 continue
             }
@@ -237,7 +244,7 @@ fun PlayerScreen(
                         val t = player.currentPosition
                         android.util.Log.w("AniTrackNext", "buffer stall — re-preparing at ${t}ms (attempt $stallRecoveries)")
                         com.sanjay.anitrack.next.data.PlayerHolder.setMedia(context, s)
-                        player.seekTo(t)
+                        if (t > 0) player.seekTo(t)
                         player.playWhenReady = true
                     }
                 }
@@ -287,10 +294,10 @@ fun PlayerScreen(
             .build()
     }
 
-    DisposableEffect(player) {
+    DisposableEffect(player, useWeb) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
-                if (state == Player.STATE_ENDED && autoNext && index + 1 < PlaySession.count) index += 1
+                if (!useWeb && state == Player.STATE_ENDED && autoNext && index + 1 < PlaySession.count) index += 1
             }
             override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
                 // Collect the stream's video renditions for the Quality menu.
@@ -304,6 +311,7 @@ fun PlayerScreen(
                 }
             }
             override fun onPlayerError(e: androidx.media3.common.PlaybackException) {
+                if (useWeb) return
                 var cause: Throwable? = e
                 var httpCode: Int? = null
                 while (cause != null) {
@@ -339,6 +347,7 @@ fun PlayerScreen(
     }
 
     var lastPlayedIndex by remember { mutableStateOf<Int?>(null) }
+    var lastPlayedWithWeb by remember { mutableStateOf(false) }
     // `provider`/`subType` participate so switching them re-resolves at the same index.
     LaunchedEffect(index, retry, provider, subType) {
         if (index >= PlaySession.count) return@LaunchedEffect
@@ -358,32 +367,46 @@ fun PlayerScreen(
         }
         // Save the outgoing episode's position before switching.
         lastPlayedIndex?.takeIf { it != index }?.let {
-            if (useWeb) saveWebProgress(it, webCtl.positionMs.value, durationMs) else saveProgress(player, it)
+            if (lastPlayedWithWeb) saveWebProgress(it, webCtl.positionMs.value, durationMs)
+            else saveProgress(player, it)
         }
         lastPlayedIndex = index
+        lastPlayedWithWeb = useWeb
         error = null
         status = "Resolving Episode ${epNum.toInt()}…"
         player.stop()
         try {
             val s = PlaySession.resolve(index)
             stream = s
-            val resumeMs = (com.sanjay.anitrack.next.data.Db.resumeFor(PlaySession.animeId, epNum) ?: 0.0) * 1000
+            val storedResumeMs = (com.sanjay.anitrack.next.data.Db.resumeFor(PlaySession.animeId, epNum) ?: 0.0) * 1000
+            // A server switch is the same episode on a different source. Keep
+            // the live clock instead of jumping to an older persisted resume.
+            val resumeMs = pendingSwitchPositionMs ?: storedResumeMs.toLong()
+            val shouldPlay = pendingSwitchPlayWhenReady ?: autoplay
             if (useWeb) {
                 // WebView + hls.js: the WebView is (re)mounted for this URL and
                 // calls load() itself in onPageFinished (when the page JS is
                 // ready). We just publish the resume position + stream here.
                 player.stop()
-                webResumeMs = resumeMs.toLong()
+                webResumeMs = resumeMs
+                webPlayWhenReady = shouldPlay
                 holder.loadedKey = null
             } else {
                 // Shared loader: local file:// vs CDN (Referer/UA) data source.
                 holder.setMedia(context, s)
-                player.playWhenReady = autoplay
+                player.playWhenReady = shouldPlay
                 holder.loadedKey = holder.keyFor(index)
                 holder.lastResolved = s
-                if (resumeMs > 0) player.seekTo(resumeMs.toLong())
+                if (resumeMs > 0) player.seekTo(resumeMs)
             }
+            pendingSwitchPositionMs = null
+            pendingSwitchPlayWhenReady = null
             status = ""
+        } catch (e: CancellationException) {
+            // Changing episode/server intentionally cancels the previous
+            // LaunchedEffect. It is not a playback failure and must never
+            // cover the new source with an error overlay.
+            throw e
         } catch (e: Exception) {
             // Tagged so `adb logcat -s AniTrackNext` captures provider failures.
             android.util.Log.e("AniTrackNext", "resolve failed provider=$provider ep=$epNum", e)
@@ -393,7 +416,7 @@ fun PlayerScreen(
 
     // Poll position for the skip-intro/outro windows (cheap, 500ms) and save
     // watch progress every ~10s while playing.
-    LaunchedEffect(stream) {
+    LaunchedEffect(stream, useWeb) {
         var sinceSave = 0
         while (isActive) {
             val s = stream
@@ -413,6 +436,9 @@ fun PlayerScreen(
     }
 
     // Final save when the screen goes away + hand off to the mini player.
+    val latestUseWeb = rememberUpdatedState(useWeb)
+    val latestDurationMs = rememberUpdatedState(durationMs)
+    val latestIndex = rememberUpdatedState(index)
     DisposableEffect(Unit) {
         onDispose {
             val holder = com.sanjay.anitrack.next.data.PlayerHolder
@@ -421,9 +447,10 @@ fun PlayerScreen(
             } else {
                 holder.release()
             }
-            val dur = if (useWeb) durationMs else player.duration
-            val posMs = if (useWeb) webCtl.positionMs.value else player.currentPosition
-            val savedIndex = index
+            val webWasActive = latestUseWeb.value
+            val dur = if (webWasActive) latestDurationMs.value else player.duration
+            val posMs = if (webWasActive) webCtl.positionMs.value else player.currentPosition
+            val savedIndex = latestIndex.value
             if (savedIndex < PlaySession.count && dur > 0) {
                 val epNum = PlaySession.episodeNumber(savedIndex)
                 val key = PlaySession.resumeKey()
@@ -450,7 +477,15 @@ fun PlayerScreen(
     // Double-tap seek chaining (10s steps stack like the old player).
     var chainSecs by remember { mutableStateOf(0) }
     var chainForward by remember { mutableStateOf(true) }
-    LaunchedEffect(seekFeedback) { if (seekFeedback != null) { delay(700); seekFeedback = null; chainSecs = 0 } }
+    var chainTargetMs by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(seekFeedback) {
+        if (seekFeedback != null) {
+            delay(700)
+            seekFeedback = null
+            chainSecs = 0
+            chainTargetMs = null
+        }
+    }
 
     Column(Modifier.fillMaxSize().background(Color.Black)) {
         // Immersive while PiP'd or locked to landscape (the old app's fullscreen).
@@ -499,12 +534,16 @@ fun PlayerScreen(
         // Server switch is shared by both orientations.
         val switchTo: (String) -> Unit = { target ->
             if (target != provider && !switching) {
+                val switchPositionMs = curPos().coerceAtLeast(0L)
+                val switchWasPlaying = if (useWeb) !webCtl.paused.value else player.playWhenReady
                 switching = true; switchError = null
                 scope.launch {
                     val result = runCatching { PlaySession.switchProvider(target) }
                     val ok = result.getOrDefault(false)
                     result.exceptionOrNull()?.let { android.util.Log.e("AniTrackNext", "switch to $target failed", it) }
                     if (ok) {
+                        pendingSwitchPositionMs = switchPositionMs
+                        pendingSwitchPlayWhenReady = switchWasPlaying
                         provider = PlaySession.provider
                         index = PlaySession.index
                         retry++   // force a re-resolve even if index/provider look unchanged
@@ -540,21 +579,21 @@ fun PlayerScreen(
         val videoArea: @Composable (Modifier) -> Unit = { mod ->
         Box(mod, contentAlignment = Alignment.Center) {
             if (useWeb) {
-                // AnimePahe via WebView + hls.js. Keyed on the resolved URL so a
-                // server/episode change remounts with the new stream.
-                key(stream?.url) {
-                    val s = stream
-                    if (s != null) {
-                        PaheWebVideo(
-                            controller = webCtl,
-                            url = s.url,
-                            referer = s.referer,
-                            userAgent = s.userAgent,
-                            startMs = webResumeMs,
-                            modifier = Modifier.fillMaxSize(),
-                            onEnded = { if (autoNext && index + 1 < PlaySession.count) index += 1 },
-                        )
-                    }
+                // The same WebView survives episode changes; hls.js tears down
+                // only its old MediaSource and loads the new signed stream.
+                val s = stream
+                if (s != null) {
+                    PaheWebVideo(
+                        controller = webCtl,
+                        url = s.url,
+                        referer = s.referer,
+                        userAgent = s.userAgent,
+                        startMs = webResumeMs,
+                        playWhenReady = webPlayWhenReady,
+                        reloadToken = retry,
+                        modifier = Modifier.fillMaxSize(),
+                        onEnded = { if (autoNext && index + 1 < PlaySession.count) index += 1 },
+                    )
                 }
             } else AndroidView(
                 factory = { ctx ->
@@ -593,24 +632,35 @@ fun PlayerScreen(
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .pointerInput(Unit) {
+                        .pointerInput(useWeb) {
                             detectTapGestures(
                                 onTap = { controlsVisible = !controlsVisible },
                                 onDoubleTap = { offset ->
                                     val w = size.width
                                     when {
                                         offset.x < w * 0.35f -> {
-                                            if (!chainForward || chainSecs == 0) chainSecs = 0
+                                            if (chainForward || chainSecs == 0) {
+                                                chainSecs = 0
+                                                chainTargetMs = curPos()
+                                            }
                                             chainForward = false
                                             chainSecs += 10
-                                            doSeek((curPos() - 10_000).coerceAtLeast(0))
+                                            val target = ((chainTargetMs ?: curPos()) - 10_000).coerceAtLeast(0)
+                                            chainTargetMs = target
+                                            doSeek(target)
                                             seekFeedback = false to chainSecs
                                         }
                                         offset.x > w * 0.65f -> {
-                                            if (chainForward.not() || chainSecs == 0) chainSecs = 0
+                                            if (!chainForward || chainSecs == 0) {
+                                                chainSecs = 0
+                                                chainTargetMs = curPos()
+                                            }
                                             chainForward = true
                                             chainSecs += 10
-                                            doSeek(curPos() + 10_000)
+                                            val maxTarget = durationMs.takeIf { it > 0 } ?: Long.MAX_VALUE
+                                            val target = ((chainTargetMs ?: curPos()) + 10_000).coerceAtMost(maxTarget)
+                                            chainTargetMs = target
+                                            doSeek(target)
                                             seekFeedback = true to chainSecs
                                         }
                                         else -> doTogglePlay()
@@ -629,7 +679,7 @@ fun PlayerScreen(
                                 },
                             )
                         }
-                        .pointerInput(Unit) {
+                        .pointerInput(useWeb) {
                             // Vertical drag on the right half = volume.
                             detectDragGestures(
                                 onDragEnd = { volumeFeedback = null },
@@ -693,13 +743,13 @@ fun PlayerScreen(
                         Modifier
                             .fillMaxWidth()
                             .height(24.dp)
-                            .pointerInput(dur) {
+                            .pointerInput(dur, useWeb) {
                                 detectTapGestures { off ->
                                     val t = (off.x / size.width * dur).toLong().coerceIn(0, dur)
                                     doSeek(t); flashControls()
                                 }
                             }
-                            .pointerInput(dur) {
+                            .pointerInput(dur, useWeb) {
                                 detectHorizontalDragGestures(
                                     onDragStart = { off -> isSeeking = true; seekPreviewMs = (off.x / size.width * dur).toLong().coerceIn(0, dur) },
                                     onHorizontalDrag = { change, _ -> seekPreviewMs = (change.position.x / size.width * dur).toLong().coerceIn(0, dur) },

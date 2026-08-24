@@ -577,13 +577,15 @@ export async function findByExternalId(
 //
 // Fast-path JS-unpacking fallback is kept for reference but not used as primary
 // because it doesn't set the CDN-authorising cookies.
-// CDN URL patterns — covers all known AnimePahe video CDN backends.
-const CDN_HOSTS = [
-  "*://*.owocdn.top/*",
-  "*://*.owocdn.com/*",
-  "*://*.uwucdn.top/*",
-  "*://*.llnwi.net/*",
-];
+// Build the interception filter from the signed runtime configuration. AnimePahe
+// rotates CDN families; keeping a second hard-coded allow-list here meant a new
+// (already trusted) family could resolve in the fast path but never be captured
+// by the browser path.
+function cdnRequestPatterns(): string[] {
+  const hosts = getRuntimeConfig().providers.animepahe.streamHostFragments
+    .filter((host) => !host.startsWith("kwik."));
+  return hosts.flatMap((host) => [`*://${host}/*`, `*://*.${host}/*`]);
+}
 const CDN_RE = /https?:\/\/[^"'\s<>]*(?:owocdn\.(?:top|com)|uwucdn\.top|llnwi\.net)[^"'\s<>]*/;
 const VIDEO_RE = /https?:\/\/[^"'\s<>]+\.(?:m3u8|mp4)(?:\?[^"'\s<>]*)?/;
 
@@ -603,6 +605,10 @@ export interface AuthorizedPaheRequestHeaders {
 const _authorizedStreamHosts = new Map<string, { authorizedAt: number; referer: string }>();
 
 export function getKwikCookies(): string { return animePaheEnabled() ? _lastKwikCookies : ""; }
+
+function kwikCookiesFresh(): boolean {
+  return Boolean(_lastKwikCookies) && Date.now() - _lastKwikCookiesAt < COOKIE_TTL_MS;
+}
 
 function authorizeStreamUrl(raw: string, kwikUrl: string) {
   assertAnimePaheEnabled();
@@ -684,8 +690,33 @@ const _kwikPending = new Map<string, Promise<{ url: string; cookies: string }>>(
 // window+session so CF is already cleared — page loads in ~1 s instead of 5-10 s.
 
 let _kwikWin: BrowserWindow | null = null;
+let _kwikRequestConfigKey = "";
 // Callback installed by the currently-running _resolveKwikBrowser call.
 let _kwikInterceptCb: ((url: string) => void) | null = null;
+// A single BrowserWindow cannot navigate to two Kwik embeds at once. Playback
+// prefetch and the download queue can otherwise replace each other's callback,
+// leaving one resolve hung until its 20-second timeout.
+let _kwikBrowserQueue: Promise<unknown> = Promise.resolve();
+
+function kwikRequestConfigKey(): string {
+  const runtime = getRuntimeConfig();
+  return JSON.stringify({
+    enabled: runtime.providers.animepahe.enabled && runtime.features.animepaheStreaming,
+    patterns: cdnRequestPatterns(),
+  });
+}
+
+/** Apply signed host-rule changes without requiring an app restart. */
+export function syncPaheRuntimeConfig(): void {
+  const nextKey = kwikRequestConfigKey();
+  if (nextKey === _kwikRequestConfigKey) return;
+  _kwikRequestConfigKey = nextKey;
+  _kwikInterceptCb = null;
+  _kwikUrlCache.clear();
+  _authorizedStreamHosts.clear();
+  if (_kwikWin && !_kwikWin.isDestroyed()) _kwikWin.destroy();
+  _kwikWin = null;
+}
 
 function getKwikWindow(): BrowserWindow {
   assertAnimePaheEnabled();
@@ -701,11 +732,12 @@ function getKwikWindow(): BrowserWindow {
       partition: "persist:kwik",
     },
   });
+  _kwikRequestConfigKey = kwikRequestConfigKey();
 
   // Set up session-level CDN interceptor ONCE — it stays alive for the whole
   // session and routes every intercepted URL to whatever callback is current.
   const sess = _kwikWin.webContents.session;
-  sess.webRequest.onBeforeRequest({ urls: CDN_HOSTS }, async (details, callback) => {
+  sess.webRequest.onBeforeRequest({ urls: cdnRequestPatterns() }, async (details, callback) => {
     if (!animePaheEnabled()) {
       _kwikInterceptCb = null;
       callback({ cancel: true });
@@ -751,7 +783,10 @@ export async function resolveKwik(
   assertTrustedKwikUrl(kwikUrl);
   // 1. URL cache hit
   const cached = _kwikUrlCache.get(kwikUrl);
-  if (cached && Date.now() - cached.at < URL_TTL_MS) {
+  // A cached URL is useful only while its matching hotlink cookies are fresh.
+  // Previously a two-hour URL could be paired with 30-minute cookies, causing
+  // playback/download failures after the app had been open for a while.
+  if (cached && Date.now() - cached.at < URL_TTL_MS && kwikCookiesFresh()) {
     authorizeStreamUrl(cached.url, kwikUrl);
     return { url: cached.url, cookies: _lastKwikCookies };
   }
@@ -762,7 +797,7 @@ export async function resolveKwik(
   }
 
   // 3. Choose fast or slow path
-  const cookiesFresh = _lastKwikCookies && (Date.now() - _lastKwikCookiesAt < COOKIE_TTL_MS);
+  const cookiesFresh = kwikCookiesFresh();
   const promise = (cookiesFresh
     ? resolveKwikFast(kwikUrl)
         .then((url) => {
@@ -788,11 +823,20 @@ export function prefetchKwik(kwikUrl: string): void {
   if (!animePaheEnabled()) return;
   if (_kwikPending.has(kwikUrl)) return;
   const cached = _kwikUrlCache.get(kwikUrl);
-  if (cached && Date.now() - cached.at < URL_TTL_MS) return;
+  if (cached && Date.now() - cached.at < URL_TTL_MS && kwikCookiesFresh()) return;
   resolveKwik(kwikUrl).catch(() => {});
 }
 
 async function _resolveKwikBrowser(
+  kwikUrl: string,
+): Promise<{ url: string; cookies: string }> {
+  const run = () => _resolveKwikBrowserOnce(kwikUrl);
+  const pending = _kwikBrowserQueue.then(run, run);
+  _kwikBrowserQueue = pending.catch(() => {});
+  return pending;
+}
+
+function _resolveKwikBrowserOnce(
   kwikUrl: string,
 ): Promise<{ url: string; cookies: string }> {
   return new Promise((resolve, reject) => {

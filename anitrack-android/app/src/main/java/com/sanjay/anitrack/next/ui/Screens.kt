@@ -1319,7 +1319,7 @@ private fun ListStatusButton(anime: Anime) {
 // ── Settings ──────────────────────────────────────────────────────────────────
 
 @Composable
-fun SettingsScreen() {
+fun SettingsScreen(onMalProfileChanged: (connected: Boolean, username: String?) -> Unit = { _, _ -> }) {
     var token by remember { mutableStateOf(com.sanjay.anitrack.next.data.GistSync.token) }
     var statusMsg by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -1332,7 +1332,7 @@ fun SettingsScreen() {
         AutomationCard()
         Spacer(Modifier.height(28.dp))
 
-        MalCard()
+        MalCard(onProfileChanged = onMalProfileChanged)
         Spacer(Modifier.height(28.dp))
 
         Text("Cross-device Sync", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
@@ -1376,6 +1376,40 @@ fun SettingsScreen() {
         statusMsg?.let {
             Spacer(Modifier.height(10.dp))
             Text(it, style = MaterialTheme.typography.labelMedium, color = Accent)
+        }
+
+        Spacer(Modifier.height(28.dp))
+        Column(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
+                .background(Color.White.copy(alpha = 0.04f)).padding(16.dp),
+        ) {
+            Text("About", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "AniTrack is a personal anime tracker with MyAnimeList two-way sync, streaming, downloads, and native Android playback.",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.55f),
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "AniTrack is not affiliated with MyAnimeList or any streaming service.",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.55f),
+            )
+            Spacer(Modifier.height(12.dp))
+            Row(
+                Modifier.clip(RoundedCornerShape(8.dp)).background(Color.White.copy(alpha = 0.06f))
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Version", style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.5f))
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    com.sanjay.anitrack.next.BuildConfig.VERSION_NAME,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
         }
     }
 }

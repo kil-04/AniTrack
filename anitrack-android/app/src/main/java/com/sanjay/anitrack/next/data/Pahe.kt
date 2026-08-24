@@ -11,12 +11,15 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -464,18 +467,50 @@ object Pahe {
             lastKwikOrigin = "${p.protocol}://${p.host}"
         } catch (e: Exception) { /* keep previous */ }
 
+        var lastFailure: Throwable? = null
+        repeat(2) { attempt ->
+            try {
+                return Stream(resolveKwikOnce(kwikUrl), lastKwikOrigin)
+            } catch (e: CancellationException) {
+                // Retry a resolver-local timeout, but stop immediately when
+                // the player/download that requested it has gone away.
+                if (!currentCoroutineContext().isActive) throw e
+                lastFailure = e
+                Log.w("AniTrack/AnimePahe", "Kwik resolve attempt ${attempt + 1} failed: ${e.message}")
+                if (attempt == 0) delay(350)
+            } catch (e: Exception) {
+                lastFailure = e
+                Log.w("AniTrack/AnimePahe", "Kwik resolve attempt ${attempt + 1} failed: ${e.message}")
+                if (attempt == 0) delay(350)
+            }
+        }
+        throw IOException(lastFailure?.message ?: "kwik resolve failed", lastFailure)
+    }
+
+    private suspend fun resolveKwikOnce(kwikUrl: String): String {
         val act = activity ?: throw IOException("no activity")
         val deferred = CompletableDeferred<String>()
         act.runOnUiThread {
             @SuppressLint("SetJavaScriptEnabled")
             val wv = WebView(act)
+            var cleanupScheduled = false
+            fun cleanup() {
+                if (cleanupScheduled) return
+                cleanupScheduled = true
+                // Destroying from shouldInterceptRequest races Chromium's
+                // in-flight callback and produced destroyed-WebView crashes.
+                // Give that callback a moment to return first.
+                wv.postDelayed({
+                    runCatching { wv.stopLoading(); wv.loadUrl("about:blank"); wv.destroy() }
+                }, 500)
+            }
             wv.settings.apply { javaScriptEnabled = true; domStorageEnabled = true; userAgentString = MOBILE_UA }
             wv.webViewClient = object : WebViewClient() {
                 override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
                     val url = request.url.toString()
                     if (url.contains(".m3u8") && !deferred.isCompleted) {
                         deferred.complete(url)
-                        act.runOnUiThread { wv.destroy() }
+                        act.runOnUiThread { cleanup() }
                     }
                     return null
                 }
@@ -488,20 +523,29 @@ object Pahe {
                 override fun onReceivedError(view: WebView, req: WebResourceRequest, err: WebResourceError) {
                     if (!req.isForMainFrame || deferred.isCompleted) return
                     deferred.completeExceptionally(IOException("kwik error: ${err.description}"))
-                    act.runOnUiThread { wv.destroy() }
+                    act.runOnUiThread { cleanup() }
+                }
+                override fun onRenderProcessGone(
+                    view: WebView,
+                    detail: android.webkit.RenderProcessGoneDetail,
+                ): Boolean {
+                    if (!deferred.isCompleted) {
+                        deferred.completeExceptionally(IOException("kwik renderer stopped"))
+                    }
+                    cleanup()
+                    return true
                 }
             }
             wv.loadUrl(kwikUrl, mutableMapOf("Referer" to baseUrl() + route("home")))
             scope.launch {
-                delay(15_000)
+                delay(18_000)
                 if (!deferred.isCompleted) {
                     deferred.completeExceptionally(IOException("kwik resolve timeout"))
-                    act.runOnUiThread { wv.destroy() }
+                    act.runOnUiThread { cleanup() }
                 }
             }
         }
-        val m3u8 = withTimeout(20_000) { deferred.await() }
-        return Stream(m3u8, lastKwikOrigin)
+        return withTimeout(22_000) { deferred.await() }
     }
 
     // ── Matching ──────────────────────────────────────────────────────────────

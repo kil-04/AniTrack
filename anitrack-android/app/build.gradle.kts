@@ -32,8 +32,8 @@ android {
         applicationId = "com.sanjay.anitrack.next"
         minSdk = 26
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.2.1"
+        versionCode = 4
+        versionName = "7.0.0"
 
         buildConfigField("String", "AUTOMATION_PUBLIC_KEY_B64", "\"${trustValue("publicKeySpkiBase64")}\"")
         buildConfigField("String", "ANDROID_RELEASE_CERT_SHA256", "\"${trustValue("androidReleaseCertSha256")}\"")
