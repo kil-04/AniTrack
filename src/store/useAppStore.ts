@@ -6,15 +6,16 @@ import type {
   ContinueWatchingItem,
   ListEntry,
   MalAuthState,
+  RecentEpisode,
 } from "../../shared/types";
 
 interface AppState {
   mal: MalAuthState;
   al: AniListAuthState;
   trending: AnimeMeta[];
-  latestEpisodes: any[];
+  latestEpisodes: RecentEpisode[];
   latestPage: number;
-  latestLastPage: number;
+  latestHasNextPage: boolean;
   continueWatching: ContinueWatchingItem[];
   list: { entry: ListEntry; anime: AnimeMeta | null }[];
   loading: boolean;
@@ -34,7 +35,7 @@ export const useAppStore = create<AppState>((set) => ({
   trending: [],
   latestEpisodes: [],
   latestPage: 1,
-  latestLastPage: 1,
+  latestHasNextPage: false,
   continueWatching: [],
   list: [],
   loading: false,
@@ -71,11 +72,11 @@ export const useAppStore = create<AppState>((set) => ({
     if (results[4].status === "fulfilled") next.list = results[4].value;
     set({ ...next, loading: false });
 
-    // Fetch latest episodes separately (slower, CF-gated); always resets to page 1
+    // Fetch the same AniList recent-airing feed used by native Android.
     try {
       set({ latestLoading: true, latestPage: 1 });
-      const result = await window.api.pahe.latest(1);
-      set({ latestEpisodes: result.data, latestLastPage: result.lastPage });
+      const result = await window.api.anilist.recent(1);
+      set({ latestEpisodes: result.data, latestHasNextPage: result.hasNextPage });
     } catch (e) {
       console.error("latest episodes fetch failed", e);
     } finally {
@@ -86,8 +87,12 @@ export const useAppStore = create<AppState>((set) => ({
   refreshLatest: async (page = 1) => {
     set({ latestLoading: true, latestPage: page });
     try {
-      const result = await window.api.pahe.latest(page);
-      set({ latestEpisodes: result.data, latestLastPage: result.lastPage });
+      const result = await window.api.anilist.recent(page);
+      set({
+        latestEpisodes: result.data,
+        latestPage: result.page,
+        latestHasNextPage: result.hasNextPage,
+      });
     } catch (e) {
       console.error(e);
     } finally {

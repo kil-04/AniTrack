@@ -988,6 +988,34 @@ export async function installCapacitorApiBridge() {
         }
         return out;
       },
+      async recent(page = 1) {
+        const safePage = Number.isInteger(page) && page > 0 ? page : 1;
+        const data = await alGql<any>(`
+          query($to: Int, $page: Int) {
+            Page(page: $page, perPage: 30) {
+              pageInfo { hasNextPage }
+              airingSchedules(airingAt_lesser: $to, sort: TIME_DESC) {
+                airingAt episode
+                media { ${MEDIA_FIELDS} isAdult }
+              }
+            }
+          }`, { to: Math.floor(Date.now() / 1000), page: safePage }, "low");
+        const seen = new Set<number>();
+        return {
+          data: (data.Page?.airingSchedules ?? []).flatMap((schedule: any) => {
+            const media = schedule.media;
+            if (!media || media.isAdult || seen.has(media.id)) return [];
+            seen.add(media.id);
+            return [{
+              anime: mapMedia(media),
+              episode: schedule.episode,
+              airingAt: schedule.airingAt,
+            }];
+          }),
+          page: safePage,
+          hasNextPage: data.Page?.pageInfo?.hasNextPage ?? false,
+        };
+      },
       async relations(id: number) {
         if (id <= 0) return [];
         try {

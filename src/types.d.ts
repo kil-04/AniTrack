@@ -30,6 +30,7 @@ interface ApiBridge {
     advancedSearch(filters: import("../shared/types").AdvancedSearchFilters): Promise<import("../shared/types").PaginatedAnime>;
     trending(): Promise<AnimeMeta[]>;
     airing(ids: number[]): Promise<import("../shared/types").AiringInfo[]>;
+    recent(page?: number): Promise<import("../shared/types").RecentEpisodesPage>;
     get(id: number): Promise<AnimeMeta | null>;
     relations(id: number): Promise<RelatedAnime[]>;
   };

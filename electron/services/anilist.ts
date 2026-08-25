@@ -1,4 +1,4 @@
-import type { AnimeMeta, RelatedAnime } from "../../shared/types";
+import type { AnimeMeta, RecentEpisodesPage, RelatedAnime } from "../../shared/types";
 
 const ENDPOINT = "https://graphql.anilist.co";
 
@@ -36,6 +36,7 @@ const MEDIA_FIELDS = `
   status
   format
   popularity
+  isAdult
   coverImage { extraLarge large color }
   bannerImage
   genres
@@ -55,6 +56,7 @@ interface MediaNode {
   status?: string | null;
   format?: string | null;
   popularity?: number | null;
+  isAdult?: boolean;
   coverImage?: { extraLarge?: string; large?: string; color?: string };
   bannerImage?: string | null;
   genres?: string[];
@@ -298,6 +300,57 @@ export async function getAiringFor(
 
   cacheSet(key, out);
   return out;
+}
+
+/** Recently aired episodes. This intentionally mirrors the native Android
+ * home/latest feed so both apps show the same titles in the same order. */
+export async function recentEpisodes(page = 1): Promise<RecentEpisodesPage> {
+  const safePage = Number.isInteger(page) && page > 0 ? page : 1;
+  const key = `recent:${safePage}`;
+  const hit = cacheGet<RecentEpisodesPage>(key);
+  if (hit) return hit;
+
+  const data = await gql<{
+    Page: {
+      pageInfo: { hasNextPage: boolean };
+      airingSchedules: Array<{
+        airingAt: number;
+        episode: number;
+        media: MediaNode | null;
+      }>;
+    };
+  }>(
+    `query($to: Int, $page: Int) {
+      Page(page: $page, perPage: 30) {
+        pageInfo { hasNextPage }
+        airingSchedules(airingAt_lesser: $to, sort: TIME_DESC) {
+          airingAt
+          episode
+          media { ${MEDIA_FIELDS} }
+        }
+      }
+    }`,
+    { to: Math.floor(Date.now() / 1000), page: safePage },
+    "low",
+  );
+
+  const seen = new Set<number>();
+  const result: RecentEpisodesPage = {
+    data: data.Page.airingSchedules.flatMap((schedule) => {
+      const media = schedule.media;
+      if (!media || media.isAdult || seen.has(media.id)) return [];
+      seen.add(media.id);
+      return [{
+        anime: toAnime(media),
+        episode: schedule.episode,
+        airingAt: schedule.airingAt,
+      }];
+    }),
+    page: safePage,
+    hasNextPage: data.Page.pageInfo.hasNextPage,
+  };
+  cacheSet(key, result);
+  return result;
 }
 
 export async function advancedSearchAnime(filters: import("../../shared/types").AdvancedSearchFilters): Promise<import("../../shared/types").PaginatedAnime> {

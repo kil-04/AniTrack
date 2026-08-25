@@ -107,6 +107,18 @@ export interface AiringInfo {
   airingAt: number;         // unix seconds
 }
 
+export interface RecentEpisode {
+  anime: AnimeMeta;
+  episode: number;
+  airingAt: number;         // unix seconds
+}
+
+export interface RecentEpisodesPage {
+  data: RecentEpisode[];
+  page: number;
+  hasNextPage: boolean;
+}
+
 export type DownloadStatus = "queued" | "downloading" | "done" | "failed";
 
 export interface DownloadItem {
@@ -153,6 +165,7 @@ export const IPC = {
   ANILIST_TRENDING: "anilist:trending",
   ANILIST_GET: "anilist:get",
   ANILIST_AIRING: "anilist:airing",
+  ANILIST_RECENT: "anilist:recent",
   // Local state
   LIST_GET_ALL: "list:get-all",
   LIST_SET: "list:set",

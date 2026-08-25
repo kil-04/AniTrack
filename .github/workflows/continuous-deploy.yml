@@ -1,0 +1,72 @@
+name: Continuous production deployment
+
+on:
+  workflow_run:
+    workflows:
+      - Verify desktop and Android
+    types:
+      - completed
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: continuous-production-versioning
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.actor.login != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Ignore a superseded verification run
+        id: current
+        shell: bash
+        env:
+          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          remote_sha="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          if [ "$remote_sha" = "$TESTED_SHA" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "A newer main commit exists; its verification run will deploy it."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: steps.current.outputs.proceed == 'true'
+        with:
+          node-version: 24
+
+      - name: Create the next patch release commit and tag
+        if: steps.current.outputs.proceed == 'true'
+        id: version
+        shell: bash
+        run: |
+          node scripts/bump-continuous-release.js
+          tag="v$(node -p "require('./package.json').version")"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- package.json package-lock.json anitrack-android/app/build.gradle.kts
+          git commit -m "chore(release): ${tag}"
+          git tag -a "$tag" -m "AniTrack ${tag}"
+          git push --atomic origin HEAD:main "refs/tags/$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Launch the signed desktop and Android release
+        if: steps.current.outputs.proceed == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "$RELEASE_TAG"

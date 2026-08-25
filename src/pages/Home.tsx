@@ -4,7 +4,7 @@ import { useAppStore } from "../store/useAppStore";
 import Row from "../components/Row";
 import Card from "../components/Card";
 import { Link } from "react-router-dom";
-import { Play, RefreshCw, Clock, Loader2, X, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
+import { Play, RefreshCw, Clock, Loader2, X, ChevronLeft, ChevronRight, ChevronsLeft } from "lucide-react";
 import { secondsToTimestamp } from "../lib/format";
 import LatestEpCard from "../components/LatestEpCard";
 import ContinueWatchingCard from "../components/ContinueWatchingCard";
@@ -16,7 +16,7 @@ export default function Home() {
   const latestEpisodes = useAppStore((s) => s.latestEpisodes);
   const latestLoading = useAppStore((s) => s.latestLoading);
   const latestPage = useAppStore((s) => s.latestPage);
-  const latestLastPage = useAppStore((s) => s.latestLastPage);
+  const latestHasNextPage = useAppStore((s) => s.latestHasNextPage);
   const refreshLatest = useAppStore((s) => s.refreshLatest);
   const refreshContinue = useAppStore((s) => s.refreshContinue);
   const refreshAll = useAppStore((s) => s.refreshAll);
@@ -387,7 +387,7 @@ export default function Home() {
               {latestCards}
             </div>
 
-            {latestLastPage > 1 && (
+            {(latestPage > 1 || latestHasNextPage) && (
               <div className="mt-5 flex items-center justify-center gap-1">
                 <button
                   onClick={() => refreshLatest(1)}
@@ -406,47 +406,17 @@ export default function Home() {
                   <ChevronLeft size={14} />
                 </button>
 
-                {Array.from({ length: latestLastPage }, (_, i) => i + 1)
-                  .filter((p) => Math.abs(p - latestPage) <= 2 || p === 1 || p === latestLastPage)
-                  .reduce<(number | "…")[]>((acc, p, idx, arr) => {
-                    if (idx > 0 && p - (arr[idx - 1] as number) > 1) acc.push("…");
-                    acc.push(p);
-                    return acc;
-                  }, [])
-                  .map((p, i) =>
-                    p === "…" ? (
-                      <span key={`ellipsis-${i}`} className="px-1 text-xs text-white/30">…</span>
-                    ) : (
-                      <button
-                        key={p}
-                        onClick={() => refreshLatest(p as number)}
-                        disabled={latestLoading}
-                        className={`flex h-8 min-w-[2rem] items-center justify-center rounded px-2 text-xs font-medium transition
-                          ${latestPage === p
-                            ? "bg-white text-black"
-                            : "text-white/60 hover:bg-white/10 hover:text-white disabled:opacity-40"
-                          }`}
-                      >
-                        {p}
-                      </button>
-                    ),
-                  )}
+                <span className="flex h-8 min-w-[5rem] items-center justify-center rounded bg-white text-xs font-medium text-black">
+                  Page {latestPage}
+                </span>
 
                 <button
                   onClick={() => refreshLatest(latestPage + 1)}
-                  disabled={latestPage === latestLastPage || latestLoading}
+                  disabled={!latestHasNextPage || latestLoading}
                   className="flex h-8 w-8 items-center justify-center rounded text-white/50 hover:bg-white/10 hover:text-white disabled:opacity-30 transition"
                   title="Next page"
                 >
                   <ChevronRight size={14} />
-                </button>
-                <button
-                  onClick={() => refreshLatest(latestLastPage)}
-                  disabled={latestPage === latestLastPage || latestLoading}
-                  className="flex h-8 w-8 items-center justify-center rounded text-white/50 hover:bg-white/10 hover:text-white disabled:opacity-30 transition"
-                  title="Last page"
-                >
-                  <ChevronsRight size={14} />
                 </button>
               </div>
             )}

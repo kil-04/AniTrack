@@ -1,6 +1,7 @@
 name: Release desktop and native Android
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - "v*"
