@@ -18,6 +18,10 @@ npm run typecheck
 # Production build (Vite + tsc for electron)
 npm run build
 
+# Regression tests for shared/desktop logic and native Android
+npm test
+npm run android:next:test
+
 # Package into an NSIS installer
 npm run pack
 
@@ -25,7 +29,8 @@ npm run pack
 npm run publish
 ```
 
-There is no test suite. `npm run typecheck` is the only automated correctness check.
+`npm test` runs the Node regression suite, `npm run android:next:test` runs native
+Android unit tests, and `npm run typecheck` checks both TypeScript contexts.
 
 ## Architecture
 

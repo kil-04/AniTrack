@@ -37,6 +37,12 @@ jobs:
       - name: Verify signed automation files
         run: npm run automation:verify
 
+      - name: Test shared matching logic
+        run: npm test
+
+      - name: Test native Android matching logic
+        run: npm run android:next:test
+
       - name: Type-check desktop code
         run: npm run typecheck
 
