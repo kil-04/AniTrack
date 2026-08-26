@@ -1,4 +1,0 @@
-{
-  "status": 200,
-  "result": "<div class=\"tip\">\n  <div>You're watching <b>Episode 1</b>.</div>\n  <div>If current servers doesn't work, please try other servers beside.</div>\n</div>\n<div class=\"servers\"><div class=\"type\" data-type=\"sub\">\n                    <label data-toggle=\"tooltip\"><i class=\"fa-solid fa-closed-captioning\"></i> SUB</label><ul><li data-ep-id=\"21219\" data-cmid=\"animixplay-fqsqfvdf4u\" data-sv-id=\"e54\" data-link-id=\"MTF1dkFtaW9BRTZPbzJJRElFZUZrOWdjeldjOERLaWNMMXFNbVB3WUJqOEZ4cFNpMDdQbnV1S3dNdklpRkhWb09KRjJXZktBQ1BhMysrZkpQUm1CNFE9PQ\">Vidstream-2</li> <li data-ep-id=\"21219\" data-cmid=\"animixplay-fqsqfvdf4u\" data-sv-id=\"a41\" data-link-id=\"MTF1dkFtaW9BRTZPbzJJRElFZUZreUwzRFBHR2Fkdmc2YjVmc0xTWDBmc0lFQmVjUWc2ZWcxMVJVR3dHbVZjMStLekhSTzNWQnVTL0JIbXRDOSszSmc9PQ\">VidCloud-1</li> </ul>\n                </div></div>"
-}
