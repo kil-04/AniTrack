@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ProviderRegistry } from "../electron/services/providers/registry.ts";
+import { ProviderRegistry } from "../apps/desktop/main/services/providers/registry.ts";
 
 function connector(id, overrides = {}) {
   return {

@@ -81,7 +81,7 @@ async function assertNewerThanPublished(artifact) {
   const manifestUrl = trust.androidUpdateManifestUrl;
   const signatureUrl = trust.androidUpdateSignatureUrl;
   if (typeof manifestUrl !== "string" || typeof signatureUrl !== "string") {
-    throw new Error("Android update URLs are missing from shared/automation-trust.json");
+    throw new Error("Android update URLs are missing from packages/shared/automation-trust.json");
   }
   const previousBytes = await fetchBytes(manifestUrl);
   if (previousBytes === null) {

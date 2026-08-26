@@ -4,7 +4,7 @@ const path = require("path");
 
 const ROOT = path.resolve(__dirname, "..");
 const ENV_PATH = path.join(ROOT, ".env");
-const TRUST_PATH = path.join(ROOT, "shared", "automation-trust.json");
+const TRUST_PATH = path.join(ROOT, "packages", "shared", "automation-trust.json");
 const CONFIG_PATH = path.join(ROOT, "automation", "remote-config.json");
 const CONFIG_SIG_PATH = path.join(ROOT, "automation", "remote-config.sig");
 const UPDATE_PATH = path.join(ROOT, "automation", "android-update.json");
@@ -64,7 +64,7 @@ function privateKey() {
 
 function publicKey() {
   if (!fs.existsSync(TRUST_PATH)) {
-    throw new Error("shared/automation-trust.json is missing. Run npm run automation:keygen.");
+    throw new Error("packages/shared/automation-trust.json is missing. Run npm run automation:keygen.");
   }
   const trust = JSON.parse(fs.readFileSync(TRUST_PATH, "utf8"));
   return crypto.createPublicKey({

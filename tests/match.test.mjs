@@ -4,7 +4,7 @@ import {
   getSeasonNumber,
   pickVerifiedCandidate,
   scoreMatch,
-} from "../src/lib/match.ts";
+} from "../apps/desktop/renderer/lib/match.ts";
 
 test("extracts common season-number formats", () => {
   assert.equal(getSeasonNumber("Attack on Titan Season 4"), 4);

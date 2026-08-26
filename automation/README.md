@@ -22,7 +22,7 @@ invalid. Rollbacks are published as the old values with a **higher** revision.
 2. Run `npm run automation:keygen` once.
 3. Back up `.env` securely. Losing the automation private key means installed
    clients cannot trust newly signed configuration.
-4. Commit `shared/automation-trust.json`, `remote-config.json`, and the generated
+4. Commit `packages/shared/automation-trust.json`, `remote-config.json`, and the generated
    `remote-config.sig`. Never commit `.env` or `.release-secrets`.
 
 Back up these two local files together in a password manager or encrypted

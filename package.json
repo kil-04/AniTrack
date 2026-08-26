@@ -2,16 +2,16 @@
   "name": "anitrack",
   "version": "7.0.2",
   "description": "Anime tracker + local player with Discord RPC, MAL two-way sync and legal-site launcher",
-  "main": "dist-electron/electron/main.js",
+  "main": "dist-electron/apps/desktop/main/main.js",
   "author": "Sanjay",
   "license": "MIT",
   "scripts": {
     "dev": "concurrently -k \"npm:dev:vite\" \"npm:dev:electron\"",
-    "dev:vite": "vite",
-    "dev:electron": "wait-on tcp:5173 && tsc -p tsconfig.electron.json && cross-env NODE_ENV=development electron .",
-    "dev:electron-watch": "wait-on tcp:5173 && tsc -p tsconfig.electron.json -w --preserveWatchOutput",
-    "build:vite": "vite build",
-    "build:electron": "tsc -p tsconfig.electron.json",
+    "dev:vite": "vite --config apps/desktop/vite.config.ts",
+    "dev:electron": "wait-on tcp:5173 && tsc -p apps/desktop/tsconfig.main.json && cross-env NODE_ENV=development electron .",
+    "dev:electron-watch": "wait-on tcp:5173 && tsc -p apps/desktop/tsconfig.main.json -w --preserveWatchOutput",
+    "build:vite": "vite build --config apps/desktop/vite.config.ts",
+    "build:electron": "tsc -p apps/desktop/tsconfig.main.json",
     "build": "npm run build:vite && npm run build:electron",
     "pack": "npm run build && electron-builder",
     "publish": "npm run release:all",
@@ -24,15 +24,15 @@
     "providers:health": "node scripts/provider-health.js",
     "providers:smoke:electron": "npm run build:electron && electron scripts/electron-provider-smoke.js",
     "android:keygen": "node scripts/generate-android-signing-key.js",
-    "android:next:debug": "anitrack-android\\gradlew.bat -p anitrack-android :app:assembleDebug",
-    "android:next:test": "anitrack-android\\gradlew.bat -p anitrack-android :app:testDebugUnitTest",
+    "android:next:debug": "apps\\android\\gradlew.bat -p apps/android :app:assembleDebug",
+    "android:next:test": "apps\\android\\gradlew.bat -p apps/android :app:testDebugUnitTest",
     "android:next:release": "node --env-file-if-exists=.env scripts/run-native-gradle.js :app:assembleRelease",
     "android:next:verify": "node scripts/android-release-common.js",
     "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/match.test.mjs tests/provider-client.test.mjs tests/provider-registry.test.mjs tests/runtime-config.test.cjs",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
-    "legacy:capacitor:sync": "npm run build:vite && npx cap sync android",
-    "legacy:capacitor:open": "npx cap open android",
-    "legacy:capacitor:build": "npm run legacy:capacitor:sync && cd android && gradlew.bat assembleRelease"
+    "typecheck": "tsc -p apps/desktop/tsconfig.renderer.json --noEmit && tsc -p apps/desktop/tsconfig.main.json --noEmit",
+    "legacy:capacitor:sync": "npm run build:vite && cd legacy/capacitor && npx cap sync android",
+    "legacy:capacitor:open": "cd legacy/capacitor && npx cap open android",
+    "legacy:capacitor:build": "npm run legacy:capacitor:sync && cd legacy/capacitor/android && gradlew.bat assembleRelease"
   },
   "dependencies": {
     "@capacitor-community/sqlite": "^6.0.2",
@@ -79,7 +79,7 @@
     ],
     "extraResources": [
       {
-        "from": "build/icon.ico",
+        "from": "apps/desktop/build/icon.ico",
         "to": "icon.ico"
       }
     ],
@@ -94,7 +94,7 @@
         ]
       }
     ],
-    "icon": "build/icon.ico",
+    "icon": "apps/desktop/build/icon.ico",
     "win": {
       "artifactName": "AniTrack-Setup-${version}.${ext}",
       "target": [
@@ -105,7 +105,7 @@
           ]
         }
       ],
-      "icon": "build/icon.ico"
+      "icon": "apps/desktop/build/icon.ico"
     },
     "nsis": {
       "oneClick": true,
@@ -114,7 +114,7 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "AniTrack",
-      "include": "build/installer.nsh"
+      "include": "apps/desktop/build/installer.nsh"
     },
     "asarUnpack": [
       "node_modules/node-sqlite3-wasm/**/*"

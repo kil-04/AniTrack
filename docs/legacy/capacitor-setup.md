@@ -1,6 +1,6 @@
 # Legacy Capacitor Android setup
 
-> This document describes the retired Capacitor application in `android/`.
+> This document describes the retired Capacitor application in `legacy/capacitor/`.
 > For the maintained native Kotlin app, use
 > [`../android/native-setup.md`](../android/native-setup.md).
 
@@ -19,8 +19,7 @@ npm install
 ## Step 2 — Initialize Capacitor & add Android platform
 
 ```powershell
-npx cap init AniTrack com.sanjay.anitrack --web-dir dist
-npx cap add android
+npm run legacy:capacitor:sync
 ```
 
 ## Step 3 — Build the web app
@@ -31,14 +30,14 @@ npm run build:vite
 
 ## Step 4 — Copy the Kotlin plugins
 
-Copy the contents of `android-plugins/src/` into:
+Copy the contents of `legacy/capacitor/plugins/src/` into:
 ```
-android/app/src/main/java/
+legacy/capacitor/android/app/src/main/java/
 ```
 
 So the result is:
 ```
-android/app/src/main/java/com/sanjay/anitrack/plugins/
+legacy/capacitor/android/app/src/main/java/com/sanjay/anitrack/plugins/
   AniTrackDbPlugin.kt
   AniTrackPahePlugin.kt
   AniTrackMalPlugin.kt
@@ -47,15 +46,15 @@ android/app/src/main/java/com/sanjay/anitrack/plugins/
 
 ## Step 5 — Replace MainActivity.kt
 
-Copy `android-plugins/MainActivity.kt.template` to:
+Copy `legacy/capacitor/plugins/MainActivity.kt.template` to:
 ```
-android/app/src/main/java/com/sanjay/anitrack/MainActivity.kt
+legacy/capacitor/android/app/src/main/java/com/sanjay/anitrack/MainActivity.kt
 ```
 (overwrite the generated one)
 
 ## Step 6 — Add dependencies to build.gradle
 
-Open `android/app/build.gradle` and add inside `dependencies {}`:
+Open `legacy/capacitor/android/app/build.gradle` and add inside `dependencies {}`:
 
 ```groovy
 implementation("com.squareup.okhttp3:okhttp:4.12.0")
@@ -63,7 +62,7 @@ implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
 ## Step 7 — Add deep-link intent filter to AndroidManifest.xml
 
-In `android/app/src/main/AndroidManifest.xml`, inside the `<activity>` tag, add:
+In `legacy/capacitor/android/app/src/main/AndroidManifest.xml`, inside the `<activity>` tag, add:
 
 ```xml
 <intent-filter android:autoVerify="false">
@@ -77,8 +76,8 @@ In `android/app/src/main/AndroidManifest.xml`, inside the `<activity>` tag, add:
 ## Step 8 — Sync Capacitor and open Android Studio
 
 ```powershell
-npx cap sync android
-npx cap open android
+npm run legacy:capacitor:sync
+npm run legacy:capacitor:open
 ```
 
 ## Step 9 — Build the APK
@@ -87,13 +86,13 @@ In Android Studio:
 - Build → Generate Signed Bundle/APK → APK
 - Or for a debug APK: Build → Build Bundle(s)/APK(s) → Build APK(s)
 
-The APK will be at `android/app/build/outputs/apk/debug/app-debug.apk`
+The APK will be at `legacy/capacitor/android/app/build/outputs/apk/debug/app-debug.apk`
 
 ## Install on your Samsung device
 
 Enable "Install from unknown sources" in Samsung settings, then:
 ```powershell
-adb install android/app/build/outputs/apk/debug/app-debug.apk
+adb install legacy/capacitor/android/app/build/outputs/apk/debug/app-debug.apk
 ```
 Or transfer the APK to your phone and open it.
 
@@ -101,8 +100,8 @@ Or transfer the APK to your phone and open it.
 
 ```powershell
 # Rebuild web + sync to Android
-npm run android:sync
+npm run legacy:capacitor:sync
 
 # Open Android Studio to run on device
-npm run android:open
+npm run legacy:capacitor:open
 ```

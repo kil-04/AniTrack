@@ -57,17 +57,17 @@ async function fetchManifestAndMedia(streamUrl, headers, expectedHost) {
 
 async function main() {
   await app.whenReady();
-  const { initRuntimeConfig } = require("../dist-electron/electron/services/remote-config");
+  const { initRuntimeConfig } = require("../dist-electron/apps/desktop/main/services/remote-config");
   const {
     AnimePaheProvider,
     getAuthorizedPaheRequestHeaders,
-  } = require("../dist-electron/electron/services/providers/animepahe");
-  const { AnikotoProvider } = require("../dist-electron/electron/services/providers/anikoto");
+  } = require("../dist-electron/apps/desktop/main/services/providers/animepahe");
+  const { AnikotoProvider } = require("../dist-electron/apps/desktop/main/services/providers/anikoto");
   const {
     removeDownload,
     setDownloadEmitter,
     startDownload,
-  } = require("../dist-electron/electron/services/downloads");
+  } = require("../dist-electron/apps/desktop/main/services/downloads");
   await initRuntimeConfig();
   const provider = providerId === "anikoto" ? new AnikotoProvider() : new AnimePaheProvider();
   const results = await provider.search(title);

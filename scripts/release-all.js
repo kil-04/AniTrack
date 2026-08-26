@@ -86,7 +86,7 @@ function run(command, args, cwd = ROOT) {
 }
 
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-const androidRoot = path.join(ROOT, "anitrack-android");
+const androidRoot = path.join(ROOT, "apps", "android");
 const gradle = path.join(androidRoot, process.platform === "win32" ? "gradlew.bat" : "gradlew");
 assertReleaseProvenance(false);
 // This remote read is deliberately the first step: no build may upload to an

@@ -9,8 +9,9 @@ const {
 } = require("./automation-common");
 
 const EXPECTED_APPLICATION_ID = "com.sanjay.anitrack.next";
-const GRADLE_PATH = path.join(ROOT, "anitrack-android", "app", "build.gradle.kts");
-const APK_PATH = path.join(ROOT, "anitrack-android", "app", "build", "outputs", "apk", "release", "app-release.apk");
+const ANDROID_ROOT = path.join(ROOT, "apps", "android");
+const GRADLE_PATH = path.join(ANDROID_ROOT, "app", "build.gradle.kts");
+const APK_PATH = path.join(ANDROID_ROOT, "app", "build", "outputs", "apk", "release", "app-release.apk");
 
 function readAndroidMetadata() {
   const gradle = fs.readFileSync(GRADLE_PATH, "utf8");
@@ -30,13 +31,13 @@ function decodeLocalProperties(value) {
 
 function sdkRoot() {
   const candidates = [process.env.ANDROID_SDK_ROOT, process.env.ANDROID_HOME];
-  const propertiesPath = path.join(ROOT, "anitrack-android", "local.properties");
+  const propertiesPath = path.join(ANDROID_ROOT, "local.properties");
   if (fs.existsSync(propertiesPath)) {
     const match = /^sdk\.dir\s*=\s*(.+)$/m.exec(fs.readFileSync(propertiesPath, "utf8"));
     if (match) candidates.push(decodeLocalProperties(match[1].trim()));
   }
   const found = candidates.filter(Boolean).map((candidate) => path.resolve(candidate)).find((candidate) => fs.existsSync(candidate));
-  if (!found) throw new Error("Android SDK not found. Set ANDROID_SDK_ROOT/ANDROID_HOME or anitrack-android/local.properties");
+  if (!found) throw new Error("Android SDK not found. Set ANDROID_SDK_ROOT/ANDROID_HOME or apps/android/local.properties");
   return found;
 }
 
@@ -114,7 +115,7 @@ function verifyAndroidArtifact(apkPath = APK_PATH) {
   const metadata = readAndroidMetadata();
   const trust = JSON.parse(fs.readFileSync(TRUST_PATH, "utf8"));
   const pinnedCert = normalizedSha256(trust.androidReleaseCertSha256,
-    "shared/automation-trust.json androidReleaseCertSha256");
+    "packages/shared/automation-trust.json androidReleaseCertSha256");
   const tools = androidTools();
 
   const signerOutput = runTool(

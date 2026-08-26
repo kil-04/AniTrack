@@ -4,7 +4,7 @@ const { spawnSync } = require("child_process");
 const { ROOT, loadLocalEnv } = require("./automation-common");
 
 loadLocalEnv();
-const androidRoot = path.join(ROOT, "anitrack-android");
+const androidRoot = path.join(ROOT, "apps", "android");
 const command = path.join(androidRoot, process.platform === "win32" ? "gradlew.bat" : "gradlew");
 const args = process.argv.slice(2);
 if (!args.length) args.push(":app:assembleRelease");

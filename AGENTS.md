@@ -34,9 +34,10 @@ Android unit tests, and `npm run typecheck` checks both TypeScript contexts.
 
 ## Architecture
 
-The maintained applications are the Electron desktop app and the native Kotlin
-app in `anitrack-android/`. The `android/` and `android-plugins/` folders are the
-legacy Capacitor app. There is no Flutter/Dart application in this repository.
+The maintained applications are the Electron desktop app in `apps/desktop/`
+and the native Kotlin app in `apps/android/`. The retired Capacitor app and its
+plugin sources live in `legacy/capacitor/`. There is no Flutter/Dart application
+in this repository.
 See `docs/architecture/project-structure.md` and
 `docs/providers/connector-contract.md` before changing provider boundaries.
 
@@ -44,22 +45,22 @@ The repo has **three TypeScript compilation contexts**:
 
 | Context | tsconfig | Module format | Runs in |
 |---|---|---|---|
-| `src/` | `tsconfig.json` (Vite bundler) | ESNext | Electron renderer (Chromium) |
-| `electron/` | `tsconfig.electron.json` | CommonJS → `dist-electron/` | Electron main process (Node) |
-| `shared/` | included in both above | — | Imported by both sides |
+| `apps/desktop/renderer/` | `apps/desktop/tsconfig.renderer.json` | ESNext | Electron renderer (Chromium) |
+| `apps/desktop/main/` | `apps/desktop/tsconfig.main.json` | CommonJS → `dist-electron/` | Electron main process (Node) |
+| `packages/shared/` | included in both above | — | Imported by both sides |
 
 ### IPC boundary
 
 The renderer **never** calls Node APIs directly. All cross-process calls go through:
 
-1. `shared/types.ts` — defines the `IPC` constant map (channel names) and all shared data types (`AnimeMeta`, `ListEntry`, `PlaybackProgress`, etc.)
-2. `electron/preload.ts` — exposes a typed `window.api` bridge via `contextBridge`
-3. `electron/main.ts` — registers all `ipcMain.handle()` handlers in `registerIpc()`
-4. `src/types.d.ts` — declares `Window.api: ApiBridge` for TypeScript in the renderer
+1. `packages/shared/types.ts` — defines the `IPC` constant map (channel names) and all shared data types (`AnimeMeta`, `ListEntry`, `PlaybackProgress`, etc.)
+2. `apps/desktop/main/preload.ts` — exposes a typed `window.api` bridge via `contextBridge`
+3. `apps/desktop/main/main.ts` — registers all `ipcMain.handle()` handlers in `registerIpc()`
+4. `apps/desktop/renderer/types.d.ts` — declares `Window.api: ApiBridge` for TypeScript in the renderer
 
-When adding a new IPC call: add the channel name to `IPC` in `shared/types.ts`, add the handler in `registerIpc()` in `main.ts`, expose it in `preload.ts`, and declare it in `ApiBridge` in `src/types.d.ts`.
+When adding a new IPC call: add the channel name to `IPC` in `packages/shared/types.ts`, add the handler in `registerIpc()` in `main.ts`, expose it in `preload.ts`, and declare it in `ApiBridge` in `apps/desktop/renderer/types.d.ts`.
 
-### Electron main process (`electron/`)
+### Electron main process (`apps/desktop/main/`)
 
 - **`main.ts`** — app lifecycle, single-instance lock, `local-video://` custom protocol for serving local files to the renderer, CDN header injection (Referer/Origin spoofing + CORS injection for AnimePahe HLS streams), auto-updater, MAL flush timer
 - **`ipc/providers.ts`** — provider-neutral streaming IPC registration; legacy `PAHE_*` channels remain for renderer compatibility during migration
@@ -71,10 +72,10 @@ When adding a new IPC call: add the channel name to `IPC` in `shared/types.ts`, 
 - **`services/legal-sites.ts`** — generates Crunchyroll/etc. links for a given anime
 - **`services/store.ts`** — simple JSON file store (used for MAL OAuth tokens)
 
-### Renderer (`src/`)
+### Renderer (`apps/desktop/renderer/`)
 
-- **`src/store/useAppStore.ts`** — single Zustand store; holds MAL auth state, trending, continue-watching list, user library list, scan status
-- **`src/App.tsx`** — top-level router; player routes (`/player/*`) and streaming routes (`/stream`, `/stream-player`) render full-screen without the sidebar/topbar shell
+- **`apps/desktop/renderer/store/useAppStore.ts`** — single Zustand store; holds MAL auth state, trending, continue-watching list, user library list, scan status
+- **`apps/desktop/renderer/App.tsx`** — top-level router; player routes (`/player/*`) and streaming routes (`/stream`, `/stream-player`) render full-screen without the sidebar/topbar shell
 - Pages: `Home`, `Library`, `Search`, `ShowDetail`, `Player` (local), `StreamingPage` + `StreamPlayer` (AnimePahe HLS via hls.js), `Settings`, `ContinueWatching`
 
 ### Key design decisions

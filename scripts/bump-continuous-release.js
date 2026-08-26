@@ -5,7 +5,7 @@ const path = require("path");
 const root = path.resolve(__dirname, "..");
 const packagePath = path.join(root, "package.json");
 const lockPath = path.join(root, "package-lock.json");
-const gradlePath = path.join(root, "anitrack-android", "app", "build.gradle.kts");
+const gradlePath = path.join(root, "apps", "android", "app", "build.gradle.kts");
 const checkOnly = process.argv.includes("--check");
 
 const pkg = JSON.parse(fs.readFileSync(packagePath, "utf8"));

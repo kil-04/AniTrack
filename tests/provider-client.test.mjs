@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { preferredStreamLinkIndex, streamVariant } from "../src/lib/provider-api.ts";
+import { preferredStreamLinkIndex, streamVariant } from "../apps/desktop/renderer/lib/provider-api.ts";
 
 test("quality connectors prefer the highest original-audio stream", () => {
   const links = [

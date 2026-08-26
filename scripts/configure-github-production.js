@@ -75,7 +75,7 @@ function resolveKeystore() {
   const configured = process.env.ANITRACK_ANDROID_KEYSTORE_FILE?.trim();
   const candidates = [
     configured && path.resolve(ROOT, configured),
-    configured && path.resolve(ROOT, "anitrack-android", configured),
+    configured && path.resolve(ROOT, "apps", "android", configured),
     path.join(ROOT, ".release-secrets", "anitrack-next.jks"),
   ].filter(Boolean);
   const keystore = candidates.find((candidate) => fs.existsSync(candidate));

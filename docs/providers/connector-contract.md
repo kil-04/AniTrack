@@ -12,12 +12,12 @@ AniTrack. A connector translates its site into normalized operations:
 
 ## Desktop
 
-- Contract: `electron/services/providers/types.ts`
-- Registry: `electron/services/providers/registry.ts`
-- Composition root: `electron/services/providers/index.ts`
-- IPC boundary: `electron/ipc/providers.ts` (`registerProviderIpc`)
-- Implementations: `electron/services/providers/animepahe.ts` and
-  `electron/services/providers/anikoto.ts`
+- Contract: `apps/desktop/main/services/providers/types.ts`
+- Registry: `apps/desktop/main/services/providers/registry.ts`
+- Composition root: `apps/desktop/main/services/providers/index.ts`
+- IPC boundary: `apps/desktop/main/ipc/providers.ts` (`registerProviderIpc`)
+- Implementations: `apps/desktop/main/services/providers/animepahe.ts` and
+  `apps/desktop/main/services/providers/anikoto.ts`
 
 The registry is the application boundary. IPC must call it instead of importing
 a concrete connector. The legacy `PAHE_*` channel names are retained temporarily
@@ -25,7 +25,7 @@ so existing renderer and Capacitor code keep working.
 
 ## Native Android
 
-- Contract and models: `anitrack-android/app/src/main/java/com/sanjay/anitrack/next/data/providers/`
+- Contract and models: `apps/android/app/src/main/java/com/sanjay/anitrack/next/data/providers/`
 - Connector adapters: `.../data/providers/connectors/`
 - Existing scraper engines: `.../data/Anikoto.kt` and `.../data/Pahe.kt`
 

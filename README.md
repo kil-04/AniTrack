@@ -19,9 +19,10 @@ Click the link above → expand **Assets** → download `AniTrack-Setup-x.x.x.ex
 
 ## Applications
 
-- Desktop: Electron + React (`src/`, `electron/`, `shared/`)
-- Current Android: native Kotlin + Compose (`anitrack-android/`)
-- Legacy Android: Capacitor (`android/`, retained for migration reference)
+- Desktop: Electron + React (`apps/desktop/`)
+- Current Android: native Kotlin + Compose (`apps/android/`)
+- Shared TypeScript contracts: `packages/shared/`
+- Legacy Android: Capacitor (`legacy/capacitor/`, retained for migration reference)
 
 There is currently no Flutter app in this repository.
 

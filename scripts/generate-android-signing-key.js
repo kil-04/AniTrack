@@ -74,7 +74,7 @@ if (copyError) {
   process.exit(1);
 }
 
-setEnvValue("ANITRACK_ANDROID_KEYSTORE_FILE", "../.release-secrets/anitrack-next.jks");
+setEnvValue("ANITRACK_ANDROID_KEYSTORE_FILE", "../../.release-secrets/anitrack-next.jks");
 setEnvValue("ANITRACK_ANDROID_KEYSTORE_PASSWORD", password);
 setEnvValue("ANITRACK_ANDROID_KEY_ALIAS", alias);
 setEnvValue("ANITRACK_ANDROID_KEY_PASSWORD", password);

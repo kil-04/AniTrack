@@ -69,7 +69,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ANITRACK_AUTOMATION_PRIVATE_KEY_B64: ${{ secrets.ANITRACK_AUTOMATION_PRIVATE_KEY_B64 }}
-          ANITRACK_ANDROID_KEYSTORE_FILE: ../.release-secrets/anitrack-next.jks
+          ANITRACK_ANDROID_KEYSTORE_FILE: ../../.release-secrets/anitrack-next.jks
           ANITRACK_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANITRACK_ANDROID_KEYSTORE_PASSWORD }}
           ANITRACK_ANDROID_KEY_ALIAS: ${{ secrets.ANITRACK_ANDROID_KEY_ALIAS }}
           ANITRACK_ANDROID_KEY_PASSWORD: ${{ secrets.ANITRACK_ANDROID_KEY_PASSWORD }}
