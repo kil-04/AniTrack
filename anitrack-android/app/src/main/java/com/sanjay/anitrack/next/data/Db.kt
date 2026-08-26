@@ -14,7 +14,7 @@ object Db {
 
     fun init(ctx: Context) {
         if (::helper.isInitialized) return
-        helper = object : SQLiteOpenHelper(ctx.applicationContext, "anitrack_next.db", null, 3) {
+        helper = object : SQLiteOpenHelper(ctx.applicationContext, "anitrack_next.db", null, 4) {
             override fun onCreate(db: SQLiteDatabase) {
                 db.execSQL(
                     """CREATE TABLE IF NOT EXISTS playback(
@@ -25,6 +25,7 @@ object Db {
                         anime_title  TEXT,
                         anime_cover  TEXT,
                         slug         TEXT,
+                        provider_id  TEXT,
                         updated_at   INTEGER NOT NULL,
                         PRIMARY KEY(anime_id, episode)
                     )""",
@@ -38,6 +39,7 @@ object Db {
                     runCatching { db.execSQL("ALTER TABLE list_entry ADD COLUMN mal_id INTEGER") }
                     createMalOutbox(db)
                 }
+                if (old < 4) runCatching { db.execSQL("ALTER TABLE playback ADD COLUMN provider_id TEXT") }
             }
         }
     }
@@ -241,6 +243,7 @@ object Db {
         val title: String,
         val cover: String?,
         val slug: String?,
+        val providerId: String?,
         val updatedAt: Long,
     ) {
         val percent: Int get() = if (durationSec > 0) ((positionSec / durationSec) * 100).toInt() else 0
@@ -249,17 +252,22 @@ object Db {
     suspend fun save(
         animeId: Int, episode: Float, positionSec: Double, durationSec: Double,
         title: String, cover: String?, slug: String?,
+        providerId: String? = null,
         updatedAt: Long = System.currentTimeMillis(), // pulled rows keep their remote stamp
     ) = withContext(Dispatchers.IO) {
         if (animeId == 0 || durationSec <= 0) return@withContext
         // Never wipe a stored slug with null (mirror of the main app's COALESCE
         // lesson — sync-pulled rows may not carry one).
         var keepSlug = slug
-        if (keepSlug.isNullOrEmpty()) {
+        var keepProviderId = providerId
+        if (keepSlug.isNullOrEmpty() || keepProviderId.isNullOrEmpty()) {
             helper.readableDatabase.rawQuery(
-                "SELECT slug FROM playback WHERE anime_id=? AND episode=?",
+                "SELECT slug, provider_id FROM playback WHERE anime_id=? AND episode=?",
                 arrayOf(animeId.toString(), episode.toString()),
-            ).use { c -> if (c.moveToFirst() && !c.isNull(0)) keepSlug = c.getString(0) }
+            ).use { c -> if (c.moveToFirst()) {
+                if (!c.isNull(0)) keepSlug = c.getString(0)
+                if (keepProviderId.isNullOrEmpty() && !c.isNull(1)) keepProviderId = c.getString(1)
+            } }
         }
         val cv = ContentValues().apply {
             put("anime_id", animeId)
@@ -269,6 +277,7 @@ object Db {
             put("anime_title", title)
             put("anime_cover", cover)
             put("slug", keepSlug)
+            put("provider_id", keepProviderId)
             put("updated_at", updatedAt)
         }
         helper.writableDatabase.insertWithOnConflict("playback", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
@@ -293,13 +302,13 @@ object Db {
         val out = mutableListOf<CwRow>()
         helper.readableDatabase.rawQuery(
             """SELECT anime_id, episode, position_sec, duration_sec,
-                      anime_title, anime_cover, slug, updated_at FROM playback""",
+                      anime_title, anime_cover, slug, provider_id, updated_at FROM playback""",
             null,
         ).use { c ->
             while (c.moveToNext()) {
                 out += CwRow(
                     c.getInt(0), c.getFloat(1), c.getDouble(2), c.getDouble(3),
-                    c.getString(4) ?: "Unknown", c.getString(5), c.getString(6), c.getLong(7),
+                    c.getString(4) ?: "Unknown", c.getString(5), c.getString(6), c.getString(7), c.getLong(8),
                 )
             }
         }
@@ -311,7 +320,7 @@ object Db {
         val out = mutableListOf<CwRow>()
         helper.readableDatabase.rawQuery(
             """SELECT p.anime_id, p.episode, p.position_sec, p.duration_sec,
-                      p.anime_title, p.anime_cover, p.slug, p.updated_at
+                      p.anime_title, p.anime_cover, p.slug, p.provider_id, p.updated_at
                FROM playback p
                JOIN (SELECT anime_id, MAX(updated_at) mu FROM playback GROUP BY anime_id) l
                  ON p.anime_id = l.anime_id AND p.updated_at = l.mu
@@ -321,7 +330,7 @@ object Db {
             while (c.moveToNext()) {
                 out += CwRow(
                     c.getInt(0), c.getFloat(1), c.getDouble(2), c.getDouble(3),
-                    c.getString(4) ?: "Unknown", c.getString(5), c.getString(6), c.getLong(7),
+                    c.getString(4) ?: "Unknown", c.getString(5), c.getString(6), c.getString(7), c.getLong(8),
                 )
             }
         }

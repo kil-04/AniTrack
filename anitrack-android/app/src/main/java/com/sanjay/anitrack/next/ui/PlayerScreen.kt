@@ -3,7 +3,6 @@ package com.sanjay.anitrack.next.ui
 import android.app.Activity
 import android.app.PictureInPictureParams
 import android.content.pm.ActivityInfo
-import android.net.Uri
 import android.util.Rational
 import androidx.annotation.OptIn
 import androidx.compose.foundation.background
@@ -47,27 +46,22 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.C
-import androidx.media3.common.MediaItem
-import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
-import com.sanjay.anitrack.next.data.Anikoto
 import com.sanjay.anitrack.next.data.PlaySession
 import com.sanjay.anitrack.next.PipState
+import com.sanjay.anitrack.next.data.providers.PlaybackBackend
+import com.sanjay.anitrack.next.data.providers.ProviderDescriptor
+import com.sanjay.anitrack.next.data.providers.Providers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 private val Accent = Color(0xFFE50914)
-private const val UA =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-
 private fun fmtTime(ms: Long): String {
     if (ms <= 0) return "0:00"
     val total = ms / 1000
@@ -85,12 +79,13 @@ internal suspend fun saveWebProgress(index: Int, posMs: Long, durMs: Long) {
     val key = PlaySession.resumeKey()
     com.sanjay.anitrack.next.data.Db.save(
         PlaySession.animeId, epNum, posMs / 1000.0, durMs / 1000.0,
-        PlaySession.animeTitle, PlaySession.animeCover, key, updatedAt = now,
+        PlaySession.animeTitle, PlaySession.animeCover, key,
+        providerId = PlaySession.provider, updatedAt = now,
     )
     com.sanjay.anitrack.next.data.GistSync.pushProgress(
         com.sanjay.anitrack.next.data.Db.CwRow(
             PlaySession.animeId, epNum, posMs / 1000.0, durMs / 1000.0,
-            PlaySession.animeTitle, PlaySession.animeCover, key, now,
+            PlaySession.animeTitle, PlaySession.animeCover, key, PlaySession.provider, now,
         ),
     )
 }
@@ -104,12 +99,13 @@ internal suspend fun saveProgress(player: ExoPlayer, index: Int) {
     val key = PlaySession.resumeKey()
     com.sanjay.anitrack.next.data.Db.save(
         PlaySession.animeId, epNum, player.currentPosition / 1000.0, dur / 1000.0,
-        PlaySession.animeTitle, PlaySession.animeCover, key, updatedAt = now,
+        PlaySession.animeTitle, PlaySession.animeCover, key,
+        providerId = PlaySession.provider, updatedAt = now,
     )
     com.sanjay.anitrack.next.data.GistSync.pushProgress(
         com.sanjay.anitrack.next.data.Db.CwRow(
             PlaySession.animeId, epNum, player.currentPosition / 1000.0, dur / 1000.0,
-            PlaySession.animeTitle, PlaySession.animeCover, key, now,
+            PlaySession.animeTitle, PlaySession.animeCover, key, PlaySession.provider, now,
         ),
     )
 }
@@ -126,6 +122,7 @@ fun PlayerScreen(
     val scope = rememberCoroutineScope()
     var index by remember { mutableStateOf(PlaySession.index) }
     var provider by remember { mutableStateOf(PlaySession.provider) }
+    val providerDescriptors = Providers.enabled().map { it.descriptor }
     var subType by remember { mutableStateOf(PlaySession.subType) }
     var switching by remember { mutableStateOf(false) }
     var switchError by remember { mutableStateOf<String?>(null) }
@@ -164,13 +161,12 @@ fun PlayerScreen(
     // Transient native-player error recovery (Anikoto/local playback).
     var errorRetries by remember { mutableStateOf(0) }
     var lastErrorAt by remember { mutableStateOf(0L) }
-    // AnimePahe's later encrypted TS chunks are not independently decodable;
-    // Media3 can start them but cannot render after a seek. hls.js/MSE is the
-    // seek-capable path and its WebView is now persistent + memory-bounded.
+    // Some connector streams need hls.js/MSE rather than Media3. The backend
+    // is selected by resolved connector metadata, not by a provider name.
     val webCtl = remember { WebController() }
     var webResumeMs by remember { mutableStateOf(0L) }
     var webPlayWhenReady by remember { mutableStateOf(true) }
-    val useWeb = provider == "animepahe" && PlaySession.localFile == null
+    val useWeb = stream?.backend == PlaybackBackend.WEB_HLS
     fun flashControls() { controlsVisible = true }
 
     // Gesture feedback overlays
@@ -371,19 +367,20 @@ fun PlayerScreen(
             else saveProgress(player, it)
         }
         lastPlayedIndex = index
-        lastPlayedWithWeb = useWeb
         error = null
         status = "Resolving Episode ${epNum.toInt()}…"
-        player.stop()
+        if (useWeb) webCtl.pause() else player.stop()
         try {
             val s = PlaySession.resolve(index)
             stream = s
+            val resolvedUsesWeb = s.backend == PlaybackBackend.WEB_HLS
+            lastPlayedWithWeb = resolvedUsesWeb
             val storedResumeMs = (com.sanjay.anitrack.next.data.Db.resumeFor(PlaySession.animeId, epNum) ?: 0.0) * 1000
             // A server switch is the same episode on a different source. Keep
             // the live clock instead of jumping to an older persisted resume.
             val resumeMs = pendingSwitchPositionMs ?: storedResumeMs.toLong()
             val shouldPlay = pendingSwitchPlayWhenReady ?: autoplay
-            if (useWeb) {
+            if (resolvedUsesWeb) {
                 // WebView + hls.js: the WebView is (re)mounted for this URL and
                 // calls load() itself in onPageFinished (when the page JS is
                 // ready). We just publish the resume position + stream here.
@@ -391,6 +388,7 @@ fun PlayerScreen(
                 webResumeMs = resumeMs
                 webPlayWhenReady = shouldPlay
                 holder.loadedKey = null
+                holder.lastResolved = null
             } else {
                 // Shared loader: local file:// vs CDN (Referer/UA) data source.
                 holder.setMedia(context, s)
@@ -460,12 +458,13 @@ fun PlayerScreen(
                         val now = System.currentTimeMillis()
                         com.sanjay.anitrack.next.data.Db.save(
                             PlaySession.animeId, epNum, posMs / 1000.0, dur / 1000.0,
-                            PlaySession.animeTitle, PlaySession.animeCover, key, updatedAt = now,
+                            PlaySession.animeTitle, PlaySession.animeCover, key,
+                            providerId = PlaySession.provider, updatedAt = now,
                         )
                         com.sanjay.anitrack.next.data.GistSync.pushProgress(
                             com.sanjay.anitrack.next.data.Db.CwRow(
                                 PlaySession.animeId, epNum, posMs / 1000.0, dur / 1000.0,
-                                PlaySession.animeTitle, PlaySession.animeCover, key, now,
+                                PlaySession.animeTitle, PlaySession.animeCover, key, PlaySession.provider, now,
                             ),
                         )
                     }
@@ -548,9 +547,10 @@ fun PlayerScreen(
                         index = PlaySession.index
                         retry++   // force a re-resolve even if index/provider look unchanged
                     } else {
+                        val targetName = providerDescriptors.firstOrNull { it.id == target }?.name ?: target
                         switchError = when {
                             !PlaySession.canSwitchServer -> "Reopen from the show page to switch servers"
-                            else -> "No ${if (target == "anikoto") "Anikoto" else "AnimePahe"} source found"
+                            else -> "No $targetName source found"
                         }
                         android.util.Log.e("AniTrackNext", "switch to $target: ok=false canSwitch=${PlaySession.canSwitchServer}")
                     }
@@ -563,6 +563,7 @@ fun PlayerScreen(
             PlayerEpisodePanel(
                 modifier = mod,
                 provider = provider,
+                providers = providerDescriptors,
                 subType = subType,
                 current = index,
                 watched = watchedMap,
@@ -907,6 +908,7 @@ fun PlayerScreen(
 private fun PlayerEpisodePanel(
     modifier: Modifier,
     provider: String,
+    providers: List<ProviderDescriptor>,
     subType: String,
     current: Int,
     watched: Map<Float, Int>,
@@ -946,18 +948,14 @@ private fun PlayerEpisodePanel(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            FilterChip(
-                selected = provider == "animepahe",
-                enabled = canSwitch && !switching,
-                onClick = { onServer("animepahe") },
-                label = { Text("AnimePahe") },
-            )
-            FilterChip(
-                selected = provider == "anikoto",
-                enabled = canSwitch && !switching,
-                onClick = { onServer("anikoto") },
-                label = { Text("Anikoto") },
-            )
+            providers.forEach { descriptor ->
+                FilterChip(
+                    selected = provider == descriptor.id,
+                    enabled = canSwitch && !switching,
+                    onClick = { onServer(descriptor.id) },
+                    label = { Text(descriptor.name) },
+                )
+            }
             if (switching) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Accent)
         }
         switchError?.let {
@@ -968,8 +966,8 @@ private fun PlayerEpisodePanel(
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp),
             )
         }
-        // SUB TYPE (Anikoto only, like the desktop app).
-        if (provider == "anikoto") {
+        // Connectors opt into subtitle-mode selection through capabilities.
+        if (providers.firstOrNull { it.id == provider }?.capabilities?.subtitleModes == true) {
             Spacer(Modifier.height(8.dp))
             Text(
                 "SUB TYPE",

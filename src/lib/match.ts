@@ -1,4 +1,4 @@
-// Provider-result matching heuristics shared by PahePanel and StreamPlayer.
+// Provider-result matching heuristics shared by ProviderPanel and StreamPlayer.
 
 // ── ID-based match verification ───────────────────────────────────────────────
 // Provider titles can lie (anikoto's "City Hunter" entry actually contains City
@@ -35,9 +35,17 @@ export async function pickVerifiedCandidate(
     const known = (ids: any) => ids?.anilistId != null || ids?.malId != null;
     for (let i = 0; i < Math.min(candidates.length, maxChecks); i++) {
       const c = candidates[i];
+      const providerId = c.providerId ?? "animepahe";
+      const animeId = String(c.id ?? c.session);
+      const lookupId = c.externalLookupId ?? c.paheId;
+      const lookup = window.api.providers
+        ? window.api.providers.getExternalIds(providerId, animeId, lookupId)
+        : providerId === "animepahe" || providerId === "anikoto"
+          ? window.api.pahe.getIds(c.paheId ?? c.id, c.session ?? c.id)
+          : Promise.resolve({});
       const ids =
         (await _withTimeout(
-          window.api.pahe.getIds(c.paheId ?? c.id, c.session ?? c.id).catch(() => null),
+          lookup.catch(() => null),
           8000,
         )) ?? {};
       if (matches(ids)) return c;

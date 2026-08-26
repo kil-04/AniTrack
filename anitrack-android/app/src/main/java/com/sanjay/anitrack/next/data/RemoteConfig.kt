@@ -1,7 +1,6 @@
 package com.sanjay.anitrack.next.data
 
 import android.content.Context
-import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.util.Base64
@@ -40,6 +39,15 @@ data class ProviderRuntimeConfig(
     val selectors: Map<String, String>,
 )
 
+private val disabledProviderRuntimeConfig = ProviderRuntimeConfig(
+    enabled = false,
+    baseUrls = emptyList(),
+    streamHostFragments = emptyList(),
+    mediaExtensions = emptyList(),
+    routes = emptyMap(),
+    selectors = emptyMap(),
+)
+
 data class RuntimeFeatures(
     val anikotoStreaming: Boolean,
     val animepaheStreaming: Boolean,
@@ -52,11 +60,14 @@ data class AndroidRuntimeConfig(
     val revision: Long,
     val issuedAt: String,
     val providerOrder: List<String>,
-    val anikoto: ProviderRuntimeConfig,
-    val animepahe: ProviderRuntimeConfig,
+    val providers: Map<String, ProviderRuntimeConfig>,
     val features: RuntimeFeatures,
     val notice: String?,
-)
+) {
+    // Backward-compatible accessors while callers migrate to the provider map.
+    val anikoto: ProviderRuntimeConfig get() = providers["anikoto"] ?: disabledProviderRuntimeConfig
+    val animepahe: ProviderRuntimeConfig get() = providers["animepahe"] ?: disabledProviderRuntimeConfig
+}
 
 data class RemoteConfigStatus(
     val revision: Long,
@@ -138,22 +149,24 @@ object RemoteConfig {
         revision = 0,
         issuedAt = "2026-08-17T00:00:00.000Z",
         providerOrder = listOf("anikoto", "animepahe"),
-        anikoto = defaultProvider,
-        animepahe = ProviderRuntimeConfig(
-            true,
-            listOf("https://animepahe.pw"),
-            listOf("owocdn.top", "owocdn.com", "uwucdn.top", "llnwi.net", "kwik.si", "kwik.cx"),
-            listOf(".m3u8", ".mp4", ".ts", ".m4s", ".vtt", ".key"),
-            mapOf(
-                "home" to "/", "search" to "/api?m=search&q={query}",
-                "latest" to "/api?m=airing&l={count}&sort=session_id_desc&page={page}",
-                "episodes" to "/api?m=release&id={animeId}&sort=episode_asc&page={page}",
-                "anime" to "/anime/{session}", "play" to "/play/{animeId}/{episodeId}",
-            ),
-            mapOf(
-                "streamUrlAttribute" to "data-src",
-                "resolutionAttribute" to "data-resolution",
-                "audioAttribute" to "data-audio",
+        providers = linkedMapOf(
+            "anikoto" to defaultProvider,
+            "animepahe" to ProviderRuntimeConfig(
+                true,
+                listOf("https://animepahe.pw"),
+                listOf("owocdn.top", "owocdn.com", "uwucdn.top", "llnwi.net", "kwik.si", "kwik.cx"),
+                listOf(".m3u8", ".mp4", ".ts", ".m4s", ".vtt", ".key"),
+                mapOf(
+                    "home" to "/", "search" to "/api?m=search&q={query}",
+                    "latest" to "/api?m=airing&l={count}&sort=session_id_desc&page={page}",
+                    "episodes" to "/api?m=release&id={animeId}&sort=episode_asc&page={page}",
+                    "anime" to "/anime/{session}", "play" to "/play/{animeId}/{episodeId}",
+                ),
+                mapOf(
+                    "streamUrlAttribute" to "data-src",
+                    "resolutionAttribute" to "data-resolution",
+                    "audioAttribute" to "data-audio",
+                ),
             ),
         ),
         features = RuntimeFeatures(true, true, true, true, true),
@@ -296,7 +309,7 @@ object RemoteConfig {
         }
     } }
 
-    private fun parse(json: String): AndroidRuntimeConfig {
+    internal fun parse(json: String): AndroidRuntimeConfig {
         val root = JSONObject(json)
         require(root.optInt("schemaVersion") == 1) { "Unsupported config schema" }
         val revision = root.optLong("revision", -1)
@@ -305,15 +318,23 @@ object RemoteConfig {
         val features = root.getJSONObject("features")
         val orderJson = root.getJSONArray("providerOrder")
         val providerOrder = (0 until orderJson.length()).map { orderJson.getString(it) }
-        require(providerOrder.size == 2 && providerOrder.toSet() == setOf("anikoto", "animepahe")) {
+        val providerId = Regex("^[a-z][a-z0-9-]{1,31}$")
+        require(providerOrder.size in 1..16 && providerOrder.distinct().size == providerOrder.size &&
+            providerOrder.all { it.matches(providerId) }) {
             "Invalid provider order"
+        }
+        val configuredProviderIds = providers.keys().asSequence().toSet()
+        require(configuredProviderIds == providerOrder.toSet()) {
+            "Provider configuration must exactly match provider order"
+        }
+        val parsedProviders = providerOrder.associateWith { id ->
+            parseProvider(providers.getJSONObject(id), id)
         }
         return AndroidRuntimeConfig(
             revision = revision,
             issuedAt = root.getString("issuedAt"),
             providerOrder = providerOrder,
-            anikoto = parseProvider(providers.getJSONObject("anikoto"), "anikoto", allowBareFamilyLabels = true),
-            animepahe = parseProvider(providers.getJSONObject("animepahe"), "animepahe", allowBareFamilyLabels = false),
+            providers = parsedProviders,
             features = RuntimeFeatures(
                 features.getBoolean("anikotoStreaming"),
                 features.getBoolean("animepaheStreaming"),
@@ -325,7 +346,7 @@ object RemoteConfig {
         )
     }
 
-    private fun parseProvider(raw: JSONObject, provider: String, allowBareFamilyLabels: Boolean): ProviderRuntimeConfig {
+    private fun parseProvider(raw: JSONObject, provider: String): ProviderRuntimeConfig {
         val expectedFields = setOf("enabled", "baseUrls", "streamHostFragments", "mediaExtensions", "routes", "selectors")
         require(raw.keys().asSequence().toSet() == expectedFields) { "$provider contains unsupported fields" }
         fun array(name: String, max: Int = 32, validator: (String) -> Boolean): List<String> {
@@ -335,24 +356,13 @@ object RemoteConfig {
                 require(list.all { it.length <= 120 && validator(it) }) { "$name contains an invalid value" }
             }.distinct()
         }
-        val routeSpec = if (provider == "anikoto") mapOf(
-            "home" to emptySet(), "search" to setOf("query", "page"), "watch" to setOf("animeId"),
-            "episodeList" to setOf("showId"), "serverList" to setOf("servers"),
-            "serverResolve" to setOf("linkId"), "sources" to setOf("playerId"),
-        ) else mapOf(
-            "home" to emptySet(), "search" to setOf("query"), "latest" to setOf("count", "page"),
-            "episodes" to setOf("animeId", "page"), "anime" to setOf("session"),
-            "play" to setOf("animeId", "episodeId"),
-        )
-        val selectorNames = if (provider == "anikoto") setOf(
-            "searchItemClass", "searchTitleAttribute", "totalClass", "subClass", "dubClass",
-            "watchContainerId", "showIdAttribute", "episodeIdAttribute", "episodeSlugAttribute",
-            "episodeNumberAttribute", "episodeServersAttribute", "malIdAttribute",
-            "serverLinkAttribute", "playerContainerId", "playerIdAttribute",
-        ) else setOf("streamUrlAttribute", "resolutionAttribute", "audioAttribute")
+        val configKey = Regex("[A-Za-z][A-Za-z0-9]{0,63}")
         val routesJson = raw.getJSONObject("routes")
-        require(routesJson.keys().asSequence().toSet() == routeSpec.keys) { "$provider routes are incomplete" }
-        val routes = routeSpec.mapValues { (name, required) ->
+        val routeNames = routesJson.keys().asSequence().toSet()
+        require(routeNames.size in 1..32 && routeNames.all { it.matches(configKey) }) {
+            "$provider routes have invalid names or size"
+        }
+        val routes = routeNames.associateWith { name ->
             routesJson.getString(name).also { route ->
                 require(route.length in 1..240 && route.startsWith('/') && !route.contains("\\") &&
                     !route.contains("://") && !route.contains(Regex("[\\r\\n\\u0000]"))) {
@@ -360,14 +370,19 @@ object RemoteConfig {
                 }
                 val placeholders = Regex("""\{([A-Za-z][A-Za-z0-9]*)\}""").findAll(route)
                     .map { it.groupValues[1] }.toList()
-                require(placeholders.size == required.size && placeholders.toSet() == required &&
-                    !route.replace(Regex("""\{[A-Za-z][A-Za-z0-9]*\}"""), "").contains('{')) {
+                require(placeholders.size <= 16 && placeholders.distinct().size == placeholders.size &&
+                    !route.replace(Regex("""\{[A-Za-z][A-Za-z0-9]*\}"""), "").let {
+                        it.contains('{') || it.contains('}')
+                    }) {
                     "$provider route $name has invalid placeholders"
                 }
             }
         }
         val selectorsJson = raw.getJSONObject("selectors")
-        require(selectorsJson.keys().asSequence().toSet() == selectorNames) { "$provider selectors are incomplete" }
+        val selectorNames = selectorsJson.keys().asSequence().toSet()
+        require(selectorNames.size <= 32 && selectorNames.all { it.matches(configKey) }) {
+            "$provider selectors have invalid names or size"
+        }
         val selectors = selectorNames.associateWith { name ->
             selectorsJson.getString(name).also {
                 require(it.matches(Regex("[A-Za-z][A-Za-z0-9_-]{0,63}"))) { "$provider selector $name is invalid" }
@@ -378,8 +393,8 @@ object RemoteConfig {
             baseUrls = array("baseUrls", 8, ::safeHttpsOrigin).map { it.trimEnd('/') },
             streamHostFragments = array("streamHostFragments") {
                 val domain = Regex("[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+")
-                val anikotoFamily = Regex("[a-z0-9][a-z0-9-]{4,61}\\.?")
-                it.matches(domain) || (allowBareFamilyLabels && it.matches(anikotoFamily))
+                val hostFamily = Regex("[a-z0-9][a-z0-9-]{4,61}\\.?")
+                it.matches(domain) || it.matches(hostFamily)
             },
             mediaExtensions = array("mediaExtensions") { it.matches(Regex("\\.[a-z0-9]{1,8}")) },
             routes = routes,
@@ -388,7 +403,7 @@ object RemoteConfig {
     }
 
     private fun safeHttpsUrl(value: String): Boolean = runCatching {
-        val uri = Uri.parse(value)
+        val uri = java.net.URI(value)
         val host = uri.host?.lowercase().orEmpty()
         uri.scheme == "https" && uri.userInfo == null && host.isNotBlank() &&
             host != "localhost" && host != "::1" && !host.endsWith(".local") &&
@@ -397,7 +412,7 @@ object RemoteConfig {
     }.getOrDefault(false)
 
     private fun safeHttpsOrigin(value: String): Boolean = safeHttpsUrl(value) && runCatching {
-        val uri = Uri.parse(value)
+        val uri = java.net.URI(value)
         (uri.path.isNullOrEmpty() || uri.path == "/") && uri.query == null && uri.fragment == null
     }.getOrDefault(false)
 

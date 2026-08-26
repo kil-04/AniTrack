@@ -1,4 +1,8 @@
-# AniTrack Android Setup
+# Legacy Capacitor Android setup
+
+> This document describes the retired Capacitor application in `android/`.
+> For the maintained native Kotlin app, use
+> [`../android/native-setup.md`](../android/native-setup.md).
 
 ## Prerequisites
 

@@ -30,7 +30,7 @@ export function cwResumeUrl(item: any): string {
   if (session) {
     const isUuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(session);
     p.session = session;
-    p.providerId = isUuid ? "animepahe" : "anikoto";
+    p.providerId = item.providerId ?? (isUuid ? "animepahe" : "anikoto");
   }
   if (img) { p.coverUrl = img; p.img = img; }
   if (animeId) { p.animeId = String(animeId); p.anilistId = String(animeId); }

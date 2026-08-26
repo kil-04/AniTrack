@@ -28,7 +28,7 @@
     "android:next:test": "anitrack-android\\gradlew.bat -p anitrack-android :app:testDebugUnitTest",
     "android:next:release": "node --env-file-if-exists=.env scripts/run-native-gradle.js :app:assembleRelease",
     "android:next:verify": "node scripts/android-release-common.js",
-    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/match.test.mjs",
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/match.test.mjs tests/provider-client.test.mjs tests/provider-registry.test.mjs tests/runtime-config.test.cjs",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
     "legacy:capacitor:sync": "npm run build:vite && npx cap sync android",
     "legacy:capacitor:open": "npx cap open android",

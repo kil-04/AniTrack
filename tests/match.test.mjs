@@ -87,6 +87,56 @@ test("uses a positively verified ID when the title winner is known-wrong", async
   assert.deepEqual(checked, ["wrong", "right"]);
 });
 
+test("verifies matches through the provider-neutral bridge", async () => {
+  const candidates = [
+    {
+      id: "show-session",
+      externalLookupId: 321,
+      providerId: "third-provider",
+      title: "Example Show",
+    },
+  ];
+  const calls = [];
+  globalThis.window = {
+    api: {
+      providers: {
+        getExternalIds: async (...args) => {
+          calls.push(args);
+          return { anilistId: 42 };
+        },
+      },
+      pahe: {
+        getIds: async () => {
+          throw new Error("legacy bridge should not be used");
+        },
+      },
+    },
+  };
+
+  const selected = await pickVerifiedCandidate(candidates, 42, undefined);
+  assert.equal(selected, candidates[0]);
+  assert.deepEqual(calls, [["third-provider", "show-session", 321]]);
+});
+
+test("does not misroute an unknown connector through the legacy Anikoto fallback", async () => {
+  let legacyCalls = 0;
+  const candidate = { id: "third-party-id", providerId: "mockstream", title: "Expected title" };
+  globalThis.window = {
+    api: {
+      pahe: {
+        getIds: async () => {
+          legacyCalls++;
+          return { anilistId: 999 };
+        },
+      },
+    },
+  };
+
+  const selected = await pickVerifiedCandidate([candidate], 42, undefined);
+  assert.equal(selected, candidate);
+  assert.equal(legacyCalls, 0);
+});
+
 test("trusts the top title match when its IDs are unavailable", async () => {
   const candidates = [
     { id: "unknown", title: "Expected title" },

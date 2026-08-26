@@ -14,18 +14,16 @@ import fs from "node:fs";
 import { IPC } from "../shared/types";
 import { flushDirty } from "./services/mal";
 import {
-  prewarm as pahePrewarm,
   getPaheBaseUrl,
   getAuthorizedPaheRequestHeaders,
-  syncPaheRuntimeConfig,
 } from "./services/providers/animepahe";
-import { registerPaheIpc } from "./ipc/pahe";
+import { providerManager } from "./services/providers";
+import { registerProviderIpc } from "./ipc/providers";
 import { registerAuthIpc } from "./ipc/auth";
 import { registerDbIpc } from "./ipc/db";
 import { registerDownloadsIpc } from "./ipc/downloads";
 import { downloadsDir } from "./services/downloads";
 import {
-  prewarmAnikoto,
   getAnikotoPlayerOrigin,
   getAnikotoPlayerOriginForUrl,
 } from "./services/providers/anikoto";
@@ -369,7 +367,7 @@ app.whenReady().then(async () => {
   registerWebRequestHandlers();
   subscribeRuntimeConfig((configStatus) => {
     sendToRenderer("automation:status", configStatus);
-    syncPaheRuntimeConfig();
+    providerManager.notifyConfigChanged();
     // Electron permits one listener per webRequest event. Re-registering here
     // atomically replaces both handlers with rules from the new revision.
     registerWebRequestHandlers();
@@ -448,8 +446,7 @@ app.whenReady().then(async () => {
 
   // Pre-warm the AnimePahe hidden window so the Cloudflare session is
   // established before the user opens a show detail page.
-  pahePrewarm();
-  prewarmAnikoto();
+  providerManager.prewarmAll();
 
   initDesktopUpdater(sendToRenderer);
 
@@ -496,7 +493,7 @@ function registerIpc() {
 
   registerAuthIpc(getMainWindow);
   registerDbIpc(getMainWindow);
-  registerPaheIpc(registerWebRequestHandlers);
+  registerProviderIpc(registerWebRequestHandlers);
   registerDownloadsIpc(getMainWindow);
 
   ipcMain.handle(IPC.UPDATE_CHECK, () => checkForDesktopUpdates(true));

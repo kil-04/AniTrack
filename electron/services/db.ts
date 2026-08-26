@@ -62,7 +62,7 @@ export function runInTransaction<T>(fn: () => T): T {
 
 // Bump CURRENT_SCHEMA_VERSION whenever you add a new migration below.
 // Each migration runs exactly once per user and is idempotent.
-const CURRENT_SCHEMA_VERSION = 4;
+const CURRENT_SCHEMA_VERSION = 5;
 
 const MIGRATIONS: Array<(d: Database) => void> = [
   // v1 — initial schema
@@ -130,6 +130,10 @@ const MIGRATIONS: Array<(d: Database) => void> = [
     try { d.run(`CREATE INDEX IF NOT EXISTS idx_anime_title ON anime(title COLLATE NOCASE)`); } catch {}
     try { d.run(`CREATE INDEX IF NOT EXISTS idx_anime_title_english ON anime(title_english COLLATE NOCASE)`); } catch {}
     try { d.run(`CREATE INDEX IF NOT EXISTS idx_anime_title_romaji ON anime(title_romaji COLLATE NOCASE)`); } catch {}
+  },
+  // v5 — identify the connector that owns the legacy session value.
+  (d) => {
+    try { d.run(`ALTER TABLE playback ADD COLUMN provider_id TEXT`); } catch {}
   },
 ];
 
@@ -321,14 +325,15 @@ export function deleteListEntry(animeId: number): void {
 export function setProgress(p: PlaybackProgress) {
   const d = getDb();
   d.run(
-    `INSERT INTO playback (anime_id, episode, position_sec, duration_sec, updated_at, pahe_session)
-     VALUES (?, ?, ?, ?, ?, ?)
+    `INSERT INTO playback (anime_id, episode, position_sec, duration_sec, updated_at, pahe_session, provider_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(anime_id, episode) DO UPDATE SET
        position_sec=excluded.position_sec,
        duration_sec=excluded.duration_sec,
        updated_at=excluded.updated_at,
-       pahe_session=COALESCE(excluded.pahe_session, playback.pahe_session)`,
-    [p.animeId, p.episode, p.positionSec, p.durationSec, p.updatedAt, p.animePaheSession ?? null],
+       pahe_session=COALESCE(excluded.pahe_session, playback.pahe_session),
+       provider_id=COALESCE(excluded.provider_id, playback.provider_id)`,
+    [p.animeId, p.episode, p.positionSec, p.durationSec, p.updatedAt, p.animePaheSession ?? null, p.providerId ?? null],
   );
 
   // Clean up duplicate negative ID stubs. The dedup scan below joins anime
@@ -416,6 +421,7 @@ export function getContinueWatching(limit = 20, offset = 0): ContinueWatchingIte
        p.duration_sec AS pb_duration_sec,
        p.updated_at   AS pb_updated_at,
        p.pahe_session AS pb_pahe_session,
+       p.provider_id  AS pb_provider_id,
        a.id           AS a_id,
        a.mal_id, a.title, a.title_english, a.title_romaji,
        a.synopsis, a.episodes AS a_episodes, a.duration,
@@ -469,6 +475,7 @@ export function getContinueWatching(limit = 20, offset = 0): ContinueWatchingIte
       durationSec: r.pb_duration_sec,
       filePath: r.le_file_path ?? null,
       percent,
+      providerId: r.pb_provider_id ?? null,
       animePaheSession: r.pb_pahe_session ?? null,
       updatedAt: r.pb_updated_at,
     });
@@ -533,14 +540,15 @@ export function migrateAnimeId(oldId: number, newId: number): void {
     const oldPlayback = d.all(`SELECT * FROM playback WHERE anime_id = ?`, [oldId]) as any[];
     for (const pb of oldPlayback) {
       d.run(
-        `INSERT INTO playback (anime_id, episode, position_sec, duration_sec, updated_at, pahe_session)
-         VALUES (?, ?, ?, ?, ?, ?)
+        `INSERT INTO playback (anime_id, episode, position_sec, duration_sec, updated_at, pahe_session, provider_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(anime_id, episode) DO UPDATE SET
            position_sec = CASE WHEN excluded.updated_at > playback.updated_at THEN excluded.position_sec ELSE playback.position_sec END,
            duration_sec = CASE WHEN excluded.updated_at > playback.updated_at THEN excluded.duration_sec ELSE playback.duration_sec END,
            updated_at = MAX(excluded.updated_at, playback.updated_at),
-           pahe_session = COALESCE(excluded.pahe_session, playback.pahe_session)`,
-        [newId, pb.episode, pb.position_sec, pb.duration_sec, pb.updated_at, pb.pahe_session]
+           pahe_session = COALESCE(excluded.pahe_session, playback.pahe_session),
+           provider_id = COALESCE(excluded.provider_id, playback.provider_id)`,
+        [newId, pb.episode, pb.position_sec, pb.duration_sec, pb.updated_at, pb.pahe_session, pb.provider_id]
       );
     }
     d.run(`DELETE FROM playback WHERE anime_id = ?`, [oldId]);

@@ -201,6 +201,7 @@ object GistSync {
         .put("durationSec", r.durationSec)
         .put("animeTitle", r.title)
         .put("animeCoverUrl", r.cover ?: JSONObject.NULL)
+        .put("providerId", r.providerId ?: JSONObject.NULL)
         .put("animePaheSession", r.slug ?: JSONObject.NULL)
         .put("updatedAt", r.updatedAt)
 
@@ -276,16 +277,15 @@ object GistSync {
                 val localAt = Db.updatedAtFor(animeId, episode)
                 if (localAt == null || remoteAt > localAt) {
                     val session = v.optString("animePaheSession", "")
-                    // Only anikoto slugs are useful to Next; pahe UUIDs aren't.
-                    val slug = session.takeIf {
-                        it.isNotEmpty() && !Regex("^[a-f0-9-]{36}$", RegexOption.IGNORE_CASE).matches(it)
-                    }
+                    val slug = session.takeIf { it.isNotEmpty() && it != "null" }
+                    val providerId = v.optString("providerId", "")
+                        .takeIf { it.isNotEmpty() && it != "null" }
                     Db.save(
                         animeId, episode,
                         v.optDouble("positionSec", 0.0), v.optDouble("durationSec", 0.0),
                         v.optString("animeTitle", "Unknown"),
                         v.optString("animeCoverUrl").takeIf { it.isNotEmpty() && it != "null" },
-                        slug, updatedAt = remoteAt,
+                        slug, providerId = providerId, updatedAt = remoteAt,
                     )
                     changed = true
                 }

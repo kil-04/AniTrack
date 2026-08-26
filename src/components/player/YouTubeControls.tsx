@@ -35,6 +35,7 @@ export interface YouTubeControlsProps {
   isPiP: boolean;
   playbackRate: number;
   providerId?: string;
+  streamVariants?: "quality" | "subtitle-type";
 
   hlsLevels?: any[];
   currentHlsLevel?: number;
@@ -73,7 +74,7 @@ export function YouTubeControls(props: YouTubeControlsProps) {
   const {
     showControls, videoRef, bufferedPct, duration, playing, muted, volume,
     autoPlay, autoNext, currentEp, links, selectedLink, isFullscreen, isTheater, isPiP, playbackRate,
-    providerId = "", hlsLevels = [], currentHlsLevel = -1, subtitlesEnabled = true, availableSubtitles = [],
+    providerId = "", streamVariants, hlsLevels = [], currentHlsLevel = -1, subtitlesEnabled = true, availableSubtitles = [],
     onSeekToPct, onSeekStart, onSeekEnd, onTogglePlay, onToggleMute, onVolumeChange,
     onPlayPrev, onPlayNext, onToggleFullscreen, onToggleTheater, onTogglePiP,
     onChangeQuality, onChangeHlsLevel, onToggleSubtitles, onToggleAutoPlay, onToggleAutoNext, onChangePlaybackRate,
@@ -169,6 +170,7 @@ export function YouTubeControls(props: YouTubeControlsProps) {
                   links={links}
                   selectedLink={selectedLink}
                   providerId={providerId}
+                  streamVariants={streamVariants}
                   hlsLevels={hlsLevels}
                   currentHlsLevel={currentHlsLevel}
                   playbackRate={playbackRate}

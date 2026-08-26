@@ -11,6 +11,12 @@
 import { registerPlugin } from "@capacitor/core";
 import { isCapacitor } from "./platform";
 import type { DownloadItem } from "../../shared/types";
+import {
+  preferredStreamLinkIndex,
+  providerClient,
+  providerVariantPreference,
+} from "./provider-api";
+import type { StreamLink } from "../../shared/provider-types";
 
 interface StartOpts {
   id: string;
@@ -149,26 +155,6 @@ interface QueueEntry {
 const queue: QueueEntry[] = [];
 let activeId: string | null = null;
 
-function pickBest(links: any[], providerId: string): any | null {
-  if (!links?.length) return null;
-  if (providerId === "anikoto") {
-    const soft = links.find((l) => {
-      try { return JSON.parse(l.id).subType === "soft"; } catch { return false; }
-    });
-    return soft ?? links[0];
-  }
-  // AnimePahe: highest resolution, preferring the non-dub (jpn) track.
-  const qOf = (l: any) => parseInt(String(l.quality ?? "").replace(/[^0-9]/g, ""), 10) || 0;
-  const isJpn = (l: any) => !String(l.audio ?? "").toLowerCase().includes("eng");
-  let best = links[0];
-  let bestScore = -1;
-  for (const l of links) {
-    const s = qOf(l) * 10 + (isJpn(l) ? 1 : 0);
-    if (s > bestScore) { bestScore = s; best = l; }
-  }
-  return best;
-}
-
 function setLocal(item: Partial<DownloadItem> & { id: string }) {
   const prev = state.get(item.id);
   state.set(item.id, {
@@ -194,10 +180,19 @@ async function tickQueue() {
 
   try {
     // Resolve the HLS URL just before downloading so the kwik token is fresh.
-    const links = await window.api.pahe.links(next.providerId, next.episodeSession, next.animeSession);
-    const best = pickBest(links, next.providerId);
+    const [links, descriptors] = await Promise.all([
+      providerClient.links(next.providerId, next.episodeSession, next.animeSession),
+      providerClient.list(),
+    ]);
+    const descriptor = descriptors.find((item) => item.id === next.providerId);
+    const bestIndex = preferredStreamLinkIndex(
+      links as StreamLink[],
+      descriptor,
+      providerVariantPreference(next.providerId),
+    );
+    const best = bestIndex >= 0 ? links[bestIndex] : null;
     if (!best) throw new Error("No stream link found");
-    const resolved = await window.api.pahe.resolve(next.providerId, best.id ?? best.kwik);
+    const resolved = await providerClient.resolve(next.providerId, best.id);
     if (!resolved?.url) throw new Error("Could not resolve stream URL");
 
     // Anikoto uses soft (separate) subtitles — save the English .vtt so downloads

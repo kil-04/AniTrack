@@ -60,6 +60,7 @@ export interface PlaybackRow {
   durationSec: number;
   animeTitle?: string;
   animeCoverUrl?: string;
+  providerId?: string;
   animePaheSession?: string;
   updatedAt: number;
 }
@@ -141,6 +142,7 @@ function parseRemoteDoc(document: unknown): RemoteDoc {
       typeof value.updatedAt !== "number" || !Number.isFinite(value.updatedAt) ||
       (value.animeTitle != null && typeof value.animeTitle !== "string") ||
       (value.animeCoverUrl != null && typeof value.animeCoverUrl !== "string") ||
+      (value.providerId != null && typeof value.providerId !== "string") ||
       (value.animePaheSession != null && typeof value.animePaheSession !== "string")
     ) {
       throw new Error(`The sync gist contains an invalid playback row (${key}).`);
@@ -153,6 +155,7 @@ function parseRemoteDoc(document: unknown): RemoteDoc {
       updatedAt: value.updatedAt,
       animeTitle: typeof value.animeTitle === "string" ? value.animeTitle : undefined,
       animeCoverUrl: typeof value.animeCoverUrl === "string" ? value.animeCoverUrl : undefined,
+      providerId: typeof value.providerId === "string" ? value.providerId : undefined,
       animePaheSession: typeof value.animePaheSession === "string" ? value.animePaheSession : undefined,
     };
   }
@@ -446,6 +449,7 @@ function localItemToRow(item: any): PlaybackRow | null {
     durationSec: item.durationSec,
     animeTitle: item.anime?.title ?? undefined,
     animeCoverUrl: item.anime?.coverImage ?? undefined,
+    providerId: item.providerId ?? undefined,
     animePaheSession: item.animePaheSession ?? undefined,
     updatedAt: item.updatedAt,
   };
@@ -488,6 +492,7 @@ export async function pullAndMerge(): Promise<number> {
             durationSec: r.durationSec,
             animeTitle: r.animeTitle ?? undefined,
             animeCoverUrl: r.animeCoverUrl ?? undefined,
+            providerId: r.providerId ?? undefined,
             animePaheSession: r.animePaheSession ?? undefined,
             updatedAt: r.updatedAt,
           });

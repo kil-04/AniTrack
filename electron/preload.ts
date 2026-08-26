@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import { IPC } from "../shared/types";
+import type { ProviderApi, ProviderFeed } from "../shared/provider-types";
 
 // Thin, typed-ish bridge. Renderer never touches Node directly.
 contextBridge.exposeInMainWorld("api", {
@@ -42,6 +43,22 @@ contextBridge.exposeInMainWorld("api", {
     set: (p: unknown) => ipcRenderer.invoke(IPC.PROGRESS_SET, p),
     getForAnime: (id: number) => ipcRenderer.invoke(IPC.PROGRESS_GET_FOR_ANIME, id),
   },
+  providers: {
+    list: () => ipcRenderer.invoke(IPC.PROVIDERS_LIST),
+    search: (q: string) => ipcRenderer.invoke(IPC.PAHE_SEARCH, q),
+    episodes: (providerId: string, animeId: string, page: number) =>
+      ipcRenderer.invoke(IPC.PAHE_EPISODES, providerId, animeId, page),
+    links: (providerId: string, episodeId: string, animeId: string) =>
+      ipcRenderer.invoke(IPC.PAHE_LINKS, providerId, episodeId, animeId),
+    resolve: (providerId: string, linkId: string) => ipcRenderer.invoke(IPC.PAHE_RESOLVE, providerId, linkId),
+    prefetch: (providerId: string, linkId: string) => ipcRenderer.invoke(IPC.PAHE_PREFETCH, providerId, linkId),
+    getExternalIds: (providerId: string, animeId: string, lookupId?: string | number) =>
+      ipcRenderer.invoke(IPC.PROVIDERS_EXTERNAL_IDS, providerId, animeId, lookupId),
+    findByExternalId: (anilistId?: number, malId?: number) =>
+      ipcRenderer.invoke(IPC.PROVIDERS_FIND_BY_EXTERNAL_ID, anilistId, malId),
+    feed: (feed: ProviderFeed, page = 1, count = 30) =>
+      ipcRenderer.invoke(IPC.PROVIDERS_FEED, feed, page, count),
+  } satisfies ProviderApi,
   pahe: {
     latest: (page = 1) => ipcRenderer.invoke(IPC.PAHE_LATEST, page),
     search: (q: string) => ipcRenderer.invoke(IPC.PAHE_SEARCH, q),

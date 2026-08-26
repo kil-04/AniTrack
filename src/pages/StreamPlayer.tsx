@@ -29,6 +29,15 @@ import { enterNativePip } from "../lib/pip";
 import { pushProgress, pullRemoteProgress, flushOnQuit } from "../lib/supabase-sync";
 import { getPlayUrl as getDownloadPlayUrl, readLocalFile, isLocalDownloadUrl, getDownloads, subscribeDownloads } from "../lib/downloads";
 import { scoreMatch, pickVerifiedCandidate } from "../lib/match";
+import {
+  preferredStreamLinkIndex,
+  providerClient,
+  providerName,
+  providerVariantPreference,
+  saveProviderVariantPreference,
+  streamVariant,
+} from "../lib/provider-api";
+import type { ProviderDescriptor, StreamLink } from "../../shared/provider-types";
 
 // ── Synthetic anime ID for AnimePahe-only watches ─────────────────────────
 // When a user watches via Latest Episodes there is no AniList ID in the URL.
@@ -141,8 +150,17 @@ export default function StreamPlayer({
 
   // Available sources (providers) for this anime
   const [availableSources, setAvailableSources] = useState<any[]>([]);
+  const [providerDescriptors, setProviderDescriptors] = useState<ProviderDescriptor[]>([]);
   // Brief status shown while we auto-switch to a backup provider after a failure.
   const [fallbackNotice, setFallbackNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    providerClient.list().then((descriptors) => {
+      if (!cancelled) setProviderDescriptors(descriptors);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   // Playback state
   const [currentEp, setCurrentEp] = useState<any | null>(null);
@@ -386,7 +404,7 @@ export default function StreamPlayer({
         }
 
         // Run searches in parallel
-        const searchResultsList = await Promise.all(searchQueries.map(q => window.api.pahe.search(q).catch(() => [])));
+        const searchResultsList = await Promise.all(searchQueries.map(q => providerClient.search(q).catch(() => [])));
         const combinedMap = new Map<string, { item: any; matchedQuery: string }>();
         for (let idx = 0; idx < searchQueries.length; idx++) {
           const list = searchResultsList[idx];
@@ -540,58 +558,35 @@ export default function StreamPlayer({
     const p = new URLSearchParams(params);
     let changed = false;
 
-    const paheMatch = availableSources.find((s) => (s.providerId ?? "animepahe") === "animepahe");
-    const anikotoMatch = availableSources.find((s) => (s.providerId ?? "animepahe") === "anikoto");
+    const sourceProviderId = (source: any) => source.providerId ?? "animepahe";
+    const sourceSession = (source: any) => source.id || source.session;
+    const currentProviderMatch = availableSources.find((source) => sourceProviderId(source) === providerId);
 
     if (!animeSession) {
-      // 1. Session is completely missing: find the match for the active providerId (default: animepahe)
-      let match = availableSources.find((s) => (s.providerId ?? "animepahe") === providerId);
-      // Fallback: if active provider has no match, but the other one does, use that
-      if (!match) {
-        match = providerId === "animepahe" ? anikotoMatch : paheMatch;
-        if (match) {
-          p.set("providerId", match.providerId ?? "animepahe");
-        }
-      }
+      // Prefer the requested connector, then fall back to the registry's first
+      // available source. This works for any number of providers.
+      const match = currentProviderMatch ?? availableSources[0];
       if (match) {
-        p.set("session", match.id || match.session);
+        p.set("providerId", sourceProviderId(match));
+        p.set("session", sourceSession(match));
         changed = true;
       }
     } else {
-      // 2. Session is present: verify if it matches the current providerId
-      const actualSource = availableSources.find((s) => (s.id || s.session) === animeSession);
+      // Verify the stored session against freshly matched provider sources.
+      const actualSource = availableSources.find((source) => sourceSession(source) === animeSession);
       if (actualSource) {
-        const actualProvider = actualSource.providerId ?? "animepahe";
+        const actualProvider = sourceProviderId(actualSource);
         if (actualProvider !== providerId) {
           p.set("providerId", actualProvider);
           changed = true;
         }
-      } else {
-        // Fallback checks for incorrect mapping
-        const isPaheSession = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(animeSession);
-        if (providerId === "animepahe" && !isPaheSession && anikotoMatch) {
-          p.set("providerId", "anikoto");
-          p.set("session", anikotoMatch.id || anikotoMatch.session);
-          changed = true;
-        } else if (providerId === "animepahe" && !paheMatch && anikotoMatch) {
-          p.set("providerId", "anikoto");
-          p.set("session", anikotoMatch.id || anikotoMatch.session);
-          changed = true;
-        } else if (providerId === "anikoto" && isPaheSession && paheMatch) {
-          p.set("providerId", "animepahe");
-          p.set("session", paheMatch.id || paheMatch.session);
-          changed = true;
-        } else if (animeSession === initialSessionRef.current && providerId === "anikoto" && anikotoMatch && (anikotoMatch.id || anikotoMatch.session) !== animeSession) {
-          // Same provider, but the STORED session (the one we were opened with)
-          // doesn't match the freshly-scored best entry for this anime — it's
-          // stale or wrong (e.g. an old bad match resurrected by cross-device
-          // sync, like City Hunter opening City Hunter '91). Self-heal to the
-          // fresh match. Guarded to the initial session only, so a source the
-          // user deliberately switched to in-session is never overridden.
-          p.set("session", anikotoMatch.id || anikotoMatch.session);
-          changed = true;
-        } else if (animeSession === initialSessionRef.current && providerId === "animepahe" && isPaheSession && paheMatch && (paheMatch.id || paheMatch.session) !== animeSession) {
-          p.set("session", paheMatch.id || paheMatch.session);
+      } else if (animeSession === initialSessionRef.current) {
+        // A stale synced session is repaired from the current connector's match;
+        // if that connector has no match, use the first enabled alternative.
+        const replacement = currentProviderMatch ?? availableSources[0];
+        if (replacement && sourceSession(replacement) !== animeSession) {
+          p.set("providerId", sourceProviderId(replacement));
+          p.set("session", sourceSession(replacement));
           changed = true;
         }
       }
@@ -766,13 +761,13 @@ export default function StreamPlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [animeSession, providerId]);
 
-  const fetchPahePage = useCallback(async (paheePage: number): Promise<{ data: any[]; total: number; lastPage: number }> => {
-    const cacheKey = `${providerId}:${animeSession}:${paheePage}`;
+  const fetchProviderPage = useCallback(async (providerPage: number): Promise<{ data: any[]; total: number; lastPage: number }> => {
+    const cacheKey = `${providerId}:${animeSession}:${providerPage}`;
     const lastPageKey = `${providerId}:${animeSession}:lastPage`;
     const cached = paheCacheRef.current.get(cacheKey);
     if (cached) return { data: cached, total: totalEpisodesRef.current, lastPage: paheCacheRef.current.get(lastPageKey) ?? 999 };
     try {
-      const r = await window.api.pahe.episodes(providerId, animeSession, paheePage);
+      const r = await providerClient.episodes(providerId, animeSession, providerPage);
       paheCacheRef.current.set(cacheKey, r.data);
       paheCacheRef.current.set(lastPageKey, r.lastPage ?? 999);
       return { data: r.data, total: r.total, lastPage: r.lastPage ?? 999 };
@@ -781,16 +776,18 @@ export default function StreamPlayer({
     }
   }, [animeSession, providerId]);
 
-  // Load all AnimePahe pages needed to cover [rangeStart, rangeStart+RANGE_SIZE-1].
+  // Load all connector pages needed to cover [rangeStart, rangeStart+RANGE_SIZE-1].
   useEffect(() => {
     if (!animeSession) return;
     let cancelled = false;
     setLoadingEps(true);
     const rangeEnd = rangeStart + RANGE_SIZE - 1;
-    const firstPaheePage = Math.max(1, Math.ceil(rangeStart / PAHE_PAGE_SIZE));
+    const providerPageSize = providerDescriptors.find((item) => item.id === providerId)
+      ?.capabilities.episodePageSize ?? PAHE_PAGE_SIZE;
+    const firstProviderPage = Math.max(1, Math.ceil(rangeStart / providerPageSize));
     // We don't yet know totalEpisodes on first call — fetch first needed page,
     // get total, then fetch the rest in parallel.
-    fetchPahePage(firstPaheePage)
+    fetchProviderPage(firstProviderPage)
       .then(async ({ data: firstData, total, lastPage: providerLastPage }) => {
         if (cancelled) return;
         if (firstData.length === 0) {
@@ -811,10 +808,10 @@ export default function StreamPlayer({
         if (total) setTotalEpisodes(total);
 
         // Cap page fetching to what the provider actually has.
-        const lastPaheePage = Math.min(
+        const lastProviderPage = Math.min(
           providerLastPage,
-          Math.ceil(Math.min(rangeEnd, total || rangeEnd) / PAHE_PAGE_SIZE),
-          Math.ceil((total || (firstPaheePage * PAHE_PAGE_SIZE)) / PAHE_PAGE_SIZE),
+          Math.ceil(Math.min(rangeEnd, total || rangeEnd) / providerPageSize),
+          Math.ceil((total || (firstProviderPage * providerPageSize)) / providerPageSize),
         );
 
         // Calculate episodeOffset from page 1 data if not already explicitly provided in URL
@@ -822,8 +819,8 @@ export default function StreamPlayer({
         let page1Data = firstData;
         // We need page-1 data to learn the provider's true first episode number,
         // both to auto-compute the offset and to sanity-check a URL-provided one.
-        if (firstPaheePage > 1) {
-          try { page1Data = (await fetchPahePage(1)).data; } catch { /* keep firstData */ }
+        if (firstProviderPage > 1) {
+          try { page1Data = (await fetchProviderPage(1)).data; } catch { /* keep firstData */ }
         }
         if (page1Data.length > 0) {
           const sortedPage1 = [...page1Data].sort((a: any, b: any) => {
@@ -881,8 +878,8 @@ export default function StreamPlayer({
 
         // 2. Fetch the remaining pages of the range in the background
         const remaining: Promise<{ data: any[] }>[] = [];
-        for (let p = firstPaheePage + 1; p <= lastPaheePage; p++) {
-          remaining.push(fetchPahePage(p));
+        for (let p = firstProviderPage + 1; p <= lastProviderPage; p++) {
+          remaining.push(fetchProviderPage(p));
         }
 
         if (remaining.length > 0) {
@@ -922,7 +919,7 @@ export default function StreamPlayer({
                 playEpisode(ep, animeSession);
               }
             }
-          }).catch((err) => console.warn("[pahe] background episode load failed", err));
+          }).catch((err) => console.warn("[provider] background episode load failed", err));
         } else {
           // No more pages to load — check if we have a pending auto-play from state
           if (pendingAutoPlayEpNumRef.current) {
@@ -934,11 +931,11 @@ export default function StreamPlayer({
           }
         }
       })
-      .catch((e) => { if (!cancelled) console.warn("[pahe] episode load failed", e); })
+      .catch((e) => { if (!cancelled) console.warn("[provider] episode load failed", e); })
       .finally(() => { if (!cancelled) setLoadingEps(false); });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [animeSession, rangeStart, fetchPahePage]);
+  }, [animeSession, rangeStart, fetchProviderPage, providerDescriptors, providerId]);
 
   // Reset cache when anime or provider changes
   useEffect(() => {
@@ -1289,30 +1286,21 @@ export default function StreamPlayer({
       setLinks([]);
       
       const epKey = String(ep.session ?? ep.id);
-      // Pick the index we'll actually play: highest quality for AnimePahe, the user's
-      // preferred sub-type for Anikoto. Shared with the next-episode prefetch below.
-      const pickBestIdx = (lks: any[]): number => {
-        const preferredSubType = providerId === "anikoto"
-          ? (localStorage.getItem("anitrack-anikoto-subtype") || "soft") : null;
-        let idx = 0;
-        if (providerId === "anikoto" && preferredSubType) {
-          const i = lks.findIndex((l: any) => { try { return JSON.parse(l.id).subType === preferredSubType; } catch { return false; } });
-          if (i >= 0) idx = i;
-        } else if (providerId !== "anikoto") {
-          const qOf = (l: any) => parseInt(String(l.quality ?? "").replace(/[^0-9]/g, ""), 10) || 0;
-          const isJpn = (l: any) => !String(l.audio ?? "").toLowerCase().includes("eng");
-          let best = -1;
-          lks.forEach((l: any, i: number) => { const s = qOf(l) * 10 + (isJpn(l) ? 1 : 0); if (s > best) { best = s; idx = i; } });
-        }
-        return idx;
-      };
+      // The connector describes whether these are quality or subtitle-type
+      // variants; the player only applies the generic preference policy.
+      const descriptor = providerDescriptors.find((item) => item.id === providerId);
+      const pickBestIdx = (items: StreamLink[]): number => preferredStreamLinkIndex(
+        items,
+        descriptor,
+        providerVariantPreference(providerId),
+      );
 
       try {
         // Use prefetched links if available (instant switch); else fetch. Run the
         // links fetch, local saved-progress, and the cloud's latest position for
         // this episode all in parallel (the remote pull adds no extra latency).
         const [fetchedLinks, savedProgress, remoteProgress] = await Promise.all([
-          linksCacheRef.current.get(epKey) ?? window.api.pahe.links(providerId, ep.session ?? ep.id, animeSession),
+          linksCacheRef.current.get(epKey) ?? providerClient.links(providerId, ep.session ?? ep.id, animeSession),
           window.api.progress.get(effectiveAnimeIdRef.current, ep.episodeNumber).catch(() => null),
           pullRemoteProgress(effectiveAnimeIdRef.current, ep.episodeNumber).catch(() => null),
         ]);
@@ -1341,7 +1329,7 @@ export default function StreamPlayer({
 
         const bestIdx = pickBestIdx(fetchedLinks);
         setSelectedLink(bestIdx);
-        const { url, subtitles, intro, outro, referer } = await window.api.pahe.resolve(providerId, fetchedLinks[bestIdx].id ?? fetchedLinks[bestIdx].kwik);
+        const { url, subtitles, intro, outro, referer } = await providerClient.resolve(providerId, fetchedLinks[bestIdx].id ?? fetchedLinks[bestIdx].kwik);
         refererRef.current = referer ?? null;
         if (!url) {
           throw new Error("Resolved stream URL is empty. The stream server may be down, or we failed to fetch it.");
@@ -1351,13 +1339,7 @@ export default function StreamPlayer({
           setSkipTimes({ op: intro, ed: outro });
         }
         
-        let activeSubs = subtitles;
-        try {
-          const linkParsed = JSON.parse(fetchedLinks[bestIdx].id);
-          if (linkParsed.subType === "hard") {
-            activeSubs = [];
-          }
-        } catch (e) {}
+        const activeSubs = streamVariant(fetchedLinks[bestIdx]) === "hard" ? [] : subtitles;
 
         attachStream(url, activeSubs);
 
@@ -1370,12 +1352,12 @@ export default function StreamPlayer({
           const cached = linksCacheRef.current.get(nextKey);
           const warm = cached
             ? Promise.resolve(cached)
-            : window.api.pahe.links(providerId, nextEp.session ?? nextEp.id, animeSession);
+            : providerClient.links(providerId, nextEp.session ?? nextEp.id, animeSession);
           warm.then((nextLinks: any[]) => {
             if (!nextLinks?.length) return;
             linksCacheRef.current.set(nextKey, nextLinks);
             const ni = pickBestIdx(nextLinks);
-            window.api.pahe.prefetch(providerId, nextLinks[ni].id ?? nextLinks[ni].kwik);
+            providerClient.prefetch(providerId, nextLinks[ni].id ?? nextLinks[ni].kwik);
           }).catch(() => {});
         }
 
@@ -1383,7 +1365,7 @@ export default function StreamPlayer({
         // background resolves don't compete with the stream that just started.
         setTimeout(() => {
           fetchedLinks.forEach((l: any, idx: number) => {
-            if (idx !== bestIdx) window.api.pahe.prefetch(providerId, l.id ?? l.kwik);
+            if (idx !== bestIdx) providerClient.prefetch(providerId, l.id ?? l.kwik);
           });
         }, 5000);
       } catch (e: any) {
@@ -1400,14 +1382,17 @@ export default function StreamPlayer({
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [animeSession, autoPlay, providerId],
+    [animeSession, autoPlay, providerDescriptors, providerId],
   );
 
   // Keep a live reference to playEpisode for the PiP-return hook (registered once).
   useEffect(() => { playEpisodeRef.current = playEpisode; });
 
   // ── Provider switching + automatic fallback ─────────────────────────────────
-  const providerLabel = (pid: string) => (pid === "anikoto" ? "Anikoto" : "AnimePahe");
+  const providerLabel = useCallback(
+    (pid: string) => providerName(providerDescriptors, pid),
+    [providerDescriptors],
+  );
 
   // Navigate to another provider's source, preserving the episode we're watching.
   // Used by both the manual "Servers" buttons and the automatic failure fallback.
@@ -1460,7 +1445,7 @@ export default function StreamPlayer({
       switchToProvider(alt, epNum);
       return true;
     },
-    [providerId, switchToProvider],
+    [providerId, providerLabel, switchToProvider],
   );
   useEffect(() => { fallbackRef.current = attemptAutoFallback; });
 
@@ -1471,15 +1456,14 @@ export default function StreamPlayer({
     // live playhead before switching quality or Anikoto subtitle type.
     const resumePosition = videoRef.current?.currentTime ?? 0;
     setSelectedLink(idx);
-    if (providerId === "anikoto") {
-      try { localStorage.setItem("anitrack-anikoto-subtype", JSON.parse(link.id).subType || "soft"); } catch {}
-    }
+    const variant = streamVariant(link);
+    if (variant) saveProviderVariantPreference(providerId, variant);
     setQualityOpen(false);
     setLoadingStream(true);
     setStreamError(null);
     resetPlayer();
     try {
-      const { url, subtitles, referer } = await window.api.pahe.resolve(providerId, link.id ?? link.kwik);
+      const { url, subtitles, referer } = await providerClient.resolve(providerId, link.id ?? link.kwik);
       refererRef.current = referer ?? null;
       if (!url) {
         throw new Error("Resolved stream URL is empty. The stream server may be down, or we failed to fetch it.");
@@ -1488,13 +1472,7 @@ export default function StreamPlayer({
       // after the new stream is ready — same pattern as episode resume.
       pendingSeekRef.current = resumePosition > 1 ? resumePosition : null;
 
-      let activeSubs = subtitles;
-      try {
-        const linkParsed = JSON.parse(link.id);
-        if (linkParsed.subType === "hard") {
-          activeSubs = [];
-        }
-      } catch (e) {}
+      const activeSubs = streamVariant(link) === "hard" ? [] : subtitles;
 
       attachStream(url, activeSubs);
     } catch (e: any) {
@@ -1951,6 +1929,7 @@ export default function StreamPlayer({
         updatedAt: Date.now(),
         animeTitle: animeTitle,
         animeCoverUrl: animeCoverUrl,
+        providerId,
         animePaheSession: animeSession || undefined,
       };
       window.api.progress.set(payload).catch(() => {});
@@ -2002,7 +1981,9 @@ export default function StreamPlayer({
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
-  // The other provider we could fall back to, if one matched this anime.
+  const activeProviderDescriptor = providerDescriptors.find((item) => item.id === providerId);
+
+  // The next provider we could fall back to, if one matched this anime.
   const altSource = availableSources.find((s) => (s.providerId || "animepahe") !== providerId);
 
   // Shared sub-components
@@ -2034,19 +2015,13 @@ export default function StreamPlayer({
           </div>
         </div>
       )}
-      {providerId === "anikoto" && links.length > 1 && (
+      {activeProviderDescriptor?.capabilities.streamVariants === "subtitle-type" && links.length > 1 && (
         <div className="border-b border-white/10 p-2">
           <div className="mb-2 text-[10px] uppercase tracking-wider text-white/50 font-semibold">Sub Type</div>
           <div className="flex gap-2">
             {links.map((link, idx) => {
-              // Derive the label from the link's real subType — the order/presence
-              // of soft/hard/dub varies per show, so a fixed label per index would
-              // mislabel (and mis-resolve) the track.
-              let label = "Sub";
-              try {
-                const st = JSON.parse(link.id).subType;
-                label = st === "hard" ? "Hard Sub" : st === "dub" ? "Dub" : "Soft Sub";
-              } catch {}
+              const variant = streamVariant(link);
+              const label = variant === "hard" ? "Hard Sub" : variant === "dub" ? "Dub" : "Soft Sub";
               return (
                 <button
                   key={idx}
@@ -2302,6 +2277,7 @@ export default function StreamPlayer({
         availableSubtitles={availableSubtitles}
         onToggleSubtitles={toggleSubtitles}
         providerId={providerId}
+        streamVariants={activeProviderDescriptor?.capabilities.streamVariants}
         cueFontSize={cueFontSize}
         setCueFontSize={setCueFontSize}
         cueFontFamily={cueFontFamily}

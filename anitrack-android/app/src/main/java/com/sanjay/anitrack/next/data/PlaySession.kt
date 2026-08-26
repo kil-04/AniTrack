@@ -1,5 +1,15 @@
 package com.sanjay.anitrack.next.data
 
+import com.sanjay.anitrack.next.data.providers.PlaybackBackend
+import com.sanjay.anitrack.next.data.providers.PlaybackPreferences
+import com.sanjay.anitrack.next.data.providers.ProviderRegistry
+import com.sanjay.anitrack.next.data.providers.ProviderSeries
+import com.sanjay.anitrack.next.data.providers.Providers
+import com.sanjay.anitrack.next.data.providers.ResolvedMedia
+import com.sanjay.anitrack.next.data.providers.SeekMode
+import com.sanjay.anitrack.next.data.providers.connectors.AnikotoProvider
+import com.sanjay.anitrack.next.data.providers.connectors.AnimePaheProvider
+
 /**
  * What the player screen should play — set right before navigating to it.
  * Provider-agnostic: holds enough to resolve either Anikoto or AnimePahe, and
@@ -26,6 +36,12 @@ object PlaySession {
     var paheSession: String = ""
     var paheEps: List<Pahe.Episode> = emptyList()
 
+    // Normalized connector state. The legacy fields above remain temporarily
+    // writable so older launch call sites can migrate independently.
+    private var activeSeries: ProviderSeries? = null
+    private var activeLegacySignature: String? = null
+    private val seriesByProvider = linkedMapOf<String, ProviderSeries>()
+
     /** True while the player screen is mounted — drives auto-PiP on Home press. */
     var playerActive: Boolean = false
 
@@ -38,27 +54,79 @@ object PlaySession {
         val subtitles: List<Anikoto.Subtitle>,
         val introStart: Long?, val introEnd: Long?,
         val outroStart: Long?, val outroEnd: Long?,
+        val backend: PlaybackBackend = PlaybackBackend.NATIVE,
+        val seekMode: SeekMode = SeekMode.CLOSEST_SYNC,
+        val downloadable: Boolean = true,
     )
 
-    val count: Int get() = if (provider == "animepahe") paheEps.size else anikotoEps.size
+    private fun legacyKey(): String = if (provider == "animepahe") paheSession else slug
 
-    fun episodeNumber(i: Int): Float =
-        if (provider == "animepahe") paheEps.getOrNull(i)?.number ?: 0f
-        else anikotoEps.getOrNull(i)?.number ?: 0f
+    private fun legacySignature(): String = buildString {
+        append(provider).append('|').append(legacyKey()).append('|')
+        if (provider == "animepahe") append(paheEps.hashCode()) else append(anikotoEps.hashCode())
+    }
+
+    /** Convert still-unmigrated launch fields into the connector contract. */
+    private fun series(): ProviderSeries? {
+        val signature = legacySignature()
+        activeSeries?.takeIf { activeLegacySignature == signature }?.let { return it }
+        val rebuilt = when (provider) {
+            "animepahe" -> paheEps.takeIf { it.isNotEmpty() }
+                ?.let { AnimePaheProvider.series(paheSession, it) }
+            "anikoto" -> anikotoEps.takeIf { it.isNotEmpty() }
+                ?.let { AnikotoProvider.series(slug, it, verified = false) }
+            else -> null
+        }
+        seriesByProvider.clear()
+        rebuilt?.let { seriesByProvider[it.providerId] = it }
+        activeSeries = rebuilt
+        activeLegacySignature = signature
+        return rebuilt
+    }
+
+    /** Preferred launch API for migrated screens and future connectors. */
+    fun startSeries(
+        series: ProviderSeries,
+        selectedIndex: Int,
+        animeId: Int,
+        animeTitle: String,
+        animeCover: String?,
+        anime: Anime?,
+    ) {
+        require(series.episodes.isNotEmpty()) { "Cannot start an empty provider series" }
+        provider = series.providerId
+        if (provider == "animepahe") {
+            paheSession = series.resumeKey; paheEps = emptyList(); anikotoEps = emptyList()
+        } else {
+            slug = series.resumeKey; anikotoEps = emptyList(); paheEps = emptyList()
+        }
+        this.animeId = animeId
+        this.animeTitle = animeTitle
+        this.animeCover = animeCover
+        this.anime = anime
+        localFile = null
+        index = selectedIndex.coerceIn(series.episodes.indices)
+        seriesByProvider.clear()
+        seriesByProvider[series.providerId] = series
+        activeSeries = series
+        activeLegacySignature = legacySignature()
+    }
+
+    val count: Int get() = series()?.episodes?.size ?: 0
+
+    fun episodeNumber(i: Int): Float = series()?.episodes?.getOrNull(i)?.number ?: 0f
 
     /** The slug/session persisted with progress so Continue Watching can resume
      *  without re-matching. RAW value, same as the desktop app writes to the
      *  sync gist: pahe sessions are UUIDs, anikoto slugs never are — consumers
      *  detect the provider with PAHE_UUID (a "pahe:" prefix broke desktop). */
-    fun resumeKey(): String =
-        if (provider == "animepahe") paheSession else slug
+    fun resumeKey(): String = series()?.resumeKey ?: legacyKey()
 
     /** AnimePahe sessions are full UUIDs; anikoto slugs are never UUID-shaped. */
     val PAHE_UUID = Regex("^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$", RegexOption.IGNORE_CASE)
 
     /** Episode title for side-panel labels (anikoto has real titles; pahe doesn't). */
-    fun episodeTitle(i: Int): String? =
-        if (provider == "animepahe") null else anikotoEps.getOrNull(i)?.title
+    fun episodeTitle(i: Int): String? = series()?.episodes?.getOrNull(i)?.title
 
     val canSwitchServer: Boolean get() = anime != null
 
@@ -68,79 +136,71 @@ object PlaySession {
      * same EPISODE NUMBER — the two providers index episodes differently.
      * Returns false if the target has no source for this show.
      */
-    suspend fun switchProvider(target: String): Boolean {
+    suspend fun switchProvider(
+        target: String,
+        registry: ProviderRegistry = Providers.registry,
+        runtime: AndroidRuntimeConfig = RemoteConfig.current(),
+    ): Boolean {
         if (target == provider) return true
-        val runtime = RemoteConfig.current()
-        if (target == "animepahe" && (!runtime.animepahe.enabled || !runtime.features.animepaheStreaming)) return false
-        if (target == "anikoto" && (!runtime.anikoto.enabled || !runtime.features.anikotoStreaming)) return false
+        val connector = registry.enabled(target, runtime) ?: return false
         val a = anime ?: return false
         val currentNum = episodeNumber(index)
         val prevIndex = index
-        // Match by episode NUMBER; if that fails (providers number differently),
-        // keep the SAME position rather than snapping back to episode 1.
-        fun match(nums: List<Float>): Int =
-            nums.indexOfFirst { kotlin.math.abs(it - currentNum) < 0.01f }
-                .takeIf { it >= 0 } ?: prevIndex.coerceIn(0, (nums.size - 1).coerceAtLeast(0))
-        if (target == "animepahe") {
-            if (paheEps.isEmpty()) {
-                val m = Pahe.matchFor(a) ?: return false
-                paheSession = m.source.session
-                paheEps = m.episodes
-            }
-            if (paheEps.isEmpty()) return false
-            provider = "animepahe"
-            index = match(paheEps.map { it.number })
-        } else {
-            if (anikotoEps.isEmpty()) {
-                val m = Anikoto.matchFor(a) ?: return false
-                slug = m.source.slug
-                anikotoEps = m.list.episodes
-            }
-            if (anikotoEps.isEmpty()) return false
-            provider = "anikoto"
-            index = match(anikotoEps.map { it.number })
-        }
+        series()?.let { seriesByProvider[it.providerId] = it }
+        val targetSeries = seriesByProvider[target]
+            ?: connector.match(a)?.also { seriesByProvider[target] = it }
+            ?: return false
+        if (targetSeries.episodes.isEmpty()) return false
+        provider = targetSeries.providerId
+        if (provider == "animepahe") paheSession = targetSeries.resumeKey else slug = targetSeries.resumeKey
+        activeSeries = targetSeries
+        activeLegacySignature = legacySignature()
+        // Match by episode NUMBER; if providers number differently, retain the
+        // same list position instead of snapping back to episode one.
+        index = targetSeries.episodeIndex(currentNum, prevIndex)
         return true
     }
 
     // Offline single-episode playback (set when launched from Downloads).
     var localFile: String? = null
 
-    suspend fun resolve(i: Int): Resolved {
+    suspend fun resolve(
+        i: Int,
+        registry: ProviderRegistry = Providers.registry,
+        runtime: AndroidRuntimeConfig = RemoteConfig.current(),
+    ): Resolved {
         localFile?.let { path ->
             // Downloaded HLS — play the local index.m3u8 directly.
-            return Resolved(java.io.File(path).toURI().toString(), "", "", emptyList(), null, null, null, null)
-        }
-        val runtime = RemoteConfig.current()
-        if (provider == "animepahe") {
-            check(runtime.animepahe.enabled && runtime.features.animepaheStreaming) {
-                "AnimePahe is temporarily disabled. Refresh automatic fixes in Settings."
-            }
-        } else {
-            check(runtime.anikoto.enabled && runtime.features.anikotoStreaming) {
-                "Anikoto is temporarily disabled. Refresh automatic fixes in Settings."
-            }
-        }
-        return if (provider == "animepahe") {
-            val ep = paheEps[i]
-            val links = Pahe.links(paheSession, ep.session)
-            if (links.isEmpty()) throw Exception("No stream links found")
-            // Highest resolution, prefer the non-dub (jpn) track.
-            val best = links.maxByOrNull {
-                (it.quality.filter { c -> c.isDigit() }.toIntOrNull() ?: 0) * 10 +
-                    (if (!it.audio.lowercase().contains("eng")) 1 else 0)
-            }!!
-            val s = Pahe.resolveKwik(best.kwik)
-            // AnimePahe is hard-subbed — no separate tracks, no provider skip data.
-            // UA must match the kwik WebView's (session is fingerprint-bound).
-            Resolved(s.url, s.referer, Pahe.MOBILE_UA, emptyList(), null, null, null, null)
-        } else {
-            val s = Anikoto.resolve(slug, anikotoEps[i], preferHardSub = subType == "hard")
-            Resolved(
-                s.url, s.referer,
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-                s.subtitles, s.introStart, s.introEnd, s.outroStart, s.outroEnd,
+            return Resolved(
+                java.io.File(path).toURI().toString(), "", "", emptyList(),
+                null, null, null, null,
+                backend = PlaybackBackend.NATIVE,
+                seekMode = SeekMode.EXACT,
+                downloadable = false,
             )
         }
+        val connector = registry.enabled(provider, runtime)
+        check(connector != null) {
+            val name = runCatching { registry.get(provider).descriptor.name }.getOrDefault(provider)
+            "$name is temporarily disabled. Refresh automatic fixes in Settings."
+        }
+        val media = series()?.episodes?.getOrNull(i)
+            ?.resolve(PlaybackPreferences(preferHardSub = subType == "hard"))
+            ?: error("Episode is no longer available")
+        return media.toLegacyResolved()
     }
+
+    private fun ResolvedMedia.toLegacyResolved() = Resolved(
+        url = url,
+        referer = referer,
+        userAgent = userAgent,
+        subtitles = subtitles.map { Anikoto.Subtitle(it.url, it.label) },
+        introStart = intro?.startSeconds,
+        introEnd = intro?.endSeconds,
+        outroStart = outro?.startSeconds,
+        outroEnd = outro?.endSeconds,
+        backend = backend,
+        seekMode = seekMode,
+        downloadable = downloadable,
+    )
 }

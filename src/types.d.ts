@@ -7,6 +7,7 @@ import type {
   RelatedAnime,
   ListEntry,
 } from "../shared/types";
+import type { AnimeInfo, ExternalIds, ProviderApi } from "../shared/provider-types";
 
 interface ApiBridge {
   al: {
@@ -46,17 +47,18 @@ interface ApiBridge {
     set(p: PlaybackProgress): Promise<{ ok: boolean }>;
     getForAnime(id: number): Promise<PlaybackProgress[]>;
   };
+  providers?: ProviderApi;
   pahe: {
     latest(page?: number): Promise<{ data: any[]; total: number; lastPage: number }>;
-    search(q: string): Promise<any[]>;
+    search(q: string): Promise<AnimeInfo[]>;
     episodes(providerId: string, animeId: string, page: number): Promise<{ data: any[]; total: number; lastPage: number }>;
     links(providerId: string, episodeId: string, animeId: string): Promise<any[]>;
     resolve(providerId: string, linkId: string): Promise<{ url: string; cookies?: string; subtitles?: any[]; intro?: any; outro?: any; referer?: string }>;
     prefetch(providerIdOrKwikUrl: string, linkId?: string): Promise<{ ok: boolean }>;
     // paheId is the numeric AnimePahe id, OR an Anikoto slug (string) — the
     // handler routes by shape so id verification works for both providers.
-    getIds(paheId: number | string, session: string): Promise<{ malId?: number; anilistId?: number; kitsuId?: number }>;
-    findById(anilistId: number | undefined, malId?: number): Promise<any>;
+    getIds(paheId: number | string, session: string): Promise<ExternalIds>;
+    findById(anilistId: number | undefined, malId?: number): Promise<AnimeInfo | null>;
     getUrl(): Promise<string>;
     setUrl(url: string): Promise<{ ok: boolean; url: string; reason?: string }>;
     fetchUrl?(url: string, binary?: boolean, headers?: Record<string, string>): Promise<{ data: string; status: number; binary: boolean }>;

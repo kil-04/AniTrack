@@ -13,6 +13,7 @@ export interface SettingsMenuProps {
   links: any[];
   selectedLink: number;
   providerId?: string;
+  streamVariants?: "quality" | "subtitle-type";
   hlsLevels?: any[];
   currentHlsLevel?: number;
   playbackRate: number;
@@ -39,7 +40,7 @@ export interface SettingsMenuProps {
 
 export function SettingsMenuContent(props: SettingsMenuProps) {
   const {
-    links, selectedLink, providerId = "", hlsLevels = [], currentHlsLevel = -1, playbackRate,
+    links, selectedLink, streamVariants, hlsLevels = [], currentHlsLevel = -1, playbackRate,
     autoPlay, autoNext, subtitlesEnabled = true, availableSubtitles = [],
     onChangePlaybackRate, onChangeQuality, onChangeHlsLevel, onToggleAutoPlay, onToggleAutoNext, onToggleSubtitles,
     cueFontSize = "16px", setCueFontSize, cueFontFamily = "'Outfit', 'Inter', sans-serif", setCueFontFamily,
@@ -48,7 +49,7 @@ export function SettingsMenuContent(props: SettingsMenuProps) {
 
   const [view, setView] = useState<MenuView>("main");
 
-  const hasLinkChoice = links.length > 1 && providerId !== "anikoto";
+  const hasLinkChoice = links.length > 1 && streamVariants !== "subtitle-type";
   const hasHls = hlsLevels.length > 1;
   const speedLabel = playbackRate === 1 ? "Normal" : `${playbackRate}×`;
   const qualityLabel = hasHls

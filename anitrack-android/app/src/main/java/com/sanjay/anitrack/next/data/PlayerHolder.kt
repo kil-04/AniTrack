@@ -11,6 +11,7 @@ import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import com.sanjay.anitrack.next.data.providers.SeekMode
 
 /**
  * App-wide ExoPlayer owner — the desktop app's persistent player. The player
@@ -50,8 +51,8 @@ object PlayerHolder {
         player ?: ExoPlayer.Builder(ctx.applicationContext).build()
             .apply {
                 playWhenReady = true
-                // Safe default for local AnimePahe TS. setMedia() switches
-                // Anikoto to exact seeks once the active provider is known.
+                // Safe default until setMedia() applies the connector's
+                // resolved seek policy for the active stream.
                 setSeekParameters(androidx.media3.exoplayer.SeekParameters.CLOSEST_SYNC)
                 // Per-segment EventLogger output is useful for diagnosing CDN
                 // stalls, but doing it in release builds adds work to every
@@ -98,16 +99,18 @@ object PlayerHolder {
         val p = get(ctx)
         val isLocal = s.url.startsWith("file:")
         p.setSeekParameters(
-            if (PlaySession.provider == "anikoto") {
-                androidx.media3.exoplayer.SeekParameters.EXACT
-            } else {
-                androidx.media3.exoplayer.SeekParameters.CLOSEST_SYNC
+            when (s.seekMode) {
+                SeekMode.EXACT -> androidx.media3.exoplayer.SeekParameters.EXACT
+                SeekMode.CLOSEST_SYNC -> androidx.media3.exoplayer.SeekParameters.CLOSEST_SYNC
             },
         )
         val factory: DataSource.Factory = if (isLocal) {
             DefaultDataSource.Factory(ctx.applicationContext)
         } else {
-            val headers = mutableMapOf("Referer" to s.referer + "/")
+            val headers = mutableMapOf<String, String>()
+            s.referer.trim().takeIf { it.isNotEmpty() }?.let {
+                headers["Referer"] = it.trimEnd('/') + "/"
+            }
             // Send the WebView's cookies for the stream host (kwik binding).
             runCatching {
                 android.webkit.CookieManager.getInstance().getCookie(s.url)

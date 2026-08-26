@@ -4,7 +4,7 @@ import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
 import { ArrowLeft, Plus, Check } from "lucide-react";
 import type { AnimeMeta, ListEntry, RelatedAnime, WatchStatus } from "../../shared/types";
-import PahePanel from "../components/PahePanel";
+import ProviderPanel from "../components/ProviderPanel";
 import WatchOrder from "../components/WatchOrder";
 import { useAppStore } from "../store/useAppStore";
 
@@ -334,7 +334,7 @@ export default function ShowDetail() {
         );
       })()}
 
-      {/* AnimePahe episodes — always check providers; AniList's "not yet released"
+      {/* Streaming episodes — always check providers; AniList's "not yet released"
           status is often stale, and the show may already be streamable. */}
       <div className="mt-8 px-8">
         {anime.status === "NOT_YET_RELEASED" && (
@@ -342,7 +342,7 @@ export default function ShowDetail() {
             AniList lists this as upcoming — checking providers in case it's already streamable…
           </p>
         )}
-        <PahePanel
+        <ProviderPanel
           animeTitle={anime.titleEnglish || anime.title}
           animeTitleAlt={anime.titleEnglish ? anime.title : undefined}
           animeTitleRomaji={anime.titleRomaji ?? undefined}

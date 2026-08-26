@@ -1,5 +1,13 @@
 import { BrowserWindow, net, session } from "electron";
-import { StreamProvider, AnimeInfo, EpisodeInfo, StreamLink, StreamData } from "./types";
+import {
+  StreamProvider,
+  AnimeInfo,
+  EpisodeInfo,
+  StreamLink,
+  StreamData,
+  ProviderFeed,
+  ProviderFeedResult,
+} from "./types";
 import { getRuntimeConfig } from "../remote-config";
 
 let _activeAnikotoBase = "";
@@ -241,9 +249,25 @@ async function anikotoFetch(url: string, options: any = {}): Promise<any> {
   throw lastError instanceof Error ? lastError : new Error("Every signed Anikoto origin failed");
 }
 
+export interface AnikotoTopItem {
+  slug: string;
+  showId: string;
+  title: string;
+  titleJp: string;
+  poster: string;
+  sub: number | null;
+  dub: number | null;
+}
+
+export interface AnikotoTopResult {
+  day: AnikotoTopItem[];
+  week: AnikotoTopItem[];
+  month: AnikotoTopItem[];
+}
+
 // Parse Anikoto's home-page "Top anime" sidebar into day/week/month lists.
-export function parseAnikotoTop(html: string): { day: any[]; week: any[]; month: any[] } {
-  const out: { day: any[]; week: any[]; month: any[] } = { day: [], week: [], month: [] };
+export function parseAnikotoTop(html: string): AnikotoTopResult {
+  const out: AnikotoTopResult = { day: [], week: [], month: [] };
   const secStart = html.indexOf('id="top-anime"');
   if (secStart < 0) return out;
   const sec = html.slice(secStart, secStart + 80000);
@@ -253,7 +277,7 @@ export function parseAnikotoTop(html: string): { day: any[]; week: any[]; month:
     const start = markers[i].index!;
     const end = i + 1 < markers.length ? markers[i + 1].index! : sec.length;
     const block = sec.slice(start, end);
-    const items: any[] = [];
+    const items: AnikotoTopItem[] = [];
     const itemClass = escapeRegex(anikotoSelector("searchItemClass"));
     const itemStart = new RegExp(`<a\\s+class=["'][^"']*\\b${itemClass}\\b[^"']*["']`, "i");
     for (const p of block.split(itemStart).slice(1, 11)) {
@@ -274,7 +298,7 @@ export function parseAnikotoTop(html: string): { day: any[]; week: any[]; month:
   return out;
 }
 
-export async function getAnikotoTop(): Promise<{ day: any[]; week: any[]; month: any[] }> {
+export async function getAnikotoTop(): Promise<AnikotoTopResult> {
   try {
     const resp = await anikotoFetch(anikotoUrl("home"));
     const html = await resp.text();
@@ -286,8 +310,15 @@ export async function getAnikotoTop(): Promise<{ day: any[]; week: any[]; month:
 }
 
 export class AnikotoProvider implements StreamProvider {
-  id = "anikoto";
-  name = "Anikoto";
+  readonly id = "anikoto";
+  readonly name = "Anikoto";
+  readonly capabilities = {
+    top: true,
+    externalIds: true,
+    downloads: true,
+    streamVariants: "subtitle-type" as const,
+    episodePageSize: 10_000,
+  };
 
   private episodesCache = new Map<string, { episodes: EpisodeInfo[]; total: number; timestamp: number }>();
   private readonly EPISODES_CACHE_TTL = 15 * 60 * 1000; // 15 minutes
@@ -514,7 +545,8 @@ export class AnikotoProvider implements StreamProvider {
         {
           id: JSON.stringify({ episodeId, animeId, subType: "soft" }),
           quality: "Auto (Soft Sub)",
-          audio: "jpn"
+          audio: "jpn",
+          variant: "soft",
         }
       ];
     }
@@ -546,14 +578,16 @@ export class AnikotoProvider implements StreamProvider {
         links.push({
           id: JSON.stringify({ episodeId, animeId, subType: "soft" }),
           quality: "Auto (Soft Sub)",
-          audio: "jpn"
+          audio: "jpn",
+          variant: "soft",
         });
       }
       if (hasHSub) {
         links.push({
           id: JSON.stringify({ episodeId, animeId, subType: "hard" }),
           quality: "Auto (Hard Sub)",
-          audio: "jpn"
+          audio: "jpn",
+          variant: "hard",
         });
       }
 
@@ -564,7 +598,8 @@ export class AnikotoProvider implements StreamProvider {
         {
           id: JSON.stringify({ episodeId, animeId, subType: "soft" }),
           quality: "Auto (Soft Sub)",
-          audio: "jpn"
+          audio: "jpn",
+          variant: "soft",
         }
       ];
     }
@@ -908,4 +943,45 @@ export class AnikotoProvider implements StreamProvider {
     promise.finally(() => this.resolvePending.delete(linkId)).catch(() => {});
     return promise;
   }
+
+  getExternalIds(animeId: string) {
+    return this.getAnimeIds(animeId);
+  }
+
+  async getFeed(feed: ProviderFeed, page = 1, count = 30): Promise<ProviderFeedResult> {
+    if (feed !== "top") throw new Error(`${this.name} does not support the ${feed} feed`);
+    const result = await getAnikotoTop();
+    const safePage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
+    const safeCount = Number.isFinite(count) && count > 0 ? Math.min(100, Math.floor(count)) : 30;
+    const offset = (safePage - 1) * safeCount;
+    const definitions: Array<{ id: keyof AnikotoTopResult; title: string }> = [
+      { id: "day", title: "Today" },
+      { id: "week", title: "This Week" },
+      { id: "month", title: "This Month" },
+    ];
+    const lengths = definitions.map(({ id }) => result[id].length);
+    return {
+      providerId: this.id,
+      feed,
+      page: safePage,
+      total: lengths.reduce((sum, length) => sum + length, 0),
+      lastPage: Math.max(1, Math.ceil(Math.max(0, ...lengths) / safeCount)),
+      groups: definitions.map(({ id, title }) => ({
+        id,
+        title,
+        items: result[id].slice(offset, offset + safeCount).map((item) => ({
+          id: item.showId || item.slug,
+          providerId: this.id,
+          animeId: item.slug,
+          title: item.title,
+          titleAlternatives: item.titleJp ? [item.titleJp] : undefined,
+          poster: item.poster,
+          subCount: item.sub ?? undefined,
+          dubCount: item.dub ?? undefined,
+        })),
+      })),
+    };
+  }
+
+  prewarm(): void { prewarmAnikoto(); }
 }

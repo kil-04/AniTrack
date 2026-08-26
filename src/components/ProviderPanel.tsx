@@ -2,7 +2,9 @@ import { useEffect, useReducer, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Play, ChevronLeft, ChevronRight, Loader2, Captions, Mic, Download, Check, Trash2 } from "lucide-react";
 import type { PlaybackProgress } from "../../shared/types";
+import type { ProviderDescriptor } from "../../shared/provider-types";
 import { scoreMatch, pickVerifiedCandidate } from "../lib/match";
+import { orderProviderIds, providerClient, providerName } from "../lib/provider-api";
 import {
   downloadsSupported,
   subscribeDownloads,
@@ -30,9 +32,10 @@ interface Props {
   resumeEpisode?: number;
 }
 
-export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji, animeId, animeMalId, animeYear, animeEpisodes, animeStatus, inline = false, resumeEpisode }: Props) {
+export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRomaji, animeId, animeMalId, animeYear, animeEpisodes, animeStatus, inline = false, resumeEpisode }: Props) {
   const navigate = useNavigate();
 
+  const [providerDescriptors, setProviderDescriptors] = useState<ProviderDescriptor[]>([]);
   const [results, setResults] = useState<any[]>([]);
   const [selected, setSelected] = useState<any | null>(null);
   const [searching, setSearching] = useState(false);
@@ -51,9 +54,24 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
   const [watchedEps, setWatchedEps] = useState<Map<number, number>>(new Map());
   const [epOffset, setEpOffset] = useState(0);
 
-  // Favicon URL derived from the configured AnimePahe base URL so domain hops work.
+  useEffect(() => {
+    let cancelled = false;
+    providerClient.list().then((providers) => {
+      if (!cancelled) setProviderDescriptors(providers);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Optional legacy decoration for AnimePahe. Connector identity comes from
+  // the provider registry above, not from this configured URL.
   const [paheBaseUrl, setPaheBaseUrl] = useState<string>("https://animepahe.pw");
   useEffect(() => { window.api.pahe.getUrl().then(setPaheBaseUrl).catch(() => {}); }, []);
+
+  const getProviderName = (providerId: string) => providerName(providerDescriptors, providerId);
+  const getResultProviderIds = () => orderProviderIds(
+    Array.from(new Set(results.map((result: any) => result.providerId ?? "animepahe"))) as string[],
+    providerDescriptors,
+  );
 
   // Offline downloads (Android only). Subscribe so episode tiles reflect status.
   const canDownload = downloadsSupported();
@@ -126,7 +144,7 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
 
       // Fetch results for all queries in parallel
       const searchResultsList = await Promise.all(
-        searchQueries.map(q => window.api.pahe.search(q).catch(() => []))
+        searchQueries.map(q => providerClient.search(q).catch(() => []))
       );
 
       // Combine and deduplicate candidates
@@ -148,7 +166,7 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
         ?? (animeId && animeId >= 1_000_000_000 ? animeId - 1_000_000_000 : undefined);
       if (realAnilistId || realMalId) {
         try {
-          const found = await window.api.pahe.findById(realAnilistId, realMalId);
+          const found = await providerClient.findByExternalId(realAnilistId, realMalId);
           if (found) {
             const key = `${found.providerId ?? "animepahe"}:${found.id}`;
             if (!combinedMap.has(key)) {
@@ -247,7 +265,7 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
     setSearching(true);
     setError(null);
     try {
-      const res = await window.api.pahe.search(manualQuery.trim());
+      const res = await providerClient.search(manualQuery.trim());
       const filtered = res.filter(candidate => {
         if (animeYear && candidate.year) {
           return Math.abs(Number(candidate.year) - animeYear) <= 3;
@@ -278,7 +296,7 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
     if (!selected) return;
     setLoadingEps(true);
     setError(null);
-    window.api.pahe.episodes(selected.providerId ?? "animepahe", selected.id, page).then(async (r) => {
+    providerClient.episodes(selected.providerId ?? "animepahe", selected.id, page).then(async (r) => {
       const rawData = [...(r.data || [])].sort((a: any, b: any) => {
         const aNum = a.episodeNumber ?? a.episode ?? 0;
         const bNum = b.episodeNumber ?? b.episode ?? 0;
@@ -292,7 +310,7 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
         setEpOffset(currentOffset);
       } else if (page > 1 && currentOffset === 0) {
         try {
-          const p1 = await window.api.pahe.episodes(selected.providerId ?? "animepahe", selected.id, 1);
+          const p1 = await providerClient.episodes(selected.providerId ?? "animepahe", selected.id, 1);
           if (p1.data.length > 0) {
             const sortedP1 = [...p1.data].sort((a: any, b: any) => {
               const aNum = a.episodeNumber ?? a.episode ?? 0;
@@ -382,7 +400,7 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
       let pg = 1;
       let lp = lastPage || 1;
       while (collected.length < BATCH_MAX && pg <= lp) {
-        const r = await window.api.pahe.episodes(provider, selected.id, pg);
+        const r = await providerClient.episodes(provider, selected.id, pg);
         lp = r.lastPage ?? lp;
         const mapped = (r.data || [])
           .map((ep: any) => {
@@ -463,7 +481,7 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
         {!selected && !searching && (showManualSearch || results.length === 0) && (
           <div className="py-4">
             <p className="mb-3 text-sm text-white/30">
-              Not found on AnimePahe automatically. Try a manual search:
+              Not found on the available streaming providers automatically. Try a manual search:
             </p>
             <div className="flex gap-2">
               <input
@@ -488,14 +506,14 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
         {selected && (
           <>
             {(() => {
-              const providers = Array.from(new Set(results.map((r: any) => r.providerId ?? "animepahe")));
+              const providers = getResultProviderIds();
               if (providers.length < 2) return null;
               return (
                 <div className="mb-3 flex items-center gap-2">
                   <span className="text-xs font-medium uppercase tracking-wider text-white/50">Server</span>
                   {providers.map((pid) => {
                     const isActive = (selected.providerId ?? "animepahe") === pid;
-                    const name = pid === "anikoto" ? "Anikoto" : "AnimePahe";
+                    const name = getProviderName(pid);
                     return (
                       <button
                         key={pid}
@@ -698,14 +716,18 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
   return (
     <div className="rounded-lg border border-white/10 bg-bg-card p-4">
       <div className="mb-3 flex items-center gap-2">
-        <img
-          src={`${paheBaseUrl}/favicon.ico`}
-          className="h-4 w-4"
-          alt=""
-          onError={(e) => (e.currentTarget.style.display = "none")}
-        />
+        {(selected?.providerId ?? "") === "animepahe" && (
+          <img
+            src={`${paheBaseUrl}/favicon.ico`}
+            className="h-4 w-4"
+            alt=""
+            onError={(e) => (e.currentTarget.style.display = "none")}
+          />
+        )}
         <span className="text-sm font-semibold">
-          Stream via {selected ? (selected.providerId === 'anikoto' ? 'Anikoto' : 'AnimePahe') : 'AnimePahe/Anikoto'}
+          Stream via {selected
+            ? getProviderName(selected.providerId ?? "animepahe")
+            : (providerDescriptors.map((provider) => provider.name).join("/") || "streaming providers")}
         </span>
       </div>
 
@@ -717,10 +739,10 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
         <div>
           {searching ? (
             <div className="flex items-center gap-2 text-xs text-muted">
-              <Loader2 size={12} className="animate-spin" /> Searching AnimePahe...
+              <Loader2 size={12} className="animate-spin" /> Searching providers...
             </div>
           ) : results.length === 0 ? (
-            <div className="text-xs text-muted">No results found on AnimePahe.</div>
+            <div className="text-xs text-muted">No results found on the available providers.</div>
           ) : (
             <div className="space-y-1">
               <div className="mb-1 text-xs text-muted">Select the correct title:</div>
@@ -735,7 +757,7 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
                   )}
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-xs font-medium">{r.title}</div>
-                    <div className="text-xs text-muted">{r.providerId === 'anikoto' ? 'Anikoto' : 'AnimePahe'} · {r.year || '?'} · {r.episodes || '?'} eps</div>
+                    <div className="text-xs text-muted">{getProviderName(r.providerId ?? "animepahe")} · {r.year || '?'} · {r.episodes || '?'} eps</div>
                   </div>
                 </button>
               ))}
@@ -763,9 +785,9 @@ export default function PahePanel({ animeTitle, animeTitleAlt, animeTitleRomaji,
                 }}
                 className="bg-bg-elev text-xs text-muted border border-white/10 rounded px-2 py-1 outline-none"
               >
-                {Array.from(new Set(results.map(r => r.providerId ?? "animepahe"))).map(pid => (
+                {getResultProviderIds().map(pid => (
                   <option key={pid} value={pid}>
-                    {pid === 'anikoto' ? 'Anikoto' : 'AnimePahe'}
+                    {getProviderName(pid)}
                   </option>
                 ))}
               </select>

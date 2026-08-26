@@ -34,6 +34,12 @@ Android unit tests, and `npm run typecheck` checks both TypeScript contexts.
 
 ## Architecture
 
+The maintained applications are the Electron desktop app and the native Kotlin
+app in `anitrack-android/`. The `android/` and `android-plugins/` folders are the
+legacy Capacitor app. There is no Flutter/Dart application in this repository.
+See `docs/architecture/project-structure.md` and
+`docs/providers/connector-contract.md` before changing provider boundaries.
+
 The repo has **three TypeScript compilation contexts**:
 
 | Context | tsconfig | Module format | Runs in |
@@ -56,6 +62,7 @@ When adding a new IPC call: add the channel name to `IPC` in `shared/types.ts`, 
 ### Electron main process (`electron/`)
 
 - **`main.ts`** — app lifecycle, single-instance lock, `local-video://` custom protocol for serving local files to the renderer, CDN header injection (Referer/Origin spoofing + CORS injection for AnimePahe HLS streams), auto-updater, MAL flush timer
+- **`ipc/providers.ts`** — provider-neutral streaming IPC registration; legacy `PAHE_*` channels remain for renderer compatibility during migration
 - **`services/db.ts`** — SQLite via `node-sqlite3-wasm`; single lazy-initialized connection; schema created inline with `initSchema()`. DB file lives in Electron's `userData`. Tables: `anime`, `list_entry`, `local_episode`, `playback`, `library_folder`
 - **`services/mal.ts`** — MAL OAuth 2.0 with PKCE (plain method); uses a shared public client ID; auth via in-app BrowserWindow; `flushDirty()` pushes `mal_dirty=1` entries every 30s
 - **`services/anilist.ts`** — AniList GraphQL for search/metadata/trending

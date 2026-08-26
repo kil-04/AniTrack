@@ -66,6 +66,8 @@ export interface PlaybackProgress {
   // (e.g. watched via Latest Episodes without going through ShowDetail)
   animeTitle?: string;
   animeCoverUrl?: string;
+  providerId?: string;
+  /** Legacy field name retained for sync/database compatibility. */
   animePaheSession?: string;
 }
 
@@ -76,6 +78,7 @@ export interface ContinueWatchingItem {
   durationSec: number;
   filePath?: string | null;
   percent: number;
+  providerId?: string | null;
   animePaheSession?: string | null;  // set for pahe-only watches (no AniList ID)
   updatedAt: number;                 // real watch time — cross-device sync ordering depends on this
 }
@@ -174,6 +177,11 @@ export const IPC = {
   PROGRESS_GET: "progress:get",
   PROGRESS_SET: "progress:set",
   CW_DISMISS: "cw:dismiss",
+  // Provider-neutral streaming API (legacy PAHE_* channels remain during migration)
+  PROVIDERS_LIST: "providers:list",
+  PROVIDERS_EXTERNAL_IDS: "providers:external-ids",
+  PROVIDERS_FIND_BY_EXTERNAL_ID: "providers:find-by-external-id",
+  PROVIDERS_FEED: "providers:feed",
   // AnimePahe
   PAHE_SEARCH: "pahe:search",
   PAHE_EPISODES: "pahe:episodes",

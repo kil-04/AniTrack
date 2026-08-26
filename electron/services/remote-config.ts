@@ -116,50 +116,31 @@ function validateStringList(value: unknown, label: string, pattern: RegExp): str
   return [...new Set(items)];
 }
 
-const PROVIDER_RULES = {
-  anikoto: {
-    routes: {
-      home: [], search: ["query", "page"], watch: ["animeId"], episodeList: ["showId"],
-      serverList: ["servers"], serverResolve: ["linkId"], sources: ["playerId"],
-    },
-    selectors: [
-      "searchItemClass", "searchTitleAttribute", "totalClass", "subClass", "dubClass",
-      "watchContainerId", "showIdAttribute", "episodeIdAttribute", "episodeSlugAttribute",
-      "episodeNumberAttribute", "episodeServersAttribute", "malIdAttribute",
-      "serverLinkAttribute", "playerContainerId", "playerIdAttribute",
-    ],
-  },
-  animepahe: {
-    routes: {
-      home: [], search: ["query"], latest: ["count", "page"], episodes: ["animeId", "page"],
-      anime: ["session"], play: ["animeId", "episodeId"],
-    },
-    selectors: ["streamUrlAttribute", "resolutionAttribute", "audioAttribute"],
-  },
-} as const;
-
 function validateProviderRules(
   raw: Record<string, unknown>,
-  provider: keyof typeof PROVIDER_RULES,
   label: string,
 ): Pick<RuntimeProviderConfig, "routes" | "selectors"> {
-  const spec = PROVIDER_RULES[provider];
   if (!raw.routes || typeof raw.routes !== "object" || Array.isArray(raw.routes)) {
     throw new Error(`${label}.routes must be an object`);
   }
   const routes = raw.routes as Record<string, unknown>;
-  assertKeys(routes, Object.keys(spec.routes), `${label}.routes`);
+  const routeEntries = Object.entries(routes);
+  if (routeEntries.length < 1 || routeEntries.length > MAX_LIST_ITEMS) {
+    throw new Error(`${label}.routes must contain 1-${MAX_LIST_ITEMS} entries`);
+  }
   const checkedRoutes: Record<string, string> = {};
-  for (const [name, required] of Object.entries(spec.routes) as Array<[string, readonly string[]]>) {
-    const route = routes[name];
+  for (const [name, route] of routeEntries) {
+    if (!/^[A-Za-z][A-Za-z0-9]{0,63}$/.test(name)) {
+      throw new Error(`${label}.routes contains an invalid name`);
+    }
     if (typeof route !== "string" || route.length < 1 || route.length > 240 || !route.startsWith("/") ||
         route.includes("\\") || route.includes("://") || /[\r\n\0]/.test(route)) {
       throw new Error(`${label}.routes.${name} must be a bounded origin-relative route`);
     }
     const placeholders = [...route.matchAll(/\{([A-Za-z][A-Za-z0-9]*)\}/g)].map((match) => match[1]);
-    if (placeholders.length !== required.length || !required.every((key) => placeholders.includes(key)) ||
-        !placeholders.every((key) => required.includes(key)) ||
-        route.replace(/\{[A-Za-z][A-Za-z0-9]*\}/g, "").includes("{")) {
+    const remainder = route.replace(/\{[A-Za-z][A-Za-z0-9]*\}/g, "");
+    if (placeholders.length > 16 || new Set(placeholders).size !== placeholders.length ||
+        remainder.includes("{") || remainder.includes("}")) {
       throw new Error(`${label}.routes.${name} contains invalid placeholders`);
     }
     checkedRoutes[name] = route;
@@ -168,11 +149,14 @@ function validateProviderRules(
     throw new Error(`${label}.selectors must be an object`);
   }
   const selectors = raw.selectors as Record<string, unknown>;
-  assertKeys(selectors, [...spec.selectors], `${label}.selectors`);
+  const selectorEntries = Object.entries(selectors);
+  if (selectorEntries.length > MAX_LIST_ITEMS) {
+    throw new Error(`${label}.selectors must contain at most ${MAX_LIST_ITEMS} entries`);
+  }
   const checkedSelectors: Record<string, string> = {};
-  for (const name of spec.selectors) {
-    const selector = selectors[name];
-    if (typeof selector !== "string" || !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(selector)) {
+  for (const [name, selector] of selectorEntries) {
+    if (!/^[A-Za-z][A-Za-z0-9]{0,63}$/.test(name) ||
+        typeof selector !== "string" || !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(selector)) {
       throw new Error(`${label}.selectors.${name} must be a safe HTML identifier`);
     }
     checkedSelectors[name] = selector;
@@ -183,8 +167,6 @@ function validateProviderRules(
 function validateProvider(
   value: unknown,
   label: string,
-  provider: keyof typeof PROVIDER_RULES,
-  allowBareFamilyLabels = false,
 ): RuntimeProviderConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} is invalid`);
   const raw = value as Record<string, unknown>;
@@ -194,16 +176,14 @@ function validateProvider(
       raw.baseUrls.some((url) => !safeHttpsOrigin(url))) {
     throw new Error(`${label}.baseUrls must contain only public HTTPS URLs`);
   }
-  const rules = validateProviderRules(raw, provider, label);
+  const rules = validateProviderRules(raw, label);
   return {
     enabled: raw.enabled,
     baseUrls: [...new Set(raw.baseUrls as string[])].map((url) => url.replace(/\/+$/, "")),
     streamHostFragments: validateStringList(
       raw.streamHostFragments,
       `${label}.streamHostFragments`,
-      allowBareFamilyLabels
-        ? /^(?:[a-z0-9][a-z0-9-]{4,61}|[a-z0-9][a-z0-9-]{4,61}\.|[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+)$/
-        : /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/,
+      /^(?:[a-z0-9][a-z0-9-]{4,61}|[a-z0-9][a-z0-9-]{4,61}\.|[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+)$/,
     ),
     mediaExtensions: validateStringList(
       raw.mediaExtensions,
@@ -226,16 +206,25 @@ function validateConfig(json: string): RuntimeConfig {
   if (typeof raw.issuedAt !== "string" || !Number.isFinite(Date.parse(raw.issuedAt))) {
     throw new Error("invalid configuration timestamp");
   }
-  if (!Array.isArray(raw.providerOrder) || raw.providerOrder.length !== 2 ||
-      new Set(raw.providerOrder).size !== 2 ||
-      raw.providerOrder.some((item) => item !== "anikoto" && item !== "animepahe")) {
-    throw new Error("providerOrder must contain anikoto and animepahe exactly once");
+  if (!Array.isArray(raw.providerOrder) || raw.providerOrder.length < 1 ||
+      raw.providerOrder.length > 16 || new Set(raw.providerOrder).size !== raw.providerOrder.length ||
+      raw.providerOrder.some((item) => typeof item !== "string" || !/^[a-z][a-z0-9-]{1,31}$/.test(item))) {
+    throw new Error("providerOrder must contain 1-16 unique provider ids");
   }
   if (!raw.providers || typeof raw.providers !== "object" || Array.isArray(raw.providers)) {
     throw new Error("providers are invalid");
   }
   const providers = raw.providers as Record<string, unknown>;
-  assertKeys(providers, ["anikoto", "animepahe"], "providers");
+  const providerOrder = raw.providerOrder as string[];
+  const providerNames = Object.keys(providers);
+  if (providerNames.length !== providerOrder.length ||
+      providerNames.some((provider) => !providerOrder.includes(provider))) {
+    throw new Error("providers must contain exactly the ids in providerOrder");
+  }
+  const checkedProviders = Object.fromEntries(providerOrder.map((provider) => [
+    provider,
+    validateProvider(providers[provider], `providers.${provider}`),
+  ]));
   if (!raw.features || typeof raw.features !== "object" || Array.isArray(raw.features)) {
     throw new Error("features are invalid");
   }
@@ -252,11 +241,8 @@ function validateConfig(json: string): RuntimeConfig {
     schemaVersion: 1,
     revision: Number(raw.revision),
     issuedAt: raw.issuedAt,
-    providerOrder: raw.providerOrder as Array<"anikoto" | "animepahe">,
-    providers: {
-      anikoto: validateProvider(providers.anikoto, "providers.anikoto", "anikoto", true),
-      animepahe: validateProvider(providers.animepahe, "providers.animepahe", "animepahe"),
-    },
+    providerOrder,
+    providers: checkedProviders,
     features: {
       anikotoStreaming: features.anikotoStreaming as boolean,
       animepaheStreaming: features.animepaheStreaming as boolean,

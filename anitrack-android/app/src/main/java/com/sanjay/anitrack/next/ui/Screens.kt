@@ -36,6 +36,10 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.sanjay.anitrack.next.data.Anime
 import com.sanjay.anitrack.next.data.AniList
+import com.sanjay.anitrack.next.data.PlaySession
+import com.sanjay.anitrack.next.data.RemoteConfig
+import com.sanjay.anitrack.next.data.providers.ProviderSeries
+import com.sanjay.anitrack.next.data.providers.Providers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -364,57 +368,33 @@ internal fun fmtSecs(sec: Double): String {
  * false only if no source could be found at all.
  */
 internal suspend fun prepareResume(row: com.sanjay.anitrack.next.data.Db.CwRow): Boolean {
-    com.sanjay.anitrack.next.data.PlaySession.localFile = null   // online resume, not a download
-    // Same detection as the desktop: pahe sessions are UUIDs, anikoto slugs
-    // aren't. (Also strip the legacy "pahe:" prefix older Next builds wrote.)
-    val key = row.slug?.removePrefix("pahe:")
-    val isPahe = key != null && com.sanjay.anitrack.next.data.PlaySession.PAHE_UUID.matches(key)
-    val meta = com.sanjay.anitrack.next.data.AniList.byId(row.animeId)
+    PlaySession.localFile = null // Online resume, never a downloaded file.
+    val runtime = RemoteConfig.current()
+    val registry = Providers.registry
+    // Keep the database/gist format unchanged. Only old Android builds wrote
+    // the temporary "pahe:" prefix, so remove it at this compatibility edge.
+    val key = row.slug?.removePrefix("pahe:")?.takeIf(String::isNotBlank)
 
-    // 1. Anikoto slug stored → use it directly.
-    if (key != null && !isPahe) {
-        val eps = runCatching { com.sanjay.anitrack.next.data.Anikoto.episodes(key).episodes }.getOrNull()
-        if (!eps.isNullOrEmpty()) {
-            com.sanjay.anitrack.next.data.PlaySession.apply {
-                provider = "anikoto"; animeId = row.animeId; animeTitle = row.title; animeCover = row.cover
-                anime = meta; paheEps = emptyList(); slug = key; anikotoEps = eps
-                index = eps.indexOfFirst { it.number == row.episode }.takeIf { it >= 0 } ?: 0
-            }
-            return true
-        }
+    // Let each enabled connector recognize and restore its own persisted key.
+    // This keeps resume working when more provider key formats are introduced.
+    val resumed = key?.let {
+        row.providerId?.let { providerId -> registry.resume(providerId, it, runtime) }
+            ?: registry.resumeFirst(it, runtime)
     }
-    // 2. AnimePahe session stored → use it.
-    if (key != null && isPahe) {
-        val eps = runCatching { com.sanjay.anitrack.next.data.Pahe.episodesAll(key) }.getOrNull()
-        if (!eps.isNullOrEmpty()) {
-            com.sanjay.anitrack.next.data.PlaySession.apply {
-                provider = "animepahe"; animeId = row.animeId; animeTitle = row.title; animeCover = row.cover
-                anime = meta; anikotoEps = emptyList(); paheSession = key; paheEps = eps
-                index = eps.indexOfFirst { it.number == row.episode }.takeIf { it >= 0 } ?: 0
-            }
-            return true
-        }
-    }
-    // 3. No usable slug → re-match from metadata (Anikoto first, then AnimePahe).
-    if (meta != null) {
-        runCatching { com.sanjay.anitrack.next.data.Anikoto.matchFor(meta) }.getOrNull()?.let { m ->
-            com.sanjay.anitrack.next.data.PlaySession.apply {
-                provider = "anikoto"; animeId = row.animeId; animeTitle = row.title; animeCover = row.cover
-                anime = meta; paheEps = emptyList(); slug = m.source.slug; anikotoEps = m.list.episodes
-                index = m.list.episodes.indexOfFirst { it.number == row.episode }.takeIf { it >= 0 } ?: 0
-            }
-            return true
-        }
-        runCatching { com.sanjay.anitrack.next.data.Pahe.matchFor(meta) }.getOrNull()?.let { m ->
-            com.sanjay.anitrack.next.data.PlaySession.apply {
-                provider = "animepahe"; animeId = row.animeId; animeTitle = row.title; animeCover = row.cover
-                anime = meta; anikotoEps = emptyList(); paheSession = m.source.session; paheEps = m.episodes
-                index = m.episodes.indexOfFirst { it.number == row.episode }.takeIf { it >= 0 } ?: 0
-            }
-            return true
-        }
-    }
-    return false
+
+    // Metadata is still loaded for player server switching and is the fallback
+    // when a stored source disappeared or the row came from an older client.
+    val meta = runCatching { AniList.byId(row.animeId) }.getOrNull()
+    val series = resumed ?: meta?.let { registry.matchFirst(it, runtime) } ?: return false
+    PlaySession.startSeries(
+        series = series,
+        selectedIndex = series.episodeIndex(row.episode),
+        animeId = row.animeId,
+        animeTitle = row.title,
+        animeCover = row.cover,
+        anime = meta,
+    )
+    return true
 }
 
 @Composable
@@ -948,27 +928,28 @@ private fun WatchOrderSection(anime: Anime, onOpenAnime: (Int) -> Unit) {
 
 private data class EpUi(
     val number: Float,
+    val title: String?,
+    val snapshot: String?,
     val play: () -> Unit,
     val resolveForDownload: suspend () -> Triple<String, String, String>,
 )
 
-private const val DESKTOP_UA =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-
 @OptIn(ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
 @Composable
 private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: () -> Unit) {
-    val runtime = com.sanjay.anitrack.next.data.RemoteConfig.current()
-    val enabledServers = runtime.providerOrder.filter { id ->
-        if (id == "anikoto") runtime.anikoto.enabled && runtime.features.anikotoStreaming
-        else runtime.animepahe.enabled && runtime.features.animepaheStreaming
+    val runtime = RemoteConfig.current()
+    val registry = Providers.registry
+    val enabledProviders = remember(runtime) { registry.enabled(runtime) }
+    val enabledProviderIds = enabledProviders.map { it.descriptor.id }
+    var server by remember(anime.id, enabledProviderIds) {
+        mutableStateOf(enabledProviderIds.firstOrNull().orEmpty())
     }
-    var server by remember(anime.id) { mutableStateOf(enabledServers.firstOrNull() ?: "anikoto") }
-    var anikotoMatch by remember { mutableStateOf<com.sanjay.anitrack.next.data.Anikoto.Matched?>(null) }
-    var paheMatch by remember { mutableStateOf<com.sanjay.anitrack.next.data.Pahe.Matched?>(null) }
-    var loading by remember { mutableStateOf(false) }
-    var failed by remember { mutableStateOf(false) }
-    var failureMessage by remember { mutableStateOf<String?>(null) }
+    var seriesByProvider by remember(anime.id) {
+        mutableStateOf<Map<String, ProviderSeries>>(emptyMap())
+    }
+    var attemptedProviders by remember(anime.id) { mutableStateOf<Set<String>>(emptySet()) }
+    var failures by remember(anime.id) { mutableStateOf<Map<String, String?>>(emptyMap()) }
+    var loading by remember(anime.id) { mutableStateOf(false) }
     var rangeStart by remember { mutableStateOf(0) }
     var watched by remember { mutableStateOf<Map<Float, Int>>(emptyMap()) }
 
@@ -977,77 +958,51 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: 
     }
     // Load the selected server on demand.
     LaunchedEffect(anime.id, server) {
-        rangeStart = 0; failed = false; failureMessage = null
-        if (server == "anikoto" && anikotoMatch == null) {
-            loading = true
-            runCatching { anikotoMatch = com.sanjay.anitrack.next.data.Anikoto.matchFor(anime) }
-                .onFailure { failed = true; failureMessage = it.message }
-            if (anikotoMatch == null) failed = true
-            loading = false
-        } else if (server == "animepahe" && paheMatch == null) {
-            loading = true
-            runCatching { paheMatch = com.sanjay.anitrack.next.data.Pahe.matchFor(anime) }
-                .onFailure { failed = true; failureMessage = it.message }
-            if (paheMatch == null) failed = true
-            loading = false
+        rangeStart = 0
+        if (server.isBlank() || server in attemptedProviders) return@LaunchedEffect
+        val provider = registry.enabled(server, runtime) ?: return@LaunchedEffect
+        loading = true
+        val result = runCatching { provider.match(anime) }
+        result.getOrNull()?.takeIf { it.episodes.isNotEmpty() }?.let { series ->
+            seriesByProvider = seriesByProvider + (server to series)
         }
+        attemptedProviders = attemptedProviders + server
+        if (seriesByProvider[server] == null) {
+            failures = failures + (server to result.exceptionOrNull()?.message)
+        }
+        loading = false
     }
 
-    // Build the unified episode list + click actions for the active server.
-    val epUi: List<EpUi> = remember(server, anikotoMatch, paheMatch) {
-        when (server) {
-            "animepahe" -> paheMatch?.let { m ->
-                m.episodes.map { ep ->
-                    EpUi(
-                        ep.number,
-                        play = {
-                            com.sanjay.anitrack.next.data.PlaySession.apply {
-                                provider = "animepahe"; animeId = anime.id
-                                animeTitle = anime.title; animeCover = anime.cover
-                                this.anime = anime; localFile = null
-                                paheSession = m.source.session; paheEps = m.episodes
-                                anikotoEps = emptyList()
-                                index = m.episodes.indexOf(ep).coerceAtLeast(0)
-                            }
-                            onPlay()
-                        },
-                        resolveForDownload = {
-                            val links = com.sanjay.anitrack.next.data.Pahe.links(m.source.session, ep.session)
-                            // Highest resolution, and among equal resolutions the
-                            // sub (non-eng-dub) track — same choice as playback,
-                            // so we grab exactly ONE highest-quality file.
-                            val best = links.maxByOrNull {
-                                (it.quality.filter { c -> c.isDigit() }.toIntOrNull() ?: 0) * 10 +
-                                    (if (!it.audio.lowercase().contains("eng")) 1 else 0)
-                            } ?: throw Exception("no link")
-                            val s = com.sanjay.anitrack.next.data.Pahe.resolveKwik(best.kwik)
-                            Triple(s.url, s.referer, com.sanjay.anitrack.next.data.Pahe.MOBILE_UA)
-                        },
+    val activeProvider = enabledProviders.firstOrNull { it.descriptor.id == server }
+    val activeSeries = seriesByProvider[server]
+    val canDownload = runtime.features.downloads &&
+        activeProvider?.descriptor?.capabilities?.downloads == true
+
+    // Build player and download actions from the normalized connector result.
+    val epUi: List<EpUi> = remember(activeSeries, anime, onPlay) {
+        val series = activeSeries ?: return@remember emptyList()
+        series.episodes.mapIndexed { index, episode ->
+            EpUi(
+                number = episode.number,
+                title = episode.title,
+                snapshot = episode.snapshot,
+                play = {
+                    PlaySession.startSeries(
+                        series = series,
+                        selectedIndex = index,
+                        animeId = anime.id,
+                        animeTitle = anime.title,
+                        animeCover = anime.cover,
+                        anime = anime,
                     )
-                }
-            }.orEmpty()
-            else -> anikotoMatch?.let { m ->
-                m.list.episodes.map { ep ->
-                    EpUi(
-                        ep.number,
-                        play = {
-                            com.sanjay.anitrack.next.data.PlaySession.apply {
-                                provider = "anikoto"; animeId = anime.id
-                                animeTitle = anime.title; animeCover = anime.cover
-                                this.anime = anime; localFile = null
-                                slug = m.source.slug; anikotoEps = m.list.episodes
-                                paheEps = emptyList()
-                                index = m.list.episodes.indexOf(ep).coerceAtLeast(0)
-                            }
-                            onPlay()
-                        },
-                        resolveForDownload = {
-                            val s = com.sanjay.anitrack.next.data.Anikoto.resolve(m.source.slug, ep)
-                            Triple(s.url, s.referer, DESKTOP_UA)
-                        },
-                    )
-                }
-            }.orEmpty()
+                    onPlay()
+                },
+                resolveForDownload = {
+                    val media = episode.resolve()
+                    check(media.downloadable) { "Downloads are not supported by this server" }
+                    Triple(media.url, media.referer, media.userAgent)
+                },
+            )
         }
     }
 
@@ -1055,28 +1010,36 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: 
         // Header with SUB/DUB badges.
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Episodes", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            val src = anikotoMatch?.source
-            if (src?.subCount != null) {
-                Spacer(Modifier.width(10.dp))
-                Box(Modifier.clip(RoundedCornerShape(6.dp)).background(Color(0xFF3BA55D).copy(alpha = 0.25f)).padding(horizontal = 8.dp, vertical = 2.dp)) {
-                    Text("SUB ${src.subCount}", style = MaterialTheme.typography.labelSmall, color = Color(0xFF7CD07C), fontWeight = FontWeight.Bold)
-                }
-            }
-            if (src?.dubCount != null && src.dubCount > 0) {
-                Spacer(Modifier.width(6.dp))
-                Box(Modifier.clip(RoundedCornerShape(6.dp)).background(Color(0xFF5865F2).copy(alpha = 0.25f)).padding(horizontal = 8.dp, vertical = 2.dp)) {
-                    Text("DUB ${src.dubCount}", style = MaterialTheme.typography.labelSmall, color = Color(0xFF9AA5FF), fontWeight = FontWeight.Bold)
+            activeSeries?.badges?.forEachIndexed { index, badge ->
+                Spacer(Modifier.width(if (index == 0) 10.dp else 6.dp))
+                val isDub = badge.startsWith("DUB", ignoreCase = true)
+                Box(
+                    Modifier.clip(RoundedCornerShape(6.dp))
+                        .background(
+                            (if (isDub) Color(0xFF5865F2) else Color(0xFF3BA55D))
+                                .copy(alpha = 0.25f),
+                        )
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                ) {
+                    Text(
+                        badge,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (isDub) Color(0xFF9AA5FF) else Color(0xFF7CD07C),
+                        fontWeight = FontWeight.Bold,
+                    )
                 }
             }
         }
         Spacer(Modifier.height(8.dp))
         // Server toggle
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if ("anikoto" in enabledServers) {
-                FilterChip(selected = server == "anikoto", onClick = { server = "anikoto" }, label = { Text("Anikoto") })
-            }
-            if ("animepahe" in enabledServers) {
-                FilterChip(selected = server == "animepahe", onClick = { server = "animepahe" }, label = { Text("AnimePahe") })
+            enabledProviders.forEach { provider ->
+                val descriptor = provider.descriptor
+                FilterChip(
+                    selected = server == descriptor.id,
+                    onClick = { server = descriptor.id },
+                    label = { Text(descriptor.name) },
+                )
             }
             if (loading) {
                 Spacer(Modifier.width(4.dp))
@@ -1084,16 +1047,16 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: 
             }
         }
         Spacer(Modifier.height(4.dp))
-        if (server == "anikoto" && anikotoMatch != null) {
+        if (activeSeries != null) {
             Text(
-                if (anikotoMatch!!.verified) "verified ✓" else "best match",
+                if (activeSeries.verified) "verified ✓" else "best match",
                 style = MaterialTheme.typography.labelSmall,
-                color = if (anikotoMatch!!.verified) Color(0xFF4CAF50) else Color.White.copy(alpha = 0.5f),
+                color = if (activeSeries.verified) Color(0xFF4CAF50) else Color.White.copy(alpha = 0.5f),
             )
         }
-        if (!loading && failed && epUi.isEmpty()) {
+        if (!loading && server in attemptedProviders && epUi.isEmpty()) {
             Text(
-                failureMessage?.let { "No source: ${it.take(160)}" } ?: "No source on this server.",
+                failures[server]?.let { "No source: ${it.take(160)}" } ?: "No source on this server.",
                 style = MaterialTheme.typography.labelSmall,
                 color = Color.White.copy(alpha = 0.55f),
             )
@@ -1105,7 +1068,7 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: 
             val current = ranges.getOrElse(rangeStart) { emptyList() }
 
             // Action buttons (Open Player · Download N · Range), desktop style.
-            var rangeDialog by remember { mutableStateOf(false) }
+            var rangeDialog by remember(server) { mutableStateOf(false) }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Button(
                     onClick = { (epUi.firstOrNull { (watched[it.number] ?: 0) < 85 } ?: epUi.first()).play() },
@@ -1115,29 +1078,31 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: 
                     Icon(Icons.Filled.PlayArrow, null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp)); Text("Open Player", fontWeight = FontWeight.Bold)
                 }
-                Row(
-                    Modifier.height(42.dp).clip(RoundedCornerShape(10.dp)).background(Color.White.copy(alpha = 0.08f))
-                        .clickable {
-                            current.forEach { ep -> com.sanjay.anitrack.next.data.Downloads.enqueue(anime.id, ep.number, anime.title, anime.cover, ep.resolveForDownload) }
-                        }
-                        .padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(Icons.Filled.FileDownload, null, tint = Color.White, modifier = Modifier.size(17.dp))
-                    Spacer(Modifier.width(7.dp)); Text("Download ${current.size}", color = Color.White, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
-                }
-                Row(
-                    Modifier.height(42.dp).clip(RoundedCornerShape(10.dp)).background(Color.White.copy(alpha = 0.08f))
-                        .clickable { rangeDialog = true }
-                        .padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(Icons.Filled.FileDownload, null, tint = Color.White, modifier = Modifier.size(17.dp))
-                    Spacer(Modifier.width(7.dp)); Text("Range", color = Color.White, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+                if (canDownload) {
+                    Row(
+                        Modifier.height(42.dp).clip(RoundedCornerShape(10.dp)).background(Color.White.copy(alpha = 0.08f))
+                            .clickable {
+                                current.forEach { ep -> com.sanjay.anitrack.next.data.Downloads.enqueue(anime.id, ep.number, anime.title, anime.cover, ep.resolveForDownload) }
+                            }
+                            .padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Filled.FileDownload, null, tint = Color.White, modifier = Modifier.size(17.dp))
+                        Spacer(Modifier.width(7.dp)); Text("Download ${current.size}", color = Color.White, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Row(
+                        Modifier.height(42.dp).clip(RoundedCornerShape(10.dp)).background(Color.White.copy(alpha = 0.08f))
+                            .clickable { rangeDialog = true }
+                            .padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Filled.FileDownload, null, tint = Color.White, modifier = Modifier.size(17.dp))
+                        Spacer(Modifier.width(7.dp)); Text("Range", color = Color.White, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             }
             // Range download dialog (desktop's custom episode range).
-            if (rangeDialog) {
+            if (rangeDialog && canDownload) {
                 var fromTxt by remember { mutableStateOf("") }
                 var toTxt by remember { mutableStateOf("") }
                 AlertDialog(
@@ -1201,7 +1166,7 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: 
                     ) {
                         // Thumbnail box (anime cover, 16:9).
                         AsyncImage(
-                            model = anime.banner ?: anime.cover,
+                            model = ep.snapshot ?: anime.banner ?: anime.cover,
                             contentDescription = null,
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.width(72.dp).height(44.dp).clip(RoundedCornerShape(6.dp)).background(Color.White.copy(alpha = 0.08f)),
@@ -1226,7 +1191,7 @@ private fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: 
                             )
                         }
                         // Download control — boxed like the desktop.
-                        when (dl?.status) {
+                        if (canDownload) when (dl?.status) {
                             com.sanjay.anitrack.next.data.Downloads.Status.DONE ->
                                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(end = 8.dp)) {
                                     Icon(Icons.Filled.Check, null, tint = Color(0xFF7CD07C), modifier = Modifier.size(16.dp))

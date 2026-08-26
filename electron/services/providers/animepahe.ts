@@ -1,4 +1,12 @@
-import { StreamProvider, AnimeInfo, EpisodeInfo, StreamLink, StreamData } from "./types";
+import {
+  StreamProvider,
+  AnimeInfo,
+  EpisodeInfo,
+  StreamLink,
+  StreamData,
+  ProviderFeed,
+  ProviderFeedResult,
+} from "./types";
 /**
  * AnimePahe integration — Cloudflare bypass via hidden BrowserWindow.
  *
@@ -957,8 +965,17 @@ export function prewarm(): void {
 
 
 export class AnimePaheProvider implements StreamProvider {
-  id = "animepahe";
-  name = "AnimePahe";
+  readonly id = "animepahe";
+  readonly name = "AnimePahe";
+  readonly capabilities = {
+    latest: true,
+    externalIds: true,
+    downloads: true,
+    prefetch: true,
+    configurableBaseUrl: true,
+    streamVariants: "quality" as const,
+    episodePageSize: 30,
+  };
 
   private linksCache = new Map<string, { links: StreamLink[]; timestamp: number }>();
   private readonly LINKS_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
@@ -972,6 +989,7 @@ export class AnimePaheProvider implements StreamProvider {
     return results.map(r => ({
       id: r.session,
       paheId: r.id,
+      externalLookupId: r.id,
       session: r.session,
       providerId: this.id,
       title: r.title,
@@ -1092,4 +1110,60 @@ export class AnimePaheProvider implements StreamProvider {
     const { url, cookies } = await resolveKwik(linkId);
     return { url, cookies, referer: new URL(linkId).origin };
   }
+
+  getExternalIds(animeId: string, lookupId?: string | number) {
+    return getAnimeIds(Number(lookupId), animeId);
+  }
+
+  async findByExternalId(anilistId?: number, malId?: number): Promise<AnimeInfo | null> {
+    const result = await findByExternalId(anilistId, malId);
+    if (!result) return null;
+    return {
+      id: result.session,
+      providerId: this.id,
+      externalLookupId: result.id,
+      title: result.title,
+      poster: result.poster,
+      episodes: result.episodes,
+      type: result.type,
+      status: result.status,
+      season: result.season,
+      year: result.year,
+      score: result.score,
+    };
+  }
+
+  async getFeed(feed: ProviderFeed, page = 1, count = 30): Promise<ProviderFeedResult> {
+    if (feed !== "latest") throw new Error(`${this.name} does not support the ${feed} feed`);
+    const safePage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
+    const safeCount = Number.isFinite(count) && count > 0 ? Math.min(100, Math.floor(count)) : 30;
+    const result = await getLatestEpisodes(safeCount, safePage);
+    return {
+      providerId: this.id,
+      feed,
+      page: safePage,
+      total: result.total,
+      lastPage: result.lastPage,
+      groups: [{
+        id: "latest",
+        title: "Latest",
+        items: result.data.map((item) => ({
+          id: String(item.id),
+          providerId: this.id,
+          animeId: item.anime_session,
+          title: item.anime_title,
+          snapshot: item.snapshot,
+          episodeNumber: item.episode,
+          publishedAt: item.created_at,
+          externalLookupId: item.anime_id,
+        })),
+      }],
+    };
+  }
+
+  prefetch(linkId: string): void { prefetchKwik(linkId); }
+  prewarm(): void { prewarm(); }
+  onConfigChanged(): void { syncPaheRuntimeConfig(); }
+  getBaseUrl(): string { return getPaheBaseUrl(); }
+  setBaseUrl(url: string): void { setPaheBaseUrl(url); }
 }

@@ -52,6 +52,7 @@ interface VideoControlsProps {
   availableSubtitles?: any[];
   onToggleSubtitles?: () => void;
   providerId?: string;
+  streamVariants?: "quality" | "subtitle-type";
 
   // Subtitle Settings props
   cueFontSize?: string;
@@ -81,6 +82,7 @@ export function VideoControls({
   availableSubtitles = [],
   onToggleSubtitles,
   providerId = "",
+  streamVariants,
 
   // Destructured Subtitle Settings
   cueFontSize = "16px",
@@ -150,6 +152,7 @@ export function VideoControls({
         isPiP={isPiP}
         playbackRate={playbackRate}
         providerId={providerId}
+        streamVariants={streamVariants}
         hlsLevels={hlsLevels}
         currentHlsLevel={currentHlsLevel}
         subtitlesEnabled={subtitlesEnabled}
@@ -390,7 +393,7 @@ export function VideoControls({
           )}
 
           {/* Link / Subtitle Selector */}
-          {links.length > 1 && providerId !== "anikoto" && (
+          {links.length > 1 && streamVariants !== "subtitle-type" && (
             <div className="relative">
               <button 
                 onClick={() => setLinksOpen(!linksOpen)} 

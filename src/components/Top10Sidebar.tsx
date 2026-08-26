@@ -1,47 +1,32 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Captions, Mic } from "lucide-react";
-
-type Tab = "day" | "week" | "month";
-
-const TABS: { id: Tab; label: string }[] = [
-  { id: "day", label: "Day" },
-  { id: "week", label: "Week" },
-  { id: "month", label: "Month" },
-];
-
-interface TopItem {
-  slug: string;
-  showId?: string;
-  title: string;
-  titleJp?: string;
-  poster?: string;
-  sub?: number | null;
-  dub?: number | null;
-}
-
-type TopData = Record<Tab, TopItem[]>;
+import { providerClient } from "../lib/provider-api";
+import type { ProviderFeedGroup, ProviderFeedItem } from "../../shared/provider-types";
 
 export default function Top10Sidebar() {
   const navigate = useNavigate();
-  const [tab, setTab] = useState<Tab>("day");
-  const [data, setData] = useState<TopData | null>(null);
+  const [tab, setTab] = useState("day");
+  const [groups, setGroups] = useState<ProviderFeedGroup[] | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Anikoto serves real Day/Week/Month rankings in one home-page fetch.
+  // The registry selects the first enabled connector with a normalized top feed.
   useEffect(() => {
     let cancelled = false;
-    window.api.pahe
-      .anikotoTop()
-      .then((res: any) => { if (!cancelled) setData(res as TopData); })
+    providerClient.feed("top", 1, 10)
+      .then((result) => {
+        if (cancelled) return;
+        setGroups(result.groups);
+        if (result.groups.length > 0) setTab(result.groups[0].id);
+      })
       .catch(() => {})
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, []);
 
-  // Resolve an Anikoto title to its AniList entry so it opens the normal detail page.
-  async function open(item: TopItem) {
-    for (const q of [item.title, item.titleJp].filter(Boolean) as string[]) {
+  // Resolve the provider result to its AniList entry so it opens the normal detail page.
+  async function open(item: ProviderFeedItem) {
+    for (const q of [item.title, ...(item.titleAlternatives ?? [])]) {
       try {
         const results = await window.api.anilist.search(q);
         if (results && results.length > 0) {
@@ -52,14 +37,15 @@ export default function Top10Sidebar() {
     }
   }
 
-  const items = data?.[tab] ?? [];
+  const tabs = groups ?? [];
+  const items = tabs.find((group) => group.id === tab)?.items ?? [];
 
   return (
     <div className="rounded-xl border border-white/5 bg-[#1b1b1b] p-4">
       <div className="mb-4 flex items-center justify-between">
         <h2 className="text-lg font-bold">Top 10</h2>
         <div className="flex overflow-hidden rounded-md border border-white/10 text-[11px] font-semibold">
-          {TABS.map((t) => (
+          {tabs.map((t) => (
             <button
               key={t.id}
               onClick={() => setTab(t.id)}
@@ -67,13 +53,13 @@ export default function Top10Sidebar() {
                 tab === t.id ? "bg-white text-black" : "text-white/60 hover:bg-white/5"
               }`}
             >
-              {t.label}
+              {t.title}
             </button>
           ))}
         </div>
       </div>
 
-      {loading && !data ? (
+      {loading && !groups ? (
         <div className="py-8 text-center text-sm text-white/30">Loading…</div>
       ) : items.length === 0 ? (
         <div className="py-8 text-center text-sm text-white/30">Couldn't load rankings.</div>
@@ -81,7 +67,7 @@ export default function Top10Sidebar() {
         <div className="flex flex-col">
           {items.map((a, i) => (
             <button
-              key={a.slug || i}
+              key={`${a.providerId}:${a.id || i}`}
               onClick={() => open(a)}
               className="flex items-center gap-3 border-b border-white/5 py-2.5 text-left last:border-0 hover:bg-white/[0.03] transition-colors"
             >
@@ -100,14 +86,14 @@ export default function Top10Sidebar() {
               <div className="min-w-0 flex-1">
                 <div className="line-clamp-2 text-sm font-semibold leading-tight text-white/90">{a.title}</div>
                 <div className="mt-1 flex items-center gap-2 text-[10px] font-bold text-white/40">
-                  {a.sub != null && (
+                  {a.subCount != null && (
                     <span className="flex items-center gap-0.5 text-emerald-300">
-                      <Captions size={11} /> {a.sub}
+                      <Captions size={11} /> {a.subCount}
                     </span>
                   )}
-                  {a.dub != null && (
+                  {a.dubCount != null && (
                     <span className="flex items-center gap-0.5 text-sky-300">
-                      <Mic size={10} /> {a.dub}
+                      <Mic size={10} /> {a.dubCount}
                     </span>
                   )}
                 </div>

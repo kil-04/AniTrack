@@ -19,11 +19,8 @@ export interface RuntimeConfig {
   schemaVersion: 1;
   revision: number;
   issuedAt: string;
-  providerOrder: Array<"anikoto" | "animepahe">;
-  providers: {
-    anikoto: RuntimeProviderConfig;
-    animepahe: RuntimeProviderConfig;
-  };
+  providerOrder: string[];
+  providers: Record<string, RuntimeProviderConfig>;
   features: RuntimeFeatureFlags;
   notice: string | null;
 }

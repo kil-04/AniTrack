@@ -10,6 +10,7 @@ import LatestEpCard from "../components/LatestEpCard";
 import ContinueWatchingCard from "../components/ContinueWatchingCard";
 import DiscoverRow from "../components/DiscoverRow";
 import Top10Sidebar from "../components/Top10Sidebar";
+import { providerClient } from "../lib/provider-api";
 
 export default function Home() {
   const trending = useAppStore((s) => s.trending);
@@ -152,10 +153,10 @@ export default function Home() {
     if (seedMap.size) setPaheEpTotals(new Map(seedMap));
 
     async function getLatestEpNumber(providerId: string, animeId: string): Promise<number> {
-      const first = await window.api.pahe.episodes(providerId, animeId, 1);
+      const first = await providerClient.episodes(providerId, animeId, 1);
       const lastPage = first.lastPage ?? 1;
       const last = lastPage > 1
-        ? await window.api.pahe.episodes(providerId, animeId, lastPage)
+        ? await providerClient.episodes(providerId, animeId, lastPage)
         : first;
       const nums = (last.data as any[]).map((e) => e.episodeNumber ?? e.episode).filter(Number.isFinite);
       return nums.length ? Math.max(...nums) : first.total;
@@ -171,17 +172,20 @@ export default function Home() {
         // AnimePahe sessions are UUIDs; Anikoto IDs are slugs (both contain
         // dashes, so a full UUID test is required to tell them apart).
         const isUuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(item.animePaheSession);
-        const providerId = isUuid ? "animepahe" : "anikoto";
+        const providerId = item.providerId ?? (isUuid ? "animepahe" : "anikoto");
         const total = await getLatestEpNumber(providerId, item.animePaheSession);
         return { key, total };
       }
       const title = item.anime.title;
-      const results = await window.api.pahe.search(title);
+      const results = await providerClient.search(title);
       if (!results.length) return null;
       const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
       const exact = results.find((r: any) => norm(r.title) === norm(title));
       const best = exact ?? results[0];
-      const total = await getLatestEpNumber(best.providerId ?? "animepahe", best.id ?? best.session);
+      const legacyBest = best as { providerId?: string; id?: string; session?: string };
+      const animeId = legacyBest.id ?? legacyBest.session;
+      if (!animeId) return null;
+      const total = await getLatestEpNumber(legacyBest.providerId ?? "animepahe", animeId);
       return { key, total };
     });
 

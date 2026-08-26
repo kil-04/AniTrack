@@ -133,50 +133,32 @@ function assertHttpsUrl(value, label, { originOnly = false, apk = false } = {}) 
   return url;
 }
 
-const PROVIDER_RULES = {
-  anikoto: {
-    routes: {
-      home: [], search: ["query", "page"], watch: ["animeId"], episodeList: ["showId"],
-      serverList: ["servers"], serverResolve: ["linkId"], sources: ["playerId"],
-    },
-    selectors: [
-      "searchItemClass", "searchTitleAttribute", "totalClass", "subClass", "dubClass",
-      "watchContainerId", "showIdAttribute", "episodeIdAttribute", "episodeSlugAttribute",
-      "episodeNumberAttribute", "episodeServersAttribute", "malIdAttribute",
-      "serverLinkAttribute", "playerContainerId", "playerIdAttribute",
-    ],
-  },
-  animepahe: {
-    routes: {
-      home: [], search: ["query"], latest: ["count", "page"], episodes: ["animeId", "page"],
-      anime: ["session"], play: ["animeId", "episodeId"],
-    },
-    selectors: ["streamUrlAttribute", "resolutionAttribute", "audioAttribute"],
-  },
-};
-
-function validateProviderRules(value, providerLabel, provider) {
-  const spec = PROVIDER_RULES[provider];
-  assert(value.routes && typeof value.routes === "object" && !Array.isArray(value.routes),
+function validateProviderRules(value, providerLabel) {
+  assert(isPlainObject(value.routes),
     `${providerLabel}.routes must be an object`);
-  assertExactKeys(value.routes, Object.keys(spec.routes), `${providerLabel}.routes`);
-  for (const [name, required] of Object.entries(spec.routes)) {
-    const route = value.routes[name];
+  const routeEntries = Object.entries(value.routes);
+  assert(routeEntries.length >= 1 && routeEntries.length <= 32,
+    `${providerLabel}.routes must contain 1-32 entries`);
+  for (const [name, route] of routeEntries) {
+    assert(/^[A-Za-z][A-Za-z0-9]{0,63}$/.test(name),
+      `${providerLabel}.routes contains an invalid name`);
     assert(typeof route === "string" && route.length >= 1 && route.length <= 240 && route.startsWith("/") &&
       !route.includes("\\") && !route.includes("://") && !/[\r\n\0]/.test(route),
     `${providerLabel}.routes.${name} must be a bounded origin-relative route`);
     const placeholders = [...route.matchAll(/\{([A-Za-z][A-Za-z0-9]*)\}/g)].map((match) => match[1]);
-    assert(placeholders.length === required.length && required.every((key) => placeholders.includes(key)) &&
-      placeholders.every((key) => required.includes(key)),
-    `${providerLabel}.routes.${name} must contain exactly: ${required.join(", ") || "no placeholders"}`);
-    assert(!route.replace(/\{[A-Za-z][A-Za-z0-9]*\}/g, "").includes("{"),
-      `${providerLabel}.routes.${name} contains an invalid placeholder`);
+    const remainder = route.replace(/\{[A-Za-z][A-Za-z0-9]*\}/g, "");
+    assert(placeholders.length <= 16 && new Set(placeholders).size === placeholders.length &&
+      !remainder.includes("{") && !remainder.includes("}"),
+    `${providerLabel}.routes.${name} contains invalid placeholders`);
   }
-  assert(value.selectors && typeof value.selectors === "object" && !Array.isArray(value.selectors),
+  assert(isPlainObject(value.selectors),
     `${providerLabel}.selectors must be an object`);
-  assertExactKeys(value.selectors, spec.selectors, `${providerLabel}.selectors`);
-  for (const name of spec.selectors) {
-    assert(typeof value.selectors[name] === "string" && /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(value.selectors[name]),
+  const selectorEntries = Object.entries(value.selectors);
+  assert(selectorEntries.length <= 32,
+    `${providerLabel}.selectors must contain at most 32 entries`);
+  for (const [name, selector] of selectorEntries) {
+    assert(/^[A-Za-z][A-Za-z0-9]{0,63}$/.test(name) &&
+      typeof selector === "string" && /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(selector),
       `${providerLabel}.selectors.${name} must be a safe HTML identifier`);
   }
 }
@@ -188,12 +170,12 @@ function validateRemoteConfig(config, label = "remote config") {
   assertPositiveInteger(config.revision, `${label}.revision`);
   assertIsoDate(config.issuedAt, `${label}.issuedAt`);
 
-  const providerNames = ["anikoto", "animepahe"];
-  assert(Array.isArray(config.providerOrder) && config.providerOrder.length === providerNames.length,
-    `${label}.providerOrder must list each supported provider once`);
-  assert(new Set(config.providerOrder).size === config.providerOrder.length &&
-    providerNames.every((provider) => config.providerOrder.includes(provider)),
-  `${label}.providerOrder must contain exactly ${providerNames.join(", ")}`);
+  assert(Array.isArray(config.providerOrder) && config.providerOrder.length >= 1 &&
+    config.providerOrder.length <= 16 && new Set(config.providerOrder).size === config.providerOrder.length &&
+    config.providerOrder.every((provider) =>
+      typeof provider === "string" && /^[a-z][a-z0-9-]{1,31}$/.test(provider)),
+  `${label}.providerOrder must contain 1-16 unique provider ids`);
+  const providerNames = config.providerOrder;
   assertExactKeys(config.providers, providerNames, `${label}.providers`);
   for (const provider of providerNames) {
     const value = config.providers[provider];
@@ -207,12 +189,11 @@ function validateRemoteConfig(config, label = "remote config") {
     assert(Array.isArray(value.streamHostFragments) && value.streamHostFragments.length >= 1 && value.streamHostFragments.length <= 32,
       `${providerLabel}.streamHostFragments must contain 1-32 entries`);
     const domain = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/i;
-    const anikotoPrefix = /^[a-z0-9][a-z0-9-]{4,61}\.$/i;
-    const anikotoRotatingFamily = /^[a-z0-9][a-z0-9-]{4,61}$/i;
+    const hostPrefix = /^[a-z0-9][a-z0-9-]{4,61}\.$/i;
+    const rotatingHostFamily = /^[a-z0-9][a-z0-9-]{4,61}$/i;
     value.streamHostFragments.forEach((fragment, index) => assert(
       typeof fragment === "string" && fragment.length <= 120 &&
-        (domain.test(fragment) || (provider === "anikoto" &&
-          (anikotoPrefix.test(fragment) || anikotoRotatingFamily.test(fragment)))),
+        (domain.test(fragment) || hostPrefix.test(fragment) || rotatingHostFamily.test(fragment)),
       `${providerLabel}.streamHostFragments[${index}] is invalid`,
     ));
     assert(new Set(value.streamHostFragments.map((value) => value.toLowerCase())).size === value.streamHostFragments.length,
@@ -225,7 +206,7 @@ function validateRemoteConfig(config, label = "remote config") {
     ));
     assert(new Set(value.mediaExtensions.map((value) => value.toLowerCase())).size === value.mediaExtensions.length,
       `${providerLabel}.mediaExtensions must not contain duplicates`);
-    validateProviderRules(value, providerLabel, provider);
+    validateProviderRules(value, providerLabel);
   }
 
   const featureNames = ["anikotoStreaming", "animepaheStreaming", "downloads", "malSync", "gistSync"];
