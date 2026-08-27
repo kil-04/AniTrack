@@ -12,9 +12,6 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -48,13 +45,11 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.C
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import com.sanjay.anitrack.next.data.PlaySession
 import com.sanjay.anitrack.next.PipState
 import com.sanjay.anitrack.next.data.providers.PlaybackBackend
-import com.sanjay.anitrack.next.data.providers.ProviderDescriptor
 import com.sanjay.anitrack.next.data.providers.Providers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -62,54 +57,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 private val Accent = Color(0xFFE50914)
-private fun fmtTime(ms: Long): String {
-    if (ms <= 0) return "0:00"
-    val total = ms / 1000
-    val h = total / 3600
-    val m = (total % 3600) / 60
-    val s = total % 60
-    return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
-}
-
-// Web (AnimePahe/hls.js) progress save — uses the mirrored position/duration.
-internal suspend fun saveWebProgress(index: Int, posMs: Long, durMs: Long) {
-    if (index >= PlaySession.count || durMs <= 0) return
-    val epNum = PlaySession.episodeNumber(index)
-    val now = System.currentTimeMillis()
-    val key = PlaySession.resumeKey()
-    com.sanjay.anitrack.next.data.Db.save(
-        PlaySession.animeId, epNum, posMs / 1000.0, durMs / 1000.0,
-        PlaySession.animeTitle, PlaySession.animeCover, key,
-        providerId = PlaySession.provider, updatedAt = now,
-    )
-    com.sanjay.anitrack.next.data.GistSync.pushProgress(
-        com.sanjay.anitrack.next.data.Db.CwRow(
-            PlaySession.animeId, epNum, posMs / 1000.0, durMs / 1000.0,
-            PlaySession.animeTitle, PlaySession.animeCover, key, PlaySession.provider, now,
-        ),
-    )
-}
-
-internal suspend fun saveProgress(player: ExoPlayer, index: Int) {
-    if (index >= PlaySession.count) return
-    val epNum = PlaySession.episodeNumber(index)
-    val dur = player.duration
-    if (dur <= 0) return
-    val now = System.currentTimeMillis()
-    val key = PlaySession.resumeKey()
-    com.sanjay.anitrack.next.data.Db.save(
-        PlaySession.animeId, epNum, player.currentPosition / 1000.0, dur / 1000.0,
-        PlaySession.animeTitle, PlaySession.animeCover, key,
-        providerId = PlaySession.provider, updatedAt = now,
-    )
-    com.sanjay.anitrack.next.data.GistSync.pushProgress(
-        com.sanjay.anitrack.next.data.Db.CwRow(
-            PlaySession.animeId, epNum, player.currentPosition / 1000.0, dur / 1000.0,
-            PlaySession.animeTitle, PlaySession.animeCover, key, PlaySession.provider, now,
-        ),
-    )
-}
-
 @OptIn(UnstableApi::class)
 @Composable
 fun PlayerScreen(
@@ -790,7 +737,7 @@ fun PlayerScreen(
                             Icon(if (muted) Icons.Filled.VolumeOff else Icons.Filled.VolumeUp, "Mute", tint = Color.White)
                         }
                         Text(
-                            "${fmtTime(shown)} / ${fmtTime(durationMs)}",
+                            "${formatPlayerTime(shown)} / ${formatPlayerTime(durationMs)}",
                             style = MaterialTheme.typography.labelMedium,
                             color = Color.White.copy(alpha = 0.85f),
                         )
@@ -895,198 +842,6 @@ fun PlayerScreen(
             else -> Column(Modifier.weight(1f).fillMaxWidth()) {
                 videoArea(Modifier.fillMaxWidth().aspectRatio(16f / 9f))
                 panel(Modifier.fillMaxWidth().weight(1f))
-            }
-        }
-    }
-}
-
-// ── Episode panel (the desktop app's SERVERS + range + find + grid) ──────────
-// Rendered beside the video in landscape/tablet, below it in portrait.
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun PlayerEpisodePanel(
-    modifier: Modifier,
-    provider: String,
-    providers: List<ProviderDescriptor>,
-    subType: String,
-    current: Int,
-    watched: Map<Float, Int>,
-    switching: Boolean,
-    switchError: String?,
-    canSwitch: Boolean,
-    onSelect: (Int) -> Unit,
-    onServer: (String) -> Unit,
-    onSubType: (String) -> Unit,
-) {
-    val count = PlaySession.count
-    val RANGE = 100
-    val rangeCount = ((count + RANGE - 1) / RANGE).coerceAtLeast(1)
-    // Follow the playing episode into its range.
-    var range by remember(current, count) { mutableStateOf(current / RANGE) }
-    var find by remember { mutableStateOf("") }
-    val listState = rememberLazyListState()
-
-    // Keep the playing episode visible when it's inside the shown range.
-    LaunchedEffect(current, range) {
-        val start = range * RANGE
-        if (current in start until minOf(start + RANGE, count)) {
-            runCatching { listState.animateScrollToItem((current - start - 2).coerceAtLeast(0)) }
-        }
-    }
-
-    Column(modifier.background(Color(0xFF0E0E12))) {
-        // ── SERVERS (the desktop app's switcher, in-player) ──
-        Text(
-            "SERVERS",
-            style = MaterialTheme.typography.labelSmall,
-            color = Color.White.copy(alpha = 0.45f),
-            modifier = Modifier.padding(start = 14.dp, top = 10.dp, bottom = 6.dp),
-        )
-        Row(
-            Modifier.padding(horizontal = 14.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            providers.forEach { descriptor ->
-                FilterChip(
-                    selected = provider == descriptor.id,
-                    enabled = canSwitch && !switching,
-                    onClick = { onServer(descriptor.id) },
-                    label = { Text(descriptor.name) },
-                )
-            }
-            if (switching) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Accent)
-        }
-        switchError?.let {
-            Text(
-                it,
-                style = MaterialTheme.typography.labelSmall,
-                color = Color(0xFFFF6B6B),
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp),
-            )
-        }
-        // Connectors opt into subtitle-mode selection through capabilities.
-        if (providers.firstOrNull { it.id == provider }?.capabilities?.subtitleModes == true) {
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "SUB TYPE",
-                style = MaterialTheme.typography.labelSmall,
-                color = Color.White.copy(alpha = 0.45f),
-                modifier = Modifier.padding(start = 14.dp, bottom = 6.dp),
-            )
-            Row(Modifier.padding(horizontal = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(selected = subType == "soft", onClick = { onSubType("soft") }, label = { Text("Soft Sub") })
-                FilterChip(selected = subType == "hard", onClick = { onSubType("hard") }, label = { Text("Hard Sub") })
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-
-        // ── Range chips + find-number (old app's 001-100 selector + search) ──
-        Row(
-            Modifier.padding(horizontal = 14.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (rangeCount > 1) {
-                LazyRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    items(rangeCount) { i ->
-                        val first = i * RANGE + 1
-                        val last = minOf((i + 1) * RANGE, count)
-                        FilterChip(
-                            selected = range == i,
-                            onClick = { range = i },
-                            label = { Text("$first–$last", style = MaterialTheme.typography.labelSmall) },
-                        )
-                    }
-                }
-            } else {
-                Spacer(Modifier.weight(1f))
-            }
-            // Slim "Find number" box, like the desktop's.
-            Box(
-                Modifier.width(110.dp).height(34.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(Color.White.copy(alpha = 0.05f))
-                    .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(6.dp))
-                    .padding(horizontal = 10.dp),
-                contentAlignment = Alignment.CenterStart,
-            ) {
-                androidx.compose.foundation.text.BasicTextField(
-                    value = find,
-                    onValueChange = { v ->
-                        find = v.filter { it.isDigit() }.take(4)
-                        find.toIntOrNull()?.let { n ->
-                            val idx = (0 until count).firstOrNull { PlaySession.episodeNumber(it).toInt() == n }
-                            if (idx != null) range = idx / RANGE
-                        }
-                    },
-                    singleLine = true,
-                    textStyle = MaterialTheme.typography.labelMedium.copy(color = Color.White),
-                    cursorBrush = androidx.compose.ui.graphics.SolidColor(Accent),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                if (find.isEmpty()) {
-                    Text("Find number", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.35f))
-                }
-            }
-        }
-        Spacer(Modifier.height(6.dp))
-
-        // ── Episode list for the active range ──
-        val start = range * RANGE
-        val visible = minOf(start + RANGE, count) - start
-        val findN = find.toIntOrNull()
-        LazyColumn(state = listState, modifier = Modifier.weight(1f)) {
-            items(visible) { off ->
-                val i = start + off
-                val n = PlaySession.episodeNumber(i)
-                val pct = watched[n] ?: 0
-                val isCur = i == current
-                val isFound = findN != null && n.toInt() == findN
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .background(
-                            when {
-                                isCur -> Accent.copy(alpha = 0.16f)
-                                isFound -> Color.White.copy(alpha = 0.10f)
-                                else -> Color.Transparent
-                            },
-                        )
-                        .clickable { onSelect(i) }
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "${if (n % 1f == 0f) n.toInt() else n}",
-                        modifier = Modifier.width(40.dp),
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = if (isCur) FontWeight.Bold else FontWeight.Normal,
-                        color = when {
-                            isCur -> Accent
-                            pct >= 85 -> Color.White.copy(alpha = 0.35f)
-                            else -> Color.White.copy(alpha = 0.85f)
-                        },
-                    )
-                    Text(
-                        PlaySession.episodeTitle(i) ?: "Episode ${if (n % 1f == 0f) n.toInt() else n}",
-                        modifier = Modifier.weight(1f),
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        color = when {
-                            isCur -> Color.White
-                            pct >= 85 -> Color.White.copy(alpha = 0.35f)
-                            else -> Color.White.copy(alpha = 0.7f)
-                        },
-                    )
-                    if (pct >= 85) {
-                        Text("✓", style = MaterialTheme.typography.labelSmall, color = Accent.copy(alpha = 0.8f))
-                    } else if (pct > 0) {
-                        Text("$pct%", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.4f))
-                    }
-                }
             }
         }
     }

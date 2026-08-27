@@ -31,6 +31,20 @@ UI, persistence and playback code should depend on normalized provider models,
 not on `AnimePahe` or `Anikoto` classes. Provider-specific cookies, parsing,
 anti-bot handling and resolution remain inside their connector.
 
+## UI module boundaries
+
+The desktop renderer keeps route-level orchestration in `pages/`, reusable UI in
+`components/`, and provider-independent matching utilities in
+`components/provider/`. Player-only helpers belong in `components/player/`.
+
+The native Android UI keeps one route-level screen per file in
+`apps/android/app/src/main/java/com/sanjay/anitrack/next/ui/`. Reusable cards,
+episode controls and playback-progress helpers live beside those screens as
+small focused modules. Do not recreate a single catch-all `Screens.kt` file.
+
+Large screens may still coordinate state, but parsing, persistence, provider
+selection and reusable UI must remain outside the route composable.
+
 ## Repository policy
 
 Keep shippable applications in `apps/`, reusable contracts in `packages/`, and

@@ -21,6 +21,12 @@ import { usePlayerStore } from "../store/usePlayerStore";
 import { SkipOverlay } from "../components/player/SkipOverlay";
 import { VideoControls } from "../components/player/VideoControls";
 import { useVideoGestures, GestureFeedback } from "../components/player/useVideoGestures";
+import {
+  installMediaSourceCodecShim,
+  MiniProgressBar,
+  providerSessionId,
+} from "../components/player/StreamPlayerSupport";
+import { discoverProviderSources } from "../components/provider/providerDiscovery";
 import Hls from "hls.js";
 import { secondsToTimestamp } from "../lib/format";
 import { useMediaQuery } from "../hooks/useMediaQuery";
@@ -28,7 +34,6 @@ import { isCapacitor } from "../lib/platform";
 import { enterNativePip } from "../lib/pip";
 import { pushProgress, pullRemoteProgress, flushOnQuit } from "../lib/supabase-sync";
 import { getPlayUrl as getDownloadPlayUrl, readLocalFile, isLocalDownloadUrl, getDownloads, subscribeDownloads } from "../lib/downloads";
-import { scoreMatch, pickVerifiedCandidate } from "../lib/match";
 import {
   preferredStreamLinkIndex,
   providerClient,
@@ -39,53 +44,7 @@ import {
 } from "../lib/provider-api";
 import type { ProviderDescriptor, StreamLink } from "../../../../packages/shared/provider-types";
 
-// ── Synthetic anime ID for AnimePahe-only watches ─────────────────────────
-// When a user watches via Latest Episodes there is no AniList ID in the URL.
-// We hash the AnimePahe session string to a stable NEGATIVE integer so it
-// never collides with real AniList IDs (which are always positive).
-function paheSessionId(session: string): number {
-  let h = 5381;
-  for (let i = 0; i < session.length; i++) {
-    h = (((h << 5) + h) ^ session.charCodeAt(i)) | 0; // djb2-xor, 32-bit signed
-  }
-  return -(Math.abs(h) || 1);
-}
-
-// ── MSE codec compatibility shim ───────────────────────────────────────────
-// AnimePahe HLS manifests declare audio as mp4a.40.1 (AAC Main Profile).
-// Chromium's MediaSource only accepts mp4a.40.2 (AAC-LC), so addSourceBuffer
-// throws NotSupportedError and hls.js crashes with bufferAddCodecError.
-// The streams are actually AAC-LC content mislabeled as Main — remapping the
-// codec string to 40.2 is safe and lets Chromium decode them correctly.
-if (typeof MediaSource !== "undefined") {
-  const _orig = MediaSource.prototype.addSourceBuffer;
-  MediaSource.prototype.addSourceBuffer = function (mime: string) {
-    return _orig.call(this, mime.replace(/mp4a\.40\.1\b/g, "mp4a.40.2"));
-  };
-}
-
-// Thin rAF-driven progress hairline for the mini-player (no React re-renders).
-function MiniProgressBar({ videoRef }: { videoRef: React.RefObject<HTMLVideoElement | null> }) {
-  const barRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    let raf = 0;
-    const tick = () => {
-      const v = videoRef.current;
-      const b = barRef.current;
-      if (v && b && v.duration && isFinite(v.duration)) {
-        b.style.width = `${(v.currentTime / v.duration) * 100}%`;
-      }
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [videoRef]);
-  return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[3px] bg-white/20">
-      <div ref={barRef} className="h-full bg-[#e50914]" style={{ width: "0%" }} />
-    </div>
-  );
-}
+installMediaSourceCodecShim();
 
 export default function StreamPlayer({
   search,
@@ -341,7 +300,7 @@ export default function StreamPlayer({
     // land its results after the user has already switched to another show.
     let cancelled = false;
     const anilistId = Number(params.get("animeId") ?? params.get("anilistId") ?? 0);
-    effectiveAnimeIdRef.current = anilistId > 0 ? anilistId : paheSessionId(animeSession);
+    effectiveAnimeIdRef.current = anilistId > 0 ? anilistId : providerSessionId(animeSession);
     // A different show arrived on this mounted player: the previous show's
     // provider matches are meaningless (and actively dangerous — the session
     // self-heal would rewrite the new show's session to the old show's match).
@@ -368,130 +327,22 @@ export default function StreamPlayer({
     // Fetch available providers for this anime (skipped for offline downloads —
     // we play the local file, no provider lookup needed).
     if (animeTitle && animeTitle !== "Anime" && !params.get("download")) {
-      (async () => {
-        let targetYear = params.get("year") ? Number(params.get("year")) : undefined;
-        let targetEpisodes = params.get("episodes") ? Number(params.get("episodes")) : undefined;
-        let targetStatus = params.get("status") ? params.get("status")! : undefined;
-        const searchQueries = [animeTitle];
-        const anilistId = Number(params.get("animeId") ?? params.get("anilistId") ?? 0);
-        let meta: any = null;
-        try {
-          if (anilistId > 0 && anilistId < 1_000_000_000) {
-            meta = await window.api.anilist.get(anilistId);
-          } else {
-            // Latest Episodes (and other AnimePahe-only entries) pass no AniList id.
-            // Resolve it from the title so we get romaji/English variants — without them
-            // the Anikoto search uses only AnimePahe's title and usually fails to match,
-            // so no Anikoto source is offered.
-            const results = await window.api.anilist.search(animeTitle);
-            if (results && results.length > 0) meta = results[0];
-          }
-        } catch (e) {
-          console.warn("[StreamPlayer] Failed to load AniList metadata:", e);
-        }
-        let targetMalId: number | undefined;
-        if (meta) {
-          if (meta.year) targetYear = meta.year;
-          if (meta.episodes) targetEpisodes = meta.episodes;
-          if (meta.status) targetStatus = meta.status;
-          if (meta.malId) targetMalId = meta.malId;
-          if (meta.titleRomaji && meta.titleRomaji.toLowerCase() !== animeTitle.toLowerCase()) {
-            searchQueries.push(meta.titleRomaji);
-          }
-          if (meta.title && meta.title.toLowerCase() !== animeTitle.toLowerCase() && (!meta.titleRomaji || meta.title.toLowerCase() !== meta.titleRomaji.toLowerCase())) {
-            searchQueries.push(meta.title);
-          }
-        }
-
-        // Run searches in parallel
-        const searchResultsList = await Promise.all(searchQueries.map(q => providerClient.search(q).catch(() => [])));
-        const combinedMap = new Map<string, { item: any; matchedQuery: string }>();
-        for (let idx = 0; idx < searchQueries.length; idx++) {
-          const list = searchResultsList[idx];
-          const query = searchQueries[idx];
-          for (const item of list) {
-            const uniqKey = `${item.providerId ?? "animepahe"}:${item.id}`;
-            if (!combinedMap.has(uniqKey)) {
-              combinedMap.set(uniqKey, { item, matchedQuery: query });
-            }
-          }
-        }
-
-        const filtered = Array.from(combinedMap.values()).filter(({ item }) => {
-          if (targetYear && item.year) {
-            return Math.abs(Number(item.year) - targetYear) <= 3;
-          }
-          return true;
-        });
-
-        const scored = filtered
-          .map(({ item, matchedQuery }) => {
-            let score = scoreMatch(item, matchedQuery, targetYear, targetEpisodes, targetStatus);
-            for (const otherQuery of searchQueries) {
-              if (otherQuery !== matchedQuery) {
-                const otherScore = scoreMatch(item, otherQuery, targetYear, targetEpisodes, targetStatus);
-                if (otherScore > score) score = otherScore;
-              }
-            }
-            return { item, score };
-          })
-          .filter((x) => x.score >= 20)
-          .sort((a, b) => b.score - a.score)
-          .map((x) => x.item);
-
-        if (scored.length > 0) {
-          // Group the top few candidates per provider (score order preserved).
-          const byProvider = new Map<string, any[]>();
-          for (const item of scored) {
-            const pid = item.providerId || "animepahe";
-            const arr = byProvider.get(pid) ?? [];
-            if (arr.length < 3) arr.push(item);
-            byProvider.set(pid, arr);
-          }
-
-          // OPTIMISTIC: publish the top-scored pick per provider right away so
-          // the episode list starts loading immediately. Verification below
-          // swaps a pick only in the rare case the title score was wrong.
-          const optimistic = Array.from(byProvider.values()).map((c) => c[0]);
-          if (cancelled) return;
-          setAvailableSources(optimistic);
-
-          // Title-plausible candidates the YEAR gate rejected. A mislabeled
-          // entry parses the wrong year out of its lying title (anikoto's real
-          // City Hunter is titled "City Hunter '91"), so id verification must
-          // get a look at these too.
-          const normT = (s: string) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, " ").replace(/\s+/g, " ").trim();
-          const plausibleRejects = Array.from(combinedMap.values())
-            .filter(({ item }) => targetYear && item.year && Math.abs(Number(item.year) - targetYear) > 3)
-            .filter(({ item }) => {
-              const c = normT(item.title);
-              return searchQueries.some((q) => { const t = normT(q); return !!t && !!c && (c.includes(t) || t.includes(c)); });
-            })
-            .map(({ item }) => item);
-
-          // Verify each provider's pick against real ids when we have them —
-          // titles lie (anikoto's "City Hunter" entry actually contains City
-          // Hunter '91's episodes), but the provider-embedded MAL id doesn't.
-          // pickVerifiedCandidate runs checks serially/time-boxed: the common
-          // case costs ONE provider request; parallel bursts tripped anti-bot
-          // limits and froze the whole app.
-          const realAnilistId = anilistId > 0 && anilistId < 1_000_000_000 ? anilistId : undefined;
-          if (realAnilistId || targetMalId) {
-            const verified: any[] = [];
-            let changed = false;
-            for (const [pid, candidates] of byProvider.entries()) {
-              const rejects = plausibleRejects.filter((i) => (i.providerId || "animepahe") === pid).slice(0, 2);
-              const pick = (await pickVerifiedCandidate([...candidates, ...rejects], realAnilistId, targetMalId)) ?? candidates[0];
-              if (pick !== candidates[0]) changed = true;
-              verified.push(pick);
-              if (cancelled) return;
-            }
-            if (changed && !cancelled) setAvailableSources(verified);
-          }
-        } else {
-          setLoadingEps(false);
-        }
-      })().catch(() => {
+      const anilistId = Number(params.get("animeId") ?? params.get("anilistId") ?? 0);
+      discoverProviderSources({
+        title: animeTitle,
+        anilistId,
+        year: params.get("year") ? Number(params.get("year")) : undefined,
+        episodes: params.get("episodes") ? Number(params.get("episodes")) : undefined,
+        status: params.get("status") ?? undefined,
+        shouldStop: () => cancelled,
+        onOptimistic: (sources) => {
+          if (!cancelled) setAvailableSources(sources);
+        },
+      }).then((sources) => {
+        if (cancelled) return;
+        if (sources.length > 0) setAvailableSources(sources);
+        else setLoadingEps(false);
+      }).catch(() => {
         if (!cancelled) setLoadingEps(false);
       });
     } else {

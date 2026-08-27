@@ -52,6 +52,21 @@ Simple providers may fit in one adapter file. Anti-bot providers such as
 AnimePahe will still need private helpers for browser sessions, cookies and CDN
 authorization.
 
+### What can be one file
+
+The signed `automation/remote-config.json` is the one shared data file for
+provider domains, routes, selectors, stream-host rules, ordering and enablement.
+Both maintained apps can consume those data-only changes after signature
+verification, without shipping remotely downloaded executable code.
+
+A provider that differs only in those declared values can therefore be added or
+repaired through that one configuration entry once a compatible generic engine
+exists in both apps. A provider with custom JavaScript challenges, cookie
+sessions, encrypted links or unusual playback authorization still needs reviewed
+TypeScript and Kotlin connector code. Keep those implementation files thin by
+delegating reusable parsing, matching and player behavior to shared platform
+helpers.
+
 ## Security rule
 
 Never download and execute connector code remotely. Signed automation may update

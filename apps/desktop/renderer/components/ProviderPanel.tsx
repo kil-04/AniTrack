@@ -6,6 +6,11 @@ import type { ProviderDescriptor } from "../../../../packages/shared/provider-ty
 import { scoreMatch, pickVerifiedCandidate } from "../lib/match";
 import { orderProviderIds, providerClient, providerName } from "../lib/provider-api";
 import {
+  buildProviderSearchQueries,
+  normalizeProviderTitle,
+  pickProviderResult,
+} from "./provider/providerSearch";
+import {
   downloadsSupported,
   subscribeDownloads,
   getDownloads,
@@ -83,15 +88,6 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
   const [rangeFrom, setRangeFrom] = useState("");
   const [rangeTo, setRangeTo] = useState("");
 
-  function pickByTitle(res: any[], title: string): any | null {
-    if (res.length === 0) return null;
-    if (res.length === 1) return res[0];
-    const scored = res
-      .map((r: any) => ({ r, score: scoreMatch(r, title, animeYear, animeEpisodes, animeStatus) }))
-      .sort((a: any, b: any) => b.score - a.score);
-    return scored[0].score >= 20 ? scored[0].r : null;
-  }
-
   useEffect(() => {
     if (!animeTitle) return;
     setShowManualSearch(false);
@@ -112,35 +108,7 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
     setSearching(true);
 
     async function runSearch() {
-      const searchQueries = [animeTitle];
-      if (animeTitleAlt && !searchQueries.some(q => q.toLowerCase() === animeTitleAlt.toLowerCase())) {
-        searchQueries.push(animeTitleAlt);
-      }
-      if (animeTitleRomaji && !searchQueries.some(q => q.toLowerCase() === animeTitleRomaji.toLowerCase())) {
-        searchQueries.push(animeTitleRomaji);
-      }
-
-      const PARTICLES = new Set(["no", "na", "wa", "ga", "wo", "ni", "de", "to", "mo", "ya", "ka", "mo"]);
-      function meaningfulWords(title: string, n: number): string {
-        return title.split(/\s+/).filter(w => !PARTICLES.has(w.toLowerCase())).slice(0, n).join(" ");
-      }
-
-      const twoWords = meaningfulWords(animeTitle, 2);
-      if (twoWords !== animeTitle && twoWords.length > 3 && !searchQueries.some(q => q.toLowerCase() === twoWords.toLowerCase())) {
-        searchQueries.push(twoWords);
-      }
-
-      if (animeTitleAlt) {
-        const twoWordsAlt = meaningfulWords(animeTitleAlt, 2);
-        if (twoWordsAlt !== animeTitleAlt && twoWordsAlt.length > 3 && !searchQueries.some(q => q.toLowerCase() === twoWordsAlt.toLowerCase())) {
-          searchQueries.push(twoWordsAlt);
-        }
-      }
-
-      const oneWord = meaningfulWords(animeTitle, 1);
-      if (oneWord.length > 3 && !searchQueries.some(q => q.toLowerCase() === oneWord.toLowerCase())) {
-        searchQueries.push(oneWord);
-      }
+      const searchQueries = buildProviderSearchQueries(animeTitle, animeTitleAlt, animeTitleRomaji);
 
       // Fetch results for all queries in parallel
       const searchResultsList = await Promise.all(
@@ -218,12 +186,14 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
           // a mislabeled provider entry parses the wrong year from its lying
           // title (anikoto's real City Hunter is titled "City Hunter '91"),
           // so the id check must get a look at those too.
-          const normT = (s: string) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, " ").replace(/\s+/g, " ").trim();
           const plausibleRejects = allCandidates
             .filter(({ candidate }) => animeYear && candidate.year && Math.abs(Number(candidate.year) - animeYear) > 3)
             .filter(({ candidate }) => {
-              const c = normT(candidate.title ?? "");
-              return searchQueries.some((q) => { const t = normT(q); return !!t && !!c && (c.includes(t) || t.includes(c)); });
+              const c = normalizeProviderTitle(candidate.title ?? "");
+              return searchQueries.some((q) => {
+                const title = normalizeProviderTitle(q);
+                return !!title && !!c && (c.includes(title) || title.includes(c));
+              });
             })
             .map(({ candidate }) => candidate)
             .slice(0, 3);
@@ -273,7 +243,11 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
         return true;
       });
       setResults(filtered);
-      const best = pickByTitle(filtered, manualQuery.trim());
+      const best = pickProviderResult(filtered, manualQuery.trim(), {
+        year: animeYear,
+        episodes: animeEpisodes,
+        status: animeStatus,
+      });
       if (best) { setSelected(best); setShowManualSearch(false); }
       else if (filtered.length > 0) {
         setSelected(filtered[0]);
