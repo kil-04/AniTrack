@@ -137,6 +137,7 @@ function rankByRelevance(query: string, media: MediaNode[]): MediaNode[] {
 // spacing and appear to load forever.
 const gqlHigh: Array<() => Promise<void>> = [];
 const gqlLow: Array<() => Promise<void>> = [];
+const gqlPending = new Map<string, Promise<unknown>>();
 let gqlPumping = false;
 let isStartup = true;
 setTimeout(() => { isStartup = false; }, 6000); // 6 seconds for initial app bootup
@@ -164,7 +165,11 @@ async function gql<T>(
   variables: Record<string, unknown> = {},
   priority: "high" | "low" = "high",
 ): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
+  const key = JSON.stringify({ query, variables });
+  const pending = gqlPending.get(key);
+  if (pending) return pending as Promise<T>;
+
+  const request = new Promise<T>((resolve, reject) => {
     const job = async () => {
       try {
         const result = await _doGql<T>(query, variables);
@@ -176,6 +181,9 @@ async function gql<T>(
     (priority === "high" ? gqlHigh : gqlLow).push(job);
     void gqlPump();
   });
+  gqlPending.set(key, request);
+  request.finally(() => gqlPending.delete(key)).catch(() => {});
+  return request;
 }
 
 async function _doGql<T>(query: string, variables: Record<string, unknown>): Promise<T> {

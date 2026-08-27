@@ -14,7 +14,6 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.ClosedCaptionOff
@@ -116,10 +115,6 @@ fun PlayerScreen(
     val useWeb = stream?.backend == PlaybackBackend.WEB_HLS
     fun flashControls() { controlsVisible = true }
 
-    // Gesture feedback overlays
-    var seekFeedback by remember { mutableStateOf<Pair<Boolean, Int>?>(null) } // (isForward, totalSecs)
-    var speedActive by remember { mutableStateOf(false) }
-    var volumeFeedback by remember { mutableStateOf<Float?>(null) }
 
     // Skip intro/outro
     var showSkipIntro by remember { mutableStateOf(false) }
@@ -420,18 +415,6 @@ fun PlayerScreen(
         }
     }
 
-    // Double-tap seek chaining (10s steps stack like the old player).
-    var chainSecs by remember { mutableStateOf(0) }
-    var chainForward by remember { mutableStateOf(true) }
-    var chainTargetMs by remember { mutableStateOf<Long?>(null) }
-    LaunchedEffect(seekFeedback) {
-        if (seekFeedback != null) {
-            delay(700)
-            seekFeedback = null
-            chainSecs = 0
-            chainTargetMs = null
-        }
-    }
 
     Column(Modifier.fillMaxSize().background(Color.Black)) {
         // Immersive while PiP'd or locked to landscape (the old app's fullscreen).
@@ -574,205 +557,75 @@ fun PlayerScreen(
                 },
             )
 
-            // Gesture layer — sits under the control bar. Single tap toggles
-            // the bar; double-tap seeks; long-press = 2×; right-half drag = vol.
-            if (!inPipMode && error == null) {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .pointerInput(useWeb) {
-                            detectTapGestures(
-                                onTap = { controlsVisible = !controlsVisible },
-                                onDoubleTap = { offset ->
-                                    val w = size.width
-                                    when {
-                                        offset.x < w * 0.35f -> {
-                                            if (chainForward || chainSecs == 0) {
-                                                chainSecs = 0
-                                                chainTargetMs = curPos()
-                                            }
-                                            chainForward = false
-                                            chainSecs += 10
-                                            val target = ((chainTargetMs ?: curPos()) - 10_000).coerceAtLeast(0)
-                                            chainTargetMs = target
-                                            doSeek(target)
-                                            seekFeedback = false to chainSecs
-                                        }
-                                        offset.x > w * 0.65f -> {
-                                            if (!chainForward || chainSecs == 0) {
-                                                chainSecs = 0
-                                                chainTargetMs = curPos()
-                                            }
-                                            chainForward = true
-                                            chainSecs += 10
-                                            val maxTarget = durationMs.takeIf { it > 0 } ?: Long.MAX_VALUE
-                                            val target = ((chainTargetMs ?: curPos()) + 10_000).coerceAtMost(maxTarget)
-                                            chainTargetMs = target
-                                            doSeek(target)
-                                            seekFeedback = true to chainSecs
-                                        }
-                                        else -> doTogglePlay()
-                                    }
-                                },
-                                onLongPress = {
-                                    speedActive = true
-                                    if (useWeb) webCtl.setRate(2f) else player.setPlaybackSpeed(2f)
-                                },
-                                onPress = {
-                                    tryAwaitRelease()
-                                    if (speedActive) {
-                                        speedActive = false
-                                        if (useWeb) webCtl.setRate(speed) else player.setPlaybackSpeed(speed)
-                                    }
-                                },
-                            )
-                        }
-                        .pointerInput(useWeb) {
-                            // Vertical drag on the right half = volume.
-                            detectDragGestures(
-                                onDragEnd = { volumeFeedback = null },
-                                onDrag = { change, drag ->
-                                    if (change.position.x > size.width / 2) {
-                                        val nv = ((if (muted) 0f else 1f) + (-drag.y / size.height * 1.4f)).coerceIn(0f, 1f)
-                                        if (useWeb) webCtl.setVolume(nv) else player.volume = nv
-                                        volumeFeedback = nv
-                                    }
-                                },
-                            )
-                        },
-                )
-            }
+            PlayerGestureLayer(
+                enabled = !inPipMode && error == null,
+                useWeb = useWeb,
+                durationMs = durationMs,
+                muted = muted,
+                speed = speed,
+                currentPositionMs = { curPos() },
+                onToggleControls = { controlsVisible = !controlsVisible },
+                onSeek = { doSeek(it) },
+                onTogglePlay = { doTogglePlay() },
+                onPlaybackRate = { rate ->
+                    if (useWeb) webCtl.setRate(rate) else player.setPlaybackSpeed(rate)
+                },
+                onVolume = { value ->
+                    if (useWeb) webCtl.setVolume(value) else player.volume = value
+                },
+            )
 
-            // Feedback overlays
-            seekFeedback?.let { (fwd, secs) ->
-                Box(
-                    Modifier
-                        .align(if (fwd) Alignment.CenterEnd else Alignment.CenterStart)
-                        .padding(horizontal = 48.dp)
-                        .clip(RoundedCornerShape(24.dp))
-                        .background(Color.Black.copy(alpha = 0.6f))
-                        .padding(horizontal = 20.dp, vertical = 12.dp),
-                ) { Text(if (fwd) "+${secs}s" else "−${secs}s", color = Color.White, style = MaterialTheme.typography.titleMedium) }
-            }
-            if (speedActive) {
-                Box(
-                    Modifier.align(Alignment.TopCenter).padding(top = 24.dp)
-                        .clip(RoundedCornerShape(50)).background(Color.Black.copy(alpha = 0.6f))
-                        .padding(horizontal = 16.dp, vertical = 6.dp),
-                ) { Text("2× ▶▶", color = Color.White, style = MaterialTheme.typography.labelLarge) }
-            }
-            volumeFeedback?.let { v ->
-                Box(
-                    Modifier.align(Alignment.Center)
-                        .clip(RoundedCornerShape(16.dp)).background(Color.Black.copy(alpha = 0.6f))
-                        .padding(horizontal = 18.dp, vertical = 10.dp),
-                ) { Text("Vol ${(v * 100).toInt()}%", color = Color.White, style = MaterialTheme.typography.labelLarge) }
-            }
-
-            // ── Custom control bar (desktop-style) ──
-            if (controlsVisible && !inPipMode && error == null && status.isEmpty()) {
-                Column(
-                    Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .background(
-                            androidx.compose.ui.graphics.Brush.verticalGradient(
-                                listOf(Color.Transparent, Color.Black.copy(alpha = 0.75f)),
-                            ),
+            NativePlayerControls(
+                visible = controlsVisible && !inPipMode && error == null && status.isEmpty(),
+                durationMs = durationMs,
+                positionMs = positionMs,
+                bufferedMs = bufferedMs,
+                isSeeking = isSeeking,
+                seekPreviewMs = seekPreviewMs,
+                useWeb = useWeb,
+                index = index,
+                episodeCount = PlaySession.count,
+                isPlaying = isPlaying,
+                muted = muted,
+                hasSubtitles = stream?.subtitles?.isNotEmpty() == true,
+                ccOn = ccOn,
+                landscapeLocked = landscapeLocked,
+                onSeekingChange = { isSeeking = it },
+                onSeekPreview = { seekPreviewMs = it },
+                onSeek = { doSeek(it); flashControls() },
+                onPrevious = { index -= 1; flashControls() },
+                onTogglePlay = { doTogglePlay(); flashControls() },
+                onNext = { index += 1; flashControls() },
+                onToggleMute = {
+                    muted = !muted
+                    if (useWeb) webCtl.setVolume(if (muted) 0f else 1f)
+                    else player.volume = if (muted) 0f else 1f
+                    flashControls()
+                },
+                onToggleSubtitles = {
+                    ccOn = !ccOn
+                    player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !ccOn).build()
+                    flashControls()
+                },
+                onToggleSettings = {
+                    settingsMenu = if (settingsMenu == null) "main" else null
+                    flashControls()
+                },
+                onPictureInPicture = {
+                    try {
+                        activity?.enterPictureInPictureMode(
+                            PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build(),
                         )
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                ) {
-                    // Scrubber
-                    val dur = durationMs.coerceAtLeast(1L)
-                    val shown = if (isSeeking) seekPreviewMs else positionMs
-                    val progress = (shown.toFloat() / dur).coerceIn(0f, 1f)
-                    val buffered = (bufferedMs.toFloat() / dur).coerceIn(0f, 1f)
-                    BoxWithConstraints(
-                        Modifier
-                            .fillMaxWidth()
-                            .height(24.dp)
-                            .pointerInput(dur, useWeb) {
-                                detectTapGestures { off ->
-                                    val t = (off.x / size.width * dur).toLong().coerceIn(0, dur)
-                                    doSeek(t); flashControls()
-                                }
-                            }
-                            .pointerInput(dur, useWeb) {
-                                detectHorizontalDragGestures(
-                                    onDragStart = { off -> isSeeking = true; seekPreviewMs = (off.x / size.width * dur).toLong().coerceIn(0, dur) },
-                                    onHorizontalDrag = { change, _ -> seekPreviewMs = (change.position.x / size.width * dur).toLong().coerceIn(0, dur) },
-                                    onDragEnd = { doSeek(seekPreviewMs); isSeeking = false },
-                                )
-                            },
-                    ) {
-                        val w = maxWidth
-                        Box(Modifier.align(Alignment.CenterStart).fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)).background(Color.White.copy(alpha = 0.25f)))
-                        Box(Modifier.align(Alignment.CenterStart).fillMaxWidth(buffered).height(3.dp).clip(RoundedCornerShape(2.dp)).background(Color.White.copy(alpha = 0.4f)))
-                        Box(Modifier.align(Alignment.CenterStart).fillMaxWidth(progress).height(3.dp).clip(RoundedCornerShape(2.dp)).background(Accent))
-                        Box(
-                            Modifier
-                                .align(Alignment.CenterStart)
-                                .offset(x = w * progress - 7.dp)
-                                .size(14.dp)
-                                .clip(RoundedCornerShape(50))
-                                .background(Accent),
-                        )
-                    }
-                    // Button row
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = { if (index > 0) { index -= 1; flashControls() } }, enabled = index > 0) {
-                            Icon(Icons.Filled.SkipPrevious, "Previous", tint = Color.White)
-                        }
-                        IconButton(onClick = { doTogglePlay(); flashControls() }) {
-                            Icon(if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, "Play/Pause", tint = Color.White, modifier = Modifier.size(30.dp))
-                        }
-                        IconButton(onClick = { if (index + 1 < PlaySession.count) { index += 1; flashControls() } }, enabled = index + 1 < PlaySession.count) {
-                            Icon(Icons.Filled.SkipNext, "Next", tint = Color.White)
-                        }
-                        IconButton(onClick = {
-                            muted = !muted
-                            if (useWeb) webCtl.setVolume(if (muted) 0f else 1f) else player.volume = if (muted) 0f else 1f
-                            flashControls()
-                        }) {
-                            Icon(if (muted) Icons.Filled.VolumeOff else Icons.Filled.VolumeUp, "Mute", tint = Color.White)
-                        }
-                        Text(
-                            "${formatPlayerTime(shown)} / ${formatPlayerTime(durationMs)}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = Color.White.copy(alpha = 0.85f),
-                        )
-                        Spacer(Modifier.weight(1f))
-                        // CC toggle (only when there are subtitles)
-                        if (stream?.subtitles?.isNotEmpty() == true) {
-                            IconButton(onClick = {
-                                ccOn = !ccOn
-                                player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
-                                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !ccOn).build()
-                                flashControls()
-                            }) {
-                                Icon(if (ccOn) Icons.Filled.ClosedCaption else Icons.Filled.ClosedCaptionOff, "Subtitles", tint = Color.White)
-                            }
-                        }
-                        // Settings gear → desktop-style layered panel
-                        IconButton(onClick = { settingsMenu = if (settingsMenu == null) "main" else null; flashControls() }) {
-                            Icon(Icons.Filled.Settings, "Settings", tint = Color.White)
-                        }
-                        IconButton(onClick = {
-                            try {
-                                activity?.enterPictureInPictureMode(
-                                    PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build(),
-                                )
-                            } catch (e: Exception) { /* no PiP */ }
-                        }) { Icon(Icons.Filled.PictureInPictureAlt, "PiP", tint = Color.White) }
-                        IconButton(onClick = {
-                            landscapeLocked = !landscapeLocked
-                            activity?.requestedOrientation =
-                                if (landscapeLocked) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                                else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-                        }) { Icon(if (landscapeLocked) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen, "Fullscreen", tint = Color.White) }
-                    }
-                }
-            }
+                    } catch (_: Exception) { /* PiP unavailable */ }
+                },
+                onToggleFullscreen = {
+                    landscapeLocked = !landscapeLocked
+                    activity?.requestedOrientation =
+                        if (landscapeLocked) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                        else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                },
+            )
 
             // Desktop-style settings panel (anchored above the control bar).
             if (settingsMenu != null) {

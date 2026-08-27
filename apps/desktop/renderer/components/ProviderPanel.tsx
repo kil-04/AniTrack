@@ -3,13 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { Play, ChevronLeft, ChevronRight, Loader2, Captions, Mic, Download, Check, Trash2 } from "lucide-react";
 import type { PlaybackProgress } from "../../../../packages/shared/types";
 import type { ProviderDescriptor } from "../../../../packages/shared/provider-types";
-import { scoreMatch, pickVerifiedCandidate } from "../lib/match";
 import { orderProviderIds, providerClient, providerName } from "../lib/provider-api";
-import {
-  buildProviderSearchQueries,
-  normalizeProviderTitle,
-  pickProviderResult,
-} from "./provider/providerSearch";
+import { useProviderMatches } from "./provider/useProviderMatches";
 import {
   downloadsSupported,
   subscribeDownloads,
@@ -18,10 +13,6 @@ import {
   enqueueBatch,
   removeDownload,
 } from "../lib/downloads";
-
-// Keyed by animeId (when a real AniList ID is known) or by title string.
-// Survives navigation so re-opening a show detail page is instant.
-const _searchCache = new Map<string | number, { results: any[]; selected: any }>();
 
 interface Props {
   animeTitle: string;
@@ -41,19 +32,34 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
   const navigate = useNavigate();
 
   const [providerDescriptors, setProviderDescriptors] = useState<ProviderDescriptor[]>([]);
-  const [results, setResults] = useState<any[]>([]);
-  const [selected, setSelected] = useState<any | null>(null);
-  const [searching, setSearching] = useState(false);
+  const {
+    results,
+    selected,
+    setSelected,
+    searching,
+    error,
+    setError,
+    manualQuery,
+    setManualQuery,
+    showManualSearch,
+    searchManually: doManualSearch,
+  } = useProviderMatches({
+    animeTitle,
+    animeTitleAlt,
+    animeTitleRomaji,
+    animeId,
+    animeMalId,
+    animeYear,
+    animeEpisodes,
+    animeStatus,
+    showManualWhenEmpty: inline,
+  });
+  const manualInputRef = useRef<HTMLInputElement>(null);
 
   const [episodes, setEpisodes] = useState<any[]>([]);
   const [page, setPage] = useState(1);
   const [lastPage, setLastPage] = useState(1);
   const [loadingEps, setLoadingEps] = useState(false);
-
-  const [error, setError] = useState<string | null>(null);
-  const [manualQuery, setManualQuery] = useState("");
-  const [showManualSearch, setShowManualSearch] = useState(false);
-  const manualInputRef = useRef<HTMLInputElement>(null);
 
   // Watched episode indicators — keyed by episode number, value is percent watched
   const [watchedEps, setWatchedEps] = useState<Map<number, number>>(new Map());
@@ -88,177 +94,6 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
   const [rangeFrom, setRangeFrom] = useState("");
   const [rangeTo, setRangeTo] = useState("");
 
-  useEffect(() => {
-    if (!animeTitle) return;
-    setShowManualSearch(false);
-    setError(null);
-
-    // Return immediately from cache — no network call, no spinner.
-    const cacheKey: string | number =
-      animeId && animeId < 1_000_000_000 ? animeId : animeTitle;
-    const cached = _searchCache.get(cacheKey);
-    if (cached) {
-      setResults(cached.results);
-      setSelected(cached.selected);
-      return;
-    }
-
-    setSelected(null);
-    setResults([]);
-    setSearching(true);
-
-    async function runSearch() {
-      const searchQueries = buildProviderSearchQueries(animeTitle, animeTitleAlt, animeTitleRomaji);
-
-      // Fetch results for all queries in parallel
-      const searchResultsList = await Promise.all(
-        searchQueries.map(q => providerClient.search(q).catch(() => []))
-      );
-
-      // Combine and deduplicate candidates
-      const combinedMap = new Map<string, { candidate: any; matchedQuery: string }>();
-      for (let idx = 0; idx < searchQueries.length; idx++) {
-        const query = searchQueries[idx];
-        const list = searchResultsList[idx];
-        for (const item of list) {
-          const key = `${item.providerId ?? "animepahe"}:${item.id}`;
-          if (!combinedMap.has(key)) {
-            combinedMap.set(key, { candidate: item, matchedQuery: query });
-          }
-        }
-      }
-
-      // ID fallback check
-      const realAnilistId = animeId && animeId < 1_000_000_000 ? animeId : undefined;
-      const realMalId = animeMalId
-        ?? (animeId && animeId >= 1_000_000_000 ? animeId - 1_000_000_000 : undefined);
-      if (realAnilistId || realMalId) {
-        try {
-          const found = await providerClient.findByExternalId(realAnilistId, realMalId);
-          if (found) {
-            const key = `${found.providerId ?? "animepahe"}:${found.id}`;
-            if (!combinedMap.has(key)) {
-              combinedMap.set(key, { candidate: found, matchedQuery: animeTitle });
-            }
-          }
-        } catch { /* swallow */ }
-      }
-
-      const allCandidates = Array.from(combinedMap.values());
-
-      // Filter by year
-      const filtered = allCandidates.filter(({ candidate }) => {
-        if (animeYear && candidate.year) {
-          return Math.abs(Number(candidate.year) - animeYear) <= 3;
-        }
-        return true;
-      });
-
-      // Score candidates
-      const scored = await Promise.all(
-        filtered.map(async ({ candidate, matchedQuery }) => {
-          let score = scoreMatch(candidate, matchedQuery, animeYear, animeEpisodes, animeStatus);
-          for (const otherQuery of searchQueries) {
-            if (otherQuery !== matchedQuery) {
-              const otherScore = scoreMatch(candidate, otherQuery, animeYear, animeEpisodes, animeStatus);
-              if (otherScore > score) score = otherScore;
-            }
-          }
-          return { candidate, score };
-        })
-      );
-
-      // Filter and sort scored results
-      const validResults = scored
-        .filter(x => x.score >= 20)
-        .sort((a, b) => b.score - a.score)
-        .map(x => x.candidate);
-
-      if (validResults.length > 0) {
-        setResults(validResults);
-        // OPTIMISTIC: show the top-scored match immediately so episodes start
-        // loading now. Id verification runs in the background and swaps the
-        // selection only in the rare case the title-scored pick was wrong.
-        setSelected(validResults[0]);
-
-        if (realAnilistId || realMalId) {
-          // Also verify title-plausible candidates the YEAR filter rejected:
-          // a mislabeled provider entry parses the wrong year from its lying
-          // title (anikoto's real City Hunter is titled "City Hunter '91"),
-          // so the id check must get a look at those too.
-          const plausibleRejects = allCandidates
-            .filter(({ candidate }) => animeYear && candidate.year && Math.abs(Number(candidate.year) - animeYear) > 3)
-            .filter(({ candidate }) => {
-              const c = normalizeProviderTitle(candidate.title ?? "");
-              return searchQueries.some((q) => {
-                const title = normalizeProviderTitle(q);
-                return !!title && !!c && (c.includes(title) || title.includes(c));
-              });
-            })
-            .map(({ candidate }) => candidate)
-            .slice(0, 3);
-
-          // Serial, time-boxed verification (common case: ONE request) — see
-          // pickVerifiedCandidate; parallel bursts trip provider anti-bot limits.
-          const pool = [...validResults.slice(0, 3), ...plausibleRejects];
-          void pickVerifiedCandidate(pool, realAnilistId, realMalId ?? undefined).then((best) => {
-            if (!best) return;
-            const finalResults = validResults.includes(best) ? validResults : [best, ...validResults];
-            if (finalResults !== validResults) setResults(finalResults);
-            if (best !== validResults[0]) setSelected(best);
-            if (_searchCache.size >= 100) {
-              const oldest = _searchCache.keys().next().value;
-              if (oldest !== undefined) _searchCache.delete(oldest);
-            }
-            _searchCache.set(cacheKey, { results: finalResults, selected: best });
-          }).catch(() => {});
-        } else {
-          if (_searchCache.size >= 100) {
-            const oldest = _searchCache.keys().next().value;
-            if (oldest !== undefined) _searchCache.delete(oldest);
-          }
-          _searchCache.set(cacheKey, { results: validResults, selected: validResults[0] });
-        }
-      } else {
-        setResults([]);
-        setManualQuery(animeTitle);
-        if (inline) setShowManualSearch(true);
-      }
-    }
-
-    runSearch().catch((e: any) => setError(String(e))).finally(() => setSearching(false));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [animeTitle, animeTitleAlt, animeTitleRomaji, animeId, animeYear, animeEpisodes, animeStatus]);
-
-  async function doManualSearch() {
-    if (!manualQuery.trim()) return;
-    setSearching(true);
-    setError(null);
-    try {
-      const res = await providerClient.search(manualQuery.trim());
-      const filtered = res.filter(candidate => {
-        if (animeYear && candidate.year) {
-          return Math.abs(Number(candidate.year) - animeYear) <= 3;
-        }
-        return true;
-      });
-      setResults(filtered);
-      const best = pickProviderResult(filtered, manualQuery.trim(), {
-        year: animeYear,
-        episodes: animeEpisodes,
-        status: animeStatus,
-      });
-      if (best) { setSelected(best); setShowManualSearch(false); }
-      else if (filtered.length > 0) {
-        setSelected(filtered[0]);
-        setShowManualSearch(false);
-      }
-    } catch (e: any) {
-      setError(String(e));
-    } finally {
-      setSearching(false);
-    }
-  }
 
   useEffect(() => {
     setEpOffset(0);

@@ -161,7 +161,6 @@ object Pahe {
                     /* let the cookie poll decide */
                 }
             }
-            wv.addJavascriptInterface(Bridge, "AndroidPahe")
             val root = act.findViewById<android.view.ViewGroup>(android.R.id.content)
             cfWebView = wv
 
@@ -233,18 +232,6 @@ object Pahe {
 
     private suspend fun waitForCf(forceSolve: Boolean = false, interactive: Boolean = true) =
         ensureCfWebView(forceSolve, interactive).await()
-
-    // ── In-page fetch bridge (kept for future needs, e.g. ids scraping) ───────
-
-    private val inPageResults = java.util.concurrent.ConcurrentHashMap<String, CompletableDeferred<String>>()
-
-    private object Bridge {
-        @android.webkit.JavascriptInterface
-        fun onResult(id: String, ok: Boolean, data: String) {
-            val d = Pahe.inPageResults.remove(id) ?: return
-            if (ok) d.complete(data) else d.completeExceptionally(IOException(data))
-        }
-    }
 
     // ── Navigate-to-page fetch for the CF-fingerprint-bound /play/ document ──
 

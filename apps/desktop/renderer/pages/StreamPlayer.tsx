@@ -11,29 +11,37 @@ import {
   FastForward,
   Maximize2,
   Minimize2,
-  ChevronDown,
   ArrowLeft,
   X,
   SkipBack,
   SkipForward,
 } from "lucide-react";
 import { usePlayerStore } from "../store/usePlayerStore";
-import { SkipOverlay } from "../components/player/SkipOverlay";
 import { VideoControls } from "../components/player/VideoControls";
-import { useVideoGestures, GestureFeedback } from "../components/player/useVideoGestures";
+import { useVideoGestures } from "../components/player/useVideoGestures";
 import {
   installMediaSourceCodecShim,
   MiniProgressBar,
   providerSessionId,
 } from "../components/player/StreamPlayerSupport";
+import { StreamEpisodePanel } from "../components/player/StreamEpisodePanel";
+import { StreamVideoArea } from "../components/player/StreamVideoArea";
 import { discoverProviderSources } from "../components/provider/providerDiscovery";
 import Hls from "hls.js";
 import { secondsToTimestamp } from "../lib/format";
+import { fetchAnimeSkipTimes, type SkipTimes } from "../lib/skip-times";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { isCapacitor } from "../lib/platform";
 import { enterNativePip } from "../lib/pip";
 import { pushProgress, pullRemoteProgress, flushOnQuit } from "../lib/supabase-sync";
-import { getPlayUrl as getDownloadPlayUrl, readLocalFile, isLocalDownloadUrl, getDownloads, subscribeDownloads } from "../lib/downloads";
+import {
+  getPlayUrl as getDownloadPlayUrl,
+  getDownloads,
+  isLocalDownloadUrl,
+  readLocalFile,
+  subscribeDownloads,
+} from "../lib/downloads";
+import { createCapacitorHlsLoader } from "../lib/capacitor-hls-loader";
 import {
   preferredStreamLinkIndex,
   providerClient,
@@ -140,10 +148,7 @@ export default function StreamPlayer({
   const playbackRateRef = useRef(playbackRate);
 
   // Skip times
-  const [skipTimes, setSkipTimes] = useState<{
-    op?: { start: number; end: number };
-    ed?: { start: number; end: number };
-  }>({});
+  const [skipTimes, setSkipTimes] = useState<SkipTimes>({});
 
   // Controls overlay visibility
   const [showControls, setShowControls] = useState(true);
@@ -246,43 +251,12 @@ export default function StreamPlayer({
   async function fetchSkipTimes(epNum: number) {
     setSkipTimes({});
     const anilistId = effectiveAnimeIdRef.current;
-    if (anilistId <= 0) return; // Cannot fetch without real AniList ID
-
     try {
-      // 1. Get MAL ID from AniList
-      let malId = malIdCacheRef.current;
-      if (!malId) {
-        const query = `query($id:Int){Media(id:$id){idMal}}`;
-        const res = await fetch("https://graphql.anilist.co", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query, variables: { id: anilistId } }),
-        });
-        const json = await res.json();
-        malId = json?.data?.Media?.idMal;
-        if (malId) malIdCacheRef.current = malId;
-      }
-      if (!malId) return;
-
-      // 2. Fetch skip times from AniSkip
-      const skipUrl = `https://api.aniskip.com/v2/skip-times/${malId}/${epNum}?types[]=op&types[]=ed&episodeLength=0`;
-      const skipResObj = await fetch(skipUrl);
-      if (!skipResObj.ok) return;
-      const skipJson = await skipResObj.json();
-      
-      const newSkips: any = {};
-      if (skipJson.found && skipJson.results) {
-        for (const res of skipJson.results) {
-          if (res.skipType === "op") {
-            newSkips.op = { start: res.interval.startTime, end: res.interval.endTime };
-          } else if (res.skipType === "ed") {
-            newSkips.ed = { start: res.interval.startTime, end: res.interval.endTime };
-          }
-        }
-      }
-      setSkipTimes(newSkips);
-    } catch (e) {
-      console.warn("Failed to fetch skip times", e);
+      const result = await fetchAnimeSkipTimes(anilistId, epNum, malIdCacheRef.current);
+      if (result.malId) malIdCacheRef.current = result.malId;
+      setSkipTimes(result.skipTimes);
+    } catch (error) {
+      console.warn("Failed to fetch skip times", error);
     }
   }
 
@@ -809,74 +783,6 @@ export default function StreamPlayer({
   // shouldInterceptRequest (API 24+ limitation). Instead we route every hls.js
   // network request through the native OkHttp fetchUrl plugin method, which sends
   // proper Referer/Cookie headers and is not subject to browser CORS enforcement.
-  function buildCapacitorLoader() {
-    return class CapacitorLoader {
-      // hls.js reads loader.stats and stores it as frag.stats — must be a live reference.
-      stats: any = {
-        aborted: false, loaded: 0, total: 0, retry: 0, chunkCount: 0, bwEstimate: 0,
-        loading: { start: 0, first: 0, end: 0 },
-        parsing: { start: 0, end: 0 },
-        buffering: { start: 0, end: 0, first: 0 },
-      };
-      private aborted = false;
-
-      load(context: any, _config: any, callbacks: any) {
-        this.aborted = false;
-        const { url, responseType } = context;
-        const binary = responseType === "arraybuffer";
-        const trequest = performance.now();
-        this.stats.loading.start = trequest;
-
-        console.log('[CapLoader] fetching', url, 'binary=', binary);
-        const ref = refererRef.current;
-        const hdrs = ref ? { Referer: ref.replace(/\/?$/, "/"), Origin: ref } : undefined;
-        // Offline downloads are read from disk via the downloader plugin instead
-        // of the network — same response shape, so the decode path below is shared.
-        const fetcher = isLocalDownloadUrl(url)
-          ? readLocalFile(url, binary)
-          : window.api.pahe.fetchUrl!(url, binary, hdrs);
-        fetcher
-          .then((result) => {
-            if (this.aborted) return;
-            console.log('[CapLoader] got response status=', result.status, 'size=', result.data?.length, 'url=', url);
-            if (result.status < 200 || result.status >= 300) {
-              console.error('[CapLoader] fetchUrl HTTP error status:', result.status, 'url=', url);
-              callbacks.onError({ code: result.status, text: `HTTP ${result.status}` }, context, null, this.stats);
-              return;
-            }
-            let data: string | ArrayBuffer;
-            if (binary && result.binary) {
-              const raw = atob(result.data);
-              const buf = new ArrayBuffer(raw.length);
-              const view = new Uint8Array(buf);
-              for (let i = 0; i < raw.length; i++) view[i] = raw.charCodeAt(i);
-              data = buf;
-            } else {
-              data = result.data;
-            }
-            const tload = performance.now();
-            const loaded = binary
-              ? (data as ArrayBuffer).byteLength
-              : (data as string).length;
-            // Mutate this.stats in-place — hls.js holds a reference via frag.stats = loader.stats
-            this.stats.loaded = loaded;
-            this.stats.total = loaded;
-            this.stats.loading.first = trequest;
-            this.stats.loading.end = tload;
-            callbacks.onSuccess({ url, data }, this.stats, context, null);
-          })
-          .catch((err: any) => {
-            if (this.aborted) return;
-            console.error('[CapLoader] fetchUrl ERROR:', String(err), 'url=', url);
-            this.stats.aborted = false;
-            callbacks.onError({ code: 0, text: String(err) }, context, null, this.stats);
-          });
-      }
-
-      abort() { this.aborted = true; this.stats.aborted = true; }
-      destroy() { this.aborted = true; }
-    };
-  }
 
   function attachStream(url: string, subtitles?: any[], startPos?: number) {
     const video = videoRef.current;
@@ -1040,7 +946,7 @@ export default function StreamPlayer({
       maxFragLookUpTolerance: 0.25,
     };
     if (isCapacitor) {
-      (hlsConfig as any).loader = buildCapacitorLoader();
+      (hlsConfig as any).loader = createCapacitorHlsLoader(() => refererRef.current);
     }
     const hls = new Hls(hlsConfig as any);
     hlsRef.current = hls;
@@ -1840,143 +1746,50 @@ export default function StreamPlayer({
   // Shared sub-components
 
   const EpisodePanel = (
-    <div className={`flex flex-col ${isMobile ? "flex-1 overflow-hidden" : "w-[260px] flex-shrink-0 border-r border-white/10"} bg-[#000000]`}>
-      {availableSources.length > 0 && (
-        <div className="border-b border-white/10 p-2">
-          <div className="mb-2 text-[10px] uppercase tracking-wider text-white/50 font-semibold">Servers</div>
-          <div className="flex flex-wrap gap-2">
-            {availableSources.map(s => {
-              const pid = s.providerId || "animepahe";
-              const isActive = pid === providerId;
-              const name = providerLabel(pid);
-              return (
-                <button
-                  key={pid}
-                  onClick={() => { if (!isActive) switchToProvider(s); }}
-                  className={`flex h-8 items-center gap-2 rounded px-3 text-xs font-medium transition-colors ${
-                    isActive
-                      ? "bg-[#e50914] text-white"
-                      : "bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"
-                  }`}
-                >
-                  {name}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-      {activeProviderDescriptor?.capabilities.streamVariants === "subtitle-type" && links.length > 1 && (
-        <div className="border-b border-white/10 p-2">
-          <div className="mb-2 text-[10px] uppercase tracking-wider text-white/50 font-semibold">Sub Type</div>
-          <div className="flex gap-2">
-            {links.map((link, idx) => {
-              const variant = streamVariant(link);
-              const label = variant === "hard" ? "Hard Sub" : variant === "dub" ? "Dub" : "Soft Sub";
-              return (
-                <button
-                  key={idx}
-                  onClick={() => changeQuality(idx)}
-                  className={`flex h-8 flex-1 items-center justify-center rounded text-xs font-semibold transition-all duration-200 ${
-                    selectedLink === idx
-                      ? "bg-[#e50914] text-white shadow-[0_0_12px_rgba(229, 9, 20,0.4)]"
-                      : "bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"
-                  }`}
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-      <div className="relative flex gap-2 border-b border-white/10 p-2">
-        <div className="relative">
-          <button
-            onClick={() => setRangeOpen((o) => !o)}
-            disabled={ranges.length <= 1}
-            className="flex h-8 items-center gap-1 rounded border border-white/10 bg-white/5 px-2 text-xs text-white/80 hover:bg-white/10 disabled:opacity-60"
-          >
-            <span>{rangeLabel}</span>
-            {ranges.length > 1 && (
-              <ChevronDown size={12} className={`transition-transform ${rangeOpen ? "rotate-180" : ""}`} />
-            )}
-          </button>
-          {rangeOpen && ranges.length > 1 && (
-            <>
-              <div className="fixed inset-0 z-20" onClick={() => setRangeOpen(false)} />
-              <div className="absolute left-0 top-full z-30 mt-1 max-h-80 w-32 overflow-y-auto rounded-md border border-white/10 bg-[#222222] shadow-xl">
-                {ranges.map((r) => {
-                  const label = `${String(r.start).padStart(3, "0")}-${String(r.end).padStart(3, "0")}`;
-                  const active = r.start === rangeStart;
-                  return (
-                    <button
-                      key={r.start}
-                      onClick={() => { setRangeStart(r.start); setRangeOpen(false); }}
-                      className={`block w-full px-3 py-1.5 text-left text-xs transition hover:bg-white/10 ${active ? "bg-white/10 text-white" : "text-white/70"}`}
-                    >
-                      {label}
-                    </button>
-                  );
-                })}
-              </div>
-            </>
-          )}
-        </div>
-        <form onSubmit={handleFindSubmit} className="flex-1">
-          <input
-            value={findNum}
-            onChange={(e) => setFindNum(e.target.value)}
-            placeholder="Find number"
-            className="h-8 w-full rounded border border-white/10 bg-white/5 px-2 text-xs text-white placeholder-white/30 outline-none focus:border-white/30"
-            type="number" min={1}
-          />
-        </form>
-      </div>
-      <div className="flex-1 overflow-y-auto p-2">
-        {loadingEps ? (
-          <div className="flex h-20 items-center justify-center">
-            <Loader2 size={16} className="animate-spin text-white/40" />
-          </div>
-        ) : (
-          <div className="grid grid-cols-5 gap-1">
-            {episodes.map((ep) => {
-              const isCurrent = (currentEp?.id ?? currentEp?.session) === (ep.id ?? ep.session);
-              const pct = watchedEps.get(ep.episodeNumber ?? ep.episode) ?? 0;
-              const watched = !isCurrent && pct >= 85;
-              return (
-                <button
-                  key={ep.id ?? ep.session}
-                  onClick={() => playEpisode(ep)}
-                  className={`flex h-9 items-center justify-center rounded text-xs font-medium transition
-                    ${isCurrent
-                      ? "bg-[#e50914] text-white"
-                      : watched
-                        ? "bg-green-500/20 text-green-400 ring-1 ring-green-500/30 hover:bg-green-500/30"
-                        : "bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"}`}
-                >
-                  {ep.episodeNumber ?? ep.episode}
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </div>
+    <StreamEpisodePanel
+      mobile={isMobile}
+      sources={availableSources}
+      providerId={providerId}
+      providerLabel={providerLabel}
+      onSwitchProvider={switchToProvider}
+      streamVariants={activeProviderDescriptor?.capabilities.streamVariants}
+      links={links}
+      selectedLink={selectedLink}
+      onChangeVariant={changeQuality}
+      ranges={ranges}
+      rangeStart={rangeStart}
+      rangeLabel={rangeLabel}
+      rangeOpen={rangeOpen}
+      onToggleRange={() => setRangeOpen((open) => !open)}
+      onSelectRange={(start) => { setRangeStart(start); setRangeOpen(false); }}
+      findNumber={findNum}
+      onFindNumber={setFindNum}
+      onFindSubmit={handleFindSubmit}
+      loading={loadingEps}
+      episodes={episodes}
+      currentEpisode={currentEp}
+      watchedEpisodes={watchedEps}
+      onPlayEpisode={playEpisode}
+    />
   );
 
 
 
   const VideoArea = (fullHeight = false) => (
-    <div
-      ref={videoWrapRef}
-      className={`relative flex ${fullHeight ? "flex-1" : ""} flex-col bg-black overflow-hidden`}
-      style={{ cursor: isMobile ? "default" : (showControls ? "default" : "none") }}
+    <StreamVideoArea
+      fullHeight={fullHeight}
+      wrapRef={videoWrapRef}
+      videoRef={videoRef}
+      mobile={isMobile}
+      capacitor={isCapacitor}
+      minimized={minimized}
+      showControls={showControls}
+      mouseNearTop={mouseNearTop}
       onMouseMove={handleVideoAreaMouseMove}
       onMouseLeave={handleVideoAreaMouseLeave}
-      onClick={(e) => {
-        const t = e.target as HTMLElement;
-        if (t.closest("button") || t.closest("input") || t.closest("select")) return;
+      onSurfaceClick={(event) => {
+        const target = event.target as HTMLElement;
+        if (target.closest("button") || target.closest("input") || target.closest("select")) return;
         if (singleClickTimerRef.current) {
           clearTimeout(singleClickTimerRef.current);
           singleClickTimerRef.current = null;
@@ -1985,195 +1798,131 @@ export default function StreamPlayer({
         }
         singleClickTimerRef.current = setTimeout(() => {
           singleClickTimerRef.current = null;
-          const v = videoRef.current;
-          if (!v) return;
-          v.paused ? v.play().catch(() => {}) : v.pause();
+          const video = videoRef.current;
+          if (!video) return;
+          video.paused ? video.play().catch(() => {}) : video.pause();
           showControlsNow();
         }, 250);
       }}
-    >
-      <style>{`
-        video::cue {
-          background-color: rgba(11, 11, 15, ${cueBgOpacity}) !important;
-          color: ${cueColor} !important;
-          font-family: ${cueFontFamily} !important;
-          font-size: ${cueFontSize} !important;
-        }
-      `}</style>
-      <video ref={videoRef} className={`h-full w-full ${gestures.fitMode === "cover" ? "object-cover" : "object-contain"}`} playsInline crossOrigin="anonymous" />
-      {/* YouTube-style gesture layer (Android / tablet). Sits above the video but
-          below the controls pill & overlay buttons (which come later in the DOM).
-          Stops the synthetic click so the desktop onClick play/pause doesn't fire. */}
-      {isCapacitor && !minimized && (
-        <div
-          className="absolute inset-0"
-          style={{ touchAction: "none" }}
-          onClick={(e) => e.stopPropagation()}
-          onTouchStart={gestures.touchHandlers.onTouchStart}
-          onTouchMove={gestures.touchHandlers.onTouchMove}
-          onTouchEnd={gestures.touchHandlers.onTouchEnd}
-          onTouchCancel={gestures.touchHandlers.onTouchCancel}
+      cueBackgroundOpacity={cueBgOpacity}
+      cueColor={cueColor}
+      cueFontFamily={cueFontFamily}
+      cueFontSize={cueFontSize}
+      fitMode={gestures.fitMode}
+      touchHandlers={gestures.touchHandlers}
+      gestureFeedback={gestures.feedback}
+      currentEpisode={currentEp}
+      loadingStream={loadingStream}
+      fallbackNotice={fallbackNotice}
+      buffering={buffering}
+      streamError={streamError}
+      playing={playing}
+      fullscreen={isFullscreen}
+      onTogglePlay={() => {
+        const video = videoRef.current;
+        if (!video) return;
+        video.paused ? video.play().catch(() => {}) : video.pause();
+        showControlsNow();
+      }}
+      onRetry={() => {
+        const episode = currentEpRef.current;
+        if (episode) playEpisodeRef.current?.(episode);
+      }}
+      alternativeProviderLabel={altSource ? providerLabel(altSource.providerId || "animepahe") : undefined}
+      onTryAlternative={altSource ? () => switchToProvider(altSource) : undefined}
+      onExitFullscreen={toggleFullscreen}
+      duration={duration}
+      skipTimes={skipTimes}
+      upNext={upNext}
+      onPlayUpNext={() => { clearUpNext(); playNext(); }}
+      onCancelUpNext={clearUpNext}
+      controls={(
+        <VideoControls
+          showControls={showControls && !minimized}
+          videoRef={videoRef}
+          duration={duration}
+          playing={playing}
+          muted={muted}
+          volume={volume}
+          autoPlay={autoPlay}
+          autoNext={autoNext}
+          currentEp={currentEp}
+          links={links}
+          selectedLink={selectedLink}
+          isMobile={isMobile}
+          qualityOpen={qualityOpen}
+          isFullscreen={isFullscreen}
+          bufferedPct={bufferedPct}
+          isTheater={isTheater}
+          isPiP={isPiP}
+          playbackRate={playbackRate}
+          onToggleTheater={() => setIsTheater((theater) => !theater)}
+          onTogglePiP={togglePiP}
+          onChangePlaybackRate={changePlaybackRate}
+          onSeekToPct={(percent) => {
+            const video = videoRef.current;
+            if (video && duration) video.currentTime = percent * duration;
+          }}
+          onSeekBy={seek}
+          onSeekStart={() => { seekingRef.current = true; }}
+          onSeekEnd={(time) => {
+            seekingRef.current = false;
+            if (videoRef.current) videoRef.current.currentTime = time;
+          }}
+          onTogglePlay={() => {
+            const video = videoRef.current;
+            if (!video) return;
+            video.paused ? video.play().catch(() => {}) : video.pause();
+          }}
+          onToggleMute={() => {
+            const next = !muted;
+            setMuted(next);
+            if (videoRef.current) videoRef.current.muted = next;
+          }}
+          onVolumeChange={(nextVolume) => {
+            setVolume(nextVolume);
+            setMuted(nextVolume === 0);
+            localStorage.setItem("ap-volume", String(nextVolume));
+            if (videoRef.current) {
+              videoRef.current.volume = nextVolume;
+              videoRef.current.muted = nextVolume === 0;
+            }
+          }}
+          onToggleAutoPlay={() => setAutoPlay((enabled) => {
+            const next = !enabled;
+            localStorage.setItem("ap-autoplay", String(next));
+            return next;
+          })}
+          onToggleAutoNext={() => setAutoNext((enabled) => {
+            const next = !enabled;
+            localStorage.setItem("ap-autonext", String(next));
+            return next;
+          })}
+          onPlayPrev={playPrev}
+          onPlayNext={playNext}
+          onToggleFullscreen={toggleFullscreen}
+          onToggleQualityMenu={() => setQualityOpen((open) => !open)}
+          onChangeQuality={changeQuality}
+          onCloseQualityMenu={() => setQualityOpen(false)}
+          hlsLevels={hlsLevels}
+          currentHlsLevel={currentHlsLevel}
+          onChangeHlsLevel={changeHlsLevel}
+          subtitlesEnabled={subtitlesEnabled}
+          availableSubtitles={availableSubtitles}
+          onToggleSubtitles={toggleSubtitles}
+          providerId={providerId}
+          streamVariants={activeProviderDescriptor?.capabilities.streamVariants}
+          cueFontSize={cueFontSize}
+          setCueFontSize={setCueFontSize}
+          cueFontFamily={cueFontFamily}
+          setCueFontFamily={setCueFontFamily}
+          cueBgOpacity={cueBgOpacity}
+          setCueBgOpacity={setCueBgOpacity}
+          cueColor={cueColor}
+          setCueColor={setCueColor}
         />
       )}
-      <GestureFeedback fb={gestures.feedback} />
-      {/* Center play/pause button (touch / Android) — appears with the controls */}
-      {isCapacitor && !minimized && currentEp && !loadingStream && (
-        <button
-          onClick={(e) => { e.stopPropagation(); const v = videoRef.current; if (!v) return; v.paused ? v.play().catch(() => {}) : v.pause(); showControlsNow(); }}
-          className={`absolute left-1/2 top-1/2 z-30 flex h-16 w-16 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white transition-all duration-300 ${showControls ? "opacity-100 scale-100" : "pointer-events-none opacity-0 scale-90"}`}
-          title="Play / Pause"
-        >
-          {playing ? <Pause size={30} fill="currentColor" /> : <Play size={30} fill="currentColor" className="ml-0.5" />}
-        </button>
-      )}
-      {!currentEp && !loadingStream && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <p className="text-sm text-white/30">Select an episode to start watching</p>
-        </div>
-      )}
-      {loadingStream && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-white/40 pointer-events-none">
-          <Loader2 size={36} className="animate-spin" />
-          <span className="text-sm">{fallbackNotice ?? "Resolving stream…"}</span>
-        </div>
-      )}
-      {buffering && !loadingStream && !streamError && currentEp && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <Loader2 size={44} className="animate-spin text-white/70 drop-shadow-lg" />
-        </div>
-      )}
-      {streamError && !loadingStream && (
-        <div className="absolute inset-0 flex items-center justify-center">
-          <div className="flex max-w-sm flex-col items-center gap-3 rounded-lg bg-red-500/10 p-5 text-center">
-            <div className="text-sm text-red-400">{streamError}</div>
-            <div className="flex gap-2">
-              <button
-                onClick={() => { const ep = currentEpRef.current; if (ep) playEpisodeRef.current?.(ep); }}
-                className="rounded bg-white/10 px-4 py-1.5 text-xs font-medium text-white hover:bg-white/20 transition-colors"
-              >
-                Retry
-              </button>
-              {altSource && (
-                <button
-                  onClick={() => switchToProvider(altSource)}
-                  className="rounded bg-[#e50914] px-4 py-1.5 text-xs font-medium text-white hover:bg-[#f6121d] transition-colors"
-                >
-                  Try {providerLabel(altSource.providerId || "animepahe")}
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-      {isFullscreen && (
-        <div className={`absolute top-4 left-1/2 -translate-x-1/2 z-30 transition-opacity duration-300 ${(isMobile || mouseNearTop) ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
-          <button onClick={(e) => { e.stopPropagation(); toggleFullscreen(); }} className="flex h-9 w-9 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur-sm hover:bg-black/80 transition" title="Exit fullscreen">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" className="h-4 w-4">
-              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
-        </div>
-      )}
-      {/* Skip Intro / Outro Overlays */}
-      <SkipOverlay
-        duration={duration}
-        videoRef={videoRef}
-        skipTimes={skipTimes}
-        showControls={showControls}
-        onSkip={(endTime) => { if (videoRef.current) videoRef.current.currentTime = endTime; }}
-      />
-      <VideoControls
-        showControls={showControls && !minimized}
-        videoRef={videoRef}
-        duration={duration}
-        playing={playing}
-        muted={muted}
-        volume={volume}
-        autoPlay={autoPlay}
-        autoNext={autoNext}
-        currentEp={currentEp}
-        links={links}
-        selectedLink={selectedLink}
-        isMobile={isMobile}
-        qualityOpen={qualityOpen}
-        isFullscreen={isFullscreen}
-        bufferedPct={bufferedPct}
-        isTheater={isTheater}
-        isPiP={isPiP}
-        playbackRate={playbackRate}
-        onToggleTheater={() => setIsTheater((t) => !t)}
-        onTogglePiP={togglePiP}
-        onChangePlaybackRate={changePlaybackRate}
-        onSeekToPct={(pct) => { const v = videoRef.current; if (v && duration) v.currentTime = pct * duration; }}
-        onSeekBy={seek}
-        onSeekStart={() => { seekingRef.current = true; }}
-        onSeekEnd={(time) => { seekingRef.current = false; if (videoRef.current) videoRef.current.currentTime = time; }}
-        onTogglePlay={() => { const v = videoRef.current; if (!v) return; v.paused ? v.play().catch(() => {}) : v.pause(); }}
-        onToggleMute={() => { const next = !muted; setMuted(next); if (videoRef.current) videoRef.current.muted = next; }}
-        onVolumeChange={(v) => { setVolume(v); setMuted(v === 0); localStorage.setItem("ap-volume", String(v)); if (videoRef.current) { videoRef.current.volume = v; videoRef.current.muted = v === 0; } }}
-        onToggleAutoPlay={() => setAutoPlay((v) => { const n = !v; localStorage.setItem("ap-autoplay", String(n)); return n; })}
-        onToggleAutoNext={() => setAutoNext((v) => { const n = !v; localStorage.setItem("ap-autonext", String(n)); return n; })}
-        onPlayPrev={playPrev}
-        onPlayNext={playNext}
-        onToggleFullscreen={toggleFullscreen}
-        onToggleQualityMenu={() => setQualityOpen((o) => !o)}
-        onChangeQuality={changeQuality}
-        onCloseQualityMenu={() => setQualityOpen(false)}
-        
-        // HLS qualities and subtitles toggle
-        hlsLevels={hlsLevels}
-        currentHlsLevel={currentHlsLevel}
-        onChangeHlsLevel={changeHlsLevel}
-        subtitlesEnabled={subtitlesEnabled}
-        availableSubtitles={availableSubtitles}
-        onToggleSubtitles={toggleSubtitles}
-        providerId={providerId}
-        streamVariants={activeProviderDescriptor?.capabilities.streamVariants}
-        cueFontSize={cueFontSize}
-        setCueFontSize={setCueFontSize}
-        cueFontFamily={cueFontFamily}
-        setCueFontFamily={setCueFontFamily}
-        cueBgOpacity={cueBgOpacity}
-        setCueBgOpacity={setCueBgOpacity}
-        cueColor={cueColor}
-        setCueColor={setCueColor}
-      />
-
-      {/* "Up next" autoplay countdown (YouTube-style) */}
-      {upNext && (
-        <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/70">
-          <div className={`flex flex-col items-center text-center ${minimized ? "gap-1" : "gap-3"}`}>
-            <div className={`uppercase tracking-widest text-white/50 ${minimized ? "text-[9px]" : "text-xs"}`}>Up next</div>
-            <div className={`font-bold ${minimized ? "text-sm" : "text-xl"}`}>Episode {upNext.episode}</div>
-            {/* Countdown ring around a play button */}
-            <button
-              onClick={(e) => { e.stopPropagation(); clearUpNext(); playNext(); }}
-              className={`relative flex items-center justify-center rounded-full bg-white/10 text-white transition hover:bg-white/20 ${minimized ? "h-10 w-10" : "h-16 w-16"}`}
-              title="Play now"
-            >
-              <svg viewBox="0 0 64 64" className="absolute inset-0 h-full w-full -rotate-90">
-                <circle cx="32" cy="32" r="29" fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="3" />
-                <circle
-                  cx="32" cy="32" r="29" fill="none" stroke="#e50914" strokeWidth="3" strokeLinecap="round"
-                  strokeDasharray={2 * Math.PI * 29}
-                  strokeDashoffset={2 * Math.PI * 29 * (1 - upNext.count / 5)}
-                  style={{ transition: "stroke-dashoffset 1s linear" }}
-                />
-              </svg>
-              <Play size={minimized ? 16 : 26} fill="currentColor" className="ml-0.5" />
-            </button>
-            {!minimized && (
-              <button
-                onClick={(e) => { e.stopPropagation(); clearUpNext(); }}
-                className="rounded-full bg-white/10 px-4 py-1.5 text-xs font-semibold text-white/80 transition hover:bg-white/20"
-              >
-                Cancel
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
+    />
   );
 
   // ── Mini-player overlay (shown when minimized) ──────────────────────────────

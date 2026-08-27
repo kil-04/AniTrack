@@ -8,6 +8,7 @@ import { useAppStore } from "./store/useAppStore";
 import { usePlayerStore } from "./store/usePlayerStore";
 import { useMediaQuery } from "./hooks/useMediaQuery";
 import { isCapacitor } from "./lib/platform";
+import { subscribeDownloads } from "./lib/downloads";
 import { AnimatePresence, motion } from "framer-motion";
 
 const PageTransition = ({ children }: { children: React.ReactNode }) => (
@@ -108,9 +109,7 @@ export default function App() {
 
   // Load the downloads list once so Continue Watching can prefer a local copy.
   useEffect(() => {
-    let off = () => {};
-    import("./lib/downloads").then(({ subscribeDownloads }) => { off = subscribeDownloads(() => {}); });
-    return () => off();
+    return subscribeDownloads(() => {});
   }, []);
 
   // Warm the heaviest route chunks (player + detail) once the app is idle so the

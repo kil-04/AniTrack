@@ -1,4 +1,3 @@
-import { BrowserWindow, net, session } from "electron";
 import {
   StreamProvider,
   AnimeInfo,
@@ -8,306 +7,40 @@ import {
   ProviderFeed,
   ProviderFeedResult,
 } from "./types";
-import { getRuntimeConfig } from "../remote-config";
+import {
+  anikotoBaseUrl,
+  anikotoRoute,
+  anikotoSelector,
+  anikotoUrl,
+  elementAttributeById,
+  escapeRegex,
+  extractRouteValue,
+  htmlAttribute,
+} from "./anikoto-config";
+import {
+  anikotoFetch,
+  getAnikotoWindow,
+  prewarmAnikoto,
+  rememberAnikotoStreamOrigin,
+} from "./anikoto-browser";
+import {
+  getAnikotoTop,
+  type AnikotoTopResult,
+} from "./anikoto-top";
 
-let _activeAnikotoBase = "";
-
-function anikotoBases(): string[] {
-  return getRuntimeConfig().providers.anikoto.baseUrls.map((base) => base.replace(/\/+$/, ""));
-}
-
-function anikotoBaseUrl(): string {
-  const config = getRuntimeConfig();
-  if (!config.providers.anikoto.enabled || !config.features.anikotoStreaming) {
-    throw new Error("Anikoto is temporarily disabled by the automation configuration.");
-  }
-  const bases = anikotoBases();
-  if (!bases.includes(_activeAnikotoBase)) _activeAnikotoBase = bases[0];
-  return _activeAnikotoBase;
-}
-
-function anikotoRoute(name: string, values: Record<string, string | number> = {}): string {
-  const template = getRuntimeConfig().providers.anikoto.routes[name];
-  if (!template) throw new Error(`Missing signed Anikoto route: ${name}`);
-  const route = template.replace(/\{([A-Za-z][A-Za-z0-9]*)\}/g, (_match, key: string) => {
-    if (!(key in values)) throw new Error(`Missing Anikoto route value: ${key}`);
-    return encodeURIComponent(String(values[key]));
-  });
-  if (route.includes("{")) throw new Error(`Unresolved Anikoto route: ${name}`);
-  return route;
-}
-
-function anikotoUrl(name: string, values: Record<string, string | number> = {}): string {
-  return `${anikotoBaseUrl()}${anikotoRoute(name, values)}`;
-}
-
-function anikotoSelector(name: string): string {
-  const value = getRuntimeConfig().providers.anikoto.selectors[name];
-  if (!value) throw new Error(`Missing signed Anikoto selector: ${name}`);
-  return value;
-}
-
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function htmlAttribute(tag: string, name: string): string | null {
-  const match = new RegExp(`(?:^|\\s)${escapeRegex(name)}\\s*=\\s*(["'])(.*?)\\1`, "i").exec(tag);
-  return match?.[2] ?? null;
-}
-
-function elementAttributeById(html: string, id: string, attribute: string): string | null {
-  const tag = new RegExp(`<[^>]+\\sid\\s*=\\s*(["'])${escapeRegex(id)}\\1[^>]*>`, "i").exec(html)?.[0];
-  return tag ? htmlAttribute(tag, attribute) : null;
-}
-
-function extractRouteValue(value: string, routeName: string, key: string): string | null {
-  const template = getRuntimeConfig().providers.anikoto.routes[routeName];
-  const marker = `{${key}}`;
-  const at = template?.indexOf(marker) ?? -1;
-  if (!template || at < 0) return null;
-  const pattern = new RegExp(`${escapeRegex(template.slice(0, at))}([^/?&#]+)${escapeRegex(template.slice(at + marker.length))}`);
-  const match = pattern.exec(value);
-  if (!match) return null;
-  try { return decodeURIComponent(match[1]); } catch { return match[1]; }
-}
-
-// Origin of the player iframe that served the most-recently-resolved stream
-// (e.g. https://vidtube.site). The segment CDNs (mewstream.buzz, nekostream.site)
-// hotlink-check Referer against this embedding player, and it rotates — so we
-// capture it at resolve time and main.ts reads it via getAnikotoPlayerOrigin()
-// to spoof the correct Referer/Origin on CDN requests.
-let _lastPlayerOrigin = "";
-export function getAnikotoPlayerOrigin(): string { return _lastPlayerOrigin; }
-const streamOrigins = new Map<string, { origin: string; expiresAt: number }>();
-
-function rememberAnikotoStreamOrigin(data: StreamData, playerOrigin: string) {
-  const expiresAt = Date.now() + 45 * 60 * 1000;
-  for (const candidate of [data.url, ...(data.subtitles ?? []).map((track: any) => track.file ?? track.src ?? "")]) {
-    try { streamOrigins.set(new URL(candidate).hostname.toLowerCase(), { origin: playerOrigin, expiresAt }); } catch {}
-  }
-}
-
-export function getAnikotoPlayerOriginForUrl(url: string): string {
-  let host = "";
-  try { host = new URL(url).hostname.toLowerCase(); } catch { return ""; }
-  const mapped = streamOrigins.get(host);
-  if (!mapped) return "";
-  if (mapped.expiresAt <= Date.now()) {
-    streamOrigins.delete(host);
-    return "";
-  }
-  return mapped.origin;
-}
-
-let _anikotoWin: BrowserWindow | null = null;
-let _anikotoReady = false;
-let _anikotoReadyPromise: Promise<void> | null = null;
-let _anikotoTimeout: NodeJS.Timeout | null = null;
-
-function resetAnikotoWindow() {
-  if (_anikotoWin && !_anikotoWin.isDestroyed()) _anikotoWin.destroy();
-  _anikotoWin = null;
-  _anikotoReady = false;
-  _anikotoReadyPromise = null;
-}
-
-function selectAnikotoBase(base: string) {
-  const clean = base.replace(/\/+$/, "");
-  if (_activeAnikotoBase && _activeAnikotoBase !== clean) resetAnikotoWindow();
-  _activeAnikotoBase = clean;
-}
-
-function resetAnikotoTimeout() {
-  if (_anikotoTimeout) {
-    clearTimeout(_anikotoTimeout);
-  }
-  _anikotoTimeout = setTimeout(() => {
-    if (_anikotoWin && !_anikotoWin.isDestroyed()) {
-      console.log("[Anikoto] Destroying idle prewarmed window to save memory");
-      _anikotoWin.destroy();
-    }
-    _anikotoWin = null;
-    _anikotoReady = false;
-    _anikotoReadyPromise = null;
-    _anikotoTimeout = null;
-  }, 120_000); // 2 minutes
-}
-
-export function getAnikotoWindow(): Promise<BrowserWindow> {
-  const baseUrl = anikotoBaseUrl();
-  resetAnikotoTimeout();
-  if (_anikotoWin && !_anikotoWin.isDestroyed() && _anikotoReady) {
-    return Promise.resolve(_anikotoWin);
-  }
-  if (_anikotoReadyPromise && _anikotoWin && !_anikotoWin.isDestroyed()) {
-    return _anikotoReadyPromise.then(() => {
-      if (!_anikotoWin || _anikotoWin.isDestroyed()) throw new Error("Anikoto window closed during init");
-      return _anikotoWin;
-    });
-  }
-
-  _anikotoReady = false;
-  _anikotoWin = new BrowserWindow({
-    show: false,
-    width: 800,
-    height: 600,
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      partition: "persist:anikoto",
-    },
-  });
-
-  _anikotoReadyPromise = new Promise<void>((resolve) => {
-    let resolved = false;
-    function done() {
-      if (resolved) return;
-      resolved = true;
-      _anikotoReady = true;
-      resolve();
-    }
-    _anikotoWin!.webContents.on("did-finish-load", done);
-    setTimeout(done, 15_000);
-    _anikotoWin!.loadURL(baseUrl + "/");
-    _anikotoWin!.on("closed", () => {
-      _anikotoWin = null;
-      _anikotoReady = false;
-      _anikotoReadyPromise = null;
-    });
-  });
-
-  return _anikotoReadyPromise.then(() => {
-    if (!_anikotoWin || _anikotoWin.isDestroyed()) throw new Error("Anikoto window closed during init");
-    return _anikotoWin;
-  });
-}
-
-export function prewarmAnikoto(): void {
-  getAnikotoWindow().catch(() => {
-    /* ignore */
-  });
-}
-
-async function anikotoFetch(url: string, options: any = {}): Promise<any> {
-  const headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    ...(options.headers || {})
-  };
-
-  const bases = anikotoBases();
-  let parsed: URL | null = null;
-  try { parsed = new URL(url); } catch {}
-  const providerRequest = parsed ? bases.includes(parsed.origin) : false;
-  const orderedBases = providerRequest
-    ? [anikotoBaseUrl(), ...bases.filter((base) => base !== anikotoBaseUrl())]
-    : [""];
-  let lastResponse: any = null;
-  let lastError: unknown = null;
-  for (const candidateBase of orderedBases) {
-    const candidateUrl = providerRequest && parsed
-      ? `${candidateBase}${parsed.pathname}${parsed.search}${parsed.hash}`
-      : url;
-    if (providerRequest) selectAnikotoBase(candidateBase);
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        await getAnikotoWindow();
-        const candidateHeaders = { ...headers } as Record<string, string>;
-        for (const [name, value] of Object.entries(candidateHeaders)) {
-          if (name.toLowerCase() !== "referer") continue;
-          try {
-            const referer = new URL(value);
-            if (bases.includes(referer.origin) && providerRequest) {
-              candidateHeaders[name] = `${candidateBase}${referer.pathname}${referer.search}${referer.hash}`;
-            }
-          } catch {}
-        }
-        const resp = await (net.fetch as any)(candidateUrl, {
-          ...options,
-          session: session.fromPartition("persist:anikoto"),
-          headers: candidateHeaders,
-        });
-        lastResponse = resp;
-        if (resp.ok) return resp;
-        const retryable = resp.status === 403 || resp.status === 429 || resp.status === 503;
-        if (attempt === 0 && retryable) {
-          console.log(`[Anikoto] ${candidateBase || "stream host"} returned ${resp.status}; refreshing session.`);
-          resetAnikotoWindow();
-          continue;
-        }
-        if (!providerRequest || (resp.status < 500 && !retryable && resp.status !== 404)) return resp;
-        break;
-      } catch (error) {
-        lastError = error;
-        resetAnikotoWindow();
-        if (attempt === 0) continue;
-        break;
-      }
-    }
-  }
-  if (lastResponse) return lastResponse;
-  throw lastError instanceof Error ? lastError : new Error("Every signed Anikoto origin failed");
-}
-
-export interface AnikotoTopItem {
-  slug: string;
-  showId: string;
-  title: string;
-  titleJp: string;
-  poster: string;
-  sub: number | null;
-  dub: number | null;
-}
-
-export interface AnikotoTopResult {
-  day: AnikotoTopItem[];
-  week: AnikotoTopItem[];
-  month: AnikotoTopItem[];
-}
-
-// Parse Anikoto's home-page "Top anime" sidebar into day/week/month lists.
-export function parseAnikotoTop(html: string): AnikotoTopResult {
-  const out: AnikotoTopResult = { day: [], week: [], month: [] };
-  const secStart = html.indexOf('id="top-anime"');
-  if (secStart < 0) return out;
-  const sec = html.slice(secStart, secStart + 80000);
-  const markers = [...sec.matchAll(/<div class="tab-content" data-name="(day|week|month)"/g)];
-  for (let i = 0; i < markers.length; i++) {
-    const name = markers[i][1] as "day" | "week" | "month";
-    const start = markers[i].index!;
-    const end = i + 1 < markers.length ? markers[i + 1].index! : sec.length;
-    const block = sec.slice(start, end);
-    const items: AnikotoTopItem[] = [];
-    const itemClass = escapeRegex(anikotoSelector("searchItemClass"));
-    const itemStart = new RegExp(`<a\\s+class=["'][^"']*\\b${itemClass}\\b[^"']*["']`, "i");
-    for (const p of block.split(itemStart).slice(1, 11)) {
-      const href = (p.match(/href="([^"]+)"/) || [])[1] || "";
-      const slug = extractRouteValue(href, "watch", "animeId") || "";
-      const poster = (p.match(/<img[^>]+src="([^"]+)"/) || [])[1] || "";
-      const alt = (p.match(/alt="([^"]*)"/) || [])[1] || "";
-      const nameM = p.match(/class="name[^"]*"[^>]*>\s*([^<]+?)\s*</);
-      const title = ((nameM && nameM[1]) || alt).trim();
-      const titleJp = htmlAttribute(p, anikotoSelector("searchTitleAttribute")) || "";
-      const showId = (p.match(/data-tip="([^"]*)"/) || [])[1] || "";
-      const sub = (p.match(/ep-status sub[\s\S]*?<span>\s*(\d+)/) || [])[1];
-      const dub = (p.match(/ep-status dub[\s\S]*?<span>\s*(\d+)/) || [])[1];
-      if (title) items.push({ slug, showId, title, titleJp, poster, sub: sub ? +sub : null, dub: dub ? +dub : null });
-    }
-    out[name] = items;
-  }
-  return out;
-}
-
-export async function getAnikotoTop(): Promise<AnikotoTopResult> {
-  try {
-    const resp = await anikotoFetch(anikotoUrl("home"));
-    const html = await resp.text();
-    return parseAnikotoTop(html);
-  } catch (e) {
-    console.warn("[Anikoto] getAnikotoTop failed", e);
-    return { day: [], week: [], month: [] };
-  }
-}
+export {
+  getAnikotoPlayerOrigin,
+  getAnikotoPlayerOriginForUrl,
+  prewarmAnikoto,
+} from "./anikoto-browser";
+export {
+  getAnikotoTop,
+  parseAnikotoTop,
+} from "./anikoto-top";
+export type {
+  AnikotoTopItem,
+  AnikotoTopResult,
+} from "./anikoto-top";
 
 export class AnikotoProvider implements StreamProvider {
   readonly id = "anikoto";
@@ -467,6 +200,10 @@ export class AnikotoProvider implements StreamProvider {
       // Harvest the MAL id the episode anchors carry (data-mal) — used to
       // verify search matches against AniList/MAL ids.
       const malM = new RegExp(`${escapeRegex(anikotoSelector("malIdAttribute"))}=["'](\\d+)["']`, "i").exec(listHtml);
+      if (this.malIdCache.size >= 200) {
+        const oldest = this.malIdCache.keys().next().value;
+        if (oldest !== undefined) this.malIdCache.delete(oldest);
+      }
       this.malIdCache.set(animeId, malM ? parseInt(malM[1], 10) : null);
 
       // Parse episodes from returned HTML using fast regex
@@ -887,7 +624,6 @@ export class AnikotoProvider implements StreamProvider {
         // The H-SUB BrowserWindow path already produced an iframe — use it directly.
         const a = await attempt(iframeUrl, serverGetJson);
         result = a.data;
-        _lastPlayerOrigin = a.playerOrigin;
         rememberAnikotoStreamOrigin(a.data, a.playerOrigin);
       } else {
         // Try each server in the matched sub-type until one resolves. The first
@@ -916,7 +652,6 @@ export class AnikotoProvider implements StreamProvider {
             // caption tracks (= hard-subbed); in that case keep trying.
             if (subType !== "soft" || (a.data.subtitles && a.data.subtitles.length > 0)) {
               result = a.data;
-              _lastPlayerOrigin = a.playerOrigin;
               rememberAnikotoStreamOrigin(a.data, a.playerOrigin);
               break;
             }
@@ -929,7 +664,6 @@ export class AnikotoProvider implements StreamProvider {
         if (!result && firstResolved) {
           // No soft-sub-with-tracks server found — fall back to the first that resolved.
           result = firstResolved.data;
-          _lastPlayerOrigin = firstResolved.playerOrigin;
           rememberAnikotoStreamOrigin(firstResolved.data, firstResolved.playerOrigin);
         }
         if (!result) throw lastErr ?? new Error("All Anikoto servers failed to resolve");

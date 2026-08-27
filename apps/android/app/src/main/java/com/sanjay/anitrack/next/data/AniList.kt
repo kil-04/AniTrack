@@ -46,6 +46,13 @@ object AniList {
             cache[key]?.let { (at, v) -> if (System.currentTimeMillis() - at < CACHE_TTL_MS) return@withContext v }
         }
         lock.withLock {
+            // Another caller may have populated the cache while this request
+            // waited for the serial rate-limit lock.
+            synchronized(cache) {
+                cache[key]?.let { (at, value) ->
+                    if (System.currentTimeMillis() - at < CACHE_TTL_MS) return@withLock value
+                }
+            }
             val wait = SPACING_MS - (System.currentTimeMillis() - lastCallAt)
             if (wait > 0) delay(wait)
             try {

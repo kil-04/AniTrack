@@ -42,8 +42,41 @@ The native Android UI keeps one route-level screen per file in
 episode controls and playback-progress helpers live beside those screens as
 small focused modules. Do not recreate a single catch-all `Screens.kt` file.
 
+The larger route families are intentionally split as follows:
+
+- `HomeRoute.kt` coordinates the home route; `HomeHighlights.kt`,
+  `ContinueCards.kt`, and `HomeComponents.kt` own reusable presentation.
+- `AnimeDetailScreen.kt` coordinates details; relations, episode/provider
+  selection, and list-status editing live in their respective `Detail*.kt`
+  modules.
+- Search, latest, downloads, schedule, continue-watching, and list routes each
+  have their own screen file.
+- `PlayerScreen.kt` owns playback state, while `NativePlayerControls.kt` and
+  `PlayerGestureLayer.kt` own the control and gesture surfaces.
+- `DownloadManager.kt` owns queue/state/persistence and
+  `DownloadTransport.kt` owns HTTP, proxying, and direct-to-disk transfer.
+
 Large screens may still coordinate state, but parsing, persistence, provider
 selection and reusable UI must remain outside the route composable.
+
+## Connector module boundaries
+
+Desktop connectors live in `apps/desktop/main/services/providers/`. A connector
+adapter implements the normalized contract in `types.ts`; provider-specific
+configuration, browser/session management, and resolver logic may be adjacent
+modules with the same connector prefix. AnimePahe therefore uses
+`animepahe-config.ts` and `animepahe-kwik.ts`, while Anikoto uses
+`anikoto-config.ts`, `anikoto-browser.ts`, and `anikoto-top.ts`.
+
+The desktop player keeps route coordination in `StreamPlayer.tsx`. Its episode
+panel, video surface, native HLS loader, provider-matching hook, and skip-time
+client are separate modules. This keeps connector payload parsing out of the
+visual components.
+
+The still-compiled Capacitor compatibility bridge is similarly divided into
+`capacitor-plugins.ts`, `capacitor-anilist.ts`, and `capacitor-anikoto.ts`.
+These modules exist only to keep old installations buildable; new Android
+product work belongs in the native Kotlin application.
 
 ## Repository policy
 
