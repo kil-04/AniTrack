@@ -1,4 +1,4 @@
-import { create } from "zustand";
+import { create, type StoreApi } from "zustand";
 import { pullAndMerge } from "../lib/supabase-sync";
 import type {
   AniListAuthState,
@@ -29,6 +29,32 @@ interface AppState {
   setScanStatus: (s: string | null) => void;
 }
 
+let latestRequestId = 0;
+
+async function loadLatest(
+  set: StoreApi<AppState>["setState"],
+  page = 1,
+): Promise<void> {
+  const requestId = ++latestRequestId;
+  set({ latestLoading: true, latestPage: page });
+  try {
+    const result = await window.api.anilist.recent(page);
+    // A pagination click may supersede an older startup/refresh request.
+    if (requestId !== latestRequestId) return;
+    set({
+      latestEpisodes: result.data,
+      latestPage: result.page,
+      latestHasNextPage: result.hasNextPage,
+    });
+  } catch (e) {
+    if (requestId === latestRequestId) {
+      console.error("latest episodes fetch failed", e);
+    }
+  } finally {
+    if (requestId === latestRequestId) set({ latestLoading: false });
+  }
+}
+
 export const useAppStore = create<AppState>((set) => ({
   mal: { connected: false },
   al: { connected: false },
@@ -44,6 +70,9 @@ export const useAppStore = create<AppState>((set) => ({
 
   refreshAll: async () => {
     set({ loading: true });
+    // Latest Episodes is independent from the rest of home startup. Start it
+    // immediately instead of waiting for auth, library, and trending first.
+    const latestPromise = loadLatest(set, 1);
     // Two-way gist sync runs in the BACKGROUND — the UI paints from local data
     // immediately instead of waiting on a GitHub round-trip. If the pull
     // brought anything new, Continue Watching refreshes itself afterwards.
@@ -71,34 +100,10 @@ export const useAppStore = create<AppState>((set) => ({
     if (results[3].status === "fulfilled") next.continueWatching = results[3].value;
     if (results[4].status === "fulfilled") next.list = results[4].value;
     set({ ...next, loading: false });
-
-    // Fetch the same AniList recent-airing feed used by native Android.
-    try {
-      set({ latestLoading: true, latestPage: 1 });
-      const result = await window.api.anilist.recent(1);
-      set({ latestEpisodes: result.data, latestHasNextPage: result.hasNextPage });
-    } catch (e) {
-      console.error("latest episodes fetch failed", e);
-    } finally {
-      set({ latestLoading: false });
-    }
+    await latestPromise;
   },
 
-  refreshLatest: async (page = 1) => {
-    set({ latestLoading: true, latestPage: page });
-    try {
-      const result = await window.api.anilist.recent(page);
-      set({
-        latestEpisodes: result.data,
-        latestPage: result.page,
-        latestHasNextPage: result.hasNextPage,
-      });
-    } catch (e) {
-      console.error(e);
-    } finally {
-      set({ latestLoading: false });
-    }
-  },
+  refreshLatest: (page = 1) => loadLatest(set, page),
 
   refreshContinue: async () => {
     try {

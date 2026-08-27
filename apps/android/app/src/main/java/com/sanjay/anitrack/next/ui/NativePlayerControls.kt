@@ -22,6 +22,7 @@ private val ControlsAccent = Color(0xFFE50914)
 
 @Composable
 internal fun NativePlayerControls(
+    modifier: Modifier = Modifier,
     visible: Boolean,
     durationMs: Long,
     positionMs: Long,
@@ -51,7 +52,7 @@ internal fun NativePlayerControls(
     if (!visible) return
 
     Column(
-        Modifier
+        modifier
             .fillMaxWidth()
             .background(
                 androidx.compose.ui.graphics.Brush.verticalGradient(

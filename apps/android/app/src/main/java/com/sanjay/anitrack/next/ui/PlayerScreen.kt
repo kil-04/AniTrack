@@ -576,6 +576,7 @@ fun PlayerScreen(
             )
 
             NativePlayerControls(
+                modifier = Modifier.align(Alignment.BottomCenter),
                 visible = controlsVisible && !inPipMode && error == null && status.isEmpty(),
                 durationMs = durationMs,
                 positionMs = positionMs,
