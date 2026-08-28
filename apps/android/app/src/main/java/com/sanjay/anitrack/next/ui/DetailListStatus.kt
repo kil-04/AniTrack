@@ -47,6 +47,8 @@ internal fun ListStatusButton(anime: Anime) {
                                 malId = anime.malId,
                                 queueForMal = connected,
                                 year = anime.year,
+                                genres = anime.genres,
+                                format = anime.format,
                             )
                             status = key
                             if (connected) com.sanjay.anitrack.next.data.Mal.requestFlush()

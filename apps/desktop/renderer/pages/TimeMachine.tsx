@@ -73,6 +73,7 @@ export default function TimeMachine() {
             <button onClick={surprise} disabled={anime.length === 0} className="flex items-center gap-2 rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black transition hover:scale-105 disabled:opacity-40">
               <Dices size={17} /> Mystery screening
             </button>
+            <button onClick={() => navigate("/taste-genome")} className="flex items-center gap-2 rounded-full border border-fuchsia-300/25 bg-fuchsia-400/10 px-5 py-2.5 text-sm font-bold text-fuchsia-100 backdrop-blur hover:bg-fuchsia-400/20"><Sparkles size={16} /> View Taste Genome</button>
             <button onClick={() => setYear(clampTimeMachineYear(year - 1))} className="rounded-full border border-white/15 bg-black/30 px-5 py-2.5 text-sm text-white/80 backdrop-blur hover:bg-white/10">Previous year</button>
             <button onClick={() => setYear(clampTimeMachineYear(year + 1))} className="rounded-full border border-white/15 bg-black/30 px-5 py-2.5 text-sm text-white/80 backdrop-blur hover:bg-white/10">Next year</button>
           </div>

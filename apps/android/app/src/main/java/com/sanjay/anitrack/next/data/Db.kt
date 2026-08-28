@@ -14,7 +14,7 @@ object Db {
 
     fun init(ctx: Context) {
         if (::helper.isInitialized) return
-        helper = object : SQLiteOpenHelper(ctx.applicationContext, "anitrack_next.db", null, 5) {
+        helper = object : SQLiteOpenHelper(ctx.applicationContext, "anitrack_next.db", null, 6) {
             override fun onCreate(db: SQLiteDatabase) {
                 db.execSQL(
                     """CREATE TABLE IF NOT EXISTS playback(
@@ -41,6 +41,10 @@ object Db {
                 }
                 if (old < 4) runCatching { db.execSQL("ALTER TABLE playback ADD COLUMN provider_id TEXT") }
                 if (old < 5) runCatching { db.execSQL("ALTER TABLE list_entry ADD COLUMN year INTEGER") }
+                if (old < 6) {
+                    runCatching { db.execSQL("ALTER TABLE list_entry ADD COLUMN genres TEXT") }
+                    runCatching { db.execSQL("ALTER TABLE list_entry ADD COLUMN format TEXT") }
+                }
             }
         }
     }
@@ -55,6 +59,8 @@ object Db {
                 cover      TEXT,
                 score      REAL,
                 year       INTEGER,
+                genres     TEXT,
+                format     TEXT,
                 updated_at INTEGER NOT NULL
             )""",
         )
@@ -85,6 +91,8 @@ object Db {
         val cover: String?,
         val score: Double?,
         val year: Int?,
+        val genres: List<String>,
+        val format: String?,
         val updatedAt: Long,
     )
 
@@ -97,6 +105,8 @@ object Db {
         queueForMal: Boolean = false,
         episodesWatched: Int? = null,
         year: Int? = null,
+        genres: List<String> = emptyList(),
+        format: String? = null,
     ) = withContext(Dispatchers.IO) {
         require(status in STATUSES) { "Invalid list status" }
         val db = helper.writableDatabase
@@ -105,6 +115,8 @@ object Db {
             put("title", title); put("cover", cover)
             if (malId != null) put("mal_id", malId)
             if (year != null) put("year", year)
+            if (genres.isNotEmpty()) put("genres", org.json.JSONArray(genres).toString())
+            if (format != null) put("format", format)
             put("updated_at", System.currentTimeMillis())
         }
         db.beginTransaction()
@@ -208,6 +220,8 @@ object Db {
         cover: String?,
         score: Double?,
         year: Int?,
+        genres: List<String>,
+        format: String?,
     ): Boolean = withContext(Dispatchers.IO) {
         val db = helper.writableDatabase
         val pending = db.rawQuery("SELECT 1 FROM mal_outbox WHERE anime_id=?", arrayOf(animeId.toString())).use {
@@ -218,6 +232,8 @@ object Db {
             put("status", status); put("title", title); put("cover", cover)
             if (score != null && score > 0) put("score", score) else putNull("score")
             if (year != null) put("year", year)
+            if (genres.isNotEmpty()) put("genres", org.json.JSONArray(genres).toString())
+            if (format != null) put("format", format)
             put("mal_id", malId); put("updated_at", System.currentTimeMillis())
         }
         if (db.update("list_entry", cv, "anime_id=?", arrayOf(animeId.toString())) == 0) {
@@ -240,7 +256,7 @@ object Db {
     suspend fun listByStatus(status: String): List<ListRow> = withContext(Dispatchers.IO) {
         val out = mutableListOf<ListRow>()
         helper.readableDatabase.rawQuery(
-            "SELECT anime_id, status, title, cover, score, year, updated_at FROM list_entry WHERE status=? ORDER BY updated_at DESC",
+            "SELECT anime_id, status, title, cover, score, year, genres, format, updated_at FROM list_entry WHERE status=? ORDER BY updated_at DESC",
             arrayOf(status),
         ).use { c ->
             while (c.moveToNext()) {
@@ -248,7 +264,12 @@ object Db {
                     c.getInt(0), c.getString(1), c.getString(2) ?: "Unknown", c.getString(3),
                     if (c.isNull(4)) null else c.getDouble(4),
                     if (c.isNull(5)) null else c.getInt(5),
-                    c.getLong(6),
+                    if (c.isNull(6)) emptyList() else runCatching {
+                        val json = org.json.JSONArray(c.getString(6))
+                        List(json.length()) { json.getString(it) }
+                    }.getOrDefault(emptyList()),
+                    if (c.isNull(7)) null else c.getString(7),
+                    c.getLong(8),
                 )
             }
         }

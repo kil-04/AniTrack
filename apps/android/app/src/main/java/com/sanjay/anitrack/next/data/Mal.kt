@@ -199,6 +199,8 @@ object Mal {
                     anime.cover,
                     score = entry.score,
                     year = anime.year,
+                    genres = anime.genres,
+                    format = anime.format,
                 )) imported++
         }
         return ImportResult(entries.size, imported)

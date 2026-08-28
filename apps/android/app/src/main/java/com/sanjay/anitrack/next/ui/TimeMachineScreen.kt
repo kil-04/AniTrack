@@ -25,7 +25,7 @@ import com.sanjay.anitrack.next.data.TimeMachineArchive
 import kotlin.random.Random
 
 @Composable
-fun TimeMachineScreen(onOpen: (Anime) -> Unit) {
+fun TimeMachineScreen(onOpen: (Anime) -> Unit, onOpenGenome: () -> Unit = {}) {
     var year by remember { mutableIntStateOf(1988) }
     var requestedYear by remember { mutableIntStateOf(1988) }
     var anime by remember { mutableStateOf<List<Anime>>(emptyList()) }
@@ -96,6 +96,7 @@ fun TimeMachineScreen(onOpen: (Anime) -> Unit) {
                         enabled = anime.isNotEmpty(),
                         colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
                     ) { Text("✦  Mystery screening", fontWeight = FontWeight.Bold) }
+                    TextButton(onClick = onOpenGenome) { Text("⌁  View Taste Genome", color = Color(0xFFFFB3FF), fontWeight = FontWeight.Bold) }
                 }
             }
         }
