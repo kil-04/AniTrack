@@ -15,6 +15,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.sanjay.anitrack.next.data.Anime
+import com.sanjay.anitrack.next.data.AniList
 
 // ── Shared card ───────────────────────────────────────────────────────────────
 
@@ -43,5 +44,20 @@ fun AnimeCard(anime: Anime, onClick: (Anime) -> Unit, width: Int = 126) {
         if (meta.isNotEmpty()) {
             Text(meta, style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.4f))
         }
+    }
+}
+
+@Composable
+fun RecommendationCard(recommendation: AniList.Recommendation, onClick: (Anime) -> Unit) {
+    Column(Modifier.width(142.dp)) {
+        AnimeCard(recommendation.anime, onClick, width = 142)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            recommendation.reason,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            color = Color.White.copy(alpha = 0.42f),
+        )
     }
 }

@@ -380,6 +380,59 @@ export async function installCapacitorApiBridge() {
           hasNextPage: data.Page?.pageInfo?.hasNextPage ?? false,
         };
       },
+      async recommendations(seedIds: number[], excludedIds: number[]) {
+        const seeds = Array.from(new Set((seedIds ?? []).filter((id) => Number.isInteger(id) && id > 0))).slice(0, 8);
+        if (seeds.length === 0) return [];
+        const excluded = new Set((excludedIds ?? []).filter((id) => Number.isInteger(id) && id > 0));
+        seeds.forEach((id) => excluded.add(id));
+        const data = await alGql<any>(`
+          query($ids: [Int]) {
+            Page(perPage: 8) {
+              media(id_in: $ids, type: ANIME) {
+                id title { romaji english }
+                recommendations(sort: RATING_DESC, perPage: 12) {
+                  nodes { rating mediaRecommendation { ${MEDIA_FIELDS} isAdult } }
+                }
+              }
+            }
+          }`, { ids: seeds }, "low");
+        const ranked = new Map<number, any>();
+        for (const seed of (data.Page?.media ?? [])) {
+          const seedTitle = seed.title?.english || seed.title?.romaji || "a show in your list";
+          for (const node of (seed.recommendations?.nodes ?? [])) {
+            const media = node.mediaRecommendation;
+            if (!media || media.isAdult || excluded.has(media.id) || node.rating <= 0) continue;
+            const edgeScore = Math.log2(node.rating + 1);
+            const existing = ranked.get(media.id);
+            if (existing) {
+              existing.score += edgeScore;
+              existing.sources.add(seed.id);
+              if (node.rating > existing.bestRating) {
+                existing.bestRating = node.rating;
+                existing.reason = `Because you liked ${seedTitle}`;
+              }
+            } else {
+              ranked.set(media.id, {
+                anime: mapMedia(media),
+                score: edgeScore,
+                bestRating: node.rating,
+                reason: `Because you liked ${seedTitle}`,
+                sources: new Set([seed.id]),
+              });
+            }
+          }
+        }
+        return Array.from(ranked.values())
+          .map((item) => ({
+            anime: item.anime,
+            reason: item.sources.size > 1
+              ? `${item.reason} and ${item.sources.size - 1} more from your list`
+              : item.reason,
+            score: item.score + (item.sources.size - 1) * 2,
+          }))
+          .sort((a, b) => b.score - a.score || (b.anime.averageScore ?? 0) - (a.anime.averageScore ?? 0))
+          .slice(0, 20);
+      },
       async relations(id: number) {
         if (id <= 0) return [];
         try {

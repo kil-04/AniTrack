@@ -9,7 +9,7 @@ import {
   pullList,
   setMalClientId,
 } from "../services/mal";
-import { getById, getRelations, searchAnime, advancedSearchAnime, trending, getAiringFor, recentEpisodes } from "../services/anilist";
+import { getById, getRelations, searchAnime, advancedSearchAnime, trending, getAiringFor, recentEpisodes, recommendations } from "../services/anilist";
 import {
   beginAuth as alBeginAuth,
   disconnect as alDisconnect,
@@ -64,6 +64,8 @@ export function registerAuthIpc(getMainWindow: () => BrowserWindow | null) {
   ipcMain.handle(IPC.ANILIST_TRENDING, () => trending());
   ipcMain.handle(IPC.ANILIST_AIRING, (_e, ids: number[]) => getAiringFor(ids));
   ipcMain.handle(IPC.ANILIST_RECENT, (_e, page = 1) => recentEpisodes(page));
+  ipcMain.handle(IPC.ANILIST_RECOMMENDATIONS, (_e, seedIds: number[], excludedIds: number[]) =>
+    recommendations(seedIds, excludedIds));
   ipcMain.handle(IPC.ANILIST_RELATIONS, (_e, id: number) => getRelations(id));
   ipcMain.handle(IPC.ANILIST_GET, async (_e, id: number) => {
     console.log(`[IPC.ANILIST_GET] Received id:`, id, `type:`, typeof id);

@@ -10,10 +10,12 @@ import LatestEpCard from "../components/LatestEpCard";
 import ContinueWatchingCard from "../components/ContinueWatchingCard";
 import DiscoverRow from "../components/DiscoverRow";
 import Top10Sidebar from "../components/Top10Sidebar";
+import RecommendationCard from "../components/RecommendationCard";
 import { providerClient } from "../lib/provider-api";
 
 export default function Home() {
   const trending = useAppStore((s) => s.trending);
+  const recommendations = useAppStore((s) => s.recommendations);
   const latestEpisodes = useAppStore((s) => s.latestEpisodes);
   const latestLoading = useAppStore((s) => s.latestLoading);
   const latestPage = useAppStore((s) => s.latestPage);
@@ -27,6 +29,13 @@ export default function Home() {
   const trendingCards = useMemo(
     () => trending.map((a) => <Card key={a.id} anime={a} size="sm" />),
     [trending]
+  );
+
+  const recommendationCards = useMemo(
+    () => recommendations.map((recommendation) => (
+      <RecommendationCard key={recommendation.anime.id} recommendation={recommendation} />
+    )),
+    [recommendations],
   );
 
 
@@ -431,6 +440,11 @@ export default function Home() {
       {/* Discovery sections + Top 10 sidebar (Anikoto-style) */}
       <div className="flex gap-4">
         <div className="min-w-0 flex-1">
+          {recommendationCards.length > 0 && (
+            <Row title="For You">
+              {recommendationCards}
+            </Row>
+          )}
           {trendingCards.length > 0 && (
             <Row title="Trending now">
               {trendingCards}

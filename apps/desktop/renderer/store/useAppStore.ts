@@ -2,6 +2,7 @@ import { create, type StoreApi } from "zustand";
 import { pullAndMerge } from "../lib/supabase-sync";
 import type {
   AniListAuthState,
+  AnimeRecommendation,
   AnimeMeta,
   ContinueWatchingItem,
   ListEntry,
@@ -13,6 +14,7 @@ interface AppState {
   mal: MalAuthState;
   al: AniListAuthState;
   trending: AnimeMeta[];
+  recommendations: AnimeRecommendation[];
   latestEpisodes: RecentEpisode[];
   latestPage: number;
   latestHasNextPage: boolean;
@@ -20,6 +22,7 @@ interface AppState {
   list: { entry: ListEntry; anime: AnimeMeta | null }[];
   loading: boolean;
   latestLoading: boolean;
+  recommendationsLoading: boolean;
   scanStatus: string | null;
 
   refreshAll: () => Promise<void>;
@@ -30,6 +33,40 @@ interface AppState {
 }
 
 let latestRequestId = 0;
+let recommendationRequestId = 0;
+
+type LocalListItem = { entry: ListEntry; anime: AnimeMeta | null };
+
+async function loadRecommendations(
+  set: StoreApi<AppState>["setState"],
+  list: LocalListItem[],
+): Promise<void> {
+  const requestId = ++recommendationRequestId;
+  const excludedIds = list.map((item) => item.entry.animeId).filter((id) => id > 0);
+  const seedIds = list
+    .filter((item) => item.anime && ["completed", "watching"].includes(item.entry.status))
+    .sort((a, b) => (b.entry.score ?? 0) - (a.entry.score ?? 0)
+      || b.entry.updatedAt - a.entry.updatedAt)
+    .map((item) => item.entry.animeId)
+    .filter((id) => id > 0)
+    .slice(0, 8);
+  if (seedIds.length === 0) {
+    set({ recommendations: [], recommendationsLoading: false });
+    return;
+  }
+
+  set({ recommendationsLoading: true });
+  try {
+    const recommendations = await window.api.anilist.recommendations(seedIds, excludedIds);
+    if (requestId === recommendationRequestId) set({ recommendations });
+  } catch (e) {
+    if (requestId === recommendationRequestId) {
+      console.error("recommendations fetch failed", e);
+    }
+  } finally {
+    if (requestId === recommendationRequestId) set({ recommendationsLoading: false });
+  }
+}
 
 async function loadLatest(
   set: StoreApi<AppState>["setState"],
@@ -59,6 +96,7 @@ export const useAppStore = create<AppState>((set) => ({
   mal: { connected: false },
   al: { connected: false },
   trending: [],
+  recommendations: [],
   latestEpisodes: [],
   latestPage: 1,
   latestHasNextPage: false,
@@ -66,6 +104,7 @@ export const useAppStore = create<AppState>((set) => ({
   list: [],
   loading: false,
   latestLoading: false,
+  recommendationsLoading: false,
   scanStatus: null,
 
   refreshAll: async () => {
@@ -98,7 +137,10 @@ export const useAppStore = create<AppState>((set) => ({
     if (results[1].status === "fulfilled") next.al = results[1].value;
     if (results[2].status === "fulfilled") next.trending = results[2].value;
     if (results[3].status === "fulfilled") next.continueWatching = results[3].value;
-    if (results[4].status === "fulfilled") next.list = results[4].value;
+    if (results[4].status === "fulfilled") {
+      next.list = results[4].value;
+      void loadRecommendations(set, results[4].value);
+    }
     set({ ...next, loading: false });
     await latestPromise;
   },
@@ -127,6 +169,7 @@ export const useAppStore = create<AppState>((set) => ({
   refreshList: async () => {
     const list = await window.api.list.getAll();
     set({ list });
+    await loadRecommendations(set, list);
   },
 
   setScanStatus: (s) => set({ scanStatus: s }),

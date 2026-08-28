@@ -48,6 +48,12 @@ export interface PaginatedAnime {
   lastPage?: number;
 }
 
+export interface AnimeRecommendation {
+  anime: AnimeMeta;
+  reason: string;
+  score: number;
+}
+
 export interface ListEntry {
   animeId: number;        // AniList ID
   status: WatchStatus;
@@ -169,6 +175,7 @@ export const IPC = {
   ANILIST_GET: "anilist:get",
   ANILIST_AIRING: "anilist:airing",
   ANILIST_RECENT: "anilist:recent",
+  ANILIST_RECOMMENDATIONS: "anilist:recommendations",
   // Local state
   LIST_GET_ALL: "list:get-all",
   LIST_SET: "list:set",

@@ -27,6 +27,7 @@ fun HomeScreen(
 ) {
     var trending by remember { mutableStateOf<List<Anime>>(emptyList()) }
     var latest by remember { mutableStateOf<List<com.sanjay.anitrack.next.data.AniList.Airing>>(emptyList()) }
+    var recommendations by remember { mutableStateOf<List<AniList.Recommendation>>(emptyList()) }
     var topAiring by remember { mutableStateOf<List<Anime>>(emptyList()) }
     var popular by remember { mutableStateOf<List<Anime>>(emptyList()) }
     var anikotoTop by remember { mutableStateOf<Map<String, List<com.sanjay.anitrack.next.data.Anikoto.TopItem>>>(emptyMap()) }
@@ -63,6 +64,23 @@ fun HomeScreen(
         runCatching { latest = AniList.recentEpisodes().first }
         runCatching { topAiring = AniList.topAiring() }
         runCatching { popular = AniList.mostPopular() }
+        // Personalization is deliberately queued after the visible core rows,
+        // so AniList's serial rate limiter never makes Home feel slower.
+        scope.launch {
+            val rows = runCatching {
+                com.sanjay.anitrack.next.data.Db.STATUSES.flatMap {
+                    com.sanjay.anitrack.next.data.Db.listByStatus(it)
+                }
+            }.getOrDefault(emptyList())
+            val seeds = rows
+                .filter { it.status == "completed" || it.status == "watching" }
+                .sortedByDescending { it.score ?: 0.0 }
+                .map { it.animeId }
+                .take(8)
+            recommendations = runCatching {
+                AniList.recommendations(seeds, rows.map { it.animeId })
+            }.getOrDefault(emptyList())
+        }
         // Anikoto Top 10 (Day/Week/Month) — same source as the desktop app.
         scope.launch { runCatching { anikotoTop = com.sanjay.anitrack.next.data.Anikoto.top() } }
     }
@@ -112,6 +130,19 @@ fun HomeScreen(
                     items(latest.size) { i ->
                         val a = latest[i]
                         LatestCard(a.anime, a.episode, onOpen)
+                    }
+                }
+            }
+        }
+        if (recommendations.isNotEmpty()) {
+            item(key = "for-you-header") { SectionHeader("For You") }
+            item(key = "for-you-row") {
+                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    items(
+                        count = recommendations.size,
+                        key = { recommendations[it].anime.id },
+                    ) { i ->
+                        RecommendationCard(recommendations[i], onOpen)
                     }
                 }
             }

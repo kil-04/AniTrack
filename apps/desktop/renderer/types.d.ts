@@ -32,6 +32,7 @@ interface ApiBridge {
     trending(): Promise<AnimeMeta[]>;
     airing(ids: number[]): Promise<import("../../../packages/shared/types").AiringInfo[]>;
     recent(page?: number): Promise<import("../../../packages/shared/types").RecentEpisodesPage>;
+    recommendations(seedIds: number[], excludedIds: number[]): Promise<import("../../../packages/shared/types").AnimeRecommendation[]>;
     get(id: number): Promise<AnimeMeta | null>;
     relations(id: number): Promise<RelatedAnime[]>;
   };

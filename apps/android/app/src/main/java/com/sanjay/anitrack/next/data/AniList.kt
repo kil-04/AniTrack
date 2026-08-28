@@ -12,6 +12,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
+import kotlin.math.log2
 
 /**
  * AniList GraphQL client. Lessons inherited from the production app baked in
@@ -122,6 +123,7 @@ object AniList {
     )
 
     data class Airing(val anime: Anime, val episode: Int, val airingAt: Long)
+    data class Recommendation(val anime: Anime, val reason: String, val score: Double)
 
     /** Airing schedule for the next 7 days (sorted by time). */
     suspend fun airingWeek(): List<Airing> {
@@ -216,6 +218,89 @@ object AniList {
             Airing(Anime.fromMedia(m), o.optInt("episode"), o.optLong("airingAt"))
         }
         return list to pg.getJSONObject("pageInfo").optBoolean("hasNextPage", false)
+    }
+
+    /** Collaborative AniList recommendations personalized from the user's
+     * completed/watching titles. Already tracked and adult titles are removed. */
+    suspend fun recommendations(seedIds: List<Int>, excludedIds: List<Int>): List<Recommendation> {
+        val seeds = seedIds.filter { it > 0 }.distinct().take(8)
+        if (seeds.isEmpty()) return emptyList()
+        val excluded = (excludedIds.filter { it > 0 } + seeds).toHashSet()
+        val data = gql(
+            """query(${'$'}ids: [Int]) {
+                Page(perPage: 8) {
+                    media(id_in: ${'$'}ids, type: ANIME) {
+                        id
+                        title { romaji english }
+                        recommendations(sort: RATING_DESC, perPage: 12) {
+                            nodes {
+                                rating
+                                mediaRecommendation { $MEDIA_FIELDS }
+                            }
+                        }
+                    }
+                }
+            }""",
+            JSONObject().put("ids", JSONArray(seeds)),
+        )
+
+        data class Ranked(
+            val anime: Anime,
+            var score: Double,
+            var bestRating: Int,
+            var reason: String,
+            val sources: MutableSet<Int>,
+        )
+
+        val ranked = mutableMapOf<Int, Ranked>()
+        val media = data.getJSONObject("Page").getJSONArray("media")
+        for (i in 0 until media.length()) {
+            val seed = media.getJSONObject(i)
+            val seedId = seed.getInt("id")
+            val titles = seed.optJSONObject("title")
+            val seedTitle = titles?.optString("english")?.takeUnless { it.isBlank() || it == "null" }
+                ?: titles?.optString("romaji")?.takeUnless { it.isBlank() || it == "null" }
+                ?: "a show in your list"
+            val nodes = seed.optJSONObject("recommendations")?.optJSONArray("nodes") ?: continue
+            for (j in 0 until nodes.length()) {
+                val node = nodes.getJSONObject(j)
+                val rating = node.optInt("rating")
+                val candidate = node.optJSONObject("mediaRecommendation") ?: continue
+                val id = candidate.optInt("id")
+                if (rating <= 0 || id in excluded || candidate.optBoolean("isAdult", false)) continue
+                val edgeScore = log2(rating + 1.0)
+                val existing = ranked[id]
+                if (existing == null) {
+                    ranked[id] = Ranked(
+                        anime = Anime.fromMedia(candidate),
+                        score = edgeScore,
+                        bestRating = rating,
+                        reason = "Because you liked $seedTitle",
+                        sources = mutableSetOf(seedId),
+                    )
+                } else {
+                    existing.score += edgeScore
+                    existing.sources += seedId
+                    if (rating > existing.bestRating) {
+                        existing.bestRating = rating
+                        existing.reason = "Because you liked $seedTitle"
+                    }
+                }
+            }
+        }
+        return ranked.values
+            .map {
+                Recommendation(
+                    anime = it.anime,
+                    reason = if (it.sources.size > 1) {
+                        "${it.reason} and ${it.sources.size - 1} more from your list"
+                    } else it.reason,
+                    score = it.score + (it.sources.size - 1) * 2,
+                )
+            }
+            .sortedWith(compareByDescending<Recommendation> { it.score }
+                .thenByDescending { it.anime.score ?: 0 })
+            .take(20)
     }
 
     /** Top 10 by trending (the desktop app's Top 10 rail). */

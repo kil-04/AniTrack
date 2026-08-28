@@ -1,4 +1,4 @@
-import type { AnimeMeta, RecentEpisodesPage, RelatedAnime } from "../../../../packages/shared/types";
+import type { AnimeMeta, AnimeRecommendation, RecentEpisodesPage, RelatedAnime } from "../../../../packages/shared/types";
 
 const ENDPOINT = "https://graphql.anilist.co";
 
@@ -357,6 +357,101 @@ export async function recentEpisodes(page = 1): Promise<RecentEpisodesPage> {
     page: safePage,
     hasNextPage: data.Page.pageInfo.hasNextPage,
   };
+  cacheSet(key, result);
+  return result;
+}
+
+/** Personalized collaborative recommendations from AniList's recommendation
+ * graph. Multiple seed shows reinforce the same candidate, while the strongest
+ * individual edge supplies the user-facing explanation. */
+export async function recommendations(
+  seedIds: number[],
+  excludedIds: number[] = [],
+): Promise<AnimeRecommendation[]> {
+  const seeds = Array.from(new Set(seedIds.filter((id) => Number.isInteger(id) && id > 0))).slice(0, 8);
+  if (seeds.length === 0) return [];
+  const excluded = new Set(excludedIds.filter((id) => Number.isInteger(id) && id > 0));
+  for (const id of seeds) excluded.add(id);
+
+  const key = `recommendations:${seeds.slice().sort((a, b) => a - b).join(",")}:${Array.from(excluded).sort((a, b) => a - b).join(",")}`;
+  const hit = cacheGet<AnimeRecommendation[]>(key);
+  if (hit) return hit;
+
+  interface SeedNode {
+    id: number;
+    title: { romaji?: string; english?: string };
+    recommendations?: {
+      nodes: Array<{
+        rating: number;
+        mediaRecommendation: MediaNode | null;
+      }>;
+    };
+  }
+
+  const data = await gql<{ Page: { media: SeedNode[] } }>(
+    `query($ids: [Int]) {
+      Page(perPage: 8) {
+        media(id_in: $ids, type: ANIME) {
+          id
+          title { romaji english }
+          recommendations(sort: RATING_DESC, perPage: 12) {
+            nodes {
+              rating
+              mediaRecommendation { ${MEDIA_FIELDS} }
+            }
+          }
+        }
+      }
+    }`,
+    { ids: seeds },
+    "low",
+  );
+
+  const ranked = new Map<number, {
+    anime: AnimeMeta;
+    score: number;
+    bestRating: number;
+    reason: string;
+    sources: Set<number>;
+  }>();
+  for (const seed of data.Page.media) {
+    const seedTitle = seed.title.english || seed.title.romaji || "a show in your list";
+    for (const node of seed.recommendations?.nodes ?? []) {
+      const media = node.mediaRecommendation;
+      if (!media || media.isAdult || excluded.has(media.id) || node.rating <= 0) continue;
+      const edgeScore = Math.log2(node.rating + 1);
+      const existing = ranked.get(media.id);
+      if (existing) {
+        existing.score += edgeScore;
+        existing.sources.add(seed.id);
+        if (node.rating > existing.bestRating) {
+          existing.bestRating = node.rating;
+          existing.reason = `Because you liked ${seedTitle}`;
+        }
+      } else {
+        ranked.set(media.id, {
+          anime: toAnime(media),
+          score: edgeScore,
+          bestRating: node.rating,
+          reason: `Because you liked ${seedTitle}`,
+          sources: new Set([seed.id]),
+        });
+      }
+    }
+  }
+
+  const result = Array.from(ranked.values())
+    .map((item) => ({
+      anime: item.anime,
+      reason: item.sources.size > 1
+        ? `${item.reason} and ${item.sources.size - 1} more from your list`
+        : item.reason,
+      score: item.score + (item.sources.size - 1) * 2,
+    }))
+    .sort((a, b) => b.score - a.score
+      || (b.anime.averageScore ?? 0) - (a.anime.averageScore ?? 0)
+      || (b.anime.popularity ?? 0) - (a.anime.popularity ?? 0))
+    .slice(0, 20);
   cacheSet(key, result);
   return result;
 }
