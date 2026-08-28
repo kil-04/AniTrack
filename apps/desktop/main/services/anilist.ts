@@ -1,4 +1,5 @@
 import type { AnimeMeta, AnimeRecommendation, RecentEpisodesPage, RelatedAnime } from "../../../../packages/shared/types";
+import { classicEraBoost, classicEraLabel } from "../../../../packages/shared/recommendations";
 
 const ENDPOINT = "https://graphql.anilist.co";
 
@@ -373,7 +374,7 @@ export async function recommendations(
   const excluded = new Set(excludedIds.filter((id) => Number.isInteger(id) && id > 0));
   for (const id of seeds) excluded.add(id);
 
-  const key = `recommendations:${seeds.slice().sort((a, b) => a - b).join(",")}:${Array.from(excluded).sort((a, b) => a - b).join(",")}`;
+  const key = `recommendations:v2:${seeds.slice().sort((a, b) => a - b).join(",")}:${Array.from(excluded).sort((a, b) => a - b).join(",")}`;
   const hit = cacheGet<AnimeRecommendation[]>(key);
   if (hit) return hit;
 
@@ -441,13 +442,17 @@ export async function recommendations(
   }
 
   const result = Array.from(ranked.values())
-    .map((item) => ({
-      anime: item.anime,
-      reason: item.sources.size > 1
+    .map((item) => {
+      const graphReason = item.sources.size > 1
         ? `${item.reason} and ${item.sources.size - 1} more from your list`
-        : item.reason,
-      score: item.score + (item.sources.size - 1) * 2,
-    }))
+        : item.reason;
+      const classicLabel = classicEraLabel(item.anime.year);
+      return {
+        anime: item.anime,
+        reason: classicLabel ? `${classicLabel} · ${graphReason}` : graphReason,
+        score: item.score + (item.sources.size - 1) * 2 + classicEraBoost(item.anime.year),
+      };
+    })
     .sort((a, b) => b.score - a.score
       || (b.anime.averageScore ?? 0) - (a.anime.averageScore ?? 0)
       || (b.anime.popularity ?? 0) - (a.anime.popularity ?? 0))

@@ -14,7 +14,7 @@ object Db {
 
     fun init(ctx: Context) {
         if (::helper.isInitialized) return
-        helper = object : SQLiteOpenHelper(ctx.applicationContext, "anitrack_next.db", null, 4) {
+        helper = object : SQLiteOpenHelper(ctx.applicationContext, "anitrack_next.db", null, 5) {
             override fun onCreate(db: SQLiteDatabase) {
                 db.execSQL(
                     """CREATE TABLE IF NOT EXISTS playback(
@@ -40,6 +40,7 @@ object Db {
                     createMalOutbox(db)
                 }
                 if (old < 4) runCatching { db.execSQL("ALTER TABLE playback ADD COLUMN provider_id TEXT") }
+                if (old < 5) runCatching { db.execSQL("ALTER TABLE list_entry ADD COLUMN year INTEGER") }
             }
         }
     }
@@ -53,6 +54,7 @@ object Db {
                 title      TEXT,
                 cover      TEXT,
                 score      REAL,
+                year       INTEGER,
                 updated_at INTEGER NOT NULL
             )""",
         )
@@ -76,7 +78,15 @@ object Db {
 
     val STATUSES = listOf("watching", "completed", "on_hold", "dropped", "plan_to_watch")
 
-    data class ListRow(val animeId: Int, val status: String, val title: String, val cover: String?, val score: Double?)
+    data class ListRow(
+        val animeId: Int,
+        val status: String,
+        val title: String,
+        val cover: String?,
+        val score: Double?,
+        val year: Int?,
+        val updatedAt: Long,
+    )
 
     suspend fun setListStatus(
         animeId: Int,
@@ -86,6 +96,7 @@ object Db {
         malId: Int? = null,
         queueForMal: Boolean = false,
         episodesWatched: Int? = null,
+        year: Int? = null,
     ) = withContext(Dispatchers.IO) {
         require(status in STATUSES) { "Invalid list status" }
         val db = helper.writableDatabase
@@ -93,6 +104,7 @@ object Db {
             put("status", status)
             put("title", title); put("cover", cover)
             if (malId != null) put("mal_id", malId)
+            if (year != null) put("year", year)
             put("updated_at", System.currentTimeMillis())
         }
         db.beginTransaction()
@@ -194,6 +206,8 @@ object Db {
         status: String,
         title: String,
         cover: String?,
+        score: Double?,
+        year: Int?,
     ): Boolean = withContext(Dispatchers.IO) {
         val db = helper.writableDatabase
         val pending = db.rawQuery("SELECT 1 FROM mal_outbox WHERE anime_id=?", arrayOf(animeId.toString())).use {
@@ -202,6 +216,8 @@ object Db {
         if (pending) return@withContext false
         val cv = ContentValues().apply {
             put("status", status); put("title", title); put("cover", cover)
+            if (score != null && score > 0) put("score", score) else putNull("score")
+            if (year != null) put("year", year)
             put("mal_id", malId); put("updated_at", System.currentTimeMillis())
         }
         if (db.update("list_entry", cv, "anime_id=?", arrayOf(animeId.toString())) == 0) {
@@ -224,12 +240,16 @@ object Db {
     suspend fun listByStatus(status: String): List<ListRow> = withContext(Dispatchers.IO) {
         val out = mutableListOf<ListRow>()
         helper.readableDatabase.rawQuery(
-            "SELECT anime_id, status, title, cover, score FROM list_entry WHERE status=? ORDER BY updated_at DESC",
+            "SELECT anime_id, status, title, cover, score, year, updated_at FROM list_entry WHERE status=? ORDER BY updated_at DESC",
             arrayOf(status),
         ).use { c ->
             while (c.moveToNext()) {
-                out += ListRow(c.getInt(0), c.getString(1), c.getString(2) ?: "Unknown", c.getString(3),
-                    if (c.isNull(4)) null else c.getDouble(4))
+                out += ListRow(
+                    c.getInt(0), c.getString(1), c.getString(2) ?: "Unknown", c.getString(3),
+                    if (c.isNull(4)) null else c.getDouble(4),
+                    if (c.isNull(5)) null else c.getInt(5),
+                    c.getLong(6),
+                )
             }
         }
         out

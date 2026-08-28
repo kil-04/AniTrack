@@ -140,7 +140,14 @@ object Mal {
         }
     }
 
-    data class Entry(val malId: Int, val title: String, val cover: String?, val status: String, val episodesWatched: Int)
+    data class Entry(
+        val malId: Int,
+        val title: String,
+        val cover: String?,
+        val status: String,
+        val episodesWatched: Int,
+        val score: Double?,
+    )
 
     /** Full list pull with paging (same fields as the desktop). */
     suspend fun pullList(): List<Entry> {
@@ -162,11 +169,39 @@ object Mal {
                     node.optJSONObject("main_picture")?.optString("large"),
                     ls.optString("status", "plan_to_watch"),
                     ls.optInt("num_episodes_watched", 0),
+                    ls.optDouble("score", 0.0).takeIf { it > 0 },
                 )
             }
             path = j.optJSONObject("paging")?.optString("next")?.takeIf { it.isNotEmpty() }
         }
         return out
+    }
+
+    data class ImportResult(val fetched: Int, val imported: Int)
+
+    /** Refresh MAL list metadata into the local database. Used by Settings and
+     * once automatically after the recommendation-schema upgrade. */
+    suspend fun importList(onFetched: (Int) -> Unit = {}): ImportResult {
+        if (Db.pendingMalOps().isNotEmpty() && !flushPending()) {
+            throw IOException("Pending local changes could not be uploaded; remote import was not applied.")
+        }
+        val entries = pullList()
+        onFetched(entries.size)
+        val byMal = AniList.byMalIds(entries.map { it.malId }).associateBy { it.malId }
+        var imported = 0
+        for (entry in entries) {
+            val anime = byMal[entry.malId] ?: continue
+            if (Db.applyMalListStatus(
+                    anime.id,
+                    entry.malId,
+                    entry.status,
+                    anime.title,
+                    anime.cover,
+                    score = entry.score,
+                    year = anime.year,
+                )) imported++
+        }
+        return ImportResult(entries.size, imported)
     }
 
     /** Push one status change (fire-and-forget from the status dropdown). */

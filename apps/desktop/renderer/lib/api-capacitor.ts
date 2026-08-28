@@ -10,6 +10,7 @@
 
 import { Browser } from "@capacitor/browser";
 import { ScreenOrientation } from "@capacitor/screen-orientation";
+import { classicEraBoost, classicEraLabel } from "../../../../packages/shared/recommendations";
 
 import {
   AniTrackDb,
@@ -423,13 +424,17 @@ export async function installCapacitorApiBridge() {
           }
         }
         return Array.from(ranked.values())
-          .map((item) => ({
-            anime: item.anime,
-            reason: item.sources.size > 1
+          .map((item) => {
+            const graphReason = item.sources.size > 1
               ? `${item.reason} and ${item.sources.size - 1} more from your list`
-              : item.reason,
-            score: item.score + (item.sources.size - 1) * 2,
-          }))
+              : item.reason;
+            const classicLabel = classicEraLabel(item.anime.year);
+            return {
+              anime: item.anime,
+              reason: classicLabel ? `${classicLabel} · ${graphReason}` : graphReason,
+              score: item.score + (item.sources.size - 1) * 2 + classicEraBoost(item.anime.year),
+            };
+          })
           .sort((a, b) => b.score - a.score || (b.anime.averageScore ?? 0) - (a.anime.averageScore ?? 0))
           .slice(0, 20);
       },

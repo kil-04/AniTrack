@@ -1,5 +1,6 @@
 import { create, type StoreApi } from "zustand";
 import { pullAndMerge } from "../lib/supabase-sync";
+import { selectRecommendationSeedIds } from "../../../../packages/shared/recommendations";
 import type {
   AniListAuthState,
   AnimeRecommendation,
@@ -43,13 +44,13 @@ async function loadRecommendations(
 ): Promise<void> {
   const requestId = ++recommendationRequestId;
   const excludedIds = list.map((item) => item.entry.animeId).filter((id) => id > 0);
-  const seedIds = list
-    .filter((item) => item.anime && ["completed", "watching"].includes(item.entry.status))
-    .sort((a, b) => (b.entry.score ?? 0) - (a.entry.score ?? 0)
-      || b.entry.updatedAt - a.entry.updatedAt)
-    .map((item) => item.entry.animeId)
-    .filter((id) => id > 0)
-    .slice(0, 8);
+  const seedIds = selectRecommendationSeedIds(list.map((item) => ({
+    id: item.entry.animeId,
+    status: item.entry.status,
+    score: item.entry.score,
+    updatedAt: item.entry.updatedAt,
+    year: item.anime?.year,
+  })));
   if (seedIds.length === 0) {
     set({ recommendations: [], recommendationsLoading: false });
     return;

@@ -70,18 +70,10 @@ fun MalCard(onProfileChanged: (connected: Boolean, username: String?) -> Unit = 
                         busy = true; syncMsg = "Syncing…"
                         scope.launch {
                             runCatching {
-                                if (Db.pendingMalOps().isNotEmpty() && !Mal.flushPending()) {
-                                    error("Pending local changes could not be uploaded; remote import was not applied.")
+                                val result = Mal.importList { fetched ->
+                                    syncMsg = "Fetched $fetched MAL entries, matching…"
                                 }
-                                val entries = Mal.pullList()
-                                syncMsg = "Fetched ${entries.size} MAL entries, matching…"
-                                val byMal = AniList.byMalIds(entries.map { it.malId }).associateBy { it.malId }
-                                var imported = 0
-                                for (e in entries) {
-                                    val a = byMal[e.malId] ?: continue
-                                    if (Db.applyMalListStatus(a.id, e.malId, e.status, a.title, a.cover)) imported++
-                                }
-                                syncMsg = "Imported $imported of ${entries.size} entries into My List."
+                                syncMsg = "Imported ${result.imported} of ${result.fetched} entries into My List."
                             }.onFailure { syncMsg = "Sync failed: ${it.message}" }
                             busy = false
                         }

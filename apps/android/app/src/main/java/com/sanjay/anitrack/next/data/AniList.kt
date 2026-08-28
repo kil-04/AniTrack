@@ -290,12 +290,15 @@ object AniList {
         }
         return ranked.values
             .map {
+                val graphReason = if (it.sources.size > 1) {
+                    "${it.reason} and ${it.sources.size - 1} more from your list"
+                } else it.reason
+                val classicLabel = RecommendationRanking.classicEraLabel(it.anime.year)
                 Recommendation(
                     anime = it.anime,
-                    reason = if (it.sources.size > 1) {
-                        "${it.reason} and ${it.sources.size - 1} more from your list"
-                    } else it.reason,
-                    score = it.score + (it.sources.size - 1) * 2,
+                    reason = if (classicLabel != null) "$classicLabel · $graphReason" else graphReason,
+                    score = it.score + (it.sources.size - 1) * 2 +
+                        RecommendationRanking.classicEraBoost(it.anime.year),
                 )
             }
             .sortedWith(compareByDescending<Recommendation> { it.score }

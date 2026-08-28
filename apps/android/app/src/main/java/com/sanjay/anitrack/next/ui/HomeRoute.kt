@@ -67,16 +67,32 @@ fun HomeScreen(
         // Personalization is deliberately queued after the visible core rows,
         // so AniList's serial rate limiter never makes Home feel slower.
         scope.launch {
-            val rows = runCatching {
+            var rows = runCatching {
                 com.sanjay.anitrack.next.data.Db.STATUSES.flatMap {
                     com.sanjay.anitrack.next.data.Db.listByStatus(it)
                 }
             }.getOrDefault(emptyList())
-            val seeds = rows
-                .filter { it.status == "completed" || it.status == "watching" }
-                .sortedByDescending { it.score ?: 0.0 }
-                .map { it.animeId }
-                .take(8)
+            val tasteRows = rows.filter { it.status == "completed" || it.status == "watching" }
+            val enrichedRows = tasteRows.count { it.score != null && it.year != null }
+            if (com.sanjay.anitrack.next.data.Mal.isConnected &&
+                tasteRows.isNotEmpty() && enrichedRows * 2 < tasteRows.size
+            ) {
+                runCatching { com.sanjay.anitrack.next.data.Mal.importList() }
+                rows = com.sanjay.anitrack.next.data.Db.STATUSES.flatMap {
+                    com.sanjay.anitrack.next.data.Db.listByStatus(it)
+                }
+            }
+            val seeds = com.sanjay.anitrack.next.data.RecommendationRanking.selectSeedIds(
+                rows.map {
+                    com.sanjay.anitrack.next.data.RecommendationSeedCandidate(
+                        id = it.animeId,
+                        status = it.status,
+                        score = it.score,
+                        updatedAt = it.updatedAt,
+                        year = it.year,
+                    )
+                },
+            )
             recommendations = runCatching {
                 AniList.recommendations(seeds, rows.map { it.animeId })
             }.getOrDefault(emptyList())

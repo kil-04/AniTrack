@@ -28,7 +28,7 @@
     "android:next:test": "apps\\android\\gradlew.bat -p apps/android :app:testDebugUnitTest",
     "android:next:release": "node --env-file-if-exists=.env scripts/run-native-gradle.js :app:assembleRelease",
     "android:next:verify": "node scripts/android-release-common.js",
-    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/match.test.mjs tests/provider-client.test.mjs tests/provider-registry.test.mjs tests/provider-search.test.mjs tests/runtime-config.test.cjs",
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/match.test.mjs tests/provider-client.test.mjs tests/provider-registry.test.mjs tests/provider-search.test.mjs tests/recommendations.test.mjs tests/runtime-config.test.cjs",
     "typecheck": "tsc -p apps/desktop/tsconfig.renderer.json --noEmit && tsc -p apps/desktop/tsconfig.main.json --noEmit",
     "legacy:capacitor:sync": "npm run build:vite && cd legacy/capacitor && npx cap sync android",
     "legacy:capacitor:open": "cd legacy/capacitor && npx cap open android",
