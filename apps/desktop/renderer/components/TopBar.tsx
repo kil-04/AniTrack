@@ -6,6 +6,7 @@ import GlobalSearch from "./GlobalSearch";
 const NAV = [
   { to: "/", label: "Home", end: true },
   { to: "/filter", label: "Search", end: false },
+  { to: "/time-machine", label: "Time Machine", end: false },
   { to: "/library", label: "My List", end: false },
   { to: "/continue-watching", label: "Continue", end: false },
   { to: "/schedule", label: "Schedule", end: false },

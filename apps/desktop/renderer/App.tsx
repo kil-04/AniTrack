@@ -33,6 +33,7 @@ const ContinueWatching = lazy(() => import("./pages/ContinueWatching"));
 const Library          = lazy(() => import("./pages/Library"));
 const Schedule         = lazy(() => import("./pages/Schedule"));
 const Downloads        = lazy(() => import("./pages/Downloads"));
+const TimeMachine      = lazy(() => import("./pages/TimeMachine"));
 
 const PageFallback = () => (
   <div className="flex h-full items-center justify-center text-white/30 text-sm">
@@ -178,6 +179,7 @@ export default function App() {
               <Route path="/continue-watching"  element={<PageTransition><ContinueWatching /></PageTransition>} />
               <Route path="/schedule"           element={<PageTransition><Schedule /></PageTransition>} />
               <Route path="/downloads"          element={<PageTransition><Downloads /></PageTransition>} />
+              <Route path="/time-machine"       element={<PageTransition><TimeMachine /></PageTransition>} />
             </Routes>
           </AnimatePresence>
         </Suspense>

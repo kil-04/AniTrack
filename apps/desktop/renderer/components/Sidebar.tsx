@@ -1,11 +1,12 @@
 import { NavLink } from "react-router-dom";
-import { Home, Library, Search, Settings, Tv } from "lucide-react";
+import { Clock3, Home, Library, Search, Settings, Tv } from "lucide-react";
 import { useAppStore } from "../store/useAppStore";
 import { motion } from "framer-motion";
 
 const items = [
   { to: "/", label: "Home", icon: Home },
   { to: "/filter", label: "Search", icon: Search },
+  { to: "/time-machine", label: "Time Machine", icon: Clock3 },
   { to: "/library", label: "My List", icon: Library },
   { to: "/settings", label: "Settings", icon: Settings },
 ];

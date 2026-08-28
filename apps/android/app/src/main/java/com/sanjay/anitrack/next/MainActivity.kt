@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
@@ -60,6 +61,7 @@ data class Dest(val route: String, val label: String, val icon: ImageVector)
 private val destinations = listOf(
     Dest("home", "Home", Icons.Filled.Home),
     Dest("search", "Search", Icons.Filled.Search),
+    Dest("time-machine", "Time Machine", Icons.Filled.History),
     Dest("mylist", "My List", Icons.Filled.Bookmark),
     Dest("schedule", "Schedule", Icons.Filled.CalendarMonth),
     Dest("downloads", "Downloads", Icons.Filled.Download),
@@ -228,6 +230,7 @@ fun AppShell() {
                         )
                     }
                     composable("search") { com.sanjay.anitrack.next.ui.SearchScreen(openDetail) }
+                    composable("time-machine") { com.sanjay.anitrack.next.ui.TimeMachineScreen(openDetail) }
                     composable("quicksearch") { com.sanjay.anitrack.next.ui.QuickSearchScreen(onOpen = openDetail, onBack = { nav.popBackStack() }) }
                     composable("continue") { com.sanjay.anitrack.next.ui.ContinueWatchingScreen(onPlay = { nav.navigate("player") }) }
                     composable("latest") { com.sanjay.anitrack.next.ui.LatestScreen(onOpen = openDetail) }
