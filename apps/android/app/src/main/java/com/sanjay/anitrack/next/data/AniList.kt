@@ -38,7 +38,9 @@ object AniList {
 
     const val MEDIA_FIELDS = """
         id idMal isAdult title { romaji english } coverImage { large } bannerImage
-        episodes status format seasonYear averageScore genres description(asHtml: false)
+        episodes duration status format seasonYear averageScore popularity genres
+        studios(isMain: true) { nodes { name } }
+        description(asHtml: false)
     """
 
     private suspend fun gql(query: String, variables: JSONObject): JSONObject = withContext(Dispatchers.IO) {

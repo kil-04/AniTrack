@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Clock3, Dices, Radio, Sparkles } from "lucide-react";
+import { Clock3, Dices, Landmark, Radio, Sparkles } from "lucide-react";
 import Card from "../components/Card";
 import type { AnimeMeta } from "../../../../packages/shared/types";
 import { ANIME_ERAS, animeEraForYear, clampTimeMachineYear, yearTransmission } from "../../../../packages/shared/time-machine";
@@ -74,6 +74,7 @@ export default function TimeMachine() {
               <Dices size={17} /> Mystery screening
             </button>
             <button onClick={() => navigate("/taste-genome")} className="flex items-center gap-2 rounded-full border border-fuchsia-300/25 bg-fuchsia-400/10 px-5 py-2.5 text-sm font-bold text-fuchsia-100 backdrop-blur hover:bg-fuchsia-400/20"><Sparkles size={16} /> View Taste Genome</button>
+            <button onClick={() => hero && navigate(`/museum/${hero.id}`)} disabled={!hero} className="flex items-center gap-2 rounded-full border border-amber-300/25 bg-amber-400/10 px-5 py-2.5 text-sm font-bold text-amber-100 backdrop-blur hover:bg-amber-400/20 disabled:opacity-40"><Landmark size={16} /> Enter Living Museum</button>
             <button onClick={() => setYear(clampTimeMachineYear(year - 1))} className="rounded-full border border-white/15 bg-black/30 px-5 py-2.5 text-sm text-white/80 backdrop-blur hover:bg-white/10">Previous year</button>
             <button onClick={() => setYear(clampTimeMachineYear(year + 1))} className="rounded-full border border-white/15 bg-black/30 px-5 py-2.5 text-sm text-white/80 backdrop-blur hover:bg-white/10">Next year</button>
           </div>

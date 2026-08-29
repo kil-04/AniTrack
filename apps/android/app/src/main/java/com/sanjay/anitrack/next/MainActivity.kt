@@ -230,8 +230,22 @@ fun AppShell() {
                         )
                     }
                     composable("search") { com.sanjay.anitrack.next.ui.SearchScreen(openDetail) }
-                    composable("time-machine") { com.sanjay.anitrack.next.ui.TimeMachineScreen(openDetail, onOpenGenome = { nav.navigate("taste-genome") }) }
+                    composable("time-machine") {
+                        com.sanjay.anitrack.next.ui.TimeMachineScreen(
+                            openDetail,
+                            onOpenGenome = { nav.navigate("taste-genome") },
+                            onOpenMuseum = { nav.navigate("museum/${it.id}") },
+                        )
+                    }
                     composable("taste-genome") { com.sanjay.anitrack.next.ui.TasteGenomeScreen(onOpen = { nav.navigate("anime/$it") }, onOpenTimeMachine = { go("time-machine") }) }
+                    composable("museum/{id}") { entry ->
+                        val id = entry.arguments?.getString("id")?.toIntOrNull() ?: 0
+                        com.sanjay.anitrack.next.ui.MuseumScreen(
+                            id,
+                            onOpenAnime = openDetail,
+                            onBack = { nav.popBackStack() },
+                        )
+                    }
                     composable("quicksearch") { com.sanjay.anitrack.next.ui.QuickSearchScreen(onOpen = openDetail, onBack = { nav.popBackStack() }) }
                     composable("continue") { com.sanjay.anitrack.next.ui.ContinueWatchingScreen(onPlay = { nav.navigate("player") }) }
                     composable("latest") { com.sanjay.anitrack.next.ui.LatestScreen(onOpen = openDetail) }

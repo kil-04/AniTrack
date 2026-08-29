@@ -35,6 +35,7 @@ const Schedule         = lazy(() => import("./pages/Schedule"));
 const Downloads        = lazy(() => import("./pages/Downloads"));
 const TimeMachine      = lazy(() => import("./pages/TimeMachine"));
 const TasteGenome      = lazy(() => import("./pages/TasteGenome"));
+const Museum           = lazy(() => import("./pages/Museum"));
 
 const PageFallback = () => (
   <div className="flex h-full items-center justify-center text-white/30 text-sm">
@@ -182,6 +183,7 @@ export default function App() {
               <Route path="/downloads"          element={<PageTransition><Downloads /></PageTransition>} />
               <Route path="/time-machine"       element={<PageTransition><TimeMachine /></PageTransition>} />
               <Route path="/taste-genome"       element={<PageTransition><TasteGenome /></PageTransition>} />
+              <Route path="/museum/:id"         element={<PageTransition><Museum /></PageTransition>} />
             </Routes>
           </AnimatePresence>
         </Suspense>

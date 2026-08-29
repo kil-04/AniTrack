@@ -16,20 +16,29 @@ data class Anime(
     val score: Int?, // AniList averageScore, 0-100
     val synopsis: String?,
     val genres: List<String>,
+    val duration: Int? = null,
+    val popularity: Int? = null,
+    val studios: List<String> = emptyList(),
 ) {
     companion object {
         fun fromMedia(m: JSONObject): Anime {
             val title = m.optJSONObject("title")
-            val genres = buildList {
-                val g = m.optJSONArray("genres")
-                if (g != null) for (i in 0 until g.length()) add(g.getString(i))
-            }
             // org.json's optString returns the literal "null" for JSON null values,
             // which leaked into titles/covers — normalize those away.
             fun JSONObject?.str(key: String): String? {
                 if (this == null || isNull(key)) return null
                 val v = optString(key)
                 return if (v.isBlank() || v == "null") null else v
+            }
+            val genres = buildList {
+                val g = m.optJSONArray("genres")
+                if (g != null) for (i in 0 until g.length()) add(g.getString(i))
+            }
+            val studios = buildList {
+                val nodes = m.optJSONObject("studios")?.optJSONArray("nodes")
+                if (nodes != null) for (i in 0 until nodes.length()) {
+                    nodes.optJSONObject(i)?.str("name")?.let(::add)
+                }
             }
             val english = title.str("english")
             val romaji = title.str("romaji")
@@ -47,6 +56,9 @@ data class Anime(
                 score = if (m.isNull("averageScore")) null else m.getInt("averageScore"),
                 synopsis = m.str("description")?.replace(Regex("<[^>]+>"), "")?.trim(),
                 genres = genres,
+                duration = if (m.isNull("duration")) null else m.optInt("duration"),
+                popularity = if (m.isNull("popularity")) null else m.optInt("popularity"),
+                studios = studios,
             )
         }
     }
