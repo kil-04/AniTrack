@@ -9,6 +9,10 @@ const providerId = (process.argv[4] || "animepahe").toLowerCase();
 const downloadSmoke = process.argv.includes("--download");
 
 app.setPath("userData", path.join(os.tmpdir(), "anitrack-provider-smoke"));
+// Provider session windows are intentionally destroyed and recreated while
+// recovering from anti-bot challenges. Keep the smoke process alive across the
+// temporary zero-window gap on Windows.
+app.on("window-all-closed", () => {});
 
 function requestHeaders(authorization) {
   return {
@@ -84,7 +88,7 @@ async function main() {
     ? getAuthorizedPaheRequestHeaders(stream.url)
     : null;
   if (providerId === "animepahe" && !authorization?.cookie) {
-    throw new Error("Resolver returned no authorized CDN cookies");
+    throw new Error(`Resolver returned no authorized CDN cookies for ${new URL(stream.url).hostname}`);
   }
   const headers = authorization ? requestHeaders(authorization) : streamHeaders(stream);
   const host = await fetchManifestAndMedia(stream.url, headers, authorization?.host);

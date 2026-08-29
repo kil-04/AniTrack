@@ -1100,9 +1100,10 @@ export default function StreamPlayer({
 
         attachStream(url, activeSubs);
 
-        // Warm the NEXT episode so "Next" is near-instant: cache its links and
-        // pre-resolve only the quality we'd actually play (resolving every quality
-        // would compete with the current stream's bandwidth and slow startup).
+        // Warm only the NEXT episode's lightweight links. Do not resolve its
+        // stream while this episode is playing: Kwik may rotate the cookie that
+        // authorized the active media session, which used to make playback stop
+        // as soon as the initial ~30-second buffer was consumed.
         const nextEp = episodesRef.current.find((e) => e.episodeNumber === ep.episodeNumber + 1);
         if (nextEp) {
           const nextKey = String(nextEp.session ?? nextEp.id);
@@ -1113,18 +1114,8 @@ export default function StreamPlayer({
           warm.then((nextLinks: any[]) => {
             if (!nextLinks?.length) return;
             linksCacheRef.current.set(nextKey, nextLinks);
-            const ni = pickBestIdx(nextLinks);
-            providerClient.prefetch(providerId, nextLinks[ni].id ?? nextLinks[ni].kwik);
           }).catch(() => {});
         }
-
-        // Pre-fetch the current episode's OTHER qualities a few seconds later, so the
-        // background resolves don't compete with the stream that just started.
-        setTimeout(() => {
-          fetchedLinks.forEach((l: any, idx: number) => {
-            if (idx !== bestIdx) providerClient.prefetch(providerId, l.id ?? l.kwik);
-          });
-        }, 5000);
       } catch (e: any) {
         // Try the next provider before surfacing the error to the user.
         if (fallbackRef.current(ep.episodeNumber)) {

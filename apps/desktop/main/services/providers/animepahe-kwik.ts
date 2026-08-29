@@ -6,6 +6,7 @@ import {
   paheBaseUrl,
   paheRoute,
 } from "./animepahe-config";
+import { StreamAuthorizationRegistry } from "./stream-authorization";
 
 // ─── Kwik resolver ───────────────────────────────────────────────────────────
 //
@@ -37,13 +38,14 @@ const VIDEO_RE = /https?:\/\/[^"'\s<>]+\.(?:m3u8|mp4)(?:\?[^"'\s<>]*)?/;
 let _lastKwikCookies = "";
 let _lastKwikCookiesAt = 0;
 const COOKIE_TTL_MS = 30 * 60_000; // refresh cookies after 30 min
+const URL_TTL_MS = 2 * 60 * 60_000; // HLS URLs are valid for ~2 h
 export interface AuthorizedPaheRequestHeaders {
   host: string;
   referer: string;
   cookie: string;
 }
 
-const _authorizedStreamHosts = new Map<string, { authorizedAt: number; referer: string }>();
+const _authorizedStreams = new StreamAuthorizationRegistry(URL_TTL_MS);
 
 export function getKwikCookies(): string { return animePaheEnabled() ? _lastKwikCookies : ""; }
 
@@ -63,7 +65,11 @@ function authorizeStreamUrl(raw: string, kwikUrl: string) {
       !(path.endsWith(".m3u8") || path.endsWith(".mp4"))) {
     throw new Error("Kwik returned an untrusted stream URL");
   }
-  _authorizedStreamHosts.set(host, { authorizedAt: Date.now(), referer: kwik.origin });
+  // Keep the cookie snapshot that authorized this particular stream. A later
+  // resolve (quality/episode prefetch or a download) may rotate the shared Kwik
+  // session cookies; using that newer value for an already-playing manifest can
+  // make its next media segment fail after the initial buffer has drained.
+  _authorizedStreams.remember(raw, kwik.origin, _lastKwikCookies);
 }
 
 function assertTrustedKwikUrl(raw: string) {
@@ -83,13 +89,7 @@ export function isAuthorizedPaheStreamUrl(raw: string): boolean {
     if (!animePaheEnabled()) return false;
     const url = new URL(raw);
     if (url.protocol !== "https:" || url.username || url.password) return false;
-    const host = url.hostname.toLowerCase();
-    const authorization = _authorizedStreamHosts.get(host);
-    if (!authorization || Date.now() - authorization.authorizedAt > URL_TTL_MS) {
-      if (authorization) _authorizedStreamHosts.delete(host);
-      return false;
-    }
-    return true;
+    return Boolean(_authorizedStreams.get(raw));
   } catch {
     return false;
   }
@@ -97,20 +97,11 @@ export function isAuthorizedPaheStreamUrl(raw: string): boolean {
 
 export function getAuthorizedPaheRequestHeaders(raw: string): AuthorizedPaheRequestHeaders | null {
   if (!isAuthorizedPaheStreamUrl(raw)) return null;
-  const url = new URL(raw);
-  const host = url.hostname.toLowerCase();
-  const authorization = _authorizedStreamHosts.get(host);
-  if (!authorization) return null;
-  return {
-    host,
-    referer: authorization.referer,
-    cookie: getKwikCookies(),
-  };
+  return _authorizedStreams.get(raw);
 }
 
 // Resolved URL cache — avoids re-resolving the same kwik URL within a session.
 const _kwikUrlCache = new Map<string, { url: string; at: number }>();
-const URL_TTL_MS = 2 * 60 * 60_000; // HLS URLs are valid for ~2 h
 const KWIK_CACHE_MAX = 500;
 function _kwikUrlCacheSet(key: string, val: { url: string; at: number }) {
   if (_kwikUrlCache.size >= KWIK_CACHE_MAX) {
@@ -125,7 +116,7 @@ const _kwikPending = new Map<string, Promise<{ url: string; cookies: string }>>(
 
 export function resetKwikForBaseChange(): void {
   _kwikUrlCache.clear();
-  _authorizedStreamHosts.clear();
+  _authorizedStreams.clear();
   _lastKwikCookies = "";
   _lastKwikCookiesAt = 0;
 }
@@ -161,7 +152,7 @@ export function syncPaheRuntimeConfig(): void {
   _kwikRequestConfigKey = nextKey;
   _kwikInterceptCb = null;
   _kwikUrlCache.clear();
-  _authorizedStreamHosts.clear();
+  _authorizedStreams.clear();
   if (_kwikWin && !_kwikWin.isDestroyed()) _kwikWin.destroy();
   _kwikWin = null;
 }
@@ -291,13 +282,26 @@ function _resolveKwikBrowserOnce(
     const win = getKwikWindow();
     let settled = false;
 
-    const timeout = setTimeout(() => {
+    const timeout = setTimeout(async () => {
       if (settled) return;
       settled = true;
       _kwikInterceptCb = null;
-      resolveKwikFast(kwikUrl)
-        .then((url) => resolve({ url, cookies: _lastKwikCookies }))
-        .catch(reject);
+      // The embed can establish its cookies without Chromium requesting the
+      // video (autoplay policy/background throttling). Preserve those cookies
+      // before falling back to HTML unpacking; previously this returned a valid
+      // URL with an empty cookie and playback died when its first buffer ran out.
+      try {
+        const cookieList = await win.webContents.session.cookies.get({});
+        const cookies = cookieList.map((c) => `${c.name}=${c.value}`).join("; ");
+        if (cookies) {
+          _lastKwikCookies = cookies;
+          _lastKwikCookiesAt = Date.now();
+        }
+        const url = await resolveKwikFast(kwikUrl);
+        resolve({ url, cookies: _lastKwikCookies });
+      } catch (error) {
+        reject(error);
+      }
     }, 20_000);
 
     _kwikInterceptCb = (url: string) => {
