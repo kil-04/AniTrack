@@ -28,4 +28,18 @@ class TasteGenomeAnalyzerTest {
         assertEquals(0, genome.confidence)
         assertEquals("Uncharted Viewer", genome.archetype)
     }
+
+    @Test fun highlyRatedClassicTasteIsNotDrownedOutByModernVolume() {
+        val classics = listOf(
+            TasteGenomeInput("completed", 10.0, 1984, listOf("Drama"), "TV"),
+            TasteGenomeInput("completed", 9.0, 1988, listOf("Sci-Fi"), "OVA"),
+        )
+        val modern = List(20) { index ->
+            TasteGenomeInput("completed", 6.0, 2020 + index % 6, listOf("Action"), "TV")
+        }
+
+        val genome = TasteGenomeAnalyzer.analyze(classics + modern)
+        assertEquals("1980s", genome.eras.first().label)
+        assertEquals(9.5, genome.eras.first().averageScore!!, 0.001)
+    }
 }

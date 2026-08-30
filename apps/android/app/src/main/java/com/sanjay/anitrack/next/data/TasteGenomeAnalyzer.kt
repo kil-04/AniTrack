@@ -1,6 +1,7 @@
 package com.sanjay.anitrack.next.data
 
 import kotlin.math.min
+import kotlin.math.log2
 import kotlin.math.roundToInt
 
 data class TasteGenomeInput(
@@ -67,16 +68,32 @@ object TasteGenomeAnalyzer {
         entry.score?.takeIf { it > 0 }?.let { bucket.scoreTotal += it; bucket.rated++ }
     }
 
-    private fun finish(map: Map<String, Bucket>, limit: Int): List<TasteAffinity> {
-        val ranked = map.values.sortedWith(compareByDescending<Bucket> { it.weight }.thenByDescending { it.count }.thenBy { it.label }).take(limit)
-        val strongest = ranked.firstOrNull()?.weight ?: 1.0
-        return ranked.map {
+    private fun finish(
+        map: Map<String, Bucket>,
+        limit: Int,
+        rankScore: (Bucket) -> Double = { it.weight },
+    ): List<TasteAffinity> {
+        val ranked = map.values.map { it to rankScore(it) }
+            .sortedWith(compareByDescending<Pair<Bucket, Double>> { it.second }
+                .thenByDescending { it.first.count }
+                .thenBy { it.first.label })
+            .take(limit)
+        val strongest = ranked.firstOrNull()?.second ?: 1.0
+        return ranked.map { (bucket, score) ->
             TasteAffinity(
-                it.key, it.label, it.count,
-                if (it.rated > 0) (it.scoreTotal / it.rated * 100).roundToInt() / 100.0 else null,
-                (it.weight / strongest * 100).roundToInt(),
+                bucket.key, bucket.label, bucket.count,
+                if (bucket.rated > 0) (bucket.scoreTotal / bucket.rated * 100).roundToInt() / 100.0 else null,
+                (score / strongest * 100).roundToInt(),
             )
         }
+    }
+
+    /** Decades measure preference rather than raw consumption volume. */
+    private fun eraPreferenceScore(bucket: Bucket): Double {
+        if (bucket.rated == 0) return 5.0 * 0.35 + log2((bucket.count + 1).toDouble()) * 0.15
+        val averageRating = bucket.scoreTotal / bucket.rated
+        val evidence = 0.72 + min(1.0, bucket.rated / 10.0) * 0.28
+        return averageRating * evidence + log2((bucket.count + 1).toDouble()) * 0.15
     }
 
     fun analyze(entries: List<TasteGenomeInput>): TasteGenome {
@@ -100,7 +117,7 @@ object TasteGenomeAnalyzer {
             entry.format?.let { add(formats, it, formatLabels[it] ?: it, entry, weight) }
         }
 
-        val eraResults = finish(eras, 6)
+        val eraResults = finish(eras, 6, ::eraPreferenceScore)
         val genreResults = finish(genres, 8)
         val formatResults = finish(formats, 5)
         val leadEra = eraResults.firstOrNull()?.label

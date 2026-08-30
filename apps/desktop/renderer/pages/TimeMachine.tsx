@@ -15,6 +15,7 @@ export default function TimeMachine() {
   const navigate = useNavigate();
   const [year, setYear] = useState(1988);
   const [anime, setAnime] = useState<AnimeMeta[]>([]);
+  const [selectedGenre, setSelectedGenre] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const era = animeEraForYear(year);
@@ -24,6 +25,7 @@ export default function TimeMachine() {
     const timer = window.setTimeout(() => {
       setLoading(true);
       setError(null);
+      setSelectedGenre(null);
       window.api.anilist.advancedSearch({ year, sort: "SCORE_DESC" })
         .then((page) => { if (active) setAnime(page.results); })
         .catch(() => { if (active) setError(`The ${year} archive did not answer. Try the transmission again.`); })
@@ -43,6 +45,12 @@ export default function TimeMachine() {
     anime.flatMap((item) => item.genres ?? []).forEach((genre) => counts.set(genre, (counts.get(genre) ?? 0) + 1));
     return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
   }, [anime]);
+  const visibleAnime = useMemo(
+    () => selectedGenre
+      ? anime.filter((item) => item.genres?.includes(selectedGenre))
+      : anime,
+    [anime, selectedGenre],
+  );
 
   const surprise = () => {
     if (anime.length === 0) return;
@@ -108,15 +116,40 @@ export default function TimeMachine() {
 
         {genreSignal.length > 0 && (
           <section>
-            <div className="mb-3 flex items-center gap-2 text-sm font-bold"><Sparkles size={16} style={{ color: era.accent }} /> Genre signal</div>
-            <div className="flex flex-wrap gap-2">{genreSignal.map(([genre, count]) => <span key={genre} className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/60">{genre} · {countLabel(count, "title")}</span>)}</div>
+            <div className="mb-3 flex items-center gap-2 text-sm font-bold"><Sparkles size={16} style={{ color: era.accent }} /> Genre signal <span className="text-xs font-normal text-white/35">Choose a signal to view its titles</span></div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                aria-pressed={selectedGenre === null}
+                onClick={() => setSelectedGenre(null)}
+                className={`rounded-full border px-3 py-1.5 text-xs transition ${selectedGenre === null ? "border-white/30 text-black" : "border-white/10 bg-white/5 text-white/60 hover:bg-white/10 hover:text-white"}`}
+                style={selectedGenre === null ? { backgroundColor: era.accent } : undefined}
+              >
+                All · {countLabel(anime.length, "title")}
+              </button>
+              {genreSignal.map(([genre, count]) => {
+                const selected = selectedGenre === genre;
+                return (
+                  <button
+                    type="button"
+                    aria-pressed={selected}
+                    key={genre}
+                    onClick={() => setSelectedGenre(selected ? null : genre)}
+                    className={`rounded-full border px-3 py-1.5 text-xs transition ${selected ? "border-white/30 text-black" : "border-white/10 bg-white/5 text-white/60 hover:bg-white/10 hover:text-white"}`}
+                    style={selected ? { backgroundColor: era.accent } : undefined}
+                  >
+                    {genre} · {countLabel(count, "title")}
+                  </button>
+                );
+              })}
+            </div>
           </section>
         )}
 
         <section>
-          <div className="mb-5 flex items-end justify-between gap-4"><div><div className="text-xs font-bold uppercase tracking-[0.25em]" style={{ color: era.accent }}>Recovered from {year}</div><h2 className="mt-1 text-2xl font-black">The essential transmission</h2></div><span className="text-xs text-white/35">Ranked by contemporary audience score</span></div>
+          <div className="mb-5 flex items-end justify-between gap-4"><div><div className="text-xs font-bold uppercase tracking-[0.25em]" style={{ color: era.accent }}>Recovered from {year}</div><h2 className="mt-1 text-2xl font-black">{selectedGenre ? `${selectedGenre} transmission` : "The essential transmission"}</h2></div><span className="text-xs text-white/35">{selectedGenre ? `${countLabel(visibleAnime.length, "title")} in this signal` : "Ranked by contemporary audience score"}</span></div>
           {loading ? <div className="h-64 animate-pulse rounded-2xl bg-white/5" /> : error ? <button onClick={() => setYear((value) => value === 1988 ? 1989 : 1988)} className="rounded-xl border border-red-500/20 bg-red-500/10 p-5 text-left text-sm text-red-200">{error}</button> : (
-            <div className="grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">{anime.slice(0, 24).map((item) => <Card key={item.id} anime={item} />)}</div>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">{visibleAnime.slice(0, 24).map((item) => <Card key={item.id} anime={item} />)}</div>
           )}
         </section>
       </div>

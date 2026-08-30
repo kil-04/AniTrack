@@ -142,11 +142,6 @@ export default function Home() {
     el.scrollBy({ left: dir === "left" ? -480 : 480, behavior: "smooth" });
   };
 
-  useEffect(() => {
-    refreshContinue();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   const [paheEpTotals, setPaheEpTotals] = useState<Map<string, number>>(new Map());
   useEffect(() => {
     if (cw.length === 0) return;

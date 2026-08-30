@@ -126,6 +126,68 @@ object AniList {
 
     data class Airing(val anime: Anime, val episode: Int, val airingAt: Long)
     data class Recommendation(val anime: Anime, val reason: String, val score: Double)
+    data class HomeFeed(
+        val trending: List<Anime>,
+        val latest: List<Airing>,
+        val topAiring: List<Anime>,
+        val popular: List<Anime>,
+    )
+
+    @Volatile private var homeFeedCache: Pair<Long, HomeFeed>? = null
+
+    /** All core Home network rows in one GraphQL round trip. AniList requests
+     * are intentionally serialized, so four separate calls created a visible
+     * row-by-row waterfall even on fast connections. */
+    suspend fun homeFeed(): HomeFeed {
+        val nowMs = System.currentTimeMillis()
+        homeFeedCache?.let { (at, feed) ->
+            if (nowMs - at < CACHE_TTL_MS) return feed
+        }
+        val now = nowMs / 1000
+        val data = gql(
+            """query(${'$'}to: Int) {
+                trending: Page(perPage: 30) {
+                    media(type: ANIME, sort: TRENDING_DESC, isAdult: false) { $MEDIA_FIELDS }
+                }
+                latest: Page(perPage: 30) {
+                    airingSchedules(airingAt_lesser: ${'$'}to, sort: TIME_DESC) {
+                        airingAt episode
+                        media { $MEDIA_FIELDS }
+                    }
+                }
+                topAiring: Page(perPage: 20) {
+                    media(type: ANIME, status: RELEASING, sort: POPULARITY_DESC, isAdult: false) { $MEDIA_FIELDS }
+                }
+                popular: Page(perPage: 20) {
+                    media(type: ANIME, sort: POPULARITY_DESC, isAdult: false) { $MEDIA_FIELDS }
+                }
+            }""",
+            JSONObject().put("to", now),
+        )
+
+        fun media(alias: String): List<Anime> {
+            val items = data.getJSONObject(alias).getJSONArray("media")
+            return (0 until items.length()).map { Anime.fromMedia(items.getJSONObject(it)) }
+        }
+
+        val latestItems = data.getJSONObject("latest").getJSONArray("airingSchedules")
+        val seen = HashSet<Int>()
+        val latest = (0 until latestItems.length()).mapNotNull { index ->
+            val item = latestItems.getJSONObject(index)
+            val animeJson = item.optJSONObject("media") ?: return@mapNotNull null
+            val id = animeJson.optInt("id")
+            if (animeJson.optBoolean("isAdult", false) || !seen.add(id)) return@mapNotNull null
+            Airing(Anime.fromMedia(animeJson), item.optInt("episode"), item.optLong("airingAt"))
+        }
+        val result = HomeFeed(
+            trending = media("trending"),
+            latest = latest,
+            topAiring = media("topAiring"),
+            popular = media("popular"),
+        )
+        homeFeedCache = nowMs to result
+        return result
+    }
 
     /** Airing schedule for the next 7 days (sorted by time). */
     suspend fun airingWeek(): List<Airing> {

@@ -124,26 +124,21 @@ export const useAppStore = create<AppState>((set) => ({
         }
       })
       .catch(() => {});
-    // Resolve each call independently so one slow/failing fetch doesn't block
-    // the others. Promise.allSettled lets us partially populate the UI.
-    const results = await Promise.allSettled([
-      window.api.mal.state(),
-      window.api.al.state(),
-      window.api.anilist.trending(),
-      window.api.list.continueWatching(),
-      window.api.list.getAll(),
-    ]);
-    const next: Partial<AppState> = {};
-    if (results[0].status === "fulfilled") next.mal = results[0].value;
-    if (results[1].status === "fulfilled") next.al = results[1].value;
-    if (results[2].status === "fulfilled") next.trending = results[2].value;
-    if (results[3].status === "fulfilled") next.continueWatching = results[3].value;
-    if (results[4].status === "fulfilled") {
-      next.list = results[4].value;
-      void loadRecommendations(set, results[4].value);
-    }
-    set({ ...next, loading: false });
-    await latestPromise;
+    // Commit each independent result as soon as it lands. The old allSettled
+    // batch held instant local rows behind the slowest startup network call.
+    const tasks = [
+      latestPromise,
+      window.api.mal.state().then((mal) => set({ mal })),
+      window.api.al.state().then((al) => set({ al })),
+      window.api.anilist.trending().then((trending) => set({ trending })),
+      window.api.list.continueWatching().then((continueWatching) => set({ continueWatching })),
+      window.api.list.getAll().then((list) => {
+        set({ list });
+        void loadRecommendations(set, list);
+      }),
+    ];
+    await Promise.allSettled(tasks);
+    set({ loading: false });
   },
 
   refreshLatest: (page = 1) => loadLatest(set, page),

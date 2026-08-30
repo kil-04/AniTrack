@@ -26,3 +26,21 @@ test("returns an honest empty profile", () => {
   assert.equal(genome.confidence, 0);
   assert.equal(genome.archetype, "Uncharted Viewer");
 });
+
+test("highly rated classic taste is not drowned out by modern viewing volume", () => {
+  const classics = [
+    { status: "completed", score: 10, year: 1984, genres: ["Drama"], format: "TV" },
+    { status: "completed", score: 9, year: 1988, genres: ["Sci-Fi"], format: "OVA" },
+  ];
+  const modern = Array.from({ length: 20 }, (_, index) => ({
+    status: "completed",
+    score: 6,
+    year: 2020 + index % 6,
+    genres: ["Action"],
+    format: "TV",
+  }));
+
+  const genome = analyzeTasteGenome([...classics, ...modern]);
+  assert.equal(genome.eras[0].label, "1980s");
+  assert.equal(genome.eras[0].averageScore, 9.5);
+});

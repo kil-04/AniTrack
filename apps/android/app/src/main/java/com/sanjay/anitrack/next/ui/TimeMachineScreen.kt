@@ -33,6 +33,7 @@ fun TimeMachineScreen(
     var year by remember { mutableIntStateOf(1988) }
     var requestedYear by remember { mutableIntStateOf(1988) }
     var anime by remember { mutableStateOf<List<Anime>>(emptyList()) }
+    var selectedGenre by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
     var failed by remember { mutableStateOf(false) }
     val era = TimeMachineArchive.eraFor(year)
@@ -41,6 +42,7 @@ fun TimeMachineScreen(
     LaunchedEffect(requestedYear) {
         loading = true
         failed = false
+        selectedGenre = null
         runCatching {
             AniList.advancedSearch(null, null, requestedYear, null, null, null, "SCORE_DESC", 1).first
         }.onSuccess { anime = it }.onFailure { failed = true }
@@ -59,6 +61,9 @@ fun TimeMachineScreen(
             .sortedByDescending { it.value }.take(5)
     }
     val hero = anime.firstOrNull()
+    val visibleAnime = remember(anime, selectedGenre) {
+        selectedGenre?.let { selected -> anime.filter { selected in it.genres } } ?: anime
+    }
 
     LazyColumn(Modifier.fillMaxSize().background(Color.Black)) {
         item {
@@ -151,10 +156,34 @@ fun TimeMachineScreen(
         if (genres.isNotEmpty()) item {
             Column(Modifier.padding(top = 24.dp)) {
                 Text("GENRE SIGNAL", modifier = Modifier.padding(horizontal = 24.dp), color = accent, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
+                Text("Tap a signal to view its titles", modifier = Modifier.padding(horizontal = 24.dp), color = Color.White.copy(alpha = 0.38f), style = MaterialTheme.typography.labelSmall)
                 Spacer(Modifier.height(10.dp))
                 LazyRow(contentPadding = PaddingValues(horizontal = 24.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    item(key = "all") {
+                        val selected = selectedGenre == null
+                        Text(
+                            "All · ${anime.size}",
+                            Modifier.clip(RoundedCornerShape(50))
+                                .background(if (selected) accent else Color.White.copy(alpha = 0.07f))
+                                .clickable { selectedGenre = null }
+                                .padding(horizontal = 13.dp, vertical = 8.dp),
+                            color = if (selected) Color.Black else Color.White.copy(alpha = 0.65f),
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                        )
+                    }
                     items(genres.toList()) { genre ->
-                        Text("${genre.key} · ${genre.value}", Modifier.clip(RoundedCornerShape(50)).background(Color.White.copy(alpha = 0.07f)).padding(horizontal = 13.dp, vertical = 8.dp), color = Color.White.copy(alpha = 0.65f), style = MaterialTheme.typography.labelMedium)
+                        val selected = selectedGenre == genre.key
+                        Text(
+                            "${genre.key} · ${genre.value}",
+                            Modifier.clip(RoundedCornerShape(50))
+                                .background(if (selected) accent else Color.White.copy(alpha = 0.07f))
+                                .clickable { selectedGenre = if (selected) null else genre.key }
+                                .padding(horizontal = 13.dp, vertical = 8.dp),
+                            color = if (selected) Color.Black else Color.White.copy(alpha = 0.65f),
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                        )
                     }
                 }
             }
@@ -163,13 +192,16 @@ fun TimeMachineScreen(
         item {
             Column(Modifier.padding(top = 28.dp, bottom = 40.dp)) {
                 Text("RECOVERED FROM $requestedYear", modifier = Modifier.padding(horizontal = 24.dp), color = accent, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
-                Text("The essential transmission", modifier = Modifier.padding(horizontal = 24.dp), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
+                Text(selectedGenre?.let { "$it transmission" } ?: "The essential transmission", modifier = Modifier.padding(horizontal = 24.dp), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
+                selectedGenre?.let {
+                    Text("${visibleAnime.size} titles in this signal", modifier = Modifier.padding(horizontal = 24.dp), color = Color.White.copy(alpha = 0.4f), style = MaterialTheme.typography.labelSmall)
+                }
                 Spacer(Modifier.height(14.dp))
                 when {
                     loading -> LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 24.dp), color = accent)
                     failed -> Text("The archive did not answer. Move the dial and try again.", modifier = Modifier.padding(horizontal = 24.dp), color = Color(0xFFFF8A80))
                     else -> LazyRow(contentPadding = PaddingValues(horizontal = 24.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                        items(anime.take(24), key = { it.id }) { item -> AnimeCard(item, onOpen, width = 142) }
+                        items(visibleAnime.take(24), key = { it.id }) { item -> AnimeCard(item, onOpen, width = 142) }
                     }
                 }
             }

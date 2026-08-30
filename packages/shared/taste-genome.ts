@@ -55,16 +55,30 @@ function addBucket(map: Map<string, Bucket>, key: string, label: string, entry: 
   map.set(key, bucket);
 }
 
-function finishBuckets(map: Map<string, Bucket>, limit: number): TasteAffinity[] {
-  const ranked = [...map.values()].sort((a, b) => b.weight - a.weight || b.count - a.count || a.label.localeCompare(b.label)).slice(0, limit);
-  const strongest = ranked[0]?.weight ?? 1;
-  return ranked.map((bucket) => ({
+function finishBuckets(map: Map<string, Bucket>, limit: number, rankScore = (bucket: Bucket) => bucket.weight): TasteAffinity[] {
+  const ranked = [...map.values()]
+    .map((bucket) => ({ bucket, score: rankScore(bucket) }))
+    .sort((a, b) => b.score - a.score || b.bucket.count - a.bucket.count || a.bucket.label.localeCompare(b.bucket.label))
+    .slice(0, limit);
+  const strongest = ranked[0]?.score ?? 1;
+  return ranked.map(({ bucket, score }) => ({
     key: bucket.key,
     label: bucket.label,
     count: bucket.count,
     averageScore: bucket.rated ? Number((bucket.scoreTotal / bucket.rated).toFixed(2)) : null,
-    strength: Math.round(bucket.weight / strongest * 100),
+    strength: Math.round(score / strongest * 100),
   }));
+}
+
+/** Decades represent preference, not consumption volume. A heavily sampled
+ * decade with middling scores should not eclipse a smaller decade the viewer
+ * consistently rates as exceptional. Rating confidence ramps up across the
+ * first ten rated titles, with breadth used only as a small tie-break signal. */
+function eraPreferenceScore(bucket: Bucket): number {
+  if (bucket.rated === 0) return 5 * 0.35 + Math.log2(bucket.count + 1) * 0.15;
+  const averageRating = bucket.scoreTotal / bucket.rated;
+  const evidence = 0.72 + Math.min(1, bucket.rated / 10) * 0.28;
+  return averageRating * evidence + Math.log2(bucket.count + 1) * 0.15;
 }
 
 export function analyzeTasteGenome(entries: TasteGenomeEntry[]): TasteGenome {
@@ -88,7 +102,7 @@ export function analyzeTasteGenome(entries: TasteGenomeEntry[]): TasteGenome {
     if (entry.format) addBucket(formats, entry.format, FORMAT_LABELS[entry.format] ?? entry.format, entry, weight);
   }
 
-  const eraResults = finishBuckets(eras, 6);
+  const eraResults = finishBuckets(eras, 6, eraPreferenceScore);
   const genreResults = finishBuckets(genres, 8);
   const formatResults = finishBuckets(formats, 5);
   const leadEra = eraResults[0]?.label;
