@@ -37,6 +37,45 @@ let latestRequestId = 0;
 let recommendationRequestId = 0;
 
 type LocalListItem = { entry: ListEntry; anime: AnimeMeta | null };
+type HomeSnapshot = {
+  savedAt: number;
+  trending: AnimeMeta[];
+  recommendations: AnimeRecommendation[];
+  latestEpisodes: RecentEpisode[];
+  latestHasNextPage: boolean;
+};
+
+const HOME_SNAPSHOT_KEY = "anitrack-home-snapshot-v1";
+const HOME_SNAPSHOT_MAX_AGE = 24 * 60 * 60 * 1000;
+
+function readHomeSnapshot(): HomeSnapshot | null {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(HOME_SNAPSHOT_KEY) ?? "null") as HomeSnapshot | null;
+    if (!parsed || Date.now() - parsed.savedAt > HOME_SNAPSHOT_MAX_AGE) return null;
+    if (!Array.isArray(parsed.trending) || !Array.isArray(parsed.recommendations) || !Array.isArray(parsed.latestEpisodes)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+const initialHomeSnapshot = readHomeSnapshot();
+
+function persistHomeSnapshot(): void {
+  try {
+    const state = useAppStore.getState();
+    const snapshot: HomeSnapshot = {
+      savedAt: Date.now(),
+      trending: state.trending,
+      recommendations: state.recommendations,
+      latestEpisodes: state.latestEpisodes,
+      latestHasNextPage: state.latestHasNextPage,
+    };
+    localStorage.setItem(HOME_SNAPSHOT_KEY, JSON.stringify(snapshot));
+  } catch {
+    // Storage can be unavailable or full; Home still works from live data.
+  }
+}
 
 async function loadRecommendations(
   set: StoreApi<AppState>["setState"],
@@ -53,13 +92,17 @@ async function loadRecommendations(
   })));
   if (seedIds.length === 0) {
     set({ recommendations: [], recommendationsLoading: false });
+    persistHomeSnapshot();
     return;
   }
 
   set({ recommendationsLoading: true });
   try {
     const recommendations = await window.api.anilist.recommendations(seedIds, excludedIds);
-    if (requestId === recommendationRequestId) set({ recommendations });
+    if (requestId === recommendationRequestId) {
+      set({ recommendations });
+      persistHomeSnapshot();
+    }
   } catch (e) {
     if (requestId === recommendationRequestId) {
       console.error("recommendations fetch failed", e);
@@ -84,6 +127,7 @@ async function loadLatest(
       latestPage: result.page,
       latestHasNextPage: result.hasNextPage,
     });
+    if (page === 1) persistHomeSnapshot();
   } catch (e) {
     if (requestId === latestRequestId) {
       console.error("latest episodes fetch failed", e);
@@ -96,11 +140,11 @@ async function loadLatest(
 export const useAppStore = create<AppState>((set) => ({
   mal: { connected: false },
   al: { connected: false },
-  trending: [],
-  recommendations: [],
-  latestEpisodes: [],
+  trending: initialHomeSnapshot?.trending ?? [],
+  recommendations: initialHomeSnapshot?.recommendations ?? [],
+  latestEpisodes: initialHomeSnapshot?.latestEpisodes ?? [],
   latestPage: 1,
-  latestHasNextPage: false,
+  latestHasNextPage: initialHomeSnapshot?.latestHasNextPage ?? false,
   continueWatching: [],
   list: [],
   loading: false,
@@ -110,8 +154,12 @@ export const useAppStore = create<AppState>((set) => ({
 
   refreshAll: async () => {
     set({ loading: true });
-    // Latest Episodes is independent from the rest of home startup. Start it
-    // immediately instead of waiting for auth, library, and trending first.
+    // Prioritize the above-the-fold hero before the latest-episode refresh.
+    // Both already have a disk snapshot to paint while these calls run.
+    const trendingPromise = window.api.anilist.trending().then((trending) => {
+      set({ trending });
+      persistHomeSnapshot();
+    });
     const latestPromise = loadLatest(set, 1);
     // Two-way gist sync runs in the BACKGROUND — the UI paints from local data
     // immediately instead of waiting on a GitHub round-trip. If the pull
@@ -128,9 +176,9 @@ export const useAppStore = create<AppState>((set) => ({
     // batch held instant local rows behind the slowest startup network call.
     const tasks = [
       latestPromise,
+      trendingPromise,
       window.api.mal.state().then((mal) => set({ mal })),
       window.api.al.state().then((al) => set({ al })),
-      window.api.anilist.trending().then((trending) => set({ trending })),
       window.api.list.continueWatching().then((continueWatching) => set({ continueWatching })),
       window.api.list.getAll().then((list) => {
         set({ list });

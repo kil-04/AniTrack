@@ -75,6 +75,7 @@ class MainActivity : ComponentActivity() {
         com.sanjay.anitrack.next.update.AppUpdater.init(applicationContext)
         com.sanjay.anitrack.next.data.RemoteConfig.init(applicationContext)
         com.sanjay.anitrack.next.data.Db.init(applicationContext)
+        com.sanjay.anitrack.next.data.AniList.init(applicationContext)
         com.sanjay.anitrack.next.data.GistSync.init(applicationContext)
         com.sanjay.anitrack.next.data.Downloads.init(applicationContext)
         com.sanjay.anitrack.next.data.Mal.init(applicationContext)

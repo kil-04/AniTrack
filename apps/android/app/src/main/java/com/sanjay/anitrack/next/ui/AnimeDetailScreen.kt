@@ -25,7 +25,7 @@ private val Accent = Color(0xFFE50914)
 
 @Composable
 fun DetailScreen(animeId: Int, onPlay: () -> Unit, onOpenAnime: (Int) -> Unit = {}) {
-    var anime by remember { mutableStateOf<Anime?>(null) }
+    var anime by remember(animeId) { mutableStateOf(AniList.cachedAnime(animeId)) }
     LaunchedEffect(animeId) { anime = AniList.byId(animeId) }
 
     val a = anime ?: run {

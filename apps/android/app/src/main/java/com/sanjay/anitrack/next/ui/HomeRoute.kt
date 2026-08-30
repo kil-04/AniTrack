@@ -49,15 +49,19 @@ fun HomeScreen(
         }
     }
 
+    fun applyHomeFeed(feed: AniList.HomeFeed) {
+        trending = feed.trending
+        latest = feed.latest
+        topAiring = feed.topAiring
+        popular = feed.popular
+    }
+
     LaunchedEffect(Unit) {
         // Paint local data immediately, then refresh it independently.
         val initialCw = runCatching {
             com.sanjay.anitrack.next.data.Db.continueWatching()
         }.getOrDefault(emptyList())
         cw = initialCw
-        scope.launch {
-            runCatching { epTotals = AniList.episodeTotals(initialCw.map { it.animeId }) }
-        }
         scope.launch {
             val changed = runCatching { com.sanjay.anitrack.next.data.GistSync.pullAndMerge() }.getOrDefault(false)
             if (changed) {
@@ -68,27 +72,32 @@ fun HomeScreen(
                 runCatching { epTotals = AniList.episodeTotals(refreshed.map { it.animeId }) }
             }
         }
+        // Anikoto uses its own host and does not compete for AniList's queue.
+        scope.launch { runCatching { anikotoTop = com.sanjay.anitrack.next.data.Anikoto.top() } }
 
-        // One request returns every core network row, avoiding the old four-call
-        // serialized waterfall. The parsed feed is cached for quick navigation.
-        scope.launch {
-            runCatching { AniList.homeFeed() }
-                .onSuccess { feed ->
-                    trending = feed.trending
-                    latest = feed.latest
-                    topAiring = feed.topAiring
-                    popular = feed.popular
-                }
-                .onFailure {
-                    // A compact fallback still leaves Home useful if AniList
-                    // rejects the larger combined query temporarily.
-                    runCatching { trending = AniList.trending() }
-                }
+        // Paint the last complete feed from disk first. If it is older than the
+        // five-minute network TTL, homeFeed refreshes it behind that content.
+        AniList.cachedHomeFeed()?.let {
+            applyHomeFeed(it)
             loading = false
         }
+        runCatching { AniList.homeFeed() }
+            .onSuccess(::applyHomeFeed)
+            .onFailure {
+                // A compact fallback still leaves Home useful on a first launch
+                // if AniList rejects the larger combined query temporarily.
+                if (trending.isEmpty()) runCatching { trending = AniList.trending() }
+            }
+        loading = false
 
-        // Personalization starts immediately but follows the core feed through
-        // AniList's rate-limit queue. Local list analysis happens in parallel.
+        // Core Home wins AniList's serial queue. Secondary badges and
+        // personalization start only after its complete feed is visible.
+        scope.launch {
+            runCatching { epTotals = AniList.episodeTotals(initialCw.map { it.animeId }) }
+        }
+
+        // Personalization follows the visible core feed through AniList's
+        // rate-limit queue instead of delaying the hero for an off-screen row.
         scope.launch {
             var rows = runCatching {
                 com.sanjay.anitrack.next.data.Db.STATUSES.flatMap {
@@ -120,8 +129,6 @@ fun HomeScreen(
                 AniList.recommendations(seeds, rows.map { it.animeId })
             }.getOrDefault(emptyList())
         }
-        // Anikoto uses its own host and can load alongside AniList.
-        scope.launch { runCatching { anikotoTop = com.sanjay.anitrack.next.data.Anikoto.top() } }
     }
 
     // The top bar (both orientations) carries the search now — no in-page bar.

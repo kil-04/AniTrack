@@ -56,7 +56,14 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // Remove unused Compose icons/classes and optimize bytecode. This
+            // reduces dex work and APK I/O during cold startup.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
             if (releaseSigningReady) signingConfig = signingConfigs.getByName("release")
         }
     }

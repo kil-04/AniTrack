@@ -1,7 +1,11 @@
 package com.sanjay.anitrack.next.data
 
+import android.content.Context
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -11,6 +15,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.util.concurrent.TimeUnit
 import kotlin.math.log2
 
@@ -24,16 +29,28 @@ object AniList {
     private const val ENDPOINT = "https://graphql.anilist.co"
     private const val SPACING_MS = 350L
     private const val CACHE_TTL_MS = 5 * 60 * 1000L
+    private const val HOME_STALE_MS = 24 * 60 * 60 * 1000L
+
+    private lateinit var homeCacheFile: File
+
+    fun init(context: Context) {
+        if (::homeCacheFile.isInitialized) return
+        homeCacheFile = File(context.applicationContext.cacheDir, "anilist-home-v1.json")
+    }
 
     private val http = OkHttpClient.Builder()
         .callTimeout(15, TimeUnit.SECONDS)
         .build()
+    private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val lock = Mutex()
     private var lastCallAt = 0L
 
     private val cache = object : LinkedHashMap<String, Pair<Long, JSONObject>>(64, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<Long, JSONObject>>) = size > 200
+    }
+    private val animeCache = object : LinkedHashMap<Int, Anime>(128, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, Anime>) = size > 500
     }
 
     const val MEDIA_FIELDS = """
@@ -92,9 +109,17 @@ object AniList {
         }
     }
 
+    private fun rememberAnime(media: JSONObject): Anime {
+        val anime = Anime.fromMedia(media)
+        synchronized(animeCache) { animeCache[anime.id] = anime }
+        return anime
+    }
+
+    fun cachedAnime(id: Int): Anime? = synchronized(animeCache) { animeCache[id] }
+
     private fun mediaList(data: JSONObject): List<Anime> {
         val arr: JSONArray = data.getJSONObject("Page").getJSONArray("media")
-        return (0 until arr.length()).map { Anime.fromMedia(arr.getJSONObject(it)) }
+        return (0 until arr.length()).map { rememberAnime(arr.getJSONObject(it)) }
     }
 
     suspend fun trending(): List<Anime> = mediaList(
@@ -135,6 +160,67 @@ object AniList {
 
     @Volatile private var homeFeedCache: Pair<Long, HomeFeed>? = null
 
+    private fun parseHomeFeed(data: JSONObject): HomeFeed {
+        fun media(alias: String): List<Anime> {
+            val items = data.getJSONObject(alias).getJSONArray("media")
+            return (0 until items.length()).map { rememberAnime(items.getJSONObject(it)) }
+        }
+
+        val latestItems = data.getJSONObject("latest").getJSONArray("airingSchedules")
+        val seen = HashSet<Int>()
+        val latest = (0 until latestItems.length()).mapNotNull { index ->
+            val item = latestItems.getJSONObject(index)
+            val animeJson = item.optJSONObject("media") ?: return@mapNotNull null
+            val id = animeJson.optInt("id")
+            if (animeJson.optBoolean("isAdult", false) || !seen.add(id)) return@mapNotNull null
+            Airing(rememberAnime(animeJson), item.optInt("episode"), item.optLong("airingAt"))
+        }
+        return HomeFeed(
+            trending = media("trending"),
+            latest = latest,
+            topAiring = media("topAiring"),
+            popular = media("popular"),
+        )
+    }
+
+    /** A complete previous Home response can paint immediately after a process
+     * restart. It is then refreshed normally when older than the network TTL. */
+    suspend fun cachedHomeFeed(): HomeFeed? {
+        val now = System.currentTimeMillis()
+        homeFeedCache?.let { (at, feed) ->
+            if (now - at in 0..HOME_STALE_MS) return feed
+        }
+        if (!::homeCacheFile.isInitialized) return null
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                val envelope = JSONObject(homeCacheFile.readText())
+                val savedAt = envelope.getLong("savedAt")
+                require(now - savedAt in 0..HOME_STALE_MS)
+                val feed = parseHomeFeed(envelope.getJSONObject("data"))
+                homeFeedCache = savedAt to feed
+                feed
+            }.getOrElse {
+                runCatching { homeCacheFile.delete() }
+                null
+            }
+        }
+    }
+
+    private fun persistHomeFeed(savedAt: Long, data: JSONObject) {
+        if (!::homeCacheFile.isInitialized) return
+        backgroundScope.launch {
+            runCatching {
+                val envelope = JSONObject().put("savedAt", savedAt).put("data", data).toString()
+                val temporary = File(homeCacheFile.parentFile, "${homeCacheFile.name}.tmp")
+                temporary.writeText(envelope)
+                if (!temporary.renameTo(homeCacheFile)) {
+                    homeCacheFile.writeText(envelope)
+                    temporary.delete()
+                }
+            }
+        }
+    }
+
     /** All core Home network rows in one GraphQL round trip. AniList requests
      * are intentionally serialized, so four separate calls created a visible
      * row-by-row waterfall even on fast connections. */
@@ -165,27 +251,9 @@ object AniList {
             JSONObject().put("to", now),
         )
 
-        fun media(alias: String): List<Anime> {
-            val items = data.getJSONObject(alias).getJSONArray("media")
-            return (0 until items.length()).map { Anime.fromMedia(items.getJSONObject(it)) }
-        }
-
-        val latestItems = data.getJSONObject("latest").getJSONArray("airingSchedules")
-        val seen = HashSet<Int>()
-        val latest = (0 until latestItems.length()).mapNotNull { index ->
-            val item = latestItems.getJSONObject(index)
-            val animeJson = item.optJSONObject("media") ?: return@mapNotNull null
-            val id = animeJson.optInt("id")
-            if (animeJson.optBoolean("isAdult", false) || !seen.add(id)) return@mapNotNull null
-            Airing(Anime.fromMedia(animeJson), item.optInt("episode"), item.optLong("airingAt"))
-        }
-        val result = HomeFeed(
-            trending = media("trending"),
-            latest = latest,
-            topAiring = media("topAiring"),
-            popular = media("popular"),
-        )
+        val result = parseHomeFeed(data)
         homeFeedCache = nowMs to result
+        persistHomeFeed(nowMs, data)
         return result
     }
 
@@ -209,7 +277,7 @@ object AniList {
             val o = arr.getJSONObject(i)
             val m = o.optJSONObject("media") ?: return@mapNotNull null
             if (m.optBoolean("isAdult", false)) return@mapNotNull null
-            Airing(Anime.fromMedia(m), o.optInt("episode"), o.optLong("airingAt"))
+            Airing(rememberAnime(m), o.optInt("episode"), o.optLong("airingAt"))
         }
     }
 
@@ -242,7 +310,7 @@ object AniList {
         )
         val page1 = data.getJSONObject("Page")
         val arr = page1.getJSONArray("media")
-        val list = (0 until arr.length()).map { Anime.fromMedia(arr.getJSONObject(it)) }
+        val list = (0 until arr.length()).map { rememberAnime(arr.getJSONObject(it)) }
         return list to page1.getJSONObject("pageInfo").optBoolean("hasNextPage", false)
     }
 
@@ -279,7 +347,7 @@ object AniList {
             val m = o.optJSONObject("media") ?: return@mapNotNull null
             if (m.optBoolean("isAdult", false)) return@mapNotNull null
             if (!seen.add(m.optInt("id"))) return@mapNotNull null
-            Airing(Anime.fromMedia(m), o.optInt("episode"), o.optLong("airingAt"))
+            Airing(rememberAnime(m), o.optInt("episode"), o.optLong("airingAt"))
         }
         return list to pg.getJSONObject("pageInfo").optBoolean("hasNextPage", false)
     }
@@ -336,7 +404,7 @@ object AniList {
                 val existing = ranked[id]
                 if (existing == null) {
                     ranked[id] = Ranked(
-                        anime = Anime.fromMedia(candidate),
+                        anime = rememberAnime(candidate),
                         score = edgeScore,
                         bestRating = rating,
                         reason = "Because you liked $seedTitle",
@@ -438,7 +506,7 @@ object AniList {
                     JSONObject().put("ids", org.json.JSONArray(chunk)),
                 )
                 val arr = data.getJSONObject("Page").getJSONArray("media")
-                for (i in 0 until arr.length()) out += Anime.fromMedia(arr.getJSONObject(i))
+                for (i in 0 until arr.length()) out += rememberAnime(arr.getJSONObject(i))
             }
         }
         return out
@@ -461,19 +529,22 @@ object AniList {
             val e = edges.getJSONObject(i)
             val node = e.optJSONObject("node") ?: return@mapNotNull null
             if (node.optString("type") != "ANIME") return@mapNotNull null   // skip manga nodes
-            Relation(e.optString("relationType"), Anime.fromMedia(node))
+            Relation(e.optString("relationType"), rememberAnime(node))
         }
     } catch (e: Exception) {
         emptyList()
     }
 
-    suspend fun byId(id: Int): Anime? = try {
-        val data = gql(
-            """query(${'$'}id: Int) { Media(id: ${'$'}id, type: ANIME) { $MEDIA_FIELDS } }""",
-            JSONObject().put("id", id),
-        )
-        Anime.fromMedia(data.getJSONObject("Media"))
-    } catch (e: Exception) {
-        null
+    suspend fun byId(id: Int): Anime? {
+        cachedAnime(id)?.let { return it }
+        return try {
+            val data = gql(
+                """query(${'$'}id: Int) { Media(id: ${'$'}id, type: ANIME) { $MEDIA_FIELDS } }""",
+                JSONObject().put("id", id),
+            )
+            rememberAnime(data.getJSONObject("Media"))
+        } catch (e: Exception) {
+            null
+        }
     }
 }

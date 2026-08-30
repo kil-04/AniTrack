@@ -85,31 +85,38 @@ object Downloads {
         if (::appCtx.isInitialized) return
         appCtx = ctx.applicationContext
         DownloadTransport.init(appCtx)
-        // Load existing downloads' meta.
-        baseDir().listFiles()?.forEach { dir ->
-            val meta = File(dir, "meta.json")
-            if (!meta.exists()) {
-                // Old/interrupted jobs without metadata cannot be resumed and
-                // otherwise consume storage forever.
-                dir.deleteRecursively()
-            } else {
-                runCatching {
-                    val o = JSONObject(meta.readText())
-                    val id = o.getString("id")
-                    val complete = File(dir, "index.m3u8").exists()
-                    withItems {
-                        add(
-                            Item(
-                                id, o.getInt("animeId"), o.getDouble("episode").toFloat(),
-                                o.optString("title"), o.optString("cover").takeIf { it.isNotEmpty() },
-                                if (complete) Status.DONE else Status.FAILED,
-                                if (complete) 100 else 0,
-                                error = if (complete) null else "Download was interrupted. Start it again from the episode list.",
-                                sizeBytes = sizeOf(id),
-                            ),
+        // Directory walks and recursive size calculations can be expensive
+        // with a large offline library. Restore them after the first frame.
+        scope.launch {
+            val restored = mutableListOf<Item>()
+            baseDir().listFiles()?.forEach { dir ->
+                val meta = File(dir, "meta.json")
+                if (!meta.exists()) {
+                    // Old/interrupted jobs without metadata cannot be resumed
+                    // and otherwise consume storage forever.
+                    dir.deleteRecursively()
+                } else {
+                    runCatching {
+                        val o = JSONObject(meta.readText())
+                        val id = o.getString("id")
+                        val complete = File(dir, "index.m3u8").exists()
+                        restored += Item(
+                            id, o.getInt("animeId"), o.getDouble("episode").toFloat(),
+                            o.optString("title"), o.optString("cover").takeIf { it.isNotEmpty() },
+                            if (complete) Status.DONE else Status.FAILED,
+                            if (complete) 100 else 0,
+                            error = if (complete) null else "Download was interrupted. Start it again from the episode list.",
+                            sizeBytes = sizeOf(id),
                         )
+                    }.onFailure { dir.deleteRecursively() }
+                }
+            }
+            withContext(Dispatchers.Main) {
+                withItems {
+                    restored.forEach { item ->
+                        if (none { it.id == item.id }) add(item)
                     }
-                }.onFailure { dir.deleteRecursively() }
+                }
             }
         }
     }

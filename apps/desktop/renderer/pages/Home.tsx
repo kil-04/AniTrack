@@ -251,7 +251,21 @@ export default function Home() {
               className={`absolute inset-0 transition-opacity duration-1000 ease-in-out ${idx === heroIndex ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}
             >
               <div className="absolute inset-0">
-                <img draggable="false" src={anime.bannerImage || anime.coverImage || undefined} className={`w-full h-full object-cover transition-transform duration-[20s] ${idx === heroIndex ? 'scale-110' : 'scale-100'}`} />
+                <img
+                  draggable="false"
+                  alt=""
+                  src={
+                    idx === heroIndex ||
+                    idx === (heroIndex + 1) % heroItems.length ||
+                    idx === (heroIndex - 1 + heroItems.length) % heroItems.length
+                      ? anime.bannerImage || anime.coverImage || undefined
+                      : undefined
+                  }
+                  loading={idx === heroIndex ? "eager" : "lazy"}
+                  decoding="async"
+                  fetchPriority={idx === heroIndex ? "high" : "low"}
+                  className={`w-full h-full object-cover transition-transform duration-[20s] ${idx === heroIndex ? 'scale-110' : 'scale-100'}`}
+                />
                 <div className="absolute inset-0 bg-gradient-to-t from-[#000000] via-[#000000]/60 to-transparent" />
                 <div className="absolute inset-0 bg-gradient-to-r from-[#000000] via-[#000000]/60 to-transparent" />
               </div>
