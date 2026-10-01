@@ -6,6 +6,10 @@ import type {
   ProviderFeedResult,
   StreamProvider,
 } from "./types";
+import {
+  authorizeResolvedStream,
+  clearResolvedStreamAuthorizations,
+} from "./stream-authorization";
 
 export interface ProviderRegistryOptions {
   /** Returns provider ids in preferred order. Unlisted providers follow registration order. */
@@ -96,8 +100,10 @@ export class ProviderRegistry {
     return this.get(providerId).getStreamLinks(episodeId, animeId);
   }
 
-  resolveStream(providerId: string, linkId: string) {
-    return this.get(providerId).resolveStream(linkId);
+  async resolveStream(providerId: string, linkId: string) {
+    const stream = await this.get(providerId).resolveStream(linkId);
+    authorizeResolvedStream(stream);
+    return stream;
   }
 
   getExternalIds(providerId: string, animeId: string, lookupId?: string | number): Promise<ExternalIds> {
@@ -131,7 +137,7 @@ export class ProviderRegistry {
     try {
       const task = provider.prefetch
         ? provider.prefetch(linkId)
-        : provider.resolveStream(linkId).then(() => undefined);
+        : this.resolveStream(providerId, linkId).then(() => undefined);
       void Promise.resolve(task).catch((error) => {
         console.warn(`[ProviderRegistry] Prefetch failed for ${provider.id}:`, error);
       });
@@ -145,6 +151,7 @@ export class ProviderRegistry {
   }
 
   notifyConfigChanged(): void {
+    clearResolvedStreamAuthorizations();
     for (const provider of this.ordered(true)) provider.onConfigChanged?.();
   }
 

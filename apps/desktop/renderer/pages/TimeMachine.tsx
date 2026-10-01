@@ -4,6 +4,7 @@ import { Clock3, Dices, Landmark, Radio, Sparkles } from "lucide-react";
 import Card from "../components/Card";
 import type { AnimeMeta } from "../../../../packages/shared/types";
 import { ANIME_ERAS, animeEraForYear, clampTimeMachineYear, yearTransmission } from "../../../../packages/shared/time-machine";
+import { rejectOversizedImage, safeImageSrc } from "../lib/image-guard";
 
 const FAVORITE_DECADES = [1970, 1980, 1990];
 
@@ -61,8 +62,8 @@ export default function TimeMachine() {
   return (
     <div className="min-h-full bg-black pb-16">
       <section className="relative min-h-[390px] overflow-hidden border-b border-white/10">
-        {hero?.bannerImage && (
-          <img src={hero.bannerImage} alt="" className="absolute inset-0 h-full w-full object-cover opacity-40" />
+        {safeImageSrc(hero?.bannerImage) && (
+          <img src={safeImageSrc(hero?.bannerImage)} alt="" className="absolute inset-0 h-full w-full object-cover opacity-40" onLoad={(event) => rejectOversizedImage(event)} />
         )}
         <div className="absolute inset-0 bg-gradient-to-r from-black via-black/85 to-black/20" />
         <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-black/20" />

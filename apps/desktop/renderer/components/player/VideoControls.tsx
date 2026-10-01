@@ -52,7 +52,7 @@ interface VideoControlsProps {
   availableSubtitles?: any[];
   onToggleSubtitles?: () => void;
   providerId?: string;
-  streamVariants?: "quality" | "subtitle-type";
+  streamVariants?: "quality" | "subtitle-type" | "server";
 
   // Subtitle Settings props
   cueFontSize?: string;

@@ -13,7 +13,7 @@ interface StreamEpisodePanelProps {
   providerId: string;
   providerLabel: (providerId: string) => string;
   onSwitchProvider: (source: any) => void;
-  streamVariants?: "quality" | "subtitle-type";
+  streamVariants?: "quality" | "subtitle-type" | "server";
   links: any[];
   selectedLink: number;
   onChangeVariant: (index: number) => void;

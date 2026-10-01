@@ -1,0 +1,35 @@
+{
+  "note": "Synthetic schema fixture, not real episode identifiers or stream addresses.",
+  "info": {"media": {"id": 1}},
+  "config": {
+    "providerOrder": ["bee", "hop", "hidden"],
+    "streaming": {
+      "bee": {"visible": true, "capabilities": {"sub": false, "ssub": true}},
+      "hop": {"visible": true, "capabilities": {"sub": true, "ssub": false}},
+      "hidden": {"visible": false, "capabilities": {"sub": true}}
+    }
+  },
+  "episodes": {
+    "mappings": {"aniId": 1},
+    "providers": {
+      "bee": {"episodes": {
+        "sub": [
+          {"id": "synthetic-bee-2", "number": 2, "title": "Second"},
+          {"id": "synthetic-bee-1", "number": 1, "title": "First"},
+          {"id": "synthetic-special", "number": 1.5, "title": "Special"}
+        ],
+        "dub": [{"id": "synthetic-bee-dub-1", "number": 1, "title": "First dubbed"}]
+      }},
+      "hop": {"episodes": {"sub": [
+        {"id": "synthetic-hop-2", "number": 2},
+        {"id": "synthetic-hop-1", "number": 1}
+      ]}},
+      "hidden": {"episodes": {"sub": [{"id": "synthetic-hidden", "number": 99}]}},
+      "unconfigured": {"episodes": {"sub": [{"id": "synthetic-unconfigured", "number": 100}]}}
+    }
+  },
+  "source": {"streams": [
+    {"url": "https://media.example.net/show/episode.m3u8", "type": "hls", "referer": "https://player.example.net/", "default": true},
+    {"url": "https://player.example.net/embed", "type": "embed"}
+  ]}
+}

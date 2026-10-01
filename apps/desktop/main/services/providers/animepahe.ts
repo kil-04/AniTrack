@@ -1,4 +1,4 @@
-import {
+import type {
   StreamProvider,
   AnimeInfo,
   EpisodeInfo,
@@ -8,7 +8,7 @@ import {
   ProviderFeedResult,
 } from "./types";
 /**
- * AnimePahe integration — Cloudflare bypass via hidden BrowserWindow.
+ * AnimePahe integration with an app-owned homepage verification session.
  *
  * Flow:
  *  1. search(title)              → PaheAnime[]
@@ -16,20 +16,22 @@ import {
  *  3. getStreamLinks(epSession, animeSession) → PaheLink[]
  *  4. resolveKwik(kwikUrl)       → { url, cookies } (stream URL + kwik session cookies)
  *
- * CF bypass:
- *  - A hidden BrowserWindow loads animepahe.pw once; CF challenge runs and
- *    sets cf_clearance in that session's cookie jar.
- *  - JSON API calls (search, episodes) use net.fetch with that session.
- *  - getStreamLinks fetches the HTML play page (same session) and regex-scrapes
- *    the resolution buttons — matching how the reference Python downloader works.
- *  - resolveKwik navigates the kwik embed page in a hidden BrowserWindow (like
- *    the Python Playwright approach), intercepts the m3u8 URL from the actual
- *    network request, and returns both the URL and the kwik session cookies.
- *    The CDN requires these cookies to serve segments.
+ * Session handling:
+ *  - The homepage window stays hidden for an ordinary load, and is shown for
+ *    the user to complete any required verification themselves.
+ *  - JSON and play-page requests are fixed same-origin GETs issued from an
+ *    isolated world of that verified page (see paheSessionRequest).
+ *  - Challenge/rate responses stop the attempt; the window is revalidated once
+ *    to show the check, with no request retry, alternative transport, or
+ *    origin rotation.
+ *  - resolveKwik fetches the public link once, parses bounded static HTML data,
+ *    and captures that link's ordinary session cookies for the resolved stream.
+ *    No player/ad embed is executed to discover media or establish cookies.
  */
 
-import { BrowserWindow, net, session as electronSession } from "electron";
+import { BrowserWindow } from "electron";
 import { getRuntimeConfig } from "../remote-config";
+import { PaheAccessError, PaheVerificationState, paheResponseError } from "./animepahe-session";
 import {
   prefetchKwik,
   resetKwikForBaseChange,
@@ -59,12 +61,13 @@ export { getPaheBaseUrl } from "./animepahe-config";
 
 export function setPaheBaseUrl(url: string): void {
   savePaheBaseUrl(url);
-  // Force the CF window to reload against the new domain next time it's needed.
+  // A user-selected origin requires a new homepage session next time it is used.
   if (_win && !_win.isDestroyed()) {
     _win.destroy();
     _win = null;
-    _ready = false;
   }
+  _verification.reset();
+  _readyPromise = null;
   // Clear domain-derived caches — they were populated from the old host.
   _idsCache.clear();
   _reverseCache.clear();
@@ -88,31 +91,62 @@ function tagAttribute(tag: string, name: string): string | null {
 // ─── Persistent hidden window ─────────────────────────────────────────────────
 
 let _win: BrowserWindow | null = null;
-let _ready = false;
-let _readyPromise: Promise<void> | null = null;
+const _verification = new PaheVerificationState();
+let _readyPromise: Promise<BrowserWindow> | null = null;
+let _windowBase = "";
+/** A user request is waiting on the window; a startup prewarm alone never shows it. */
+let _userWaiting = false;
+let _idleTimer: NodeJS.Timeout | null = null;
+// The hidden window runs the site's own scripts. Once AnimePahe is idle, free
+// that renderer; the next request reopens it (playback/Kwik do not need it).
+const IDLE_CLOSE_MS = 10 * 60_000;
+
+function scheduleIdleClose(): void {
+  if (_idleTimer) clearTimeout(_idleTimer);
+  _idleTimer = setTimeout(() => {
+    _idleTimer = null;
+    // Never close a window that is loading or showing a check to the user.
+    if (_win && !_win.isDestroyed() && !_win.isVisible() && _verification.ready && !_readyPromise) _win.destroy();
+  }, IDLE_CLOSE_MS);
+  _idleTimer.unref?.();
+}
 
 function selectConfiguredPaheBase(base: string) {
   if (selectRuntimePaheBase(base)) {
     if (_win && !_win.isDestroyed()) _win.destroy();
     _win = null;
-    _ready = false;
+    _verification.reset();
     _readyPromise = null;
   }
 }
 
-function getPaheWindow(): Promise<BrowserWindow> {
+function getPaheWindow(interactive = true): Promise<BrowserWindow> {
   assertAnimePaheEnabled();
-  if (_win && !_win.isDestroyed() && _ready) {
+  if (interactive) _userWaiting = true;
+  try { _verification.assertRequestAllowed(); } catch (error) {
+    // A silent prewarm may have met the check; show it now that the user asked.
+    if (interactive && error instanceof PaheAccessError && error.code === "PAHE_SECURITY_CHECK" && _win && !_win.isDestroyed()) {
+      showPaheVerification(_win);
+    }
+    return Promise.reject(error);
+  }
+  const base = paheBaseUrl();
+  if (_win && !_win.isDestroyed() && _windowBase !== base) {
+    _win.destroy();
+    _win = null;
+    _readyPromise = null;
+    _verification.reset();
+  }
+  if (_win && !_win.isDestroyed() && _verification.ready) {
+    scheduleIdleClose();
     return Promise.resolve(_win);
   }
   if (_readyPromise && _win && !_win.isDestroyed()) {
-    return _readyPromise.then(() => {
-      if (!_win || _win.isDestroyed()) throw new Error("AnimePahe window closed during init");
-      return _win;
-    });
+    return _readyPromise;
   }
 
-  _ready = false;
+  const generation = _verification.reset();
+  _windowBase = base;
   _win = new BrowserWindow({
     show: false,
     width: 800,
@@ -120,192 +154,180 @@ function getPaheWindow(): Promise<BrowserWindow> {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      partition: "persist:animepahe",
     },
   });
+  const win = _win;
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  const providerSession = win.webContents.session;
+  providerSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  providerSession.setPermissionCheckHandler(() => false);
+  // Keep verification permissions separate from the desktop renderer.
+  const denyDownload = (event: Electron.Event, _item: Electron.DownloadItem, contents?: Electron.WebContents) => {
+    if (contents === win.webContents) event.preventDefault();
+  };
+  providerSession.on("will-download", denyDownload);
+  win.webContents.on("will-navigate", (event, target) => {
+    try { if (new URL(target).origin !== base) event.preventDefault(); } catch { event.preventDefault(); }
+  });
 
-  _readyPromise = new Promise<void>((resolve) => {
-    let resolved = false;
-    let shown = false;
-    function done() {
-      if (resolved) return;
-      resolved = true;
-      _ready = true;
-      // Hide the window again if we surfaced it for a manual CF solve.
-      if (shown && _win && !_win.isDestroyed()) {
-        try { _win.hide(); } catch { /* ignore */ }
+  _readyPromise = new Promise<BrowserWindow>((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(hardTimeout);
+      _readyPromise = null;
+      if (error) {
+        reject(error);
+        if (!(error instanceof PaheAccessError) && !win.isDestroyed()) win.destroy();
       }
-      resolve();
-    }
-    // Cloudflare serves an interstitial ("Just a moment...") that runs a JS
-    // challenge and then reloads the page — did-finish-load fires for the
-    // interstitial too. Only mark the session ready once the loaded page is
-    // NOT a challenge page; otherwise API calls go out without cf_clearance
-    // and 403.
-    //
-    // Modern CF often serves an INTERACTIVE challenge (Turnstile checkbox)
-    // that a hidden window can never pass. If auto-clearance hasn't happened
-    // after 10s, show the window so the user can click through it once —
-    // cf_clearance persists in the session cookies afterwards. Hard cap at
-    // 90s so a never-cleared page can't hang callers forever.
-    const showTimer = setTimeout(() => {
-      if (resolved || !_win || _win.isDestroyed()) return;
-      shown = true;
-      console.log("[pahe] CF challenge needs interaction — showing window for manual solve");
-      try {
-        _win.setTitle("AnimePahe — complete the verification check");
-        _win.show();
-        _win.focus();
-      } catch { /* ignore */ }
-    }, 10_000);
+      else resolve(win);
+    };
     const hardTimeout = setTimeout(() => {
-      clearTimeout(showTimer);
-      done();
-    }, 90_000);
+      finish(new Error("AnimePahe homepage did not finish loading. Retry or choose another provider."));
+    }, 30_000);
     const checkLoad = async () => {
-      if (resolved || !_win || _win.isDestroyed()) return;
+      if (win.isDestroyed() || _win !== win) return;
       try {
-        const title: string = await _win.webContents.executeJavaScript("document.title", true);
+        const title: string = await win.webContents.executeJavaScript("document.title", true);
         if (/just a moment|attention required|checking your browser|verify you are human/i.test(title)) {
-          console.log("[pahe] CF challenge page detected, waiting for clearance…");
-          return; // challenge reloads the page → did-finish-load fires again
+          const error = paheResponseError(403, "")!;
+          _verification.reject(error);
+          if (_userWaiting) showPaheVerification(win);
+          finish(error);
+          return;
         }
-        console.log("[pahe] CF session ready:", title.slice(0, 60));
-        clearTimeout(showTimer);
-        clearTimeout(hardTimeout);
-        done();
+        if (!title || new URL(win.webContents.getURL()).origin !== base) return;
+        if (_verification.markReady(generation)) {
+          _userWaiting = false;
+          if (win.isVisible()) win.hide();
+          finish();
+          scheduleIdleClose();
+        }
       } catch { /* page mid-navigation — wait for the next load */ }
     };
-    _win!.webContents.on("did-finish-load", checkLoad);
-    _win!.loadURL(paheBaseUrl() + paheRoute("home"));
-    _win!.on("closed", () => {
-      clearTimeout(showTimer);
-      clearTimeout(hardTimeout);
-      // Resolve so pending callers fail fast on the destroyed-window guard
-      // instead of hanging until the hard timeout.
-      done();
-      _win = null;
-      _ready = false;
-      _readyPromise = null;
+    win.webContents.on("did-finish-load", checkLoad);
+    // A cached homepage can render while the network copy sits behind a
+    // website check, which would falsely mark the session ready. Revalidate so
+    // any check is what the window shows (and the user can complete).
+    win.loadURL(base + paheRoute("home"), { extraHeaders: "Cache-Control: no-cache\n" }).catch(() => {
+      finish(new Error("AnimePahe homepage could not be loaded. Retry or choose another provider."));
+    });
+    win.on("closed", () => {
+      providerSession.removeListener("will-download", denyDownload);
+      finish(new Error("AnimePahe verification window was closed. Retry to reconnect."));
+      if (_win === win) {
+        _win = null;
+        _verification.reset();
+        _readyPromise = null;
+        _userWaiting = false;
+      }
     });
   });
 
-  return _readyPromise.then(() => {
-    if (!_win || _win.isDestroyed()) throw new Error("AnimePahe window closed during init");
-    return _win;
-  });
+  return _readyPromise;
 }
 
-// ─── Shared net.fetch helper (JSON API calls) ─────────────────────────────────
-//
-// Uses net.fetch with the hidden window's session so cf_clearance is included.
-// More reliable than executeJavaScript for JSON endpoints in Electron 32.
-
 /**
- * Run a fetch INSIDE the hidden window's page context. Unlike net.fetch, an
- * in-page request carries the full browser fingerprint (sec-fetch-* headers,
- * cookie ordering, etc.), so Cloudflare treats it like the site's own AJAX.
- * Returns { status, text } or null if the page context is unavailable.
+ * Show the provider window for user-operated verification. `revalidate` is for
+ * a request rejected while the window still shows a normal (possibly cached)
+ * page: one cache-bypassing reload brings up the website's own check.
  */
-async function paheInPageFetch(
-  win: BrowserWindow,
-  url: string,
-): Promise<{ status: number; text: string } | null> {
+function showPaheVerification(win: BrowserWindow, revalidate = false): void {
+  if (win.isDestroyed()) return;
   try {
-    const res = await win.webContents.executeJavaScript(
-      `(async () => {
-        try {
-          const r = await fetch(${JSON.stringify(url)}, {
-            headers: { "Accept": "application/json, text/html, text/plain, */*", "X-Requested-With": "XMLHttpRequest" },
-            credentials: "include",
-          });
-          return { status: r.status, text: await r.text() };
-        } catch (e) { return { status: 0, text: String(e) }; }
-      })()`,
-      true,
-    );
-    if (res && typeof res.status === "number") return res;
-    return null;
-  } catch {
-    return null;
-  }
+    win.setTitle("AnimePahe — complete the website check, then retry in AniTrack (Ctrl+R reloads this page)");
+    win.show();
+    win.focus();
+    if (revalidate) win.webContents.reloadIgnoringCache();
+  } catch { /* window closed while the request was completing */ }
 }
 
-// Serialize hidden-window navigations so concurrent calls don't race on the
-// shared window.
-let _paheNavQueue: Promise<unknown> = Promise.resolve();
+// ─── Browser-session requests (one attempt per call) ─────────────────────────
+
+const PAHE_REQUEST_WORLD = 1207;
+const PAHE_REQUEST_TIMEOUT_MS = 30_000;
+const MAX_PAHE_BODY_BYTES = 2 * 1024 * 1024;
+
+interface PaheSessionResponse { status: number; body: string | null }
 
 /**
- * Fetch an HTML page (e.g. the /play/ page) by NAVIGATING the hidden window to
- * it and returning the rendered page's full HTML, or null. A top-level document
- * navigation carries the full browser fingerprint, which Cloudflare passes even
- * when an XHR / net.fetch is challenged. (This works only for real document
- * pages — AnimePahe's /api endpoint is XHR-only and 404s on document nav, so the
- * JSON API path relies on the in-page XHR fetch instead.) Navigations serialized.
+ * Cloudflare rejects browser-process Session.fetch requests even after the
+ * user completes the website check, while the verified page's own same-origin
+ * requests pass. Send one fixed, reviewed GET from an isolated world of that
+ * page: page scripts cannot replace its fetch, nothing downloaded executes,
+ * and only same-origin paths of the configured site are accepted.
  */
-async function paheNavFetchHtml(url: string): Promise<string | null> {
-  const run = async (): Promise<string | null> => {
-    const win = await getPaheWindow().catch(() => null);
-    if (!win || win.isDestroyed()) return null;
-    try {
-      await win.loadURL(url);
-    } catch {
-      // page may still have loaded despite a redirect/abort rejection
+async function paheSessionRequest(win: BrowserWindow, url: string, accept: string, xhr: boolean): Promise<PaheSessionResponse> {
+  const target = new URL(url);
+  const origin = new URL(paheBaseUrl()).origin;
+  if (target.protocol !== "https:" || target.origin !== origin || new URL(win.webContents.getURL()).origin !== origin) {
+    throw new Error("AnimePahe request left the verified site. Retry or choose another provider.");
+  }
+  const request = { path: target.pathname + target.search, accept, xhr, limit: MAX_PAHE_BODY_BYTES, timeout: PAHE_REQUEST_TIMEOUT_MS };
+  // `request` is data passed as an argument; the code around it is fixed. No
+  // top-level declarations: the isolated world keeps its globals between calls.
+  const code = `(async (request) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), request.timeout);
+  try {
+    const headers = { Accept: request.accept };
+    if (request.xhr) headers["X-Requested-With"] = "XMLHttpRequest";
+    const response = await fetch(request.path, { headers, credentials: "same-origin", cache: "no-store", signal: controller.signal });
+    if (new URL(response.url).origin !== location.origin) return { status: 0, body: "" };
+    const reader = response.body.getReader();
+    const chunks = [];
+    let size = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > request.limit) { await reader.cancel(); return { status: response.status, body: null }; }
+      chunks.push(value);
     }
-    for (let i = 0; i < 12; i++) {
-      if (win.isDestroyed()) return null;
-      const title: string = await win.webContents
-        .executeJavaScript("document.title", true)
-        .catch(() => "");
-      if (title && !/just a moment|verify you are human|attention required|checking your browser/i.test(title)) {
-        const html: string = await win.webContents
-          .executeJavaScript("document.documentElement.outerHTML", true)
-          .catch(() => "");
-        if (html) return html;
-      }
-      await new Promise((r) => setTimeout(r, 500));
+    return { status: response.status, body: await new Blob(chunks).text() };
+  } finally { clearTimeout(timer); }
+})(
+/* request */ ${JSON.stringify(request)}
+)`;
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    const result = await Promise.race([
+      win.webContents.executeJavaScriptInIsolatedWorld(PAHE_REQUEST_WORLD, [{ code }]),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), PAHE_REQUEST_TIMEOUT_MS + 5_000); }),
+    ]);
+    if (!result || typeof result.status !== "number" || (result.body !== null && typeof result.body !== "string")) {
+      throw new Error("malformed");
     }
-    return null;
-  };
-  const p = _paheNavQueue.then(run, run);
-  _paheNavQueue = p.catch(() => {});
-  return p;
+    return { status: result.status, body: result.body };
+  } catch (error) {
+    const reason = error instanceof Error ? `${error.name}: ${error.message}` : "unknown";
+    console.warn("[AnimePahe] Session request failed:", reason.replace(/https?:\/\/\S+/g, "[url]").slice(0, 160));
+    throw new Error("AnimePahe request did not complete. Retry or choose another provider.");
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
-async function paheWindowFetchOnce(url: string, retried = false): Promise<any> {
-  const win = await getPaheWindow();
-  // `session` is valid at runtime in Electron 32 but absent from TS types.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const resp = await (net.fetch as any)(url, {
-    session: win.webContents.session,
-    headers: {
-      Accept: "application/json, text/plain, */*",
-      "X-Requested-With": "XMLHttpRequest",
-      Referer: paheBaseUrl() + paheRoute("home"),
-    },
-  });
-  if (!resp.ok) {
-    if (resp.status === 403 || resp.status === 503 || resp.status === 429) {
-      // 1. CF blocked the net.fetch fingerprint — retry from inside the page (XHR).
-      //    The /api endpoint is XHR-only (document navigation 404s), so the
-      //    in-page fetch is the only viable bypass here.
-      const inPage = await paheInPageFetch(win, url);
-      if (inPage && inPage.status >= 200 && inPage.status < 300) {
-        try { return JSON.parse(inPage.text); } catch { /* fall through */ }
-      }
-      // 2. CF cookie may have expired. Destroy the hidden window once and retry
-      //    — that re-runs the CF challenge and gets us a fresh cookie.
-      if (!retried) {
-        if (_win && !_win.isDestroyed()) { _win.destroy(); }
-        _win = null;
-        _ready = false;
-        _readyPromise = null;
-        return paheWindowFetchOnce(url, true);
-      }
-    }
-    const body = await resp.text().catch(() => "");
-    throw new Error(`HTTP ${resp.status} ${resp.statusText}: ${body.slice(0, 120)}`);
+function readPaheResponse(win: BrowserWindow, response: PaheSessionResponse, label: string): string {
+  if (response.body === null) throw new Error(`${label} response was unexpectedly large.`);
+  const accessError = paheResponseError(response.status, response.body);
+  if (accessError) {
+    _verification.reject(accessError);
+    if (accessError.code === "PAHE_SECURITY_CHECK") showPaheVerification(win, true);
+    throw accessError;
   }
-  return resp.json();
+  if (response.status < 200 || response.status >= 300) throw new Error(`${label} HTTP ${response.status}. Retry or choose another provider.`);
+  return response.body;
+}
+
+async function paheWindowFetchOnce(url: string): Promise<any> {
+  const win = await getPaheWindow();
+  const response = await paheSessionRequest(win, url, "application/json, text/plain, */*", true);
+  scheduleIdleClose();
+  const body = readPaheResponse(win, response, "AnimePahe");
+  try { return JSON.parse(body); } catch { throw new Error("AnimePahe returned an unexpected response. Retry or choose another provider."); }
 }
 
 async function paheWindowFetch(url: string): Promise<any> {
@@ -323,6 +345,7 @@ async function paheWindowFetch(url: string): Promise<any> {
     try {
       return await paheWindowFetchOnce(`${base}${parsed.pathname}${parsed.search}${parsed.hash}`);
     } catch (error) {
+      if (error instanceof PaheAccessError) throw error;
       lastError = error;
     }
   }
@@ -440,31 +463,27 @@ export async function getAnimeIds(
   // ── 2. AnimePahe page meta tags (CF-cleared session) ───────────────────────
   try {
     const win = await getPaheWindow();
-    const resp = await (net.fetch as any)(`${paheBaseUrl()}${paheRoute("anime", { session })}`, {
-      session: win.webContents.session,
-      headers: { Referer: paheBaseUrl() + paheRoute("home") },
-    });
-    if (resp.ok) {
-      const html: string = await resp.text();
-      // Tolerate any attribute order, single or double quotes, extra whitespace.
-      const metaRe = (name: string) =>
-        new RegExp(
-          `<meta[^>]+(?:name=["']${name}["'][^>]+content=["'](\\d+)["']|content=["'](\\d+)["'][^>]+name=["']${name}["'])`,
-          "i",
-        );
-      const grab = (name: string): number | undefined => {
-        const m = html.match(metaRe(name));
-        const v = m?.[1] ?? m?.[2];
-        return v ? Number(v) : undefined;
-      };
-      const result = {
-        malId:     grab("myanimelist"),
-        anilistId: grab("anilist"),
-        kitsuId:   grab("kitsu"),
-      };
-      _idsCacheSet(cacheKey, result);
-      return result;
-    }
+    const resp = await paheSessionRequest(win, `${paheBaseUrl()}${paheRoute("anime", { session })}`, "text/html,application/xhtml+xml,*/*", false);
+    // readPaheResponse throws for every non-2xx answer.
+    const html = readPaheResponse(win, resp, "AnimePahe show page");
+    // Tolerate any attribute order, single or double quotes, extra whitespace.
+    const metaRe = (name: string) =>
+      new RegExp(
+        `<meta[^>]+(?:name=["']${name}["'][^>]+content=["'](\\d+)["']|content=["'](\\d+)["'][^>]+name=["']${name}["'])`,
+        "i",
+      );
+    const grab = (name: string): number | undefined => {
+      const m = html.match(metaRe(name));
+      const v = m?.[1] ?? m?.[2];
+      return v ? Number(v) : undefined;
+    };
+    const result = {
+      malId:     grab("myanimelist"),
+      anilistId: grab("anilist"),
+      kitsuId:   grab("kitsu"),
+    };
+    _idsCacheSet(cacheKey, result);
+    return result;
   } catch { /* swallow */ }
 
   return {};
@@ -540,7 +559,8 @@ export async function findByExternalId(
 
 export function prewarm(): void {
   if (!animePaheEnabled()) return;
-  getPaheWindow().catch(() => {
+  // Silent: a website check met here stays hidden until the user asks for AnimePahe.
+  getPaheWindow(false).catch(() => {
     /* ignore */
   });
 }
@@ -606,7 +626,7 @@ export class AnimePaheProvider implements StreamProvider {
 
   async getStreamLinks(episodeId: string, animeId: string): Promise<StreamLink[]> {
     assertAnimePaheEnabled();
-    const cacheKey = `${animeId}:${episodeId}`;
+    const cacheKey = `${paheBaseUrl()}:${animeId}:${episodeId}`;
     const cached = this.linksCache.get(cacheKey);
     if (cached && (Date.now() - cached.timestamp < this.LINKS_CACHE_TTL)) {
       console.log(`[AnimePahe] getStreamLinks cache HIT for: ${cacheKey}`);
@@ -615,37 +635,11 @@ export class AnimePaheProvider implements StreamProvider {
 
     const playUrl = paheBaseUrl() + paheRoute("play", { animeId, episodeId });
 
-    async function fetchPlayPage(retried = false): Promise<string> {
+    async function fetchPlayPage(): Promise<string> {
       const win = await getPaheWindow();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const resp = await (net.fetch as any)(playUrl, {
-        session: win.webContents.session,
-        headers: {
-          Accept: "text/html,application/xhtml+xml,*/*",
-          Referer: paheBaseUrl() + paheRoute("home"),
-        },
-      });
-      if (!resp.ok) {
-        if (resp.status === 403 || resp.status === 503 || resp.status === 429) {
-          // 1. XHR from inside the page.
-          const inPage = await paheInPageFetch(win, playUrl);
-          if (inPage && inPage.status >= 200 && inPage.status < 300) return inPage.text;
-          // 2. Top-level navigation (passes CF where XHR doesn't).
-          const navHtml = await paheNavFetchHtml(playUrl);
-          if (navHtml) return navHtml;
-          // 3. Fresh CF challenge via window recreate.
-          if (!retried) {
-            if (_win && !_win.isDestroyed()) { _win.destroy(); }
-            _win = null;
-            _ready = false;
-            _readyPromise = null;
-            return fetchPlayPage(true);
-          }
-        }
-        const body = await resp.text().catch(() => "");
-        throw new Error(`Play page HTTP ${resp.status} ${resp.statusText}: ${body.slice(0, 120)}`);
-      }
-      return resp.text();
+      const response = await paheSessionRequest(win, playUrl, "text/html,application/xhtml+xml,*/*", false);
+      scheduleIdleClose();
+      return readPaheResponse(win, response, "AnimePahe play page");
     }
     const html = await fetchPlayPage();
     const links = [];
@@ -690,7 +684,8 @@ export class AnimePaheProvider implements StreamProvider {
   async resolveStream(linkId: string): Promise<StreamData> {
     assertAnimePaheEnabled();
     const { url, cookies } = await resolveKwik(linkId);
-    return { url, cookies, referer: new URL(linkId).origin };
+    return { url, cookies, referer: new URL(linkId).origin,
+      authorizationScope: new URL(url).pathname.endsWith(".m3u8") ? "directory" : "exact" };
   }
 
   getExternalIds(animeId: string, lookupId?: string | number) {

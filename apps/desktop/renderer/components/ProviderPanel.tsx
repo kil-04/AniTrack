@@ -84,8 +84,12 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
     providerDescriptors,
   );
 
-  // Offline downloads (Android only). Subscribe so episode tiles reflect status.
-  const canDownload = downloadsSupported();
+  // Offline downloads are available only when both the current platform and
+  // the selected connector explicitly support them. This keeps new providers
+  // opt-in while their download transports are being validated.
+  const selectedProviderId = selected?.providerId ?? "animepahe";
+  const selectedProvider = providerDescriptors.find((provider) => provider.id === selectedProviderId);
+  const canDownload = downloadsSupported() && selectedProvider?.capabilities.downloads === true;
   const [, forceDownloads] = useReducer((x) => x + 1, 0);
   useEffect(() => (canDownload ? subscribeDownloads(forceDownloads) : undefined), [canDownload]);
   const [batchBusy, setBatchBusy] = useState(false);

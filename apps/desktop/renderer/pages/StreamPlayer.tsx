@@ -26,6 +26,14 @@ import {
 } from "../components/player/StreamPlayerSupport";
 import { StreamEpisodePanel } from "../components/player/StreamEpisodePanel";
 import { StreamVideoArea } from "../components/player/StreamVideoArea";
+import {
+  capturePlaybackPosition,
+  chooseResumePosition,
+  HlsRecoveryBudget,
+  PlaybackRequestGate,
+  providerPlaybackErrorMessage,
+  requiresManualProviderRetry,
+} from "../components/player/playbackRequests";
 import { discoverProviderSources } from "../components/provider/providerDiscovery";
 import Hls from "hls.js";
 import { secondsToTimestamp } from "../lib/format";
@@ -53,6 +61,10 @@ import {
 import type { ProviderDescriptor, StreamLink } from "../../../../packages/shared/provider-types";
 
 installMediaSourceCodecShim();
+
+function streamLinkKey(link: any): string {
+  return String(link?.id ?? link?.kwik ?? `${link?.quality ?? "source"}:${link?.audio ?? ""}`);
+}
 
 export default function StreamPlayer({
   search,
@@ -89,6 +101,18 @@ export default function StreamPlayer({
   const startEp = Math.max(0, Number(params.get("episode") ?? params.get("ep") ?? 0));
   const urlOffset = Number(params.get("episodeOffset") ?? 0);
   const epOffsetRef = useRef<number>(urlOffset);
+  // The persistent mini-player can receive a different show without remounting.
+  const animeIdentity = (() => {
+    const aid = Number(params.get("animeId") ?? params.get("anilistId") ?? 0);
+    return aid > 0 ? `id:${aid}` : `title:${animeTitle}`;
+  })();
+  const playbackContextKey = `${animeIdentity}|${providerId}|${animeSession}|${params.get("download") ?? ""}`;
+  const playbackContextRef = useRef(playbackContextKey);
+  playbackContextRef.current = playbackContextKey;
+  const playbackRequestsRef = useRef(new PlaybackRequestGate());
+  const loadingStreamRef = useRef(false);
+  const [episodeReloadRevision, setEpisodeReloadRevision] = useState(0);
+  const episodeLoadFailedRef = useRef(false);
 
   // Episode list
   const [episodes, setEpisodes] = useState<any[]>([]);
@@ -133,6 +157,8 @@ export default function StreamPlayer({
   const [currentEp, setCurrentEp] = useState<any | null>(null);
   const [loadingStream, setLoadingStream] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
+  const streamErrorRef = useRef<string | null>(null);
+  streamErrorRef.current = streamError;
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(false);
   const [duration, setDuration] = useState(0);
@@ -199,12 +225,15 @@ export default function StreamPlayer({
   // Live ref to playEpisode so the PiP-return hook can reload the current episode
   // (the WebView MediaSource is destroyed during PiP and can't be revived in place).
   const playEpisodeRef = useRef<((ep: any, session?: string, resumePos?: number) => void) | null>(null);
+  const changeQualityRef = useRef<(idx: number, resumePos?: number, automatic?: boolean) => Promise<void>>(async () => {});
   const seekingRef = useRef(false);
   const singleClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoNextRef = useRef(autoNext);
   const currentEpRef = useRef<any>(null);
   const episodesRef = useRef<any[]>([]);
   const linksRef = useRef<any[]>([]);
+  const selectedLinkRef = useRef(selectedLink);
+  const failedLinkIdsRef = useRef<Set<string>>(new Set());
   const rangeStartRef = useRef(rangeStart);
   const totalEpisodesRef = useRef(totalEpisodes);
   // Cache of fetched episode pages by AnimePahe page number — survives range changes.
@@ -227,6 +256,13 @@ export default function StreamPlayer({
   // Pending seek position — set before attachStream, applied in onCanPlay.
   // This avoids passing startPosition to hls.js (which stalls AnimePahe CDN).
   const pendingSeekRef = useRef<number | null>(null);
+  const providerResumeRef = useRef<{
+    animeIdentity: string;
+    providerId: string;
+    session: string;
+    episode: number;
+    positionSec: number;
+  } | null>(null);
   const pendingAutoPlayEpNumRef = useRef<number | null>(null);
 
   // Stable effective anime ID — computed once on mount so playEpisode and the
@@ -248,26 +284,18 @@ export default function StreamPlayer({
     }
   }
 
-  async function fetchSkipTimes(epNum: number) {
+  async function fetchSkipTimes(epNum: number, isCurrent = () => true) {
     setSkipTimes({});
     const anilistId = effectiveAnimeIdRef.current;
     try {
       const result = await fetchAnimeSkipTimes(anilistId, epNum, malIdCacheRef.current);
+      if (!isCurrent()) return;
       if (result.malId) malIdCacheRef.current = result.malId;
       setSkipTimes(result.skipTimes);
     } catch (error) {
       console.warn("Failed to fetch skip times", error);
     }
   }
-
-  // Stable identity for the CURRENT show. The player instance persists across
-  // navigations (mini-player), so everything per-show below must re-run when
-  // this changes — running it on mount only meant a newly-opened show inherited
-  // the PREVIOUS show's sources/anime-id (Cat's Eye playing City Hunter 2).
-  const animeIdentity = (() => {
-    const aid = Number(params.get("animeId") ?? params.get("anilistId") ?? 0);
-    return aid > 0 ? `id:${aid}` : `title:${animeTitle}`;
-  })();
 
   useEffect(() => {
     // Guards every async setState below: a slow provider search must never
@@ -282,6 +310,8 @@ export default function StreamPlayer({
     setWatchedEps(new Map());
     epOffsetRef.current = Number(params.get("episodeOffset") ?? 0);
     pendingSeekRef.current = null;
+    providerResumeRef.current = null;
+    malIdCacheRef.current = null;
     fallbackTriedRef.current.clear();
 
     // Load initial watched-episode map from DB.
@@ -335,13 +365,17 @@ export default function StreamPlayer({
   const isOffline = !!params.get("download");
 
   async function playLocal(dlId: string, epNum: number) {
+    const request = playbackRequestsRef.current.begin(playbackContextKey);
+    const isCurrent = () => playbackRequestsRef.current.isCurrent(request, playbackContextRef.current);
     resetPlayer();
     setStreamError(null);
     setLoadingStream(true);
     setCurrentEp({ episodeNumber: epNum, episode: epNum, id: dlId, session: dlId });
     const url = await getDownloadPlayUrl(dlId);
+    if (!isCurrent()) return;
     if (!url) { setStreamError("Download not found on this device."); setLoadingStream(false); return; }
     const saved = await window.api.progress.get(effectiveAnimeIdRef.current, epNum).catch(() => null);
+    if (!isCurrent()) return;
     pendingSeekRef.current = saved && saved.positionSec > 5 ? saved.positionSec : null;
     refererRef.current = null;
     // Offer the locally-saved subtitle (if any) — attachStream drops it when the
@@ -431,6 +465,7 @@ export default function StreamPlayer({
   useEffect(() => { availableSourcesRef.current = availableSources; }, [availableSources]);
   useEffect(() => { episodesRef.current = episodes; }, [episodes]);
   useEffect(() => { linksRef.current = links; }, [links]);
+  useEffect(() => { selectedLinkRef.current = selectedLink; }, [selectedLink]);
   useEffect(() => { rangeStartRef.current = rangeStart; }, [rangeStart]);
   useEffect(() => { totalEpisodesRef.current = totalEpisodes; }, [totalEpisodes]);
 
@@ -563,6 +598,8 @@ export default function StreamPlayer({
     const key = `${animeSession}|${providerId}`;
     if (prevSessionKeyRef.current === key) return;
     prevSessionKeyRef.current = key;
+    playbackRequestsRef.current.invalidate();
+    loadingStreamRef.current = false;
     // Kill the PREVIOUS show's stream immediately. If the new episode load
     // fails (network, provider anti-bot), the old video must not keep playing
     // under the new title ("says Cat's Eye, plays Dragon Ball").
@@ -591,14 +628,10 @@ export default function StreamPlayer({
     const lastPageKey = `${providerId}:${animeSession}:lastPage`;
     const cached = paheCacheRef.current.get(cacheKey);
     if (cached) return { data: cached, total: totalEpisodesRef.current, lastPage: paheCacheRef.current.get(lastPageKey) ?? 999 };
-    try {
-      const r = await providerClient.episodes(providerId, animeSession, providerPage);
-      paheCacheRef.current.set(cacheKey, r.data);
-      paheCacheRef.current.set(lastPageKey, r.lastPage ?? 999);
-      return { data: r.data, total: r.total, lastPage: r.lastPage ?? 999 };
-    } catch {
-      return { data: [], total: 0, lastPage: 1 };
-    }
+    const r = await providerClient.episodes(providerId, animeSession, providerPage);
+    paheCacheRef.current.set(cacheKey, r.data);
+    paheCacheRef.current.set(lastPageKey, r.lastPage ?? 999);
+    return { data: r.data, total: r.total, lastPage: r.lastPage ?? 999 };
   }, [animeSession, providerId]);
 
   // Load all connector pages needed to cover [rangeStart, rangeStart+RANGE_SIZE-1].
@@ -606,6 +639,8 @@ export default function StreamPlayer({
     if (!animeSession) return;
     let cancelled = false;
     setLoadingEps(true);
+    episodeLoadFailedRef.current = false;
+    setStreamError(null);
     const rangeEnd = rangeStart + RANGE_SIZE - 1;
     const providerPageSize = providerDescriptors.find((item) => item.id === providerId)
       ?.capabilities.episodePageSize ?? PAHE_PAGE_SIZE;
@@ -616,19 +651,7 @@ export default function StreamPlayer({
       .then(async ({ data: firstData, total, lastPage: providerLastPage }) => {
         if (cancelled) return;
         if (firstData.length === 0) {
-          // Session expired or failed to load. Redirect back to Anime page to
-          // refresh the session — but never hijack navigation while minimized;
-          // in mini mode just surface the error on the card.
-          const id = Number(params.get("animeId") ?? 0);
-          if (id > 0) {
-            if (!minimizedRef.current) {
-              navigate(`/anime/${id}`, { replace: true });
-            } else {
-              setStreamError("Session expired — tap to reopen this show.");
-              setLoadingEps(false);
-            }
-            return;
-          }
+          throw new Error("This provider returned no episodes. Retry or choose another provider.");
         }
         if (total) setTotalEpisodes(total);
 
@@ -647,6 +670,7 @@ export default function StreamPlayer({
         if (firstProviderPage > 1) {
           try { page1Data = (await fetchProviderPage(1)).data; } catch { /* keep firstData */ }
         }
+        if (cancelled) return;
         if (page1Data.length > 0) {
           const sortedPage1 = [...page1Data].sort((a: any, b: any) => {
             const aNum = a.episodeNumber ?? a.episode ?? 0;
@@ -744,7 +768,11 @@ export default function StreamPlayer({
                 playEpisode(ep, animeSession);
               }
             }
-          }).catch((err) => console.warn("[provider] background episode load failed", err));
+          }).catch((err) => {
+            if (cancelled) return;
+            console.warn("[provider] background episode load failed", err);
+            if (!currentEpRef.current) setStreamError(err.message ?? "Unable to load the remaining episodes. Retry or choose another provider.");
+          });
         } else {
           // No more pages to load — check if we have a pending auto-play from state
           if (pendingAutoPlayEpNumRef.current) {
@@ -756,11 +784,16 @@ export default function StreamPlayer({
           }
         }
       })
-      .catch((e) => { if (!cancelled) console.warn("[provider] episode load failed", e); })
+      .catch((e) => {
+        if (cancelled) return;
+        episodeLoadFailedRef.current = true;
+        setStreamError(providerPlaybackErrorMessage(e, "Unable to load episodes. Retry or choose another provider."));
+        setLoadingStream(false);
+      })
       .finally(() => { if (!cancelled) setLoadingEps(false); });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [animeSession, rangeStart, fetchProviderPage, providerDescriptors, providerId]);
+  }, [animeSession, rangeStart, fetchProviderPage, providerDescriptors, providerId, episodeReloadRevision]);
 
   // Reset cache when anime or provider changes
   useEffect(() => {
@@ -784,9 +817,23 @@ export default function StreamPlayer({
   // network request through the native OkHttp fetchUrl plugin method, which sends
   // proper Referer/Cookie headers and is not subject to browser CORS enforcement.
 
+  function nextAvailableLinkIndex(after: number): number {
+    const items = linksRef.current;
+    const activeAudio = items[after]?.audio;
+    for (let offset = 1; offset < items.length; offset++) {
+      const index = (after + offset) % items.length;
+      const candidate = items[index];
+      if (activeAudio && candidate?.audio !== activeAudio) continue;
+      if (!failedLinkIdsRef.current.has(streamLinkKey(candidate))) return index;
+    }
+    return -1;
+  }
+
   function attachStream(url: string, subtitles?: any[], startPos?: number) {
     const video = videoRef.current;
     if (!video) return;
+    const request = playbackRequestsRef.current.current();
+    const isCurrent = () => playbackRequestsRef.current.isCurrent(request, playbackContextRef.current);
     currentStreamUrlRef.current = url;
 
     setStreamError(null);
@@ -859,6 +906,7 @@ export default function StreamPlayer({
             : window.api.pahe.fetchUrl!(sub.file, false, subHdrs);
           fetchSub
             .then((result) => {
+              if (!isCurrent() || track.parentNode !== video) return;
               // A downloaded episode may have no subtitle file (e.g. hard-subbed
               // AnimePahe) — drop the empty track instead of showing a blank entry.
               if (local && (result.status !== 200 || !result.data || !result.data.includes("WEBVTT"))) {
@@ -871,6 +919,7 @@ export default function StreamPlayer({
               try { track.track.mode = subtitlesEnabled ? "showing" : "hidden"; } catch (e) {}
             })
             .catch((err) => {
+              if (!isCurrent() || track.parentNode !== video) return;
               console.error("[Subtitles] Failed to fetch subtitle file:", err, "url=", sub.file);
               if (local) { try { video.removeChild(track); } catch (e) {} return; }
               track.src = sub.file;
@@ -891,6 +940,7 @@ export default function StreamPlayer({
 
       // Defer track mode settings to a safer timeout to override async browser state resets
       setTimeout(() => {
+        if (!isCurrent()) return;
         const tracks = video.textTracks;
         console.log(`[Subtitles] Safely initialized track modes for ${tracks.length} tracks to: ${subtitlesEnabled ? "showing" : "hidden"}`);
         let firstCustomShown = false;
@@ -920,7 +970,7 @@ export default function StreamPlayer({
   function buildHls(
     url: string,
     video: HTMLVideoElement,
-    opts: { worker: boolean; startLevel: number; attempt: number; startPosition?: number },
+    opts: { worker: boolean; startLevel: number; attempt: number; startPosition?: number; recovery?: HlsRecoveryBudget },
   ) {
     if (hlsRef.current) {
       hlsRef.current.destroy();
@@ -950,10 +1000,13 @@ export default function StreamPlayer({
     }
     const hls = new Hls(hlsConfig as any);
     hlsRef.current = hls;
+    const request = playbackRequestsRef.current.current();
+    const isActive = () => hlsRef.current === hls
+      && playbackRequestsRef.current.isCurrent(request, playbackContextRef.current);
 
     // Fatal network errors (cold manifest/segment fetch, CDN warm-up race) are
     // usually transient — retry via hls.startLoad() before surfacing an error.
-    let networkRetries = 0;
+    const recovery = opts.recovery ?? new HlsRecoveryBudget();
 
     hls.on(Hls.Events.BUFFER_CODECS, (_e, data) => {
       const audioCodec = (data as any).audio?.codec ?? "";
@@ -963,10 +1016,8 @@ export default function StreamPlayer({
       }
     });
 
-    hls.loadSource(url);
-    hls.attachMedia(video);
-
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      if (!isActive()) return;
       console.log('[HLS] MANIFEST_PARSED — starting playback');
       
       // Extract available HLS qualities
@@ -992,57 +1043,89 @@ export default function StreamPlayer({
     });
 
     hls.on(Hls.Events.ERROR, (_e, data) => {
-      const errInfo = `type=${data.type} details=${data.details} fatal=${data.fatal} url=${(data as any).url ?? (data as any).frag?.url ?? ''}`;
-      console.error('[HLS ERROR]', errInfo, data);
+      if (!isActive()) return;
+      const errInfo = `type=${data.type} details=${data.details} fatal=${data.fatal}`;
+      console.error('[HLS ERROR]', errInfo);
       if (!data.fatal) return;
 
       if (data.details === Hls.ErrorDetails.BUFFER_ADD_CODEC_ERROR) {
-        if (opts.attempt === 1) {
-          buildHls(url, video, { worker: false, startLevel: -1, attempt: 2 });
-          return;
-        }
-        if (opts.attempt === 2) {
-          buildHls(url, video, { worker: false, startLevel: 0, attempt: 3 });
+        if (opts.attempt < 3) {
+          pendingSeekRef.current = capturePlaybackPosition(video.currentTime, pendingSeekRef.current);
+          buildHls(url, video, {
+            worker: false,
+            startLevel: opts.attempt === 1 ? -1 : 0,
+            attempt: opts.attempt + 1,
+            recovery,
+          });
           return;
         }
       }
 
-      if (data.type === Hls.ErrorTypes.MEDIA_ERROR && opts.attempt < 3) {
+      if (data.type === Hls.ErrorTypes.MEDIA_ERROR && recovery.nextMediaRetry() !== null) {
         hls.recoverMediaError();
         return;
       }
 
       // Transient network error — retry the load a few times before giving up.
-      if (data.type === Hls.ErrorTypes.NETWORK_ERROR && networkRetries < 3) {
-        networkRetries++;
-        console.warn(`[HLS] network error (${data.details}); retry ${networkRetries}/3`);
-        setTimeout(() => { try { hls.startLoad(); } catch { /* destroyed */ } }, 800 * networkRetries);
+      if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+        const retry = recovery.nextNetworkRetry();
+        if (retry !== null) {
+          console.warn(`[HLS] network error (${data.details}); retry ${retry}/3`);
+          setTimeout(() => { if (isActive() && !streamErrorRef.current) hls.startLoad(); }, 800 * retry);
+          return;
+        }
+      }
+
+      // A provider may expose several independent servers. Exhaust those
+      // lazily before switching the whole show to another provider.
+      const failedIndex = selectedLinkRef.current;
+      const failedLink = linksRef.current[failedIndex];
+      if (failedLink) failedLinkIdsRef.current.add(streamLinkKey(failedLink));
+      const nextLink = nextAvailableLinkIndex(failedIndex);
+      if (nextLink >= 0) {
+        setFallbackNotice(`${failedLink?.quality ?? "Stream"} unavailable — trying ${linksRef.current[nextLink]?.quality ?? "another server"}…`);
+        void changeQualityRef.current(nextLink, video.currentTime, true);
         return;
       }
 
-      // Stream is dead on this provider — try the next one before giving up.
+      // Every server on this provider failed — try the next provider.
       if (fallbackRef.current(currentEpRef.current?.episodeNumber)) return;
       setStreamError(`HLS error: ${data.details} (${data.type})`);
       setLoadingStream(false);
     });
+    // Register listeners first, including for an immediately cached manifest.
+    hls.loadSource(url);
+    hls.attachMedia(video);
   }
 
   // ── Playback ───────────────────────────────────────────────────────────────
 
-  const loadingStreamRef = useRef(false);
-
   const playEpisode = useCallback(
     async (ep: any, session = animeSession, resumePos?: number) => {
+      if (playbackContextRef.current !== playbackContextKey) return;
       if (loadingStreamRef.current && (currentEpRef.current?.session ?? currentEpRef.current?.id) === (ep.session ?? ep.id)) return;
+      const request = playbackRequestsRef.current.begin(playbackContextKey);
+      const isCurrent = () => playbackRequestsRef.current.isCurrent(request, playbackContextRef.current);
+      const animeId = effectiveAnimeIdRef.current;
+      const switchResume = providerResumeRef.current;
+      const matchesSwitch = switchResume?.animeIdentity === animeIdentity
+        && switchResume.providerId === providerId && switchResume.session === session
+        && switchResume.episode === ep.episodeNumber;
+      const explicitResume = resumePos ?? (matchesSwitch ? switchResume.positionSec : undefined);
+      if (matchesSwitch) providerResumeRef.current = null;
       resetPlayer();
+      pendingSeekRef.current = chooseResumePosition(explicitResume, null);
+      failedLinkIdsRef.current.clear();
       loadingStreamRef.current = true;
       setCurrentEp(ep);
+      currentEpRef.current = ep;
       setStreamError(null);
       setLoadingStream(true);
       setDuration(0);
       setLinks([]);
+      linksRef.current = [];
       
-      const epKey = String(ep.session ?? ep.id);
+      const epKey = `${providerId}:${session}:${String(ep.session ?? ep.id)}`;
       // The connector describes whether these are quality or subtitle-type
       // variants; the player only applies the generic preference policy.
       const descriptor = providerDescriptors.find((item) => item.id === providerId);
@@ -1057,16 +1140,18 @@ export default function StreamPlayer({
         // links fetch, local saved-progress, and the cloud's latest position for
         // this episode all in parallel (the remote pull adds no extra latency).
         const [fetchedLinks, savedProgress, remoteProgress] = await Promise.all([
-          linksCacheRef.current.get(epKey) ?? providerClient.links(providerId, ep.session ?? ep.id, animeSession),
-          window.api.progress.get(effectiveAnimeIdRef.current, ep.episodeNumber).catch(() => null),
-          pullRemoteProgress(effectiveAnimeIdRef.current, ep.episodeNumber).catch(() => null),
+          linksCacheRef.current.get(epKey) ?? providerClient.links(providerId, ep.session ?? ep.id, session),
+          window.api.progress.get(animeId, ep.episodeNumber).catch(() => null),
+          pullRemoteProgress(animeId, ep.episodeNumber).catch(() => null),
         ]);
+        if (!isCurrent()) return;
 
-        fetchSkipTimes(ep.episodeNumber).catch(() => {});
+        fetchSkipTimes(ep.episodeNumber, isCurrent).catch(() => {});
 
         if (!fetchedLinks.length) throw new Error("No stream links found for this episode");
         linksCacheRef.current.set(epKey, fetchedLinks);
         setLinks(fetchedLinks);
+        linksRef.current = fetchedLinks;
 
         // Resume from the freshest saved position across this device and the cloud
         // (the other device), so e.g. pausing on the tablet resumes here exactly —
@@ -1078,15 +1163,44 @@ export default function StreamPlayer({
         // We apply the resume seek in onCanPlay (after the video is ready) rather than
         // passing startPosition to hls.js — hls.js startPosition stalls on
         // AnimePahe CDN because it tries to fetch mid-stream segments cold.
-        pendingSeekRef.current = (resumePos != null && resumePos > 5)
-          ? resumePos
-          : freshest
-          ? freshest.positionSec
-          : null;
+        pendingSeekRef.current = chooseResumePosition(explicitResume, freshest?.positionSec ?? null);
 
-        const bestIdx = pickBestIdx(fetchedLinks);
+        const preferredIdx = pickBestIdx(fetchedLinks);
+        const preferredAudio = fetchedLinks[preferredIdx]?.audio;
+        const candidateIndices = [
+          preferredIdx,
+          ...fetchedLinks
+            .map((_link: StreamLink, index: number) => index)
+            .filter((index: number) => index !== preferredIdx
+              && (!preferredAudio || fetchedLinks[index]?.audio === preferredAudio)),
+        ];
+        let bestIdx = preferredIdx;
+        let resolved: Awaited<ReturnType<typeof providerClient.resolve>> | null = null;
+        let lastResolveError: unknown = null;
+        for (const candidate of candidateIndices) {
+          if (!isCurrent()) return;
+          const link = fetchedLinks[candidate];
+          try {
+            const next = await providerClient.resolve(providerId, link.id ?? link.kwik);
+            if (!isCurrent()) return;
+            if (!next.url) throw new Error("Resolved stream URL is empty");
+            bestIdx = candidate;
+            resolved = next;
+            break;
+          } catch (error) {
+            if (!isCurrent()) return;
+            if (requiresManualProviderRetry(error)) throw error;
+            lastResolveError = error;
+            failedLinkIdsRef.current.add(streamLinkKey(link));
+          }
+        }
+        if (!resolved) throw lastResolveError ?? new Error("Every stream server failed to resolve");
         setSelectedLink(bestIdx);
-        const { url, subtitles, intro, outro, referer } = await providerClient.resolve(providerId, fetchedLinks[bestIdx].id ?? fetchedLinks[bestIdx].kwik);
+        selectedLinkRef.current = bestIdx;
+        if (bestIdx !== preferredIdx) {
+          setFallbackNotice(`${fetchedLinks[preferredIdx]?.quality ?? "Preferred server"} unavailable — using ${fetchedLinks[bestIdx]?.quality ?? "backup server"}…`);
+        }
+        const { url, subtitles, intro, outro, referer } = resolved;
         refererRef.current = referer ?? null;
         if (!url) {
           throw new Error("Resolved stream URL is empty. The stream server may be down, or we failed to fetch it.");
@@ -1106,35 +1220,35 @@ export default function StreamPlayer({
         // as soon as the initial ~30-second buffer was consumed.
         const nextEp = episodesRef.current.find((e) => e.episodeNumber === ep.episodeNumber + 1);
         if (nextEp) {
-          const nextKey = String(nextEp.session ?? nextEp.id);
+          const nextKey = `${providerId}:${session}:${String(nextEp.session ?? nextEp.id)}`;
           const cached = linksCacheRef.current.get(nextKey);
           const warm = cached
             ? Promise.resolve(cached)
-            : providerClient.links(providerId, nextEp.session ?? nextEp.id, animeSession);
+            : providerClient.links(providerId, nextEp.session ?? nextEp.id, session);
           warm.then((nextLinks: any[]) => {
-            if (!nextLinks?.length) return;
+            if (!isCurrent() || !nextLinks?.length) return;
             linksCacheRef.current.set(nextKey, nextLinks);
           }).catch(() => {});
         }
       } catch (e: any) {
+        if (!isCurrent()) return;
         // Try the next provider before surfacing the error to the user.
-        if (fallbackRef.current(ep.episodeNumber)) {
-          loadingStreamRef.current = false;
+        if (!requiresManualProviderRetry(e) && fallbackRef.current(ep.episodeNumber)) {
           return;
         }
-        setStreamError(e.message ?? String(e));
+        setStreamError(providerPlaybackErrorMessage(e));
         setLoadingStream(false);
         setFallbackNotice(null);
       } finally {
-        loadingStreamRef.current = false;
+        if (isCurrent()) loadingStreamRef.current = false;
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [animeSession, autoPlay, providerDescriptors, providerId],
+    [animeSession, animeIdentity, playbackContextKey, autoPlay, providerDescriptors, providerId],
   );
 
   // Keep a live reference to playEpisode for the PiP-return hook (registered once).
-  useEffect(() => { playEpisodeRef.current = playEpisode; });
+  playEpisodeRef.current = playEpisode;
 
   // ── Provider switching + automatic fallback ─────────────────────────────────
   const providerLabel = useCallback(
@@ -1149,6 +1263,23 @@ export default function StreamPlayer({
       const pid = source.providerId || "animepahe";
       const targetEp =
         epNum ?? currentEpRef.current?.episodeNumber ?? currentEpRef.current?.episode ?? startEp;
+      const currentNumber = currentEpRef.current?.episodeNumber ?? currentEpRef.current?.episode;
+      const nextSession = String(source.id || source.session);
+      const retainedResume = providerResumeRef.current;
+      if (currentNumber === targetEp
+        || (retainedResume?.animeIdentity === animeIdentity && retainedResume.episode === targetEp)) {
+        // An unapplied seek, then the live playhead; an earlier switch's
+        // retained position only when nothing is loaded yet.
+        const position = capturePlaybackPosition(videoRef.current?.currentTime, pendingSeekRef.current)
+          || (retainedResume?.positionSec ?? 0);
+        providerResumeRef.current = {
+          animeIdentity, providerId: pid, session: nextSession,
+          episode: targetEp, positionSec: position,
+        };
+      }
+      playbackRequestsRef.current.invalidate();
+      loadingStreamRef.current = false;
+      resetPlayer();
       // Reset stream/episode state so the load effect performs a full reload.
       setCurrentEp(null);
       currentEpRef.current = null;
@@ -1161,12 +1292,12 @@ export default function StreamPlayer({
 
       const p = new URLSearchParams(params);
       p.set("providerId", pid);
-      p.set("session", source.id || source.session);
+      p.set("session", nextSession);
       if (targetEp) p.set("episode", String(targetEp));
       syncPlayerUrl(p);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [params, syncPlayerUrl, startEp],
+    [params, syncPlayerUrl, startEp, animeIdentity],
   );
 
   // After a stream fails, transparently try the next provider we haven't tried for
@@ -1197,37 +1328,62 @@ export default function StreamPlayer({
   );
   useEffect(() => { fallbackRef.current = attemptAutoFallback; });
 
-  async function changeQuality(idx: number) {
+  async function changeQuality(idx: number, resumeOverride?: number, automatic = false) {
+    if (playbackContextRef.current !== playbackContextKey) return;
     const link = linksRef.current[idx];
     if (!link) return;
+    const request = playbackRequestsRef.current.begin(playbackContextKey);
+    const isCurrent = () => playbackRequestsRef.current.isCurrent(request, playbackContextRef.current);
     // resetPlayer() clears the media element (and currentTime), so capture the
     // live playhead before switching quality or Anikoto subtitle type.
-    const resumePosition = videoRef.current?.currentTime ?? 0;
+    const resumePosition = resumeOverride ?? capturePlaybackPosition(videoRef.current?.currentTime, pendingSeekRef.current);
+    if (!automatic) failedLinkIdsRef.current.delete(streamLinkKey(link));
     setSelectedLink(idx);
+    selectedLinkRef.current = idx;
     const variant = streamVariant(link);
     if (variant) saveProviderVariantPreference(providerId, variant);
     setQualityOpen(false);
     setLoadingStream(true);
+    loadingStreamRef.current = true;
     setStreamError(null);
     resetPlayer();
+    pendingSeekRef.current = resumePosition;
     try {
       const { url, subtitles, referer } = await providerClient.resolve(providerId, link.id ?? link.kwik);
+      if (!isCurrent()) return;
       refererRef.current = referer ?? null;
       if (!url) {
         throw new Error("Resolved stream URL is empty. The stream server may be down, or we failed to fetch it.");
       }
       // Store the current position in pendingSeekRef so onCanPlay applies it
       // after the new stream is ready — same pattern as episode resume.
-      pendingSeekRef.current = resumePosition > 1 ? resumePosition : null;
+      pendingSeekRef.current = resumePosition > 0 ? resumePosition : null;
 
       const activeSubs = streamVariant(link) === "hard" ? [] : subtitles;
 
       attachStream(url, activeSubs);
     } catch (e: any) {
-      setStreamError(e.message ?? String(e));
+      if (!isCurrent()) return;
+      if (requiresManualProviderRetry(e)) {
+        setStreamError(providerPlaybackErrorMessage(e));
+        setLoadingStream(false);
+        return;
+      }
+      failedLinkIdsRef.current.add(streamLinkKey(link));
+      const nextLink = nextAvailableLinkIndex(idx);
+      if (nextLink >= 0) {
+        setFallbackNotice(`${link.quality ?? "Stream"} unavailable — trying ${linksRef.current[nextLink]?.quality ?? "another server"}…`);
+        await changeQualityRef.current(nextLink, resumePosition, true);
+        return;
+      }
+      if (fallbackRef.current(currentEpRef.current?.episodeNumber)) return;
+      setStreamError(providerPlaybackErrorMessage(e));
       setLoadingStream(false);
+    } finally {
+      if (isCurrent()) loadingStreamRef.current = false;
     }
   }
+  changeQualityRef.current = changeQuality;
 
   function changeHlsLevel(idx: number) {
     console.log('[changeHlsLevel] idx:', idx, 'hlsRef.current:', !!hlsRef.current);
@@ -1511,6 +1667,15 @@ export default function StreamPlayer({
         return;
       }
       if (err) {
+        const failedIndex = selectedLinkRef.current;
+        const failedLink = linksRef.current[failedIndex];
+        if (failedLink) failedLinkIdsRef.current.add(streamLinkKey(failedLink));
+        const nextLink = nextAvailableLinkIndex(failedIndex);
+        if (nextLink >= 0) {
+          setFallbackNotice(`${failedLink?.quality ?? "Stream"} unavailable — trying ${linksRef.current[nextLink]?.quality ?? "another server"}…`);
+          void changeQualityRef.current(nextLink, video.currentTime, true);
+          return;
+        }
         if (fallbackRef.current(currentEpRef.current?.episodeNumber)) return;
         setStreamError(`Video error: ${err.message || err.code}`);
       }
@@ -1556,11 +1721,23 @@ export default function StreamPlayer({
     let lastTime = -1;
     let stalledTicks = 0;
     let recovering = false;
+    let observedRevision = 0;
+    let recoveryTimer: ReturnType<typeof setTimeout> | null = null;
     const id = setInterval(() => {
       const video = videoRef.current;
       if (!video) return;
+      const request = playbackRequestsRef.current.current();
+      if ((request?.revision ?? 0) !== observedRevision) {
+        observedRevision = request?.revision ?? 0;
+        lastTime = video.currentTime;
+        stalledTicks = 0;
+        recovering = false;
+        if (recoveryTimer) { clearTimeout(recoveryTimer); recoveryTimer = null; }
+      }
       // Only watch when a stream should actively be playing.
       if (
+        !playbackRequestsRef.current.isCurrent(request, playbackContextRef.current) ||
+        streamErrorRef.current ||
         loadingStreamRef.current ||
         !currentEpRef.current ||
         video.paused ||
@@ -1611,9 +1788,12 @@ export default function StreamPlayer({
       }
       lastTime = video.currentTime;
       stalledTicks = 0;
-      setTimeout(() => { recovering = false; }, 1000);
+      recoveryTimer = setTimeout(() => { recovering = false; recoveryTimer = null; }, 1000);
     }, 1000);
-    return () => clearInterval(id);
+    return () => {
+      clearInterval(id);
+      if (recoveryTimer) clearTimeout(recoveryTimer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1625,6 +1805,7 @@ export default function StreamPlayer({
 
   useEffect(() => {
     return () => {
+      playbackRequestsRef.current.invalidate();
       resetPlayer();
       if (singleClickTimerRef.current) { clearTimeout(singleClickTimerRef.current); singleClickTimerRef.current = null; }
     };
@@ -1817,7 +1998,10 @@ export default function StreamPlayer({
       }}
       onRetry={() => {
         const episode = currentEpRef.current;
-        if (episode) playEpisodeRef.current?.(episode);
+        if (episode && !episodeLoadFailedRef.current) {
+          linksCacheRef.current.delete(`${providerId}:${animeSession}:${String(episode.session ?? episode.id)}`);
+          playEpisodeRef.current?.(episode);
+        } else setEpisodeReloadRevision((revision) => revision + 1);
       }}
       alternativeProviderLabel={altSource ? providerLabel(altSource.providerId || "animepahe") : undefined}
       onTryAlternative={altSource ? () => switchToProvider(altSource) : undefined}

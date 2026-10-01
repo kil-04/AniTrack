@@ -1,0 +1,7 @@
+{
+  "note": "Synthetic protocol fixture, not a captured catalogue or playback response",
+  "payload": { "streaming": {}, "providerOrder": [], "testLabel": "テスト" },
+  "syntheticKey": "00112233445566778899aabbccddeeff",
+  "gzipBase64url": "H4sIAAAAAAAACqtWKi4pSk3MzcxLV7KqrtVRKijKL8tMSS3yL0pJLVKyio7VUSpJLS7xSUxKzVGyUnrc3Pa4aefj5g6lWgB6cmZ4OwAAAA",
+  "xorGzipBase64url": "H5oqM0RVZneIkwHt5vPHtU3d7_8PAtTdJkz7keQXwTRMWA_Bax8vWtorIDUZjMS2LT_TeggfqyY6y9BnECtWlufyxD3hD2YN-v_SgMzd7g"
+}

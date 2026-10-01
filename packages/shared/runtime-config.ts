@@ -38,7 +38,7 @@ export const BUILTIN_RUNTIME_CONFIG: RuntimeConfig = {
   schemaVersion: 1,
   revision: 0,
   issuedAt: "2026-08-17T00:00:00.000Z",
-  providerOrder: ["anikoto", "animepahe"],
+  providerOrder: ["anikoto", "animepahe", "mkissa"],
   providers: {
     anikoto: {
       enabled: true,
@@ -93,6 +93,22 @@ export const BUILTIN_RUNTIME_CONFIG: RuntimeConfig = {
         resolutionAttribute: "data-resolution",
         audioAttribute: "data-audio",
       },
+    },
+    mkissa: {
+      // Shipped dark until catalogue, stream and seek probes pass on both
+      // maintained apps. A signed config can enable or kill-switch it later.
+      enabled: false,
+      baseUrls: ["https://mkissa.to", "https://api.mkissa.net"],
+      streamHostFragments: [
+        "allanime.day", "filelotion.fyi", "mp4upload.com", "ok.ru", "streamsb.net",
+      ],
+      mediaExtensions: [".m3u8", ".mp4", ".ts", ".m4s", ".vtt", ".key"],
+      routes: {
+        graphql: "/api",
+        authConfigs: "/authconfigs",
+        cryptoBootstrap: "/client-crypto/v1/bootstrap",
+      },
+      selectors: {},
     },
   },
   features: {

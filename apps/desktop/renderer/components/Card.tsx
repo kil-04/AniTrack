@@ -131,14 +131,14 @@ const Card = React.memo(function Card({ anime, progressPercent, episode, size }:
             
             {/* Anikoto-style corner badges */}
             {anime.averageScore != null && (
-              <div className="absolute top-2 right-2 z-[2] flex items-center gap-0.5 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-bold text-amber-300 backdrop-blur-sm">
+              <div className="absolute top-2 right-2 z-[2] flex items-center gap-0.5 rounded-md bg-black/75 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">
                 <Star size={9} fill="currentColor" />
                 {(anime.averageScore / 10).toFixed(1)}
               </div>
             )}
             <div className="absolute top-2 left-2 z-[2] flex flex-col items-start gap-1">
               {formatLabel(anime.format) && (
-                <span className="rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white/90 backdrop-blur-sm">
+                <span className="rounded-md bg-black/75 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white/90">
                   {formatLabel(anime.format)}
                 </span>
               )}
@@ -168,7 +168,7 @@ const Card = React.memo(function Card({ anime, progressPercent, episode, size }:
             
             {/* Play Icon Center Hover */}
             <div className="absolute inset-0 flex items-center justify-center opacity-0 scale-90 transition-all duration-300 group-hover:opacity-100 group-hover:scale-100">
-              <div className="rounded-full bg-white/20 p-3 text-white backdrop-blur-md border border-white/20 shadow-xl">
+              <div className="rounded-full bg-white/25 p-3 text-white border border-white/20 shadow-xl">
                 <Play size={24} fill="currentColor" className="ml-1" />
               </div>
             </div>

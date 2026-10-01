@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { Play } from "lucide-react";
 import { motion } from "framer-motion";
 import type { RecentEpisode } from "../../../../packages/shared/types";
+import { rejectOversizedImage, safeImageSrc } from "../lib/image-guard";
 
 function airedLabel(airingAt: number): string {
   const date = new Date(airingAt * 1000);
@@ -14,7 +15,7 @@ function airedLabel(airingAt: number): string {
 
 const LatestEpCard = React.memo(function LatestEpCard({ ep }: { ep: RecentEpisode }) {
   const anime = ep.anime;
-  const image = anime.bannerImage || anime.coverImage;
+  const image = safeImageSrc(anime.bannerImage, anime.coverImage);
   const [isHovered, setIsHovered] = useState(false);
   const cardRef = useRef<HTMLAnchorElement>(null);
   const [rect, setRect] = useState<DOMRect | null>(null);
@@ -65,7 +66,7 @@ const LatestEpCard = React.memo(function LatestEpCard({ ep }: { ep: RecentEpisod
           className="group relative block aspect-[16/9] w-full overflow-hidden rounded-lg bg-[#1b1b1b] transition-all duration-300 ease-out hover:z-10 hover:scale-110 hover:shadow-[0_12px_40px_rgb(0,0,0,0.8)] hover:shadow-[#e50914]/30 hover:ring-2 hover:ring-[#e50914]/50 outline-none"
         >
           {image ? (
-            <img src={image} alt={anime.title} className="h-full w-full object-cover opacity-80 transition-transform duration-500 group-hover:scale-105" loading="lazy" />
+            <img src={image} alt={anime.title} className="h-full w-full object-cover opacity-80 transition-transform duration-500 group-hover:scale-105" loading="lazy" onLoad={(event) => rejectOversizedImage(event, anime.coverImage)} />
           ) : (
             <div className="flex h-full w-full items-center justify-center bg-[#222222] text-xs text-white/30">No Image</div>
           )}
@@ -76,7 +77,7 @@ const LatestEpCard = React.memo(function LatestEpCard({ ep }: { ep: RecentEpisod
             <div className="mt-1 text-[10px] font-medium text-white/60">{airedLabel(ep.airingAt)}</div>
           </div>
           <div className="absolute inset-0 flex items-center justify-center opacity-0 scale-90 transition-all duration-300 group-hover:opacity-100 group-hover:scale-100">
-            <div className="rounded-full bg-white/20 p-2.5 text-white backdrop-blur-md border border-white/20 shadow-xl">
+            <div className="rounded-full bg-white/25 p-2.5 text-white border border-white/20 shadow-xl">
               <Play size={20} fill="currentColor" className="ml-0.5" />
             </div>
           </div>

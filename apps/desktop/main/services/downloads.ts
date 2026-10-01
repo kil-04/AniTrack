@@ -1,12 +1,13 @@
 import { app, net } from "electron";
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import type { DownloadItem } from "../../../../packages/shared/types";
 import { getRuntimeConfig } from "./remote-config";
 import {
   getAuthorizedPaheRequestHeaders,
-  type AuthorizedPaheRequestHeaders,
 } from "./providers/animepahe";
+import { getResolvedStreamAuthorization } from "./providers/stream-authorization";
 
 /**
  * Desktop (Electron) offline downloader — mirrors the Android AniTrackDownloader
@@ -51,9 +52,23 @@ function itemDir(id: string): string {
   return target;
 }
 
-const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
-const cancelled = new Set<string>();
-const running = new Set<string>();
+interface DownloadJob {
+  controller: AbortController;
+  removed: boolean;
+}
+const running = new Map<string, DownloadJob>();
+const REQUEST_TIMEOUT_MS = 30_000;
+const MAX_PLAYLIST_BYTES = 2 * 1024 * 1024;
+const MAX_ASSET_BYTES = 32 * 1024 * 1024;
+const MAX_DOWNLOAD_BYTES = 10 * 1024 * 1024 * 1024;
+const MAX_ASSETS = 20_000;
+// Since 429 is terminal, stay under CDN rate limits: an Anikoto CDN returned
+// 429 (Retry-After: 10) after ~100 requests in 4 s with six workers, while two
+// workers completed a 314-segment episode without one (1 Oct 2026).
+const DOWNLOAD_WORKERS = 2;
+
+class DownloadTransportError extends Error {}
+class DownloadStoppedError extends Error {}
 
 export interface StartOpts {
   id: string; animeId: number; episode: number; title: string; coverUrl?: string | null;
@@ -65,13 +80,14 @@ export interface StartOpts {
 
 export function startDownload(opts: StartOpts): void {
   assertStartOpts(opts);
+  if (running.has(opts.id)) return;
   if (!getRuntimeConfig().features.downloads) {
     emit(opts, "failed", 0, 0, 0, 0, "Downloads are temporarily disabled by signed automation rules.");
     return;
   }
-  if (running.has(opts.id)) return;
-  cancelled.delete(opts.id);
-  void runDownload(opts);
+  const job: DownloadJob = { controller: new AbortController(), removed: false };
+  running.set(opts.id, job);
+  void runDownload(opts, job);
 }
 
 export function listDownloads(): { items: DownloadItem[] } {
@@ -104,7 +120,11 @@ export function listDownloads(): { items: DownloadItem[] } {
 
 export function removeDownload(id: string): void {
   assertDownloadId(id);
-  cancelled.add(id);
+  const job = running.get(id);
+  if (job) {
+    job.removed = true;
+    job.controller.abort();
+  }
   try { fs.rmSync(itemDir(id), { recursive: true, force: true }); } catch { /* ignore */ }
 }
 
@@ -150,6 +170,7 @@ function assertHttpUrl(value: unknown, name: string): void {
 // ── Worker ──────────────────────────────────────────────────────────────────
 
 function emit(o: StartOpts, status: DownloadItem["status"], progress: number, done: number, total: number, sizeBytes: number, error?: string) {
+  if (running.get(o.id)?.removed) return;
   const item: DownloadItem = {
     id: o.id, animeId: o.animeId, episode: o.episode, title: o.title, coverUrl: o.coverUrl ?? null,
     providerId: o.providerId, status, progress, doneSegments: done, totalSegments: total, sizeBytes,
@@ -166,51 +187,49 @@ function emit(o: StartOpts, status: DownloadItem["status"], progress: number, do
   emitProgress(item);
 }
 
-async function runDownload(o: StartOpts): Promise<void> {
+async function runDownload(o: StartOpts, job: DownloadJob): Promise<void> {
   const dir = itemDir(o.id);
-  running.add(o.id);
   try {
+    assertJobActive(job);
     fs.mkdirSync(dir, { recursive: true });
     emit(o, "downloading", 0, 0, 0, 0);
-    const paheAuthorization = o.providerId === "animepahe"
-      ? getAuthorizedPaheRequestHeaders(o.hlsUrl)
-      : null;
-    if (o.providerId === "animepahe" && (!paheAuthorization || !paheAuthorization.cookie)) {
-      throw new Error("AnimePahe stream authorization expired. Retry to resolve a fresh stream.");
+    if (o.providerId === "animepahe" && !getResolvedStreamAuthorization(o.hlsUrl)
+      && !getAuthorizedPaheRequestHeaders(o.hlsUrl)) {
+      throw new DownloadTransportError("AnimePahe stream authorization expired. Retry to resolve a fresh stream.");
     }
-    const ref = o.referer && o.referer.length
-      ? o.referer.replace(/\/$/, "")
-      : paheAuthorization?.referer ?? "";
 
-    let playlistUrl = o.hlsUrl;
-    let playlist = await httpGetText(playlistUrl, ref, paheAuthorization);
+    let received = await httpGetText(o.hlsUrl, o.providerId, job);
+    let playlistUrl = received.url;
+    let playlist = received.text;
     // Some providers return a master playlist whose selected rendition is
     // itself another master. Resolve a bounded chain instead of accidentally
     // downloading the nested .m3u8 as though it were a video segment.
     for (let depth = 0; playlist.includes("#EXT-X-STREAM-INF"); depth++) {
-      if (depth >= 4) throw new Error("HLS playlist nesting is too deep");
+      if (depth >= 4) throw new DownloadTransportError("HLS playlist nesting is too deep");
       const variant = pickVariant(playlist, playlistUrl);
-      if (!variant) throw new Error("HLS master playlist had no playable variant");
-      playlistUrl = variant;
-      playlist = await httpGetText(playlistUrl, ref, paheAuthorization);
+      if (!variant) throw new DownloadTransportError("HLS master playlist had no playable variant");
+      received = await httpGetText(variant, o.providerId, job);
+      playlistUrl = received.url;
+      playlist = received.text;
     }
-    if (!playlist.includes("#EXTM3U")) throw new Error("Stream response was not an HLS playlist");
+    if (!playlist.includes("#EXTM3U")) throw new DownloadTransportError("Stream response was not an HLS playlist");
 
     const base = playlistUrl.slice(0, playlistUrl.lastIndexOf("/") + 1);
     const out: string[] = [];
-    const toDownload: { url: string; file: string }[] = [];
+    const toDownload: { url: string; file: string; maxBytes: number }[] = [];
     const localByUrl = new Map<string, string>();
     let seg = 0, key = 0, init = 0;
     const queueAsset = (url: string, prefix: "seg" | "key" | "init", fallbackExt: string): string => {
       const absolute = absolutize(url, base);
       const existing = localByUrl.get(absolute);
       if (existing) return existing;
+      if (toDownload.length >= MAX_ASSETS) throw new DownloadTransportError("This playlist contains too many media files.");
       const sequence = prefix === "seg" ? seg++ : prefix === "key" ? key++ : init++;
       const width = prefix === "seg" ? 5 : 2;
       const ext = safeMediaExtension(absolute, fallbackExt);
       const name = `${prefix}${String(sequence).padStart(width, "0")}${ext}`;
       localByUrl.set(absolute, name);
-      toDownload.push({ url: absolute, file: path.join(dir, name) });
+      toDownload.push({ url: absolute, file: path.join(dir, name), maxBytes: prefix === "key" ? 64 * 1024 : MAX_ASSET_BYTES });
       return name;
     };
     for (const raw of playlist.split("\n")) {
@@ -232,91 +251,259 @@ async function runDownload(o: StartOpts): Promise<void> {
         out.push(name);
       } else out.push(line);
     }
-    if (!toDownload.length) throw new Error("Playlist had no segments");
+    if (!toDownload.length) throw new DownloadTransportError("Playlist had no segments");
+    assertJobActive(job);
+    const plan = createHash("sha256");
+    for (const asset of toDownload) plan.update(`${asset.url}\0${path.basename(asset.file)}\0`);
+    const fingerprint = plan.digest("hex");
+    const planFile = path.join(dir, "download.plan");
+    const previousPlan = fs.existsSync(planFile) ? fs.readFileSync(planFile, "utf8") : "";
+    const resumeAllowed = previousPlan === fingerprint;
+    // A changed plan overwrites numbered assets through .part files. Mark it
+    // incomplete first, so a later retry cannot reuse old files left behind
+    // when only some replacement segments finished before a failure.
+    if (!resumeAllowed) fs.writeFileSync(planFile, "incomplete");
     fs.writeFileSync(path.join(dir, "index.m3u8"), out.join("\n"));
 
     const total = toDownload.length;
     let done = 0;
-    // 6-way concurrency with 429 backoff (mirrors the Android downloader).
+    // Drain every worker after failure so no old job can keep writing files.
     let idx = 0;
+    let downloadedBytes = 0;
     async function worker() {
       while (idx < toDownload.length) {
-        if (cancelled.has(o.id)) throw new Error("cancelled");
+        assertJobActive(job);
         const d = toDownload[idx++];
-        await httpDownloadToFile(d.url, d.file, ref, paheAuthorization);
+        downloadedBytes += await httpDownloadToFile(d.url, d.file, o.providerId, job, d.maxBytes, resumeAllowed);
+        assertJobActive(job);
+        if (downloadedBytes > MAX_DOWNLOAD_BYTES) throw new DownloadTransportError("This download exceeded the supported size limit.");
         done++;
         if (done % 4 === 0 || done === total) emit(o, "downloading", Math.floor((done * 100) / total), done, total, 0);
       }
     }
-    await Promise.all(Array.from({ length: 6 }, () => worker()));
+    const workers = Array.from({ length: DOWNLOAD_WORKERS }, () => worker());
+    try {
+      await Promise.all(workers);
+    } catch (error) {
+      job.controller.abort();
+      await Promise.allSettled(workers);
+      throw error;
+    }
+    assertJobActive(job);
+    fs.writeFileSync(planFile, fingerprint);
 
     if (o.subtitleUrl) {
-      try { await httpDownloadToFile(o.subtitleUrl, path.join(dir, "subs.vtt"), ref, paheAuthorization); } catch { /* best-effort */ }
+      try { await httpDownloadToFile(o.subtitleUrl, path.join(dir, "subs.vtt"), o.providerId, job, MAX_PLAYLIST_BYTES, resumeAllowed); } catch { /* best-effort */ }
     }
 
+    assertJobActive(job);
     let sizeBytes = 0;
     try { for (const f of fs.readdirSync(dir)) sizeBytes += fs.statSync(path.join(dir, f)).size; } catch { /* ignore */ }
     emit(o, "done", 100, total, total, sizeBytes);
-  } catch (e: any) {
-    if (cancelled.has(o.id)) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } }
-    else emit(o, "failed", 0, 0, 0, 0, e?.message ?? "download failed");
+  } catch (error: unknown) {
+    if (job.removed) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } }
+    else emit(o, "failed", 0, 0, 0, 0, downloadFailureMessage(error));
   } finally {
-    running.delete(o.id);
+    if (running.get(o.id) === job) running.delete(o.id);
   }
 }
 
 // ── HTTP helpers ──────────────────────────────────────────────────────────────
 
-function reqHeaders(url: string, ref: string, paheAuthorization: AuthorizedPaheRequestHeaders | null): Record<string, string> {
-  const h: Record<string, string> = { "User-Agent": UA };
-  if (ref) { h["Referer"] = ref + "/"; h["Origin"] = ref; }
-  if (paheAuthorization) {
-    const host = new URL(url).hostname.toLowerCase();
-    if (host === paheAuthorization.host) {
-      h["Referer"] = paheAuthorization.referer + "/";
-      h["Origin"] = paheAuthorization.referer;
-      if (paheAuthorization.cookie) h["Cookie"] = paheAuthorization.cookie;
+function reqHeaders(url: string, providerId: string): Record<string, string> {
+  const authorized = getResolvedStreamAuthorization(url);
+  if (authorized) return { ...authorized.headers };
+  const pahe = providerId === "animepahe" ? getAuthorizedPaheRequestHeaders(url) : null;
+  if (!pahe) return {};
+  const headers: Record<string, string> = {};
+  if (pahe.referer) {
+    headers.Referer = pahe.referer.replace(/\/$/, "") + "/";
+    headers.Origin = new URL(pahe.referer).origin;
+  }
+  if (pahe.cookie) headers.Cookie = pahe.cookie;
+  return headers;
+}
+
+function assertJobActive(job: DownloadJob): void {
+  if (job.removed || job.controller.signal.aborted) throw new DownloadStoppedError("Download stopped.");
+}
+
+function downloadFailureMessage(error: unknown): string {
+  if (error instanceof DownloadTransportError) return error.message;
+  if (error && typeof error === "object" && "code" in error) {
+    if (error.code === "ENOSPC") return "There is not enough free disk space for this download.";
+    if (error.code === "EACCES" || error.code === "EPERM") return "AniTrack could not write the download files.";
+  }
+  return "A network or storage error interrupted the download. Retry to resolve a fresh stream.";
+}
+
+export function downloadRetryDelay(retryAfter: string | null, attempt: number): number {
+  const seconds = Number(retryAfter);
+  return Number.isFinite(seconds) && seconds > 0
+    ? Math.min(5000, seconds * 1000)
+    : Math.min(5000, 400 * 2 ** Math.max(0, attempt));
+}
+
+function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(new DownloadStoppedError("Download stopped."));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new DownloadStoppedError("Download stopped."));
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
+
+function retryWait(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) { reject(new DownloadStoppedError("Download stopped.")); return; }
+    const onAbort = () => { clearTimeout(timer); reject(new DownloadStoppedError("Download stopped.")); };
+    const timer = setTimeout(() => { signal.removeEventListener("abort", onAbort); resolve(); }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function downloadMediaUrl(raw: string): string {
+  let url: URL;
+  try { url = new URL(raw); } catch { throw new DownloadTransportError("The download returned an invalid media address."); }
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  const ipv4 = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(host)?.slice(1).map(Number);
+  const local = host === "localhost" || /\.(?:localhost|local|internal)$/.test(host)
+    || (ipv4 && (ipv4[0] === 0 || ipv4[0] === 10 || ipv4[0] === 127 || ipv4[0] >= 224
+      || (ipv4[0] === 100 && ipv4[1] >= 64 && ipv4[1] <= 127)
+      || (ipv4[0] === 169 && ipv4[1] === 254)
+      || (ipv4[0] === 172 && ipv4[1] >= 16 && ipv4[1] <= 31)
+      || (ipv4[0] === 192 && (ipv4[1] === 0 || ipv4[1] === 168))
+      || (ipv4[0] === 198 && (ipv4[1] === 18 || ipv4[1] === 19))))
+    || (host.includes(":") && (/^(?:fc|fd|fe[89ab])/i.test(host) || host === "::" || host === "::1" || host.startsWith("::ffff:")));
+  if (url.protocol !== "https:" || url.username || url.password || local) {
+    throw new DownloadTransportError("The download returned an unsafe media address.");
+  }
+  return url.toString();
+}
+
+async function responseBytes(response: Response, maxBytes: number, signal: AbortSignal): Promise<Buffer> {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    void response.body?.cancel().catch(() => {});
+    throw new DownloadTransportError("A download response exceeded the supported size limit.");
+  }
+  if (!response.body) return Buffer.alloc(0);
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await abortable(reader.read(), signal);
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) throw new DownloadTransportError("A download response exceeded the supported size limit.");
+      chunks.push(Buffer.from(value));
+    }
+    return Buffer.concat(chunks, size);
+  } finally {
+    void reader.cancel().catch(() => {});
+    try { reader.releaseLock(); } catch { /* pending read was aborted */ }
+  }
+}
+
+async function readWithRetry(url: string, providerId: string, job: DownloadJob, maxBytes: number): Promise<{ bytes: Buffer; url: string; contentType: string }> {
+  for (let attempt = 0; ; attempt++) {
+    assertJobActive(job);
+    const controller = new AbortController();
+    let timedOut = false;
+    const abort = () => controller.abort();
+    job.controller.signal.addEventListener("abort", abort, { once: true });
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, REQUEST_TIMEOUT_MS);
+    try {
+      let requestUrl = downloadMediaUrl(url);
+      let response: Response;
+      for (let redirects = 0; ; redirects++) {
+        response = await abortable(net.fetch(requestUrl, {
+          headers: reqHeaders(requestUrl, providerId), signal: controller.signal,
+          redirect: "manual", credentials: "omit",
+        }), controller.signal);
+        if (![301, 302, 303, 307, 308].includes(response.status)) break;
+        void response.body?.cancel().catch(() => {});
+        const location = response.headers.get("location");
+        if (!location || redirects >= 3) throw new DownloadTransportError("The download returned too many redirects.");
+        requestUrl = downloadMediaUrl(new URL(location, requestUrl).toString());
+      }
+      if (response.ok) return {
+        bytes: await responseBytes(response, maxBytes, controller.signal), url: requestUrl,
+        contentType: response.headers.get("content-type") ?? "",
+      };
+      void response.body?.cancel().catch(() => {});
+      const retryable = response.status === 408 || (response.status >= 500 && response.status <= 599);
+      if (!retryable || attempt >= 3) throw new DownloadTransportError(`Download server returned HTTP ${response.status}. Retry manually or choose another provider.`);
+      await retryWait(downloadRetryDelay(response.headers.get("retry-after"), attempt), job.controller.signal);
+    } catch (error) {
+      if (timedOut && !job.controller.signal.aborted) throw new DownloadTransportError("A download request timed out. Retry to resolve a fresh stream.");
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      job.controller.signal.removeEventListener("abort", abort);
+      controller.abort();
     }
   }
-  return h;
 }
 
-async function execWithRetry(
-  url: string,
-  ref: string,
-  paheAuthorization: AuthorizedPaheRequestHeaders | null,
-  maxRetries = 6,
-): Promise<Response> {
-  let attempt = 0;
-  for (;;) {
-    const resp = await net.fetch(url, { headers: reqHeaders(url, ref, paheAuthorization) });
-    if (resp.ok) return resp;
-    const retryable = resp.status === 429 || resp.status === 408 || resp.status >= 500;
-    if (!retryable || attempt >= maxRetries) throw new Error(`HTTP ${resp.status} for ${url}`);
-    const ra = Number(resp.headers.get("retry-after"));
-    const backoff = isFinite(ra) && ra > 0 ? ra * 1000 : Math.min(5000, 400 * 2 ** attempt);
-    await new Promise((r) => setTimeout(r, backoff + Math.floor(Math.random() * 300)));
-    attempt++;
-  }
-}
-
-async function httpGetText(url: string, ref: string, paheAuthorization: AuthorizedPaheRequestHeaders | null): Promise<string> {
-  const resp = await execWithRetry(url, ref, paheAuthorization);
-  return resp.text();
+async function httpGetText(url: string, providerId: string, job: DownloadJob): Promise<{ text: string; url: string }> {
+  const result = await readWithRetry(url, providerId, job, MAX_PLAYLIST_BYTES);
+  return { text: result.bytes.toString("utf8"), url: result.url };
 }
 
 async function httpDownloadToFile(
   url: string,
   file: string,
-  ref: string,
-  paheAuthorization: AuthorizedPaheRequestHeaders | null,
-): Promise<void> {
-  if (fs.existsSync(file) && fs.statSync(file).size > 0) return; // resume: skip complete segments
-  const resp = await execWithRetry(url, ref, paheAuthorization);
-  const buf = Buffer.from(await resp.arrayBuffer());
+  providerId: string,
+  job: DownloadJob,
+  maxBytes: number,
+  resumeAllowed: boolean,
+): Promise<number> {
+  assertJobActive(job);
+  if (resumeAllowed && fs.existsSync(file) && fs.statSync(file).size > 0) return fs.statSync(file).size;
+  const { bytes: buf, contentType } = await readWithRetry(url, providerId, job, maxBytes);
+  assertJobActive(job);
+  assertDownloadedAsset(buf, contentType);
   const tmp = file + ".part";
   fs.writeFileSync(tmp, buf);
   fs.renameSync(tmp, file);
+  return buf.length;
+}
+
+const FMP4_BOX_TYPES = new Set(["ftyp", "styp", "moof", "moov", "sidx", "emsg", "prft"]);
+
+/** MPEG-TS: every leading 188-byte packet (at least two) carries the 0x47 sync byte. */
+function isTransportStream(bytes: Buffer): boolean {
+  if (bytes.length < 376) return false;
+  const packets = Math.min(8, Math.floor(bytes.length / 188));
+  for (let i = 0; i < packets; i++) if (bytes[i * 188] !== 0x47) return false;
+  return true;
+}
+
+/** True only for payloads whose bytes verifiably start as HLS media. */
+function hasMediaSignature(bytes: Buffer): boolean {
+  if (isTransportStream(bytes)) return true;
+  // fMP4 init/media segment: a sized ISO-BMFF box of a segment-level type.
+  if (bytes.length >= 8 && bytes.readUInt32BE(0) >= 8 && FMP4_BOX_TYPES.has(bytes.toString("latin1", 4, 8))) return true;
+  // Packed audio (AAC/MP3) segments begin with an ID3v2 timestamp tag.
+  return bytes.length >= 10 && bytes.toString("latin1", 0, 3) === "ID3" && bytes[3] >= 2 && bytes[3] <= 4;
+}
+
+function assertDownloadedAsset(bytes: Buffer, contentType: string): void {
+  if (!bytes.length) throw new DownloadTransportError("The download server returned an empty media file. Retry manually or choose another provider.");
+  // Some CDNs disguise MPEG-TS segments behind image/*, octet-stream or even
+  // text/html labels (the type follows a randomized file extension), so a
+  // verifiable media signature outranks the header. Otherwise reject known
+  // page types and recognizable error payloads.
+  if (hasMediaSignature(bytes)) return;
+  const pageType = /(?:text\/html|(?:application|text)\/(?:[a-z0-9.+-]*\+)?(?:json|xml))\b/i.test(contentType);
+  const prefix = bytes.subarray(0, 128).toString("utf8").replace(/^\uFEFF/, "").trimStart();
+  const pageBody = /^(?:<!doctype\s+html\b|<!--|<\?xml\b|<(?:html|head|body|title|meta|script|div|h[1-6]|p)\b|\{\s*"|\[\s*[{"])/i.test(prefix);
+  const errorBody = /^(?:access\s+denied|forbidden\b|unauthorized\b|not\s+found\b|rate\s+limit(?:ed)?\b|internal\s+server\s+error|service\s+unavailable|error\b)/i.test(prefix);
+  if (pageType || pageBody || errorBody) {
+    throw new DownloadTransportError("The download server returned an error page instead of media. Retry manually or choose another provider.");
+  }
 }
 
 function absolutize(uri: string, base: string): string {

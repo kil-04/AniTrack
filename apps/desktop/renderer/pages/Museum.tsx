@@ -5,6 +5,7 @@ import Card from "../components/Card";
 import type { AnimeMeta } from "../../../../packages/shared/types";
 import { buildMuseumExhibit } from "../../../../packages/shared/living-museum";
 import { animeEraForYear } from "../../../../packages/shared/time-machine";
+import { rejectOversizedImage, safeImageSrc } from "../lib/image-guard";
 
 export default function Museum() {
   const id = Number(useParams().id);
@@ -41,7 +42,7 @@ export default function Museum() {
   return (
     <div className="min-h-full bg-black pb-16">
       <section className="relative min-h-[520px] overflow-hidden border-b border-white/10">
-        {(anime.bannerImage || anime.coverImage) && <img src={anime.bannerImage || anime.coverImage || ""} alt="" className="absolute inset-0 h-full w-full object-cover opacity-35 blur-[1px]" />}
+        {safeImageSrc(anime.bannerImage, anime.coverImage) && <img src={safeImageSrc(anime.bannerImage, anime.coverImage)} alt="" className="absolute inset-0 h-full w-full object-cover opacity-35 blur-[1px]" onLoad={(event) => rejectOversizedImage(event, anime.coverImage)} />}
         <div className="absolute inset-0 bg-gradient-to-r from-black via-black/90 to-black/35" />
         <div className="absolute inset-0 bg-gradient-to-t from-black via-black/10 to-black/50" />
         <div className="relative mx-auto flex min-h-[520px] max-w-[1500px] items-end gap-8 px-6 py-12 lg:px-12">

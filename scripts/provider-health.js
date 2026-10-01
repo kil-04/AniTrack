@@ -128,18 +128,44 @@ function markdown(config, results) {
 async function main() {
   const config = readJsonFile(CONFIG_PATH, validateRemoteConfig, "automation/remote-config.json");
   const jobs = [];
-  if (config.providers.anikoto.enabled && config.features.anikotoStreaming) {
-    for (const base of config.providers.anikoto.baseUrls) jobs.push(probeAnikoto(config.providers.anikoto, base));
-  }
-  if (config.providers.animepahe.enabled && config.features.animepaheStreaming) {
-    for (const base of config.providers.animepahe.baseUrls) jobs.push(probeAnimePahe(config.providers.animepahe, base));
+  for (const provider of config.providerOrder) {
+    const providerConfig = config.providers[provider];
+    const featureEnabled = provider === "anikoto" ? config.features.anikotoStreaming
+      : provider === "animepahe" ? config.features.animepaheStreaming
+      : true;
+
+    if (!providerConfig.enabled || !featureEnabled) {
+      const reason = !providerConfig.enabled
+        ? "disabled in signed provider configuration; no request sent"
+        : "disabled by signed feature configuration; no request sent";
+      for (const base of providerConfig.baseUrls) {
+        jobs.push(Promise.resolve(result(provider, base, "disabled", reason)));
+      }
+      continue;
+    }
+
+    if (provider === "anikoto") {
+      for (const base of providerConfig.baseUrls) jobs.push(probeAnikoto(providerConfig, base));
+    } else if (provider === "animepahe") {
+      for (const base of providerConfig.baseUrls) jobs.push(probeAnimePahe(providerConfig, base));
+    } else {
+      for (const base of providerConfig.baseUrls) {
+        jobs.push(Promise.resolve(result(
+          provider,
+          base,
+          "failed",
+          "provider is enabled but has no reviewed automated health probe",
+        )));
+      }
+    }
   }
   const results = await Promise.all(jobs);
   const report = markdown(config, results);
   console.log(process.argv.includes("--json") ? JSON.stringify({ revision: config.revision, results }, null, 2) : report);
   if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, report + "\n");
 
-  const providerFailed = ["anikoto", "animepahe"].some((provider) => {
+  const providerFailed = config.providerOrder.some((provider) => {
+    if (!config.providers[provider].enabled) return false;
     const providerResults = results.filter((entry) => entry.provider === provider);
     return providerResults.length > 0 && providerResults.every((entry) => entry.state === "failed");
   });

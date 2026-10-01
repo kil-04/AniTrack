@@ -453,8 +453,18 @@ export default function Settings() {
           </p>
           <div className="mb-4 grid gap-2 text-sm sm:grid-cols-2">
             <div><span className="text-muted">Revision:</span> {automationStatus.revision} ({automationStatus.source})</div>
-            <div><span className="text-muted">Anikoto:</span> {automationStatus.config.providers.anikoto.baseUrls[0]}</div>
-            <div><span className="text-muted">AnimePahe:</span> {automationStatus.config.providers.animepahe.baseUrls[0]}</div>
+            {automationStatus.config.providerOrder.map((providerId) => {
+              const provider = automationStatus.config.providers[providerId];
+              const label = providerId === "animepahe"
+                ? "AnimePahe"
+                : providerId.charAt(0).toUpperCase() + providerId.slice(1);
+              return (
+                <div key={providerId}>
+                  <span className="text-muted">{label}:</span>{" "}
+                  {provider.enabled ? provider.baseUrls[0] : "Disabled until verified"}
+                </div>
+              );
+            })}
             <div>
               <span className="text-muted">Last checked:</span>{" "}
               {automationStatus.lastCheckedAt ? new Date(automationStatus.lastCheckedAt).toLocaleString() : "Not yet"}

@@ -28,7 +28,7 @@
     "android:next:test": "apps\\android\\gradlew.bat -p apps/android :app:testDebugUnitTest",
     "android:next:release": "node --env-file-if-exists=.env scripts/run-native-gradle.js :app:assembleRelease",
     "android:next:verify": "node scripts/android-release-common.js",
-    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/living-museum.test.mjs tests/match.test.mjs tests/provider-client.test.mjs tests/provider-registry.test.mjs tests/provider-search.test.mjs tests/recommendations.test.mjs tests/stream-authorization.test.mjs tests/taste-genome.test.mjs tests/time-machine.test.mjs tests/runtime-config.test.cjs",
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/anikoto-provider.test.mjs tests/anikoto-hls.test.mjs tests/downloads.test.mjs tests/electron-provider-smoke.test.cjs tests/anikoto-source.test.mjs tests/anikoto-transport.test.mjs tests/animepahe-session.test.mjs tests/desktop-player.test.mjs tests/living-museum.test.mjs tests/match.test.mjs tests/miruro-protocol.test.mjs tests/miruro-web-session.test.mjs tests/mkissa-provider.test.mjs tests/provider-client.test.mjs tests/provider-registry.test.mjs tests/provider-search.test.mjs tests/recommendations.test.mjs tests/stream-authorization.test.mjs tests/taste-genome.test.mjs tests/time-machine.test.mjs tests/runtime-config.test.cjs",
     "typecheck": "tsc -p apps/desktop/tsconfig.renderer.json --noEmit && tsc -p apps/desktop/tsconfig.main.json --noEmit",
     "legacy:capacitor:sync": "npm run build:vite && cd legacy/capacitor && npx cap sync android",
     "legacy:capacitor:open": "cd legacy/capacitor && npx cap open android",
@@ -75,7 +75,11 @@
       "dist-electron/**/*",
       "!node_modules/@capacitor/**",
       "!node_modules/@capacitor-community/**",
-      "!node_modules/**/android/**"
+      "!node_modules/**/android/**",
+      "!node_modules/{react,react-dom,react-router,react-router-dom,@remix-run,scheduler,loose-envify,js-tokens,zustand}/**",
+      "!node_modules/{framer-motion,motion-dom,motion-utils,lucide-react,hls.js}/**",
+      "!node_modules/{@stencil,jeep-sqlite,sql.js,localforage,lie,immediate,jszip,pako,setimmediate,browser-fs-access,tslib}/**",
+      "!node_modules/{core-util-is,inherits,isarray,process-nextick-args,util-deprecate}/**"
     ],
     "extraResources": [
       {

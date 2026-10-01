@@ -12,6 +12,7 @@ import DiscoverRow from "../components/DiscoverRow";
 import Top10Sidebar from "../components/Top10Sidebar";
 import RecommendationCard from "../components/RecommendationCard";
 import { providerClient } from "../lib/provider-api";
+import { rejectOversizedImage, safeImageSrc } from "../lib/image-guard";
 
 export default function Home() {
   const trending = useAppStore((s) => s.trending);
@@ -258,12 +259,13 @@ export default function Home() {
                     idx === heroIndex ||
                     idx === (heroIndex + 1) % heroItems.length ||
                     idx === (heroIndex - 1 + heroItems.length) % heroItems.length
-                      ? anime.bannerImage || anime.coverImage || undefined
+                      ? safeImageSrc(anime.bannerImage, anime.coverImage)
                       : undefined
                   }
                   loading={idx === heroIndex ? "eager" : "lazy"}
                   decoding="async"
                   fetchPriority={idx === heroIndex ? "high" : "low"}
+                  onLoad={(event) => rejectOversizedImage(event, anime.coverImage)}
                   className={`w-full h-full object-cover transition-transform duration-[20s] ${idx === heroIndex ? 'scale-110' : 'scale-100'}`}
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-[#000000] via-[#000000]/60 to-transparent" />

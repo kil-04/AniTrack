@@ -128,6 +128,12 @@ export function preferredStreamLinkIndex(
     const index = links.findIndex((link) => streamVariant(link) === preferredVariant);
     return index >= 0 ? index : 0;
   }
+  if (descriptor?.capabilities.streamVariants === "server") {
+    const index = links.findIndex((link) =>
+      streamVariant(link) === preferredVariant || link.quality === preferredVariant,
+    );
+    return index >= 0 ? index : 0;
+  }
   if (descriptor?.capabilities.streamVariants === "quality") {
     let bestIndex = 0;
     let bestScore = -1;

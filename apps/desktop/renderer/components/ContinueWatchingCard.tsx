@@ -168,7 +168,7 @@ const ContinueWatchingCard = React.memo(function ContinueWatchingCard({ item, pa
             if (!total) return null;
             const hasNew = total > item.episode;
             return (
-              <div className={`absolute right-2 top-2 rounded shadow-md px-2 py-1 text-[10px] font-bold tracking-widest backdrop-blur-md
+              <div className={`absolute right-2 top-2 rounded shadow-md px-2 py-1 text-[10px] font-bold tracking-widest
                 ${hasNew ? "bg-green-500 text-white" : "bg-black/60 text-white/50 border border-white/10"}`}>
                 {hasNew ? `EP ${total} ▲` : `EP ${total} ✓`}
               </div>
@@ -176,7 +176,7 @@ const ContinueWatchingCard = React.memo(function ContinueWatchingCard({ item, pa
           })()}
           
           <div className="absolute inset-0 flex items-center justify-center opacity-0 transition-all duration-300 group-hover:opacity-100 scale-90 group-hover:scale-100">
-            <div className="rounded-full bg-white/20 p-3 text-white shadow-xl backdrop-blur-md border border-white/20">
+            <div className="rounded-full bg-white/25 p-3 text-white shadow-xl border border-white/20">
               <Play size={24} fill="currentColor" className="ml-1" />
             </div>
           </div>

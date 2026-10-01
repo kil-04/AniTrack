@@ -35,7 +35,7 @@ export interface YouTubeControlsProps {
   isPiP: boolean;
   playbackRate: number;
   providerId?: string;
-  streamVariants?: "quality" | "subtitle-type";
+  streamVariants?: "quality" | "subtitle-type" | "server";
 
   hlsLevels?: any[];
   currentHlsLevel?: number;

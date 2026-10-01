@@ -2,13 +2,14 @@ import { Link } from "react-router-dom";
 import { Info, Play } from "lucide-react";
 import type { AnimeMeta } from "../../../../packages/shared/types";
 import { truncate } from "../lib/format";
+import { rejectOversizedImage, safeImageSrc } from "../lib/image-guard";
 
 interface Props {
   anime: AnimeMeta;
 }
 
 export default function HeroBanner({ anime }: Props) {
-  const bg = anime.bannerImage || anime.coverImage;
+  const bg = safeImageSrc(anime.bannerImage, anime.coverImage);
   return (
     <div className="relative h-[65vh] min-h-[460px] max-h-[700px] w-full overflow-hidden">
       {bg && (
@@ -17,6 +18,7 @@ export default function HeroBanner({ anime }: Props) {
           alt={anime.title}
           className="h-full w-full object-cover"
           loading="lazy"
+          onLoad={(event) => rejectOversizedImage(event, anime.coverImage)}
         />
       )}
       <div className="absolute inset-0 bg-gradient-to-t from-bg via-bg/40 to-transparent" />

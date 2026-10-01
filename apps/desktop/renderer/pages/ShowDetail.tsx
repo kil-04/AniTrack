@@ -7,6 +7,7 @@ import type { AnimeMeta, ListEntry, RelatedAnime, WatchStatus } from "../../../.
 import ProviderPanel from "../components/ProviderPanel";
 import WatchOrder from "../components/WatchOrder";
 import { useAppStore } from "../store/useAppStore";
+import { rejectOversizedImage, safeImageSrc } from "../lib/image-guard";
 
 const STATUS_OPTIONS: { value: WatchStatus; label: string }[] = [
   { value: "watching", label: "Watching" },
@@ -187,7 +188,7 @@ export default function ShowDetail() {
     await refreshList();
   }
 
-  const bannerSrc = anime.bannerImage || anime.coverImage || "";
+  const bannerSrc = safeImageSrc(anime.bannerImage, anime.coverImage) || "";
 
   return (
     <div className="relative pb-16">
@@ -195,7 +196,7 @@ export default function ShowDetail() {
       {/* Banner */}
       <div className="relative h-[32vh] min-h-[200px] w-full overflow-hidden">
         {bannerSrc && (
-          <img src={bannerSrc} alt="" className="h-full w-full object-cover object-top" />
+          <img src={bannerSrc} alt="" className="h-full w-full object-cover object-top" onLoad={(event) => rejectOversizedImage(event, anime.coverImage)} />
         )}
         <div className="absolute inset-0 bg-gradient-to-t from-[#000000] via-[#000000]/60 to-transparent" />
         <button

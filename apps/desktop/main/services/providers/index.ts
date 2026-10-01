@@ -2,6 +2,7 @@ import type { RuntimeFeatureFlags, RuntimeProviderConfig } from "../../../../../
 import { getRuntimeConfig } from "../remote-config";
 import { AnimePaheProvider } from "./animepahe";
 import { AnikotoProvider } from "./anikoto";
+import { MkissaProvider } from "./mkissa";
 import { ProviderRegistry } from "./registry";
 import type { StreamProvider } from "./types";
 
@@ -21,7 +22,7 @@ function providerEnabled(provider: StreamProvider): boolean {
 }
 
 export const providerManager = new ProviderRegistry(
-  [new AnimePaheProvider(), new AnikotoProvider()],
+  [new AnimePaheProvider(), new AnikotoProvider(), new MkissaProvider()],
   {
     order: () => getRuntimeConfig().providerOrder,
     isEnabled: providerEnabled,

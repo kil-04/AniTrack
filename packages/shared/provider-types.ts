@@ -58,6 +58,12 @@ export interface StreamData {
   outro?: ProviderSkipRange;
   /** Origin required by providers that enforce hotlink protection. */
   referer?: string;
+  /** Additional headers required for manifests and their media requests. */
+  requestHeaders?: Record<string, string>;
+  /** Whether authorization applies only to this URL or its stream directory. */
+  authorizationScope?: "exact" | "directory";
+  /** Allow the Electron renderer to consume this authorized media cross-origin. */
+  cors?: boolean;
 }
 
 export interface ExternalIds {
@@ -106,7 +112,7 @@ export interface ProviderCapabilities {
   downloads?: boolean;
   prefetch?: boolean;
   configurableBaseUrl?: boolean;
-  streamVariants?: "quality" | "subtitle-type";
+  streamVariants?: "quality" | "subtitle-type" | "server";
   /** Number of episodes returned by one connector page; defaults to 30. */
   episodePageSize?: number;
 }

@@ -13,7 +13,7 @@ export interface SettingsMenuProps {
   links: any[];
   selectedLink: number;
   providerId?: string;
-  streamVariants?: "quality" | "subtitle-type";
+  streamVariants?: "quality" | "subtitle-type" | "server";
   hlsLevels?: any[];
   currentHlsLevel?: number;
   playbackRate: number;

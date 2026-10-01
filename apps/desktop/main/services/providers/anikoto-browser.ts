@@ -1,10 +1,7 @@
-import { BrowserWindow, net, session } from "electron";
+import { BrowserWindow, session } from "electron";
 import type { StreamData } from "./types";
-import {
-  anikotoBaseUrl,
-  anikotoBases,
-  selectAnikotoBase,
-} from "./anikoto-config";
+import { anikotoBaseUrl } from "./anikoto-config";
+import { createAnikotoTransport } from "./anikoto-transport";
 
 // Origin of the player iframe that served the most-recently-resolved stream
 // (e.g. https://vidtube.site). The segment CDNs (mewstream.buzz, nekostream.site)
@@ -46,53 +43,37 @@ export function getAnikotoPlayerOriginForUrl(url: string): string {
   return mapped.origin;
 }
 
-let _anikotoWin: BrowserWindow | null = null;
-let _anikotoReady = false;
-let _anikotoReadyPromise: Promise<void> | null = null;
-let _anikotoTimeout: NodeJS.Timeout | null = null;
+interface AnikotoWindowState {
+  window: BrowserWindow;
+  base: string;
+  initialization: Promise<BrowserWindow> | null;
+  idleTimer: NodeJS.Timeout | null;
+}
+let currentWindow: AnikotoWindowState | null = null;
 
-function resetAnikotoWindow() {
-  if (_anikotoWin && !_anikotoWin.isDestroyed()) _anikotoWin.destroy();
-  _anikotoWin = null;
-  _anikotoReady = false;
-  _anikotoReadyPromise = null;
+function closeAnikotoWindow(state: AnikotoWindowState, destroy = true) {
+  if (state.idleTimer) clearTimeout(state.idleTimer);
+  state.idleTimer = null;
+  // A closed old window must never clear a replacement window's state.
+  if (currentWindow === state) currentWindow = null;
+  if (destroy && !state.window.isDestroyed()) state.window.destroy();
 }
 
-function activateAnikotoBase(base: string) {
-  if (selectAnikotoBase(base)) resetAnikotoWindow();
-}
-
-function resetAnikotoTimeout() {
-  if (_anikotoTimeout) {
-    clearTimeout(_anikotoTimeout);
-  }
-  _anikotoTimeout = setTimeout(() => {
-    if (_anikotoWin && !_anikotoWin.isDestroyed()) {
-      console.log("[Anikoto] Destroying idle prewarmed window to save memory");
-      _anikotoWin.destroy();
-    }
-    _anikotoWin = null;
-    _anikotoReady = false;
-    _anikotoReadyPromise = null;
-    _anikotoTimeout = null;
-  }, 120_000); // 2 minutes
+function resetAnikotoTimeout(state: AnikotoWindowState) {
+  if (state.idleTimer) clearTimeout(state.idleTimer);
+  state.idleTimer = setTimeout(() => closeAnikotoWindow(state), 120_000);
 }
 
 export function getAnikotoWindow(): Promise<BrowserWindow> {
-  const baseUrl = anikotoBaseUrl();
-  resetAnikotoTimeout();
-  if (_anikotoWin && !_anikotoWin.isDestroyed() && _anikotoReady) {
-    return Promise.resolve(_anikotoWin);
+  const base = anikotoBaseUrl();
+  if (currentWindow && (currentWindow.base !== base || currentWindow.window.isDestroyed())) {
+    closeAnikotoWindow(currentWindow);
   }
-  if (_anikotoReadyPromise && _anikotoWin && !_anikotoWin.isDestroyed()) {
-    return _anikotoReadyPromise.then(() => {
-      if (!_anikotoWin || _anikotoWin.isDestroyed()) throw new Error("Anikoto window closed during init");
-      return _anikotoWin;
-    });
+  if (currentWindow?.initialization) {
+    resetAnikotoTimeout(currentWindow);
+    return currentWindow.initialization;
   }
-
-  _anikotoReady = false;
-  _anikotoWin = new BrowserWindow({
+  const window = new BrowserWindow({
     show: false,
     width: 800,
     height: 600,
@@ -103,92 +84,40 @@ export function getAnikotoWindow(): Promise<BrowserWindow> {
     },
   });
 
-  _anikotoReadyPromise = new Promise<void>((resolve) => {
-    let resolved = false;
-    function done() {
-      if (resolved) return;
-      resolved = true;
-      _anikotoReady = true;
-      resolve();
+  const state: AnikotoWindowState = { window, base, initialization: null, idleTimer: null };
+  currentWindow = state;
+  state.initialization = new Promise<BrowserWindow>((resolve, reject) => {
+    let settled = false;
+    const timeout = setTimeout(() => finish(new Error("Anikoto homepage did not load in time")), 15_000);
+    function finish(error?: Error) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (error || currentWindow !== state || window.isDestroyed()) {
+        closeAnikotoWindow(state);
+        reject(error ?? new Error("Anikoto window closed during initialization"));
+      } else {
+        resolve(window);
+      }
     }
-    _anikotoWin!.webContents.on("did-finish-load", done);
-    setTimeout(done, 15_000);
-    _anikotoWin!.loadURL(baseUrl + "/");
-    _anikotoWin!.on("closed", () => {
-      _anikotoWin = null;
-      _anikotoReady = false;
-      _anikotoReadyPromise = null;
+    window.once("closed", () => {
+      closeAnikotoWindow(state, false);
+      finish(new Error("Anikoto window closed during initialization"));
     });
+    void window.loadURL(`${base}/`).then(
+      () => finish(),
+      () => finish(new Error("Unable to load Anikoto homepage")),
+    );
   });
-
-  return _anikotoReadyPromise.then(() => {
-    if (!_anikotoWin || _anikotoWin.isDestroyed()) throw new Error("Anikoto window closed during init");
-    return _anikotoWin;
-  });
+  resetAnikotoTimeout(state);
+  return state.initialization;
 }
 
 export function prewarmAnikoto(): void {
-  getAnikotoWindow().catch(() => {
-    /* ignore */
-  });
+  session.fromPartition("persist:anikoto");
 }
 
-export async function anikotoFetch(url: string, options: any = {}): Promise<any> {
-  const headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    ...(options.headers || {})
-  };
-
-  const bases = anikotoBases();
-  let parsed: URL | null = null;
-  try { parsed = new URL(url); } catch {}
-  const providerRequest = parsed ? bases.includes(parsed.origin) : false;
-  const orderedBases = providerRequest
-    ? [anikotoBaseUrl(), ...bases.filter((base) => base !== anikotoBaseUrl())]
-    : [""];
-  let lastResponse: any = null;
-  let lastError: unknown = null;
-  for (const candidateBase of orderedBases) {
-    const candidateUrl = providerRequest && parsed
-      ? `${candidateBase}${parsed.pathname}${parsed.search}${parsed.hash}`
-      : url;
-    if (providerRequest) activateAnikotoBase(candidateBase);
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        await getAnikotoWindow();
-        const candidateHeaders = { ...headers } as Record<string, string>;
-        for (const [name, value] of Object.entries(candidateHeaders)) {
-          if (name.toLowerCase() !== "referer") continue;
-          try {
-            const referer = new URL(value);
-            if (bases.includes(referer.origin) && providerRequest) {
-              candidateHeaders[name] = `${candidateBase}${referer.pathname}${referer.search}${referer.hash}`;
-            }
-          } catch {}
-        }
-        const resp = await (net.fetch as any)(candidateUrl, {
-          ...options,
-          session: session.fromPartition("persist:anikoto"),
-          headers: candidateHeaders,
-        });
-        lastResponse = resp;
-        if (resp.ok) return resp;
-        const retryable = resp.status === 403 || resp.status === 429 || resp.status === 503;
-        if (attempt === 0 && retryable) {
-          console.log(`[Anikoto] ${candidateBase || "stream host"} returned ${resp.status}; refreshing session.`);
-          resetAnikotoWindow();
-          continue;
-        }
-        if (!providerRequest || (resp.status < 500 && !retryable && resp.status !== 404)) return resp;
-        break;
-      } catch (error) {
-        lastError = error;
-        resetAnikotoWindow();
-        if (attempt === 0) continue;
-        break;
-      }
-    }
-  }
-  if (lastResponse) return lastResponse;
-  throw lastError instanceof Error ? lastError : new Error("Every signed Anikoto origin failed");
-}
+// Ordinary public/session requests should not wait for a hidden homepage or
+// rotate through identities/origins when a server rejects them.
+export const anikotoFetch = createAnikotoTransport((url, options) =>
+  session.fromPartition("persist:anikoto").fetch(url, options));

@@ -11,6 +11,7 @@ import {
 } from "electron";
 import path from "node:path";
 import fs from "node:fs";
+import { Readable } from "node:stream";
 import { IPC } from "../../../packages/shared/types";
 import { flushDirty } from "./services/mal";
 import {
@@ -18,15 +19,12 @@ import {
   getAuthorizedPaheRequestHeaders,
 } from "./services/providers/animepahe";
 import { providerManager } from "./services/providers";
+import { getResolvedStreamAuthorization } from "./services/providers/stream-authorization";
 import { registerProviderIpc } from "./ipc/providers";
 import { registerAuthIpc } from "./ipc/auth";
 import { registerDbIpc } from "./ipc/db";
 import { registerDownloadsIpc } from "./ipc/downloads";
 import { downloadsDir } from "./services/downloads";
-import {
-  getAnikotoPlayerOrigin,
-  getAnikotoPlayerOriginForUrl,
-} from "./services/providers/anikoto";
 import {
   getRuntimeConfig,
   getRuntimeConfigStatus,
@@ -47,10 +45,8 @@ const isDev = process.env.NODE_ENV === "development";
 // Disable Chromium Sandbox to prevent EXCEPTION_BREAKPOINT (0x80000003) crashes on certain Windows setups.
 app.commandLine.appendSwitch("no-sandbox");
 
-// Strip "Electron/x.y" and the app name from the User-Agent. Cloudflare
-// fingerprints the Electron token and challenge-blocks AnimePahe API calls;
-// the cf_clearance cookie is also validated against the UA, so the hidden
-// challenge window and net.fetch must present the same clean Chrome UA.
+// Use the same Chromium identity for provider windows and network requests.
+// Do not claim a different Chrome version through hard-coded client hints.
 app.userAgentFallback = app.userAgentFallback
   .replace(/\s?Electron\/[\d.]+/i, "")
   .replace(/\s?anitrack\/[\d.]+/i, "");
@@ -69,194 +65,68 @@ function sendToRenderer(channel: string, payload?: unknown) {
 function registerWebRequestHandlers() {
   const runtime = getRuntimeConfig();
   const paheRules = runtime.providers.animepahe;
-  const anikotoRules = runtime.providers.anikoto;
-  const paheStreamingEnabled = paheRules.enabled && runtime.features.animepaheStreaming;
-  const anikotoStreamingEnabled = anikotoRules.enabled && runtime.features.anikotoStreaming;
-
-  const parseRequestUrl = (raw: string) => {
-    try {
-      const parsed = new URL(raw);
-      return { host: parsed.hostname.toLowerCase(), path: parsed.pathname.toLowerCase() };
-    } catch {
-      return { host: "", path: "" };
-    }
-  };
-  const matchesHostRule = (host: string, rule: string, allowBareFamilyLabels = false) => {
-    const value = rule.toLowerCase();
-    if (!host || !value) return false;
-    if (value.endsWith(".")) return host.startsWith(value);
-    if (value.includes(".")) return host === value || host.endsWith(`.${value}`);
-    return allowBareFamilyLabels && host.split(".").some((label) => label === value || label.startsWith(`${value}-`));
-  };
-  const matchesAnyHostRule = (host: string, rules: string[], allowBareFamilyLabels = false) =>
-    rules.some((rule) => matchesHostRule(host, rule, allowBareFamilyLabels));
-  const hasMediaExtension = (pathname: string, extensions: string[]) =>
-    extensions.some((extension) => pathname.endsWith(extension));
-
-  // Derive the current AnimePahe host from settings so domain hops (.pw → .si)
-  // don't need a release.
+  const paheEnabled = paheRules.enabled && runtime.features.animepaheStreaming;
   let paheHost = "animepahe.pw";
   try { paheHost = new URL(getPaheBaseUrl()).hostname; } catch {}
-
-  // Snapshot thumbnails — derive from the current host, plus known historical
-  // hosts so old DB references keep working after a domain switch.
   const snapshotHosts = new Set([
     `i.${paheHost}`,
     ...paheRules.baseUrls.map((base) => {
       try { return `i.${new URL(base).hostname.toLowerCase()}`; } catch { return ""; }
     }).filter(Boolean),
-    "i.animepahe.ru",
-    "i.animepahe.pw",
-    "i.animepahe.si",
-    "i.animepahe.cx",
+    "i.animepahe.ru", "i.animepahe.pw", "i.animepahe.si", "i.animepahe.cx",
   ]);
-  // Spoof Referer + Origin on outgoing requests to the stream CDN.
-  // NOTE: Electron's webRequest API supports only ONE listener per event per
-  // session — registering twice replaces the first listener. Snapshot
-  // thumbnail handling therefore lives inside this single handler.
-  session.defaultSession.webRequest.onBeforeSendHeaders(
-    {
-      urls: ["*://*/*"],
-    },
-    (details, callback) => {
-      // Snapshot thumbnails need a Referer from the AnimePahe site.
-      const parsedRequest = parseRequestUrl(details.url);
-      const urlHost = parsedRequest.host;
-      if (snapshotHosts.has(urlHost)) {
-        const headers: Record<string, string> = { ...details.requestHeaders as Record<string, string> };
-        headers["Referer"] = `https://${paheHost}/`;
-        callback({ requestHeaders: headers });
-        return;
-      }
 
-      const isPaheCdn = paheStreamingEnabled &&
-        (matchesAnyHostRule(urlHost, paheRules.streamHostFragments) || urlHost === `cdn.${paheHost}`);
+  const authorizationFor = (url: string) => {
+    const resolved = getResolvedStreamAuthorization(url);
+    if (resolved) return resolved;
+    const pahe = paheEnabled ? getAuthorizedPaheRequestHeaders(url) : null;
+    if (!pahe) return null;
+    return {
+      headers: {
+        Referer: `${pahe.referer}/`, Origin: pahe.referer,
+        ...(pahe.cookie ? { Cookie: pahe.cookie } : {}),
+      } as Record<string, string>,
+      cors: true,
+    };
+  };
 
-      const isKwik = paheStreamingEnabled &&
-        matchesAnyHostRule(urlHost, paheRules.streamHostFragments.filter((rule) => rule.startsWith("kwik.")));
-
-      const apiHosts = [
-        "myanimelist.net", "malsync.moe", "anilist.co",
-        ...anikotoRules.baseUrls.map((base) => new URL(base).hostname),
-        ...paheRules.baseUrls.map((base) => new URL(base).hostname),
-      ];
-      const isApiHost = apiHosts.some((host) => urlHost === host || urlHost.endsWith(`.${host}`));
-
-      // Megaplay / Kiwi-Stream rotating CDN domains
-      const mappedPlayerOrigin = getAnikotoPlayerOriginForUrl(details.url);
-      const isMegaplayStream =
-        anikotoStreamingEnabled && !isApiHost && (
-          Boolean(mappedPlayerOrigin) ||
-          matchesAnyHostRule(urlHost, anikotoRules.streamHostFragments, true) ||
-          parsedRequest.path.includes("/anime/") ||
-          parsedRequest.path.includes("subtitles") ||
-          parsedRequest.path.includes("/public/stream/") ||
-          (Boolean(getAnikotoPlayerOrigin()) && hasMediaExtension(parsedRequest.path, anikotoRules.mediaExtensions))
-        );
-
-      if (isPaheCdn || isKwik || isMegaplayStream) {
-        const headers: Record<string, string> = {};
-        for (const [k, v] of Object.entries(details.requestHeaders)) {
-          if (k.toLowerCase() === "origin") continue;
-
-          // Cloudflare WAF bypass: Spoof Client Hints to hide Electron
-          if (k.toLowerCase() === "sec-ch-ua") {
-            headers[k] = '"Google Chrome";v="120", "Chromium";v="120", "Not_A Brand";v="8"';
-            continue;
-          }
-          if (k.toLowerCase() === "sec-ch-ua-mobile") {
-            headers[k] = "?0";
-            continue;
-          }
-          if (k.toLowerCase() === "sec-ch-ua-platform") {
-            headers[k] = '"Windows"';
-            continue;
-          }
-
-          headers[k] = v as string;
+  // Electron permits one listener per session event. Keep thumbnails and
+  // per-stream credentials together; never use the last resolved player's
+  // origin for unrelated media sharing a CDN or a .m3u8 extension.
+  session.defaultSession.webRequest.onBeforeSendHeaders({ urls: ["*://*/*"] }, (details, callback) => {
+    const headers: Record<string, string> = { ...details.requestHeaders as Record<string, string> };
+    let host = "";
+    try { host = new URL(details.url).hostname.toLowerCase(); } catch {}
+    const overrides = authorizationFor(details.url)?.headers
+      ?? (snapshotHosts.has(host) ? { Referer: `https://${paheHost}/` } : null);
+    if (overrides) {
+      for (const [name, value] of Object.entries(overrides)) {
+        for (const existing of Object.keys(headers)) {
+          if (existing.toLowerCase() === name.toLowerCase()) delete headers[existing];
         }
-
-        if (isMegaplayStream) {
-          // The Anikoto player host rotates (megaplay.buzz → vidtube.site → …)
-          // and so do its segment CDNs (mewstream.buzz, nekostream.site, …).
-          // These CDNs hotlink-check Referer against the player iframe that
-          // embedded the stream — which we captured at resolve time. Use it so
-          // the spoofed Referer stays correct across domain hops; fall back to
-          // per-family defaults if no resolve has happened yet this session.
-          const playerOrigin = mappedPlayerOrigin || getAnikotoPlayerOrigin();
-          if (playerOrigin) {
-            headers["Referer"] = playerOrigin + "/";
-            headers["Origin"] = playerOrigin;
-          } else if (details.url.includes("mewcdn") || details.url.includes("mewstream") || details.url.includes("vibeplayer") || details.url.includes("vibe")) {
-            headers["Referer"] = "https://mewcdn.online/";
-            headers["Origin"] = "https://mewcdn.online";
-          } else {
-            headers["Referer"] = "https://megaplay.buzz/";
-            headers["Origin"] = "https://megaplay.buzz";
-          }
-        } else {
-          const authorization = getAuthorizedPaheRequestHeaders(details.url);
-          const kwikOrigin = authorization?.referer || "https://kwik.cx";
-          headers["Referer"] = kwikOrigin + "/";
-          headers["Origin"] = kwikOrigin;
-          // Cookies are intentionally copied across origins for AnimePahe's
-          // hotlink protection, but only to a concrete stream host captured
-          // from a successful resolver result — never merely to a broad rule.
-          if (authorization?.cookie) headers["Cookie"] = authorization.cookie;
-        }
-
-        callback({ requestHeaders: headers });
-      } else {
-        callback({ requestHeaders: details.requestHeaders });
+        headers[name] = value;
       }
-    },
-  );
+    }
+    callback({ requestHeaders: headers });
+  });
 
-  // Inject CORS headers into CDN responses for hls.js.
-  session.defaultSession.webRequest.onHeadersReceived(
-    {
-      urls: ["*://*/*"],
-    },
-    (details, callback) => {
-      const parsedRequest = parseRequestUrl(details.url);
-      const isPaheCdn = paheStreamingEnabled &&
-        (matchesAnyHostRule(parsedRequest.host, paheRules.streamHostFragments) ||
-          parsedRequest.host === `cdn.${paheHost}`);
-
-      const apiHosts = [
-        "myanimelist.net", "malsync.moe", "anilist.co",
-        ...anikotoRules.baseUrls.map((base) => new URL(base).hostname),
-        ...paheRules.baseUrls.map((base) => new URL(base).hostname),
-      ];
-      const isApiHost = apiHosts.some((host) => parsedRequest.host === host || parsedRequest.host.endsWith(`.${host}`));
-
-      const mappedPlayerOrigin = getAnikotoPlayerOriginForUrl(details.url);
-      const isMegaplayStream =
-        anikotoStreamingEnabled && !isApiHost && (
-          Boolean(mappedPlayerOrigin) ||
-          matchesAnyHostRule(parsedRequest.host, anikotoRules.streamHostFragments, true) ||
-          parsedRequest.path.includes("/anime/") ||
-          parsedRequest.path.includes("subtitles") ||
-          parsedRequest.path.includes("/public/stream/") ||
-          (Boolean(getAnikotoPlayerOrigin()) && hasMediaExtension(parsedRequest.path, anikotoRules.mediaExtensions))
-        );
-
-      if (isPaheCdn || isMegaplayStream) {
-        const headers: Record<string, string[]> = {};
-        for (const [k, v] of Object.entries(details.responseHeaders ?? {})) {
-          if (k.toLowerCase().startsWith("access-control-")) continue;
-          headers[k] = Array.isArray(v) ? v : [v as string];
-        }
-        headers["Access-Control-Allow-Origin"] = ["*"];
-        headers["Access-Control-Allow-Methods"] = ["GET, HEAD, OPTIONS"];
-        headers["Access-Control-Allow-Headers"] = ["*"];
-        headers["Access-Control-Expose-Headers"] = ["*"];
-        callback({ responseHeaders: headers });
-      } else {
-        callback({ responseHeaders: details.responseHeaders });
+  session.defaultSession.webRequest.onHeadersReceived({ urls: ["*://*/*"] }, (details, callback) => {
+    if (!authorizationFor(details.url)?.cors) {
+      callback({ responseHeaders: details.responseHeaders });
+      return;
+    }
+    const headers: Record<string, string[]> = {};
+    for (const [name, value] of Object.entries(details.responseHeaders ?? {})) {
+      if (!name.toLowerCase().startsWith("access-control-")) {
+        headers[name] = Array.isArray(value) ? value : [value as string];
       }
-    },
-  );
+    }
+    headers["Access-Control-Allow-Origin"] = ["*"];
+    headers["Access-Control-Allow-Methods"] = ["GET, HEAD, OPTIONS"];
+    headers["Access-Control-Allow-Headers"] = ["*"];
+    headers["Access-Control-Expose-Headers"] = ["*"];
+    callback({ responseHeaders: headers });
+  });
 }
 
 // Allow our app to be the default handler for anitrack:// URLs.
@@ -365,12 +235,17 @@ app.whenReady().then(async () => {
   // refresh attempt before providers and request interception are initialized.
   await initRuntimeConfig();
   registerWebRequestHandlers();
+  let appliedRuntimeRevision = getRuntimeConfig().revision;
   subscribeRuntimeConfig((configStatus) => {
     sendToRenderer("automation:status", configStatus);
-    providerManager.notifyConfigChanged();
-    // Electron permits one listener per webRequest event. Re-registering here
-    // atomically replaces both handlers with rules from the new revision.
-    registerWebRequestHandlers();
+    if (configStatus.revision !== appliedRuntimeRevision) {
+      appliedRuntimeRevision = configStatus.revision;
+      providerManager.notifyConfigChanged();
+      // Electron permits one listener per webRequest event. Re-register only
+      // for a genuinely new signed revision; a 304/error status must not clear
+      // credentials from a stream that is currently playing.
+      registerWebRequestHandlers();
+    }
   });
 
   // Serve offline downloads: anitrack-dl://d/<folder>/<file> → userData/anitrack_downloads/<folder>/<file>
@@ -381,9 +256,11 @@ app.whenReady().then(async () => {
       const root = path.resolve(downloadsDir());
       const filePath = path.resolve(root, rel);
       const relative = path.relative(root, filePath);
-      if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) || !fs.existsSync(filePath)) {
+      if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
         return new Response("", { status: 404 });
       }
+      const stat = await fs.promises.stat(filePath).catch(() => null);
+      if (!stat?.isFile()) return new Response("", { status: 404 });
       const ext = path.extname(filePath).toLowerCase();
       const type = ext === ".m3u8" ? "application/vnd.apple.mpegurl"
         : ext === ".vtt" ? "text/vtt"
@@ -394,8 +271,10 @@ app.whenReady().then(async () => {
         : ext === ".mp3" ? "audio/mpeg"
         : ext === ".key" ? "application/octet-stream"
         : "application/octet-stream";
-      return new Response(fs.readFileSync(filePath), {
-        headers: { "Content-Type": type, "Access-Control-Allow-Origin": "*" },
+      // Stream rather than readFileSync: multi-MB segments must not block the
+      // main process (and every IPC call) while offline playback buffers.
+      return new Response(Readable.toWeb(fs.createReadStream(filePath)) as ReadableStream, {
+        headers: { "Content-Type": type, "Content-Length": String(stat.size), "Access-Control-Allow-Origin": "*" },
       });
     } catch {
       return new Response("", { status: 500 });
