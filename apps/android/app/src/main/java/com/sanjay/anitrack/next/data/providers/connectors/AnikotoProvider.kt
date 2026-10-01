@@ -13,6 +13,7 @@ import com.sanjay.anitrack.next.data.providers.ProviderSubtitle
 import com.sanjay.anitrack.next.data.providers.ResolvedMedia
 import com.sanjay.anitrack.next.data.providers.SeekMode
 import com.sanjay.anitrack.next.data.providers.SkipRange
+import com.sanjay.anitrack.next.data.providers.StreamAuthorizationScope
 
 object AnikotoProvider : AnimeProvider {
     private const val USER_AGENT =
@@ -53,10 +54,13 @@ object AnikotoProvider : AnimeProvider {
         episodes = episodes.map { episode ->
             ProviderEpisode(episode.number, episode.title) { preferences ->
                 val stream = Anikoto.resolve(slug, episode, preferences.preferHardSub)
+                val playerOrigin = stream.referer.trimEnd('/')
                 ResolvedMedia(
                     url = stream.url,
-                    referer = stream.referer,
+                    referer = "$playerOrigin/",
                     userAgent = USER_AGENT,
+                    requestHeaders = playbackHeaders(playerOrigin),
+                    authorizationScope = StreamAuthorizationScope.PUBLIC_HLS,
                     subtitles = stream.subtitles.map { ProviderSubtitle(it.url, it.label) },
                     intro = stream.introEnd?.let { SkipRange(stream.introStart, it) },
                     outro = stream.outroEnd?.let { SkipRange(stream.outroStart, it) },
@@ -66,6 +70,14 @@ object AnikotoProvider : AnimeProvider {
             }
         },
     )
+
+    internal fun playbackHeaders(playerOrigin: String): Map<String, String> {
+        val origin = playerOrigin.trimEnd('/')
+        return mapOf(
+            "Referer" to "$origin/",
+            "Origin" to origin,
+        )
+    }
 
     private val PAHE_UUID = Regex(
         "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",

@@ -35,6 +35,10 @@ android {
         versionCode = 9
         versionName = "7.0.5"
 
+        // Explicitly opted-in, bounded on-device connector diagnostics; no live
+        // requests are made by the ordinary JVM regression suite.
+        testInstrumentationRunner = "com.sanjay.anitrack.next.diagnostics.MiruroAccessInstrumentation"
+
         buildConfigField("String", "AUTOMATION_PUBLIC_KEY_B64", "\"${trustValue("publicKeySpkiBase64")}\"")
         buildConfigField("String", "ANDROID_RELEASE_CERT_SHA256", "\"${trustValue("androidReleaseCertSha256")}\"")
         buildConfigField("String", "AUTOMATION_CONFIG_URL", "\"${trustValue("configUrl")}\"")
@@ -55,6 +59,12 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Install developer verification builds beside the signed app so
+            // USB testing never requires uninstalling or erasing user data.
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+        }
         release {
             // Remove unused Compose icons/classes and optimize bytecode. This
             // reduces dex work and APK I/O during cold startup.
@@ -113,6 +123,9 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     testImplementation("junit:junit:4.13.2")
+    // Android's org.json classes are stubs in local JVM tests. Use the real
+    // implementation so provider protocol/cooldown fixtures exercise parsing.
+    testImplementation("org.json:json:20231013")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
 

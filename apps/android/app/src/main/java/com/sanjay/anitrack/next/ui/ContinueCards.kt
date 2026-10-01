@@ -45,6 +45,18 @@ internal suspend fun prepareResume(row: com.sanjay.anitrack.next.data.Db.CwRow):
     // the temporary "pahe:" prefix, so remove it at this compatibility edge.
     val key = row.slug?.removePrefix("pahe:")?.takeIf(String::isNotBlank)
 
+    // This function is entered by a Continue-Watching tap, never a background prefetch.
+    val requested = row.providerId?.let { registry.enabled(it, runtime) }
+        ?: key?.let { saved -> registry.enabled(runtime).firstOrNull { it.acceptsResumeKey(saved) } }
+    requested?.access?.let { access ->
+        if (!access.state.value.ready) {
+            val connected = try { access.connect() }
+            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (_: Exception) { false }
+            if (!connected) return false
+        }
+    }
+
     // Let each enabled connector recognize and restore its own persisted key.
     // This keeps resume working when more provider key formats are introduced.
     val resumed = key?.let {

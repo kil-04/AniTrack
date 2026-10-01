@@ -383,6 +383,8 @@ internal object DownloadTransport {
 
     fun text(url: String, ref: String, ua: String): String = String(getBytes(url, ref, ua))
 
+    fun bytes(url: String, ref: String, ua: String): ByteArray = getBytes(url, ref, ua, maxRetries = 2)
+
     fun toFile(url: String, file: File, ref: String, ua: String, maxRetries: Int = 6) {
         val tmp = File(file.parentFile, file.name + ".part")
         val engine = cronetEngine()

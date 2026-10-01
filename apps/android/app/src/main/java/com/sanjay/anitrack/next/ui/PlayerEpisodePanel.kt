@@ -19,6 +19,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.sanjay.anitrack.next.data.PlaySession
 import com.sanjay.anitrack.next.data.providers.ProviderDescriptor
+import com.sanjay.anitrack.next.data.providers.ProviderStreamVariant
 
 private val EpisodePanelAccent = Color(0xFFE50914)
 private const val EPISODE_RANGE_SIZE = 100
@@ -29,6 +30,9 @@ internal fun PlayerEpisodePanel(
     modifier: Modifier,
     provider: String,
     providers: List<ProviderDescriptor>,
+    streamVariants: List<ProviderStreamVariant>,
+    selectedVariantId: String?,
+    variantsLoading: Boolean,
     subType: String,
     current: Int,
     watched: Map<Float, Int>,
@@ -37,6 +41,7 @@ internal fun PlayerEpisodePanel(
     canSwitch: Boolean,
     onSelect: (Int) -> Unit,
     onServer: (String) -> Unit,
+    onStreamVariant: (String) -> Unit,
     onSubType: (String) -> Unit,
 ) {
     val count = PlaySession.count
@@ -54,15 +59,15 @@ internal fun PlayerEpisodePanel(
 
     Column(modifier.background(Color(0xFF0E0E12))) {
         Text(
-            "SERVERS",
+            "PROVIDERS",
             style = MaterialTheme.typography.labelSmall,
             color = Color.White.copy(alpha = 0.45f),
             modifier = Modifier.padding(start = 14.dp, top = 10.dp, bottom = 6.dp),
         )
-        Row(
+        FlowRow(
             Modifier.padding(horizontal = 14.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             providers.forEach { descriptor ->
                 FilterChip(
@@ -83,6 +88,37 @@ internal fun PlayerEpisodePanel(
                 color = Color(0xFFFF6B6B),
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp),
             )
+        }
+
+        if (streamVariants.isNotEmpty() || variantsLoading) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "${providers.firstOrNull { it.id == provider }?.name?.uppercase() ?: "STREAM"} SERVERS",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(alpha = 0.45f),
+                modifier = Modifier.padding(start = 14.dp, bottom = 6.dp),
+            )
+            FlowRow(
+                Modifier.padding(horizontal = 14.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                streamVariants.forEach { variant ->
+                    FilterChip(
+                        selected = selectedVariantId == variant.id,
+                        enabled = !switching,
+                        onClick = { onStreamVariant(variant.id) },
+                        label = { Text(variant.label) },
+                    )
+                }
+                if (variantsLoading) {
+                    CircularProgressIndicator(
+                        Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = EpisodePanelAccent,
+                    )
+                }
+            }
         }
 
         if (providers.firstOrNull { it.id == provider }?.capabilities?.subtitleModes == true) {

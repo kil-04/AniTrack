@@ -5,6 +5,7 @@ import com.sanjay.anitrack.next.data.Anime
 
 interface AnimeProvider {
     val descriptor: ProviderDescriptor
+    val access: ProviderAccess? get() = null
     fun isEnabled(config: AndroidRuntimeConfig): Boolean =
         config.providers[descriptor.id]?.enabled == true
     /**

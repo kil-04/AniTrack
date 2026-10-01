@@ -148,7 +148,7 @@ object RemoteConfig {
     private val defaults = AndroidRuntimeConfig(
         revision = 0,
         issuedAt = "2026-08-17T00:00:00.000Z",
-        providerOrder = listOf("anikoto", "animepahe"),
+        providerOrder = listOf("anikoto", "animepahe", "mkissa"),
         providers = linkedMapOf(
             "anikoto" to defaultProvider,
             "animepahe" to ProviderRuntimeConfig(
@@ -167,6 +167,20 @@ object RemoteConfig {
                     "resolutionAttribute" to "data-resolution",
                     "audioAttribute" to "data-audio",
                 ),
+            ),
+            "mkissa" to ProviderRuntimeConfig(
+                enabled = false,
+                baseUrls = listOf("https://mkissa.to", "https://api.mkissa.net"),
+                streamHostFragments = listOf(
+                    "allanime.day", "filelotion.fyi", "mp4upload.com", "ok.ru", "streamsb.net",
+                ),
+                mediaExtensions = listOf(".m3u8", ".mp4", ".ts", ".m4s", ".vtt", ".key"),
+                routes = mapOf(
+                    "graphql" to "/api",
+                    "authConfigs" to "/authconfigs",
+                    "cryptoBootstrap" to "/client-crypto/v1/bootstrap",
+                ),
+                selectors = emptyMap(),
             ),
         ),
         features = RuntimeFeatures(true, true, true, true, true),

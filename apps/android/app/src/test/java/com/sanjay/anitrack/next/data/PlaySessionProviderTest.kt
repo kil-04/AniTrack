@@ -7,6 +7,7 @@ import com.sanjay.anitrack.next.data.providers.ProviderEpisode
 import com.sanjay.anitrack.next.data.providers.ProviderRegistry
 import com.sanjay.anitrack.next.data.providers.ProviderSeries
 import com.sanjay.anitrack.next.data.providers.ProviderSubtitle
+import com.sanjay.anitrack.next.data.providers.ProviderStreamVariant
 import com.sanjay.anitrack.next.data.providers.ResolvedMedia
 import com.sanjay.anitrack.next.data.providers.SeekMode
 import com.sanjay.anitrack.next.data.providers.SkipRange
@@ -38,7 +39,7 @@ class PlaySessionProviderTest {
             url = "https://media.example/episode.m3u8",
             referer = "https://player.example/",
             userAgent = "test-agent",
-            subtitles = listOf(ProviderSubtitle("https://media.example/en.vtt", "English")),
+            subtitles = listOf(ProviderSubtitle("https://media.example/en.srt", "English", "application/x-subrip", "en", true)),
             intro = SkipRange(5, 75),
             backend = PlaybackBackend.WEB_HLS,
             seekMode = SeekMode.EXACT,
@@ -47,7 +48,16 @@ class PlaySessionProviderTest {
         val series = ProviderSeries(
             providerId = "mockstream",
             resumeKey = "raw-provider-key",
-            episodes = listOf(ProviderEpisode(7f, "Seventh") { media }),
+            episodes = listOf(
+                ProviderEpisode(
+                    number = 7f,
+                    title = "Seventh",
+                    variantsResolver = { listOf(ProviderStreamVariant("backup", "Backup")) },
+                    variantResolver = { variantId, _ ->
+                        media.copy(url = "https://media.example/$variantId.m3u8")
+                    },
+                ) { media },
+            ),
         )
         PlaySession.startSeries(series, 0, 42, "Example", null, null)
 
@@ -55,12 +65,23 @@ class PlaySessionProviderTest {
         assertEquals("raw-provider-key", PlaySession.resumeKey())
         assertEquals(7f, PlaySession.episodeNumber(0))
         assertEquals("Seventh", PlaySession.episodeTitle(0))
+        assertEquals("Backup", PlaySession.streamVariants(0).single().label)
 
         val resolved = PlaySession.resolve(0, ProviderRegistry(listOf(connector)), runtime)
         assertEquals(PlaybackBackend.WEB_HLS, resolved.backend)
         assertEquals(SeekMode.EXACT, resolved.seekMode)
         assertEquals(75L, resolved.introEnd)
         assertEquals("English", resolved.subtitles.single().label)
+        assertEquals("application/x-subrip", resolved.subtitles.single().mimeType)
+        assertEquals("en", resolved.subtitles.single().language)
         assertFalse(resolved.downloadable)
+
+        val alternate = PlaySession.resolve(
+            0,
+            ProviderRegistry(listOf(connector)),
+            runtime,
+            variantId = "backup",
+        )
+        assertEquals("https://media.example/backup.m3u8", alternate.url)
     }
 }

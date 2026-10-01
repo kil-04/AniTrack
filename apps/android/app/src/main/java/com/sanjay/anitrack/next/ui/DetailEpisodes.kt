@@ -38,7 +38,7 @@ private data class EpUi(
     val title: String?,
     val snapshot: String?,
     val play: () -> Unit,
-    val resolveForDownload: suspend () -> Triple<String, String, String>,
+    val resolveForDownload: suspend () -> com.sanjay.anitrack.next.data.Downloads.Source,
 )
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
@@ -57,6 +57,7 @@ internal fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay:
     var attemptedProviders by remember(anime.id) { mutableStateOf<Set<String>>(emptySet()) }
     var failures by remember(anime.id) { mutableStateOf<Map<String, String?>>(emptyMap()) }
     var loading by remember(anime.id) { mutableStateOf(false) }
+    var accessRevision by remember(anime.id) { mutableIntStateOf(0) }
     var rangeStart by remember { mutableStateOf(0) }
     var watched by remember { mutableStateOf<Map<Float, Int>>(emptyMap()) }
 
@@ -64,12 +65,14 @@ internal fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay:
         runCatching { watched = com.sanjay.anitrack.next.data.Db.positionsFor(anime.id) }
     }
     // Load the selected server on demand.
-    LaunchedEffect(anime.id, server) {
+    LaunchedEffect(anime.id, server, accessRevision) {
         rangeStart = 0
         if (server.isBlank() || server in attemptedProviders) return@LaunchedEffect
         val provider = registry.enabled(server, runtime) ?: return@LaunchedEffect
         loading = true
-        val result = runCatching { provider.match(anime) }
+        val result = try { Result.success(provider.match(anime)) }
+            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (error: Exception) { Result.failure(error) }
         result.getOrNull()?.takeIf { it.episodes.isNotEmpty() }?.let { series ->
             seriesByProvider = seriesByProvider + (server to series)
         }
@@ -107,7 +110,11 @@ internal fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay:
                 resolveForDownload = {
                     val media = episode.resolve()
                     check(media.downloadable) { "Downloads are not supported by this server" }
-                    Triple(media.url, media.referer, media.userAgent)
+                    val captions = media.subtitles.filter { it.mimeType == "text/vtt" }
+                    val caption = captions.firstOrNull { it.default }
+                        ?: captions.firstOrNull { it.language == "en" || it.label.contains("english", ignoreCase = true) }
+                        ?: captions.firstOrNull()
+                    com.sanjay.anitrack.next.data.Downloads.Source(media.url, media.referer, media.userAgent, caption?.url)
                 },
             )
         }
@@ -139,7 +146,7 @@ internal fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay:
         }
         Spacer(Modifier.height(8.dp))
         // Server toggle
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             enabledProviders.forEach { provider ->
                 val descriptor = provider.descriptor
                 FilterChip(
@@ -150,10 +157,16 @@ internal fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay:
             }
             if (loading) {
                 Spacer(Modifier.width(4.dp))
-                CircularProgressIndicator(Modifier.size(16.dp).align(Alignment.CenterVertically), strokeWidth = 2.dp, color = Accent)
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Accent)
             }
         }
         Spacer(Modifier.height(4.dp))
+        ProviderAccessControls(activeProvider) {
+            attemptedProviders = attemptedProviders - server
+            seriesByProvider = seriesByProvider - server
+            failures = failures - server
+            accessRevision++
+        }
         if (activeSeries != null) {
             Text(
                 if (activeSeries.verified) "verified ✓" else "best match",
@@ -167,6 +180,11 @@ internal fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay:
                 style = MaterialTheme.typography.labelSmall,
                 color = Color.White.copy(alpha = 0.55f),
             )
+            TextButton(onClick = {
+                attemptedProviders = attemptedProviders - server
+                failures = failures - server
+                accessRevision++
+            }) { Text("Retry") }
         }
         Spacer(Modifier.height(10.dp))
 

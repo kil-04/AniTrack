@@ -2,6 +2,7 @@ package com.sanjay.anitrack.next.data
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import androidx.compose.runtime.mutableStateOf
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -9,9 +10,12 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import com.sanjay.anitrack.next.BuildConfig
 import com.sanjay.anitrack.next.data.providers.SeekMode
+import com.sanjay.anitrack.next.data.providers.StreamAuthorizationScope
 
 /**
  * App-wide ExoPlayer owner — the desktop app's persistent player. The player
@@ -58,9 +62,9 @@ object PlayerHolder {
                 // stalls, but doing it in release builds adds work to every
                 // HLS load and exposes expiring stream paths in device logs.
                 if (com.sanjay.anitrack.next.BuildConfig.DEBUG) {
-                    addAnalyticsListener(androidx.media3.exoplayer.util.EventLogger())
+                    // Avoid EventLogger: its exception dumps can expose signed URLs.
                     addAnalyticsListener(object : androidx.media3.exoplayer.analytics.AnalyticsListener {
-                        private fun tail(u: android.net.Uri) = u.lastPathSegment ?: u.toString()
+                        private fun tail(u: android.net.Uri) = "media" // Never print signed paths.
                         override fun onLoadStarted(
                             t: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
                             l: androidx.media3.exoplayer.source.LoadEventInfo,
@@ -83,7 +87,7 @@ object PlayerHolder {
                             m: androidx.media3.exoplayer.source.MediaLoadData,
                             e: java.io.IOException,
                             wasCanceled: Boolean,
-                        ) { android.util.Log.w("AniTrackLoads", "error ${tail(l.uri)} canceled=$wasCanceled: ${e.message}") }
+                        ) { android.util.Log.w("AniTrackLoads", "error ${tail(l.uri)} track=${m.trackType} canceled=$wasCanceled: ${e.javaClass.simpleName}") }
                     })
                 }
             }
@@ -98,6 +102,7 @@ object PlayerHolder {
     fun setMedia(ctx: Context, s: PlaySession.Resolved) {
         val p = get(ctx)
         val isLocal = s.url.startsWith("file:")
+        val isHls = s.mimeType == MimeTypes.APPLICATION_M3U8 || s.url.contains(".m3u8") || isLocal
         p.setSeekParameters(
             when (s.seekMode) {
                 SeekMode.EXACT -> androidx.media3.exoplayer.SeekParameters.EXACT
@@ -107,21 +112,28 @@ object PlayerHolder {
         val factory: DataSource.Factory = if (isLocal) {
             DefaultDataSource.Factory(ctx.applicationContext)
         } else {
-            val headers = mutableMapOf<String, String>()
-            s.referer.trim().takeIf { it.isNotEmpty() }?.let {
+            val headers = s.requestHeaders
+                .filter { (name, value) ->
+                    name.matches(Regex("^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,80}$")) &&
+                        name.lowercase() !in BLOCKED_REQUEST_HEADERS &&
+                        value.length <= 8192 && !value.contains(Regex("[\\r\\n\\u0000]"))
+                }
+                .toMutableMap()
+            s.referer.trim().takeIf { it.isNotEmpty() && headers.keys.none { name -> name.equals("Referer", true) } }?.let {
                 headers["Referer"] = it.trimEnd('/') + "/"
             }
             // Send the WebView's cookies for the stream host (kwik binding).
-            runCatching {
+            if (!s.conservativeNetwork) runCatching {
                 android.webkit.CookieManager.getInstance().getCookie(s.url)
-                    ?.takeIf { it.isNotBlank() }?.let { headers["Cookie"] = it }
+                    ?.takeIf { it.isNotBlank() && headers.keys.none { name -> name.equals("Cookie", true) } }
+                    ?.let { headers["Cookie"] = it }
             }
             val engine = cronetEngine(ctx)
-            if (engine != null) {
+            check(engine != null || !s.conservativeNetwork) { "Secure native transport is unavailable. Please use another provider." }
+            val baseFactory: DataSource.Factory = if (engine != null) {
                 androidx.media3.datasource.cronet.CronetDataSource.Factory(engine, cronetExecutor)
                     .setUserAgent(s.userAgent)
-                    .setDefaultRequestProperties(headers)
-                    .setHandleSetCookieRequests(true)
+                    .setHandleSetCookieRequests(!s.conservativeNetwork)
                     // A hung post-seek request now fails fast → onPlayerError
                     // recovery re-prepares, instead of buffering forever.
                     .setConnectionTimeoutMs(15_000)
@@ -129,14 +141,38 @@ object PlayerHolder {
             } else {
                 DefaultHttpDataSource.Factory()
                     .setUserAgent(s.userAgent)
-                    .setDefaultRequestProperties(headers)
-                    .setAllowCrossProtocolRedirects(true)
+                    .setAllowCrossProtocolRedirects(false)
             }
+            val scope = s.authorizationScope
+                ?: if (isHls) StreamAuthorizationScope.DIRECTORY else StreamAuthorizationScope.EXACT
+            val authorization = ScopedRequestAuthorization.create(s.url, scope, headers)
+            if (BuildConfig.DEBUG && PlaySession.provider == "anikoto") {
+                val root = Uri.parse(s.url)
+                Log.d(
+                    "AniTrackAuth",
+                    "root host=${root.host.orEmpty()} file=${root.lastPathSegment.orEmpty()} " +
+                        "scope=$scope headers=${headers.keys.sorted().joinToString(",")}",
+                )
+            }
+            ResolvingDataSource.Factory(
+                baseFactory,
+                ResolvingDataSource.Resolver { dataSpec ->
+                    val scopedHeaders = authorization?.headersFor(dataSpec.uri.toString()).orEmpty()
+                    if (BuildConfig.DEBUG && PlaySession.provider == "anikoto") {
+                        Log.d(
+                            "AniTrackAuth",
+                            "request host=${dataSpec.uri.host.orEmpty()} " +
+                                "file=${dataSpec.uri.lastPathSegment.orEmpty()} authorized=${scopedHeaders.isNotEmpty()}",
+                        )
+                    }
+                    if (scopedHeaders.isEmpty()) dataSpec else dataSpec.withAdditionalHeaders(scopedHeaders)
+                },
+            )
         }
         val subtitleConfigs = s.subtitles.mapIndexed { i, sub ->
             MediaItem.SubtitleConfiguration.Builder(Uri.parse(sub.url))
-                .setMimeType(MimeTypes.TEXT_VTT)
-                .setLanguage("en")
+                .setMimeType(sub.mimeType)
+                .setLanguage(sub.language)
                 .setLabel(sub.label)
                 .setSelectionFlags(if (i == 0) C.SELECTION_FLAG_DEFAULT else 0)
                 .build()
@@ -146,6 +182,21 @@ object PlayerHolder {
         p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
             .clearVideoSizeConstraints().build()
 
+        if (s.conservativeNetwork) {
+            val policy = object : androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy() {
+                override fun getRetryDelayMsFor(info: androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo) = C.TIME_UNSET
+                override fun getFallbackSelectionFor(
+                    options: androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.FallbackOptions,
+                    info: androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo,
+                ): androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.FallbackSelection? = null
+            }
+            val item = MediaItem.Builder().setUri(s.url).setMimeType(s.mimeType)
+                .setSubtitleConfigurations(subtitleConfigs).build()
+            p.setMediaSource(DefaultMediaSourceFactory(factory).setLoadErrorHandlingPolicy(policy).createMediaSource(item))
+            p.prepare()
+            return
+        }
+
         // Wrap the CDN factory so every kwik .m3u8 reload is normalized to a
         // static VOD playlist. Without this, kwik re-serves the manifest with
         // no #EXT-X-ENDLIST after a seek → ExoPlayer flips it to live/dynamic →
@@ -153,7 +204,6 @@ object PlayerHolder {
         val streamFactory: DataSource.Factory =
             if (isLocal) factory else VodManifestDataSource.Factory(factory)
 
-        val isHls = s.url.contains(".m3u8") || isLocal
         if (isHls && subtitleConfigs.isEmpty()) {
             // Kwik's TS is loosely muxed (PesReader start-code spam) — these
             // flags make the TS reader tolerant like a browser player.
@@ -194,4 +244,16 @@ object PlayerHolder {
         lastResolved = null
         miniActive.value = false
     }
+
+    private val BLOCKED_REQUEST_HEADERS = setOf(
+        "connection",
+        "content-length",
+        "host",
+        "proxy-authorization",
+        "proxy-connection",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+    )
 }

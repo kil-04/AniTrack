@@ -158,13 +158,22 @@ object Downloads {
         }
     }
 
+    /** What one download needs; resolved just in time (kwik tokens expire fast). */
+    data class Source(val url: String, val referer: String, val userAgent: String, val subtitleUrl: String? = null)
+
+    private const val SUBTITLE_FILE = "subs.vtt"
+    private const val MAX_SUBTITLE_BYTES = 2 * 1024 * 1024
+
+    /** Captions saved beside a downloaded episode, if any. */
+    fun localSubtitle(playlist: File): File? = File(playlist.parentFile, SUBTITLE_FILE).takeIf { it.isFile }
+
     /**
-     * Queue an episode. `resolve` returns the m3u8 URL + Referer + UA at
-     * download time (kwik tokens expire fast, so resolve just-in-time).
+     * Queue an episode. `resolve` returns the m3u8 URL + Referer + UA (and the
+     * preferred caption track) at download time.
      */
     fun enqueue(
         animeId: Int, episode: Float, title: String, cover: String?,
-        resolve: suspend () -> Triple<String, String, String>,
+        resolve: suspend () -> Source,
     ) {
         val id = idOf(animeId, episode)
         if (!RemoteConfig.current().features.downloads) {
@@ -204,8 +213,9 @@ object Downloads {
                     // an interrupted item instead of leaking invisible files.
                     folder(id).deleteRecursively()
                     writeMeta(id, animeId, episode, title, cover)
-                    val (url, referer, ua) = resolve()
-                    download(id, url, referer, ua) { p -> setStatus(id, Status.DOWNLOADING, p) }
+                    val source = resolve()
+                    download(id, source.url, source.referer, source.userAgent) { p -> setStatus(id, Status.DOWNLOADING, p) }
+                    source.subtitleUrl?.let { saveSubtitle(id, it, source.referer, source.userAgent) }
                     withItems {
                         val i = indexOfFirst { it.id == id }
                         if (i >= 0) this[i] = this[i].copy(status = Status.DONE, progress = 100, sizeBytes = sizeOf(id))
@@ -250,6 +260,24 @@ object Downloads {
             temp.delete()
             throw Exception("Could not save download metadata")
         }
+    }
+
+    /**
+     * Soft-sub episodes are unwatchable offline without their captions, so save
+     * them beside the video. Best-effort: a caption failure never fails the
+     * already-complete video download.
+     */
+    private suspend fun saveSubtitle(id: String, url: String, referer: String, ua: String) = withContext(Dispatchers.IO) {
+        runCatching {
+            if (java.net.URI(url).scheme != "https") return@runCatching
+            val bytes = runInterruptible { DownloadTransport.bytes(url, referer, ua) }
+            if (bytes.size > MAX_SUBTITLE_BYTES) return@runCatching
+            if (!String(bytes, Charsets.UTF_8).trimStart('﻿').trimStart().startsWith("WEBVTT")) return@runCatching
+            val dir = folder(id)
+            val temp = File(dir, "$SUBTITLE_FILE.part")
+            temp.writeBytes(bytes)
+            if (!temp.renameTo(File(dir, SUBTITLE_FILE))) temp.delete()
+        }.onFailure { error -> if (error is CancellationException) throw error }
     }
 
     // ── HLS download ────────────────────────────────────────────────────────────

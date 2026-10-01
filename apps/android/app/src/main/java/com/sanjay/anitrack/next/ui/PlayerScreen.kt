@@ -49,6 +49,7 @@ import androidx.media3.ui.PlayerView
 import com.sanjay.anitrack.next.data.PlaySession
 import com.sanjay.anitrack.next.PipState
 import com.sanjay.anitrack.next.data.providers.PlaybackBackend
+import com.sanjay.anitrack.next.data.providers.ProviderStreamVariant
 import com.sanjay.anitrack.next.data.providers.Providers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -72,6 +73,9 @@ fun PlayerScreen(
     var subType by remember { mutableStateOf(PlaySession.subType) }
     var switching by remember { mutableStateOf(false) }
     var switchError by remember { mutableStateOf<String?>(null) }
+    var streamVariants by remember { mutableStateOf<List<ProviderStreamVariant>>(emptyList()) }
+    var selectedVariantId by remember { mutableStateOf<String?>(null) }
+    var variantsLoading by remember { mutableStateOf(false) }
     var retry by remember { mutableStateOf(0) }
     var pendingSwitchPositionMs by remember { mutableStateOf<Long?>(null) }
     var pendingSwitchPlayWhenReady by remember { mutableStateOf<Boolean?>(null) }
@@ -134,6 +138,11 @@ fun PlayerScreen(
     val player = remember { com.sanjay.anitrack.next.data.PlayerHolder.get(context) }
     LaunchedEffect(Unit) { com.sanjay.anitrack.next.data.PlayerHolder.miniActive.value = false }
 
+    LaunchedEffect(player, ccOn) {
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !ccOn).build()
+    }
+
     // Unified controls that dispatch to the active backend (ExoPlayer / WebView).
     fun curPos(): Long = if (useWeb) webCtl.positionMs.value else player.currentPosition
     fun doSeek(ms: Long) { positionMs = ms; if (useWeb) webCtl.seekTo(ms) else player.seekTo(ms) }
@@ -175,7 +184,8 @@ fun PlayerScreen(
                 if (player.bufferedPosition > stallBufferedAt + 500) {
                     stallBufferedAt = player.bufferedPosition
                     stallTicks = 0
-                } else if (++stallTicks > 27 && stallRecoveries < 2) {   // ~8s frozen
+                } else if (++stallTicks > 27 && stallRecoveries < 2 &&
+                    com.sanjay.anitrack.next.data.PlayerHolder.lastResolved?.conservativeNetwork != true) {   // ~8s frozen
                     stallRecoveries++
                     stallTicks = 0
                     com.sanjay.anitrack.next.data.PlayerHolder.lastResolved?.let { s ->
@@ -258,7 +268,15 @@ fun PlayerScreen(
                     }
                     cause = cause.cause
                 }
-                android.util.Log.e("AniTrackNext", "player error http=$httpCode provider=${PlaySession.provider}", e)
+                android.util.Log.e("AniTrackNext", "player error http=$httpCode provider=${PlaySession.provider} code=${e.errorCodeName}")
+                if (com.sanjay.anitrack.next.data.PlayerHolder.lastResolved?.conservativeNetwork == true) {
+                    httpCode?.let { code ->
+                        Providers.registry.get(PlaySession.provider).access?.playbackRejected(code)
+                    }
+                    error = if (httpCode != null) "Stream request failed (HTTP $httpCode). No automatic retry."
+                        else "Native playback stopped (${e.errorCodeName}). Choose another server or retry manually."
+                    return
+                }
                 // Transient network/seek stalls (Cronet re-requests after a seek)
                 // are recoverable — re-prepare in place instead of dropping the
                 // control bar. Only surface a fatal error after repeated retries.
@@ -286,8 +304,35 @@ fun PlayerScreen(
 
     var lastPlayedIndex by remember { mutableStateOf<Int?>(null) }
     var lastPlayedWithWeb by remember { mutableStateOf(false) }
-    // `provider`/`subType` participate so switching them re-resolves at the same index.
-    LaunchedEffect(index, retry, provider, subType) {
+    val resolveGeneration = remember { java.util.concurrent.atomic.AtomicLong(0) }
+    val variantGeneration = remember { java.util.concurrent.atomic.AtomicLong(0) }
+
+    // Discover provider-native choices without resolving any third-party embed pages.
+    LaunchedEffect(index, provider, subType) {
+        val generation = variantGeneration.incrementAndGet()
+        val requestProvider = provider
+        val requestIndex = index
+        streamVariants = emptyList()
+        variantsLoading = true
+        val variants = runCatching { PlaySession.streamVariants(index) }.getOrDefault(emptyList())
+        if (generation == variantGeneration.get() &&
+            requestProvider == PlaySession.provider &&
+            requestIndex == PlaySession.index
+        ) {
+            streamVariants = variants
+            if (selectedVariantId != null && variants.none { it.id == selectedVariantId }) {
+                selectedVariantId = null
+            }
+            variantsLoading = false
+        }
+    }
+
+    // Provider, subtitle mode and provider-native variant all re-resolve at the same index.
+    LaunchedEffect(index, retry, provider, subType, selectedVariantId) {
+        val generation = resolveGeneration.incrementAndGet()
+        val requestProvider = provider
+        val requestIndex = index
+        val requestVariantId = selectedVariantId
         if (index >= PlaySession.count) return@LaunchedEffect
         PlaySession.subType = subType
         // Keep the session in sync with in-player navigation — otherwise a
@@ -297,7 +342,13 @@ fun PlayerScreen(
         val epNum = PlaySession.episodeNumber(index)
         // Already loaded (returning from the mini player)? Don't restart it.
         val holder = com.sanjay.anitrack.next.data.PlayerHolder
-        if (holder.loadedKey == holder.keyFor(index) && player.mediaItemCount > 0) {
+        if (pendingSwitchPositionMs == null && holder.loadedKey == holder.keyFor(index) && player.mediaItemCount > 0) {
+            if (generation != resolveGeneration.get() ||
+                requestProvider != PlaySession.provider ||
+                requestVariantId != selectedVariantId
+            ) {
+                return@LaunchedEffect
+            }
             stream = holder.lastResolved
             lastPlayedIndex = index
             status = ""
@@ -313,7 +364,15 @@ fun PlayerScreen(
         status = "Resolving Episode ${epNum.toInt()}…"
         if (useWeb) webCtl.pause() else player.stop()
         try {
-            val s = PlaySession.resolve(index)
+            val s = PlaySession.resolve(index, variantId = requestVariantId)
+            // Provider resolvers contain blocking network calls. A canceled
+            // resolver can therefore finish after its replacement has started;
+            // never let that stale result overwrite the new player/error state.
+            if (generation != resolveGeneration.get() ||
+                requestProvider != PlaySession.provider ||
+                requestIndex != PlaySession.index ||
+                requestVariantId != selectedVariantId
+            ) return@LaunchedEffect
             stream = s
             val resolvedUsesWeb = s.backend == PlaybackBackend.WEB_HLS
             lastPlayedWithWeb = resolvedUsesWeb
@@ -348,8 +407,13 @@ fun PlayerScreen(
             // cover the new source with an error overlay.
             throw e
         } catch (e: Exception) {
+            if (generation != resolveGeneration.get() ||
+                requestProvider != PlaySession.provider ||
+                requestIndex != PlaySession.index ||
+                requestVariantId != selectedVariantId
+            ) return@LaunchedEffect
             // Tagged so `adb logcat -s AniTrackNext` captures provider failures.
-            android.util.Log.e("AniTrackNext", "resolve failed provider=$provider ep=$epNum", e)
+            android.util.Log.e("AniTrackNext", "resolve failed provider=$provider ep=$epNum type=${e.javaClass.simpleName}")
             error = e.message ?: "Failed to resolve stream"
         }
     }
@@ -467,16 +531,32 @@ fun PlayerScreen(
                 val switchWasPlaying = if (useWeb) !webCtl.paused.value else player.playWhenReady
                 switching = true; switchError = null
                 scope.launch {
+                    val access = Providers.registry.get(target).access
+                    if (access != null && !access.state.value.ready) {
+                        player.pause()
+                        val connected = try { access.connect() }
+                        catch (cancelled: kotlinx.coroutines.CancellationException) { switching = false; throw cancelled }
+                        catch (_: Exception) { false }
+                        if (!connected) {
+                            switching = false
+                            switchError = "Provider connection cancelled or unsuccessful. You can try again."
+                            if (switchWasPlaying) player.play()
+                            return@launch
+                        }
+                    }
                     val result = runCatching { PlaySession.switchProvider(target) }
                     val ok = result.getOrDefault(false)
-                    result.exceptionOrNull()?.let { android.util.Log.e("AniTrackNext", "switch to $target failed", it) }
+                    result.exceptionOrNull()?.let { android.util.Log.e("AniTrackNext", "switch to $target failed: ${it.javaClass.simpleName}") }
                     if (ok) {
                         pendingSwitchPositionMs = switchPositionMs
                         pendingSwitchPlayWhenReady = switchWasPlaying
+                        selectedVariantId = null
+                        streamVariants = emptyList()
                         provider = PlaySession.provider
                         index = PlaySession.index
                         retry++   // force a re-resolve even if index/provider look unchanged
                     } else {
+                        if (switchWasPlaying) player.play()
                         val targetName = providerDescriptors.firstOrNull { it.id == target }?.name ?: target
                         switchError = when {
                             !PlaySession.canSwitchServer -> "Reopen from the show page to switch servers"
@@ -489,11 +569,24 @@ fun PlayerScreen(
             }
         }
 
+        val switchStreamVariant: (String) -> Unit = { target ->
+            if (target != selectedVariantId && !switching) {
+                pendingSwitchPositionMs = curPos().coerceAtLeast(0L)
+                pendingSwitchPlayWhenReady = if (useWeb) !webCtl.paused.value else player.playWhenReady
+                switchError = null
+                selectedVariantId = target
+                retry++
+            }
+        }
+
         val panel: @Composable (Modifier) -> Unit = { mod ->
             PlayerEpisodePanel(
                 modifier = mod,
                 provider = provider,
                 providers = providerDescriptors,
+                streamVariants = streamVariants,
+                selectedVariantId = selectedVariantId,
+                variantsLoading = variantsLoading,
                 subType = subType,
                 current = index,
                 watched = watchedMap,
@@ -502,6 +595,7 @@ fun PlayerScreen(
                 canSwitch = PlaySession.canSwitchServer,
                 onSelect = { index = it },
                 onServer = switchTo,
+                onStreamVariant = switchStreamVariant,
                 onSubType = { subType = it },
             )
         }
@@ -672,6 +766,10 @@ fun PlayerScreen(
             when {
                 error != null -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(error!!, color = Color(0xFFFF6B6B), style = MaterialTheme.typography.bodyMedium)
+                    ProviderAccessControls(Providers.registry.enabled(provider, com.sanjay.anitrack.next.data.RemoteConfig.current())) {
+                        pendingSwitchPositionMs = curPos().coerceAtLeast(0L)
+                        retry++
+                    }
                     Spacer(Modifier.height(8.dp))
                     Button(onClick = { retry += 1 }, colors = ButtonDefaults.buttonColors(containerColor = Accent)) { Text("Retry") }
                 }

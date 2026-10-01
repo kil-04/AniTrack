@@ -4,9 +4,11 @@ import com.sanjay.anitrack.next.data.providers.PlaybackBackend
 import com.sanjay.anitrack.next.data.providers.PlaybackPreferences
 import com.sanjay.anitrack.next.data.providers.ProviderRegistry
 import com.sanjay.anitrack.next.data.providers.ProviderSeries
+import com.sanjay.anitrack.next.data.providers.ProviderStreamVariant
 import com.sanjay.anitrack.next.data.providers.Providers
 import com.sanjay.anitrack.next.data.providers.ResolvedMedia
 import com.sanjay.anitrack.next.data.providers.SeekMode
+import com.sanjay.anitrack.next.data.providers.StreamAuthorizationScope
 import com.sanjay.anitrack.next.data.providers.connectors.AnikotoProvider
 import com.sanjay.anitrack.next.data.providers.connectors.AnimePaheProvider
 
@@ -51,12 +53,16 @@ object PlaySession {
         // The CDN binds sessions to the browser fingerprint that resolved the
         // stream — the player must present the SAME user agent.
         val userAgent: String,
-        val subtitles: List<Anikoto.Subtitle>,
+        val requestHeaders: Map<String, String> = emptyMap(),
+        val authorizationScope: StreamAuthorizationScope? = null,
+        val subtitles: List<com.sanjay.anitrack.next.data.providers.ProviderSubtitle>,
         val introStart: Long?, val introEnd: Long?,
         val outroStart: Long?, val outroEnd: Long?,
         val backend: PlaybackBackend = PlaybackBackend.NATIVE,
         val seekMode: SeekMode = SeekMode.CLOSEST_SYNC,
         val downloadable: Boolean = true,
+        val conservativeNetwork: Boolean = false,
+        val mimeType: String? = null,
     )
 
     private fun legacyKey(): String = if (provider == "animepahe") paheSession else slug
@@ -128,6 +134,10 @@ object PlaySession {
     /** Episode title for side-panel labels (anikoto has real titles; pahe doesn't). */
     fun episodeTitle(i: Int): String? = series()?.episodes?.getOrNull(i)?.title
 
+    /** Provider-native choices inside the active provider, such as MKissa's episode servers. */
+    suspend fun streamVariants(i: Int): List<ProviderStreamVariant> =
+        series()?.episodes?.getOrNull(i)?.variants().orEmpty()
+
     val canSwitchServer: Boolean get() = anime != null
 
     /**
@@ -168,12 +178,25 @@ object PlaySession {
         i: Int,
         registry: ProviderRegistry = Providers.registry,
         runtime: AndroidRuntimeConfig = RemoteConfig.current(),
+        variantId: String? = null,
     ): Resolved {
         localFile?.let { path ->
-            // Downloaded HLS — play the local index.m3u8 directly.
+            // Downloaded HLS — play the local index.m3u8 directly, with any
+            // captions saved beside it.
+            val playlist = java.io.File(path)
             return Resolved(
-                java.io.File(path).toURI().toString(), "", "", emptyList(),
-                null, null, null, null,
+                url = playlist.toURI().toString(),
+                referer = "",
+                userAgent = "",
+                subtitles = listOfNotNull(
+                    Downloads.localSubtitle(playlist)?.let {
+                        com.sanjay.anitrack.next.data.providers.ProviderSubtitle(it.toURI().toString(), "English", default = true)
+                    },
+                ),
+                introStart = null,
+                introEnd = null,
+                outroStart = null,
+                outroEnd = null,
                 backend = PlaybackBackend.NATIVE,
                 seekMode = SeekMode.EXACT,
                 downloadable = false,
@@ -185,7 +208,10 @@ object PlaySession {
             "$name is temporarily disabled. Refresh automatic fixes in Settings."
         }
         val media = series()?.episodes?.getOrNull(i)
-            ?.resolve(PlaybackPreferences(preferHardSub = subType == "hard"))
+            ?.resolve(
+                PlaybackPreferences(preferHardSub = subType == "hard"),
+                variantId = variantId,
+            )
             ?: error("Episode is no longer available")
         return media.toLegacyResolved()
     }
@@ -194,7 +220,9 @@ object PlaySession {
         url = url,
         referer = referer,
         userAgent = userAgent,
-        subtitles = subtitles.map { Anikoto.Subtitle(it.url, it.label) },
+        requestHeaders = requestHeaders,
+        authorizationScope = authorizationScope,
+        subtitles = subtitles,
         introStart = intro?.startSeconds,
         introEnd = intro?.endSeconds,
         outroStart = outro?.startSeconds,
@@ -202,5 +230,7 @@ object PlaySession {
         backend = backend,
         seekMode = seekMode,
         downloadable = downloadable,
+        conservativeNetwork = conservativeNetwork,
+        mimeType = mimeType,
     )
 }

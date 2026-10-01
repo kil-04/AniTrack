@@ -5,6 +5,8 @@ import com.sanjay.anitrack.next.data.Anime
 import com.sanjay.anitrack.next.data.RemoteConfig
 import com.sanjay.anitrack.next.data.providers.connectors.AnikotoProvider
 import com.sanjay.anitrack.next.data.providers.connectors.AnimePaheProvider
+import com.sanjay.anitrack.next.data.providers.connectors.MkissaProvider
+import com.sanjay.anitrack.next.data.providers.connectors.MiruroAndroidProvider
 
 private val VALID_ID = Regex("^[a-z][a-z0-9-]{1,31}$")
 
@@ -66,6 +68,6 @@ class ProviderRegistry(providers: List<AnimeProvider>) {
 
 /** Composition root: adding a connector requires one deliberate registry entry. */
 object Providers {
-    val registry = ProviderRegistry(listOf(AnikotoProvider, AnimePaheProvider))
+    val registry = ProviderRegistry(listOf(AnikotoProvider, AnimePaheProvider, MkissaProvider, MiruroAndroidProvider))
     fun enabled(): List<AnimeProvider> = registry.enabled(RemoteConfig.current())
 }

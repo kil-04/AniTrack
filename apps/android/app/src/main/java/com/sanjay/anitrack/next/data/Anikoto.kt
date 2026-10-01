@@ -1,6 +1,7 @@
 package com.sanjay.anitrack.next.data
 
 import android.util.Log
+import com.sanjay.anitrack.next.data.providers.connectors.anikoto.AnikotoSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -290,54 +291,111 @@ object Anikoto {
         val target = types.firstOrNull { if (preferHardSub) isHard(it.label) else isSoft(it.label) }
             ?: types.firstOrNull { it.linkIds.isNotEmpty() }
             ?: throw Exception("no stream servers listed")
-        val linkId = target.linkIds.firstOrNull() ?: throw Exception("no server link id")
+        if (target.linkIds.isEmpty()) throw Exception("no server link id")
         val actualHard = isHard(target.label)
 
+        // The first advertised server is often dead for a given episode, so try
+        // a bounded number in order (as the desktop connector does). For soft
+        // sub, a server without caption tracks is serving burned-in subtitles:
+        // keep looking, but fall back to it if nothing better resolves.
+        var firstResolved: Stream? = null
+        var lastError: Exception? = null
+        for (linkId in target.linkIds.take(MAX_SERVER_ATTEMPTS)) {
+            try {
+                val stream = resolveServer(linkId, actualHard)
+                if (firstResolved == null) firstResolved = stream
+                if (actualHard || stream.subtitles.isNotEmpty()) return@withContext stream
+            } catch (error: Exception) {
+                lastError = error
+                Log.w("Anikoto", "An episode server was unavailable; trying the next advertised server")
+            }
+        }
+        firstResolved ?: throw (lastError ?: Exception("every Anikoto server failed"))
+    }
+
+    private const val MAX_SERVER_ATTEMPTS = 5
+    private const val CIPHER_TTL_MS = 15 * 60 * 1000L
+    // Null marks a client with no readable source decoder.
+    private val cipherCache = HashMap<String, Pair<Long, AnikotoSource.Cipher256?>>()
+
+    /** Player client cipher, read as data and reused briefly per client URL. */
+    private fun playerCipher(clientUrl: String, referer: String): AnikotoSource.Cipher256? {
+        synchronized(cipherCache) {
+            cipherCache[clientUrl]?.let { (at, cipher) -> if (System.currentTimeMillis() - at < CIPHER_TTL_MS) return cipher }
+        }
+        val cipher = runCatching { AnikotoSource.parseCipher(get(clientUrl, referer = referer)) }
+            .getOrElse { error -> if (error is IllegalStateException) null else throw error }
+        synchronized(cipherCache) { cipherCache[clientUrl] = System.currentTimeMillis() to cipher }
+        return cipher
+    }
+
+    /** Decode an encrypted source with the first readable client of the player origin. */
+    private fun decryptedSourceUrl(src: JSONObject, playerOrigin: String, iframePath: String, referer: String): String {
+        var lastError: Exception? = null
+        for (path in AnikotoSource.clientScriptPaths(iframePath)) {
+            val cipher = playerCipher(playerOrigin + path, referer) ?: continue
+            try {
+                return AnikotoSource.sourceUrl(src, cipher)
+            } catch (error: IllegalStateException) {
+                lastError = error
+            }
+        }
+        throw lastError ?: IllegalStateException("Anikoto player format changed; its connector needs an update")
+    }
+
+    private fun skip(obj: JSONObject?, key: String): Pair<Long?, Long?> {
+        val o = obj?.optJSONObject(key) ?: return null to null
+        val end = o.optLong("end", 0)
+        return if (end > 0) o.optLong("start", 0) to end else null to null
+    }
+
+    private fun resolveServer(linkId: String, actualHard: Boolean): Stream {
         val serverGet = JSONObject(get(providerUrl("serverResolve", mapOf("linkId" to linkId)), xhr = true))
         val iframeUrl = serverGet.optJSONObject("result")?.optString("url").orEmpty()
         if (iframeUrl.isEmpty()) throw Exception("server iframe URL missing")
-
-        fun skip(obj: JSONObject?, key: String): Pair<Long?, Long?> {
-            val o = obj?.optJSONObject(key) ?: return null to null
-            val end = o.optLong("end", 0)
-            return if (end > 0) o.optLong("start", 0) to end else null to null
-        }
         val skipData = serverGet.optJSONObject("result")?.optJSONObject("skip_data")
 
         // Direct-stream hosts encode the URL in the hash.
         if (iframeUrl.contains("plyr.php") || iframeUrl.contains("mewcdn.online/player/")) {
             val hash = iframeUrl.substringAfter('#', "")
             if (hash.isNotEmpty()) {
-                val decoded = String(android.util.Base64.decode(hash, android.util.Base64.DEFAULT))
+                val decoded = AnikotoSource.assertMediaUrl(
+                    // Either base64 alphabet may appear in the hash.
+                    String(android.util.Base64.decode(hash.replace('-', '+').replace('_', '/'), android.util.Base64.DEFAULT)),
+                )
                 val (inS, inE) = skip(skipData, "intro"); val (outS, outE) = skip(skipData, "outro")
-                return@withContext Stream(decoded, "${base()}/", emptyList(), inS, inE, outS, outE)
+                return Stream(decoded, "${base()}/", emptyList(), inS, inE, outS, outE)
             }
         }
 
+        val iframe = java.net.URI(AnikotoSource.assertMediaUrl(iframeUrl))
         val megaHtml = get(iframeUrl, referer = "${base()}/")
         val megaId = elementAttributeById(megaHtml, selector("playerContainerId"), selector("playerIdAttribute"))
             ?: throw Exception("megaplay data-id missing")
 
         // getSources lives on the SAME (rotating) origin as the iframe.
-        val playerOrigin = java.net.URI(iframeUrl).let { "${it.scheme}://${it.host}" }
-        val src = JSONObject(get("$playerOrigin${route("sources", mapOf("playerId" to megaId))}", referer = iframeUrl, xhr = true))
-
-        val streamUrl = src.optJSONObject("sources")?.optString("file").orEmpty()
-        if (streamUrl.isEmpty()) throw Exception("stream URL missing in getSources")
+        val playerOrigin = "${iframe.scheme}://${iframe.host}"
+        val iframePath = iframe.rawPath.orEmpty()
+        val sourcesPath = AnikotoSource.sourcesPath(route("sources", mapOf("playerId" to megaId)), iframePath)
+        val src = JSONObject(get("$playerOrigin$sourcesPath", referer = iframeUrl, xhr = true))
+        val streamUrl = if (AnikotoSource.needsCipher(src)) {
+            decryptedSourceUrl(src, playerOrigin, iframePath, iframeUrl)
+        } else AnikotoSource.sourceUrl(src)
 
         val subs = mutableListOf<Subtitle>()
         if (!actualHard) {
             val tracks = src.optJSONArray("tracks")
-            if (tracks != null) for (i in 0 until tracks.length()) {
-                val t = tracks.getJSONObject(i)
+            if (tracks != null) for (i in 0 until minOf(tracks.length(), 32)) {
+                val t = tracks.optJSONObject(i) ?: continue
                 if (t.optString("kind") == "captions") {
-                    subs += Subtitle(t.optString("file"), t.optString("label", "English"))
+                    val file = runCatching { AnikotoSource.assertMediaUrl(t.optString("file")) }.getOrNull() ?: continue
+                    subs += Subtitle(file, t.optString("label", "English"))
                 }
             }
         }
         val (inS, inE) = skip(src, "intro").takeIf { it.second != null } ?: skip(skipData, "intro")
         val (outS, outE) = skip(src, "outro").takeIf { it.second != null } ?: skip(skipData, "outro")
-        Stream(streamUrl, playerOrigin, subs, inS, inE, outS, outE)
+        return Stream(streamUrl, playerOrigin, subs, inS, inE, outS, outE)
     }
 
     /**
