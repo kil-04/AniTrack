@@ -93,6 +93,19 @@ working secondary origin takes over without waiting for a config edit. Adding a
 new origin or changing a route/selector is continuous deployment: update the
 signed config with a higher revision and merge it to `main`.
 
+## Release versions
+
+Every verified push to `main` is released by `continuous-deploy.yml`. When the
+version in `package.json` is already tagged, it publishes the next patch. For a
+deliberate minor or major release, declare the version (for example `7.1.0`)
+in `package.json`, `package-lock.json` and the Android `versionName`, raise the
+Android `versionCode`, and push that commit to `main`; the untagged declared
+version is then released as-is. Do not push the release tag yourself.
+
+A push that edits `automation/remote-config.json` is re-signed by a follow-up
+bot commit, which supersedes that push's verification run, so no release is cut
+for it. The next ordinary push to `main` releases the combined state.
+
 ## Android code updates
 
 Native code still requires an APK. The release pipeline creates a signed update
