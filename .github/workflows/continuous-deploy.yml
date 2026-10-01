@@ -48,7 +48,7 @@ jobs:
         with:
           node-version: 24
 
-      - name: Create the next patch release commit and tag
+      - name: Create the release commit (patch bump or declared version) and tag
         if: steps.current.outputs.proceed == 'true'
         id: version
         shell: bash
@@ -58,7 +58,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -- package.json package-lock.json apps/android/app/build.gradle.kts
-          git commit -m "chore(release): ${tag}"
+          # A declared (untagged) version is released from the tested commit as-is.
+          git diff --cached --quiet || git commit -m "chore(release): ${tag}"
           git tag -a "$tag" -m "AniTrack ${tag}"
           git push --atomic origin HEAD:main "refs/tags/$tag"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
