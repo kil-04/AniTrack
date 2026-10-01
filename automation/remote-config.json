@@ -1,10 +1,11 @@
 {
   "schemaVersion": 1,
-  "revision": 5,
-  "issuedAt": "2026-08-20T22:20:59.227Z",
+  "revision": 6,
+  "issuedAt": "2026-08-30T23:12:52.580Z",
   "providerOrder": [
     "anikoto",
-    "animepahe"
+    "animepahe",
+    "mkissa"
   ],
   "providers": {
     "anikoto": {
@@ -93,6 +94,34 @@
         "resolutionAttribute": "data-resolution",
         "audioAttribute": "data-audio"
       }
+    },
+    "mkissa": {
+      "enabled": false,
+      "baseUrls": [
+        "https://mkissa.to",
+        "https://api.mkissa.net"
+      ],
+      "streamHostFragments": [
+        "allanime.day",
+        "filelotion.fyi",
+        "mp4upload.com",
+        "ok.ru",
+        "streamsb.net"
+      ],
+      "mediaExtensions": [
+        ".m3u8",
+        ".mp4",
+        ".ts",
+        ".m4s",
+        ".vtt",
+        ".key"
+      ],
+      "routes": {
+        "graphql": "/api",
+        "authConfigs": "/authconfigs",
+        "cryptoBootstrap": "/client-crypto/v1/bootstrap"
+      },
+      "selectors": {}
     }
   },
   "features": {

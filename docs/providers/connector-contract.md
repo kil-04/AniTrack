@@ -52,6 +52,50 @@ Simple providers may fit in one adapter file. Anti-bot providers such as
 AnimePahe will still need private helpers for browser sessions, cookies and CDN
 authorization.
 
+## Stream variants and server switching
+
+`ProviderCapabilities.streamVariants` tells the UI what a stream choice means:
+
+- `quality` is a resolution or bitrate choice;
+- `subtitle-type` is a soft-sub, hard-sub or dub choice;
+- `server` is a provider mirror/player choice.
+
+For a multi-server provider, return one `StreamLink` per server. Keep
+`StreamLink.variant` stable (for example, a normalized server alias) and use
+`quality` as its user-facing label. Do not model five servers as five providers.
+Resolve only the selected server and try the remaining links sequentially after
+a real resolution or playback failure. Switching links must preserve the
+episode, audio preference and current playback position.
+
+Server links and media URLs are often short-lived. Cache only bounded metadata;
+resolve a link immediately before playback or download. A background prefetch
+must never resolve every server in parallel.
+
+## Stream authorization
+
+`StreamData` is the complete playback hand-off. In addition to `url`, it may
+carry `referer`, `cookies`, `requestHeaders`, `authorizationScope` and `cors`.
+The connector must supply these values instead of making the player infer rules
+from the provider name.
+
+- `requestHeaders` contains only headers actually required by the resolved
+  manifest/media requests. Never include `Host`, `Content-Length`, connection
+  headers, proxy headers or client cookies unrelated to the stream.
+- `authorizationScope: "exact"` authorizes only the resolved URL. This is the
+  default and should be preferred for a direct MP4 or a single signed URL.
+- `authorizationScope: "directory"` authorizes the resolved URL and sibling
+  resources under the same HTTPS origin and path directory. Use it only when an
+  HLS playlist loads relative manifests, segments, keys or subtitles there.
+- `cors` asks the Electron main process to add renderer-facing CORS headers for
+  that narrowly scoped media authorization. It does not broaden the allowed
+  destination.
+
+Authorization must be registered only after a connector returns a validated
+HTTPS URL. Reject credential-bearing URLs, local/private hosts and non-network
+schemes. Never apply provider headers to an entire third-party origin when an
+exact URL or stream directory is sufficient, and never log cookies,
+authorization values or source-decoding keys.
+
 ### What can be one file
 
 The signed `automation/remote-config.json` is the one shared data file for
@@ -73,6 +117,23 @@ Never download and execute connector code remotely. Signed automation may update
 data only: domains, routes, selectors, host rules, ordering and enablement.
 Executable scraping or playback logic must be reviewed, tested and released as
 part of the desktop installer or APK.
+
+Downloaded site JavaScript is untrusted input: parse only the bounded data
+needed by a reviewed connector and never evaluate it with `eval`, `Function`, a
+script tag or a WebView. Do not display advertising/player embed pages merely
+to discover their media URL.
+
+AniTrack does not bypass CAPTCHA or human-verification challenges. A connector
+must recognize challenge responses, stop retrying, enter a bounded cooldown and
+let the registry offer another provider. Repeated parallel retries amplify a
+challenge and can make every server unavailable.
+
+Android MKissa and Miruro are an explicit user-requested exception to the timed
+cooldown: stop the failed attempt without automatic retries, but allow an
+immediate manual retry or server change. Miruro API security errors require a
+fresh user-approved connection; a media-server rejection must not invalidate
+the catalogue session. No CAPTCHA bypass or automatic server rotation is added.
+Desktop cooldown policies are unchanged.
 
 ## Definition of done
 
