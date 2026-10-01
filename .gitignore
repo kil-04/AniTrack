@@ -1,24 +1,79 @@
-node_modules
-dist
-dist-electron
-release
+# Dependencies and package-manager caches
+node_modules/
+.npm/
+.pnpm-store/
+.yarn/cache/
+.yarn/unplugged/
+
+# Desktop build output and JavaScript/TypeScript caches
+/dist/
+/dist-electron/
+/release/
+/coverage/
+/.nyc_output/
+/.vite/
+**/.vite/
+.cache/
+.parcel-cache/
+.turbo/
+*.tsbuildinfo
+.eslintcache
+.stylelintcache
+/test-results/
+/playwright-report/
+
+# Local configuration, credentials, and signing material
 .env
 .env.*
 !.env.example
-.DS_Store
-*.log
-resources/mpv/
-apps/desktop/build/icon_tmp/
-.claude
-.release-secrets/
-.device-backups/
 *.jks
 *.keystore
-apps/android/.gradle/
-apps/android/.kotlin/
-apps/android/build/
-apps/android/app/build/
-apps/android/local.properties
-legacy/capacitor/android/.gradle/
-legacy/capacitor/android/build/
-legacy/capacitor/android/app/build/
+keystore.properties
+local.properties
+/.release-secrets/
+
+# IDE and operating-system metadata
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs, editor backups, and temporary diagnostics
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo
+*.bak
+/artifacts/
+/.device-backups/
+
+# Electron runtime assets generated or downloaded locally. Keep
+# apps/desktop/build itself tracked: it contains icons and installer.nsh.
+/resources/mpv/
+/apps/desktop/build/icon_tmp/
+
+# Native Android/Gradle output and caches
+**/.gradle/
+**/.kotlin/
+/apps/android/**/build/
+/legacy/capacitor/android/**/build/
+**/.externalNativeBuild/
+**/.cxx/
+**/captures/
+*.apk
+*.aab
+*.aar
+*.ap_
+*.dex
+*.class
+*.hprof
+
+# Capacitor-generated projects and copied web output
+/legacy/capacitor/www/
+/legacy/capacitor/android/app/release/
+/legacy/capacitor/android/capacitor-cordova-android-plugins/
+
+# Local assistant state
+/.claude/
