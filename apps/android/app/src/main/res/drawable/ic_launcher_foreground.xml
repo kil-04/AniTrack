@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  AniTrack mark: a play button inside a watch-progress ring (a dim track and a
+  bright 270° arc). Drawn on the 108dp adaptive-icon grid; the mark stays well
+  inside the 66dp safe zone. ui/AniLogo.kt draws the same geometry in-app.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Halo around the ring -->
+    <path android:pathData="M54,54m-36,0a36,36 0,1 1,72 0a36,36 0,1 1,-72 0">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="54"
+                android:centerY="54"
+                android:gradientRadius="36">
+                <item android:offset="0" android:color="#00E50914" />
+                <item android:offset="0.45" android:color="#1FE50914" />
+                <item android:offset="0.62" android:color="#40E50914" />
+                <item android:offset="0.8" android:color="#14E50914" />
+                <item android:offset="1" android:color="#00E50914" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- Track -->
+    <path
+        android:pathData="M54,32a22,22 0,1 1,0 44a22,22 0,1 1,0 -44"
+        android:strokeWidth="6"
+        android:strokeColor="#FF4A0C12" />
+    <!-- Progress arc: 12 o'clock clockwise to 9 o'clock -->
+    <path
+        android:pathData="M54,32A22,22 0,1 1,32 54"
+        android:strokeWidth="6"
+        android:strokeLineCap="round">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:type="linear"
+                android:startX="32"
+                android:startY="32"
+                android:endX="76"
+                android:endY="76">
+                <item android:offset="0" android:color="#FFFF4D57" />
+                <item android:offset="0.55" android:color="#FFE50914" />
+                <item android:offset="1" android:color="#FFA3060E" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- Play triangle with rounded corners -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M48.6,45L48.6,63L64.4,54Z"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineJoin="round"
+        android:strokeWidth="4.4" />
+</vector>

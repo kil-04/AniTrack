@@ -398,3 +398,37 @@ key and subtitle paths across a host change; cookies and arbitrary pages remain
 forbidden. MP4 remains exact-URL scoped. A connector regression verifies that a
 cross-host `.ts` segment receives the Referer while a cross-host HTML page does
 not. Device retesting after rebuild is still required.
+
+## API replaced upstream (2026-10-02)
+
+Miruro (`www.miruro.ru`) no longer serves the reads this connector was built on.
+Observed from a user-operated session page in the desktop test app:
+
+- `/api/secure/pipe` still exists, but the old inner paths (`info/{id}`,
+  `episodes`, `sources`) return HTTP 404. Both platform connectors therefore
+  fail at their first catalogue read.
+- The frontend now uses REST routes under `/api/v1/`: `anime` (lookup by
+  `anilist_id_in`, comma-joined, cursor paging), `anime/{internalId}/episodes`,
+  `.../episodes/{episodeId}` and `.../episodes/{episodeId}/play`. Show ids are
+  opaque internal tokens, not AniList ids. The server accepts only an
+  allow-list of exact query combinations (`limit=12` works where `limit=20`
+  returns `400 Unsupported catalog request`).
+- Responses are `application/octet-stream` payloads that are not JSON, gzip,
+  deflate, Brotli, or XOR with the public `VITE_PROXY_OBF_KEY` (which replaced
+  `VITE_PIPE_OBF_KEY`; `env2.js` is now a plain `window.env={...}` object).
+  No readable bundle, chunk or the Workbox service worker contains the decoder.
+- `/play` responses group streams as tracks (sub/ssub/dub) → providers →
+  servers with required `headers` (typically only `Referer`) → streams
+  (`url`, `format` hls/mp4, optional `embed`).
+
+Decoding these payloads would require recovering deliberately hidden logic,
+which this project does not do. Miruro stays disabled on both platforms.
+
+Desktop now contains a staged connector (`miruro.ts`, `miruro-media.ts`) on a
+reusable user-verified page session (`verified-page-session.ts`): AniList-based
+search (no Miruro traffic during matching), identity-checked catalogue,
+per-server variants, direct HLS/MP4 only, and playlist-directory authorization.
+It is registered but off unless signed configuration enables it, and its
+transport targets the retired routes. The desktop client now distinguishes
+security-check and rate-limit cooldowns; requests queued behind a block still
+stop.

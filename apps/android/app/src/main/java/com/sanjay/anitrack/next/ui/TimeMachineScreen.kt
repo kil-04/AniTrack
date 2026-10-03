@@ -1,5 +1,9 @@
 package com.sanjay.anitrack.next.ui
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Insights
+import androidx.compose.material.icons.rounded.Museum
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -104,9 +108,21 @@ fun TimeMachineScreen(
                         onClick = { anime.take(15).takeIf { it.isNotEmpty() }?.let { onOpen(it[Random.nextInt(it.size)]) } },
                         enabled = anime.isNotEmpty(),
                         colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
-                    ) { Text("✦  Mystery screening", fontWeight = FontWeight.Bold) }
-                    TextButton(onClick = onOpenGenome) { Text("⌁  View Taste Genome", color = Color(0xFFFFB3FF), fontWeight = FontWeight.Bold) }
-                    TextButton(onClick = { hero?.let(onOpenMuseum) }, enabled = hero != null) { Text("⌂  Enter Living Museum", color = Color(0xFFFFD180), fontWeight = FontWeight.Bold) }
+                    ) {
+                        Icon(Icons.Rounded.AutoAwesome, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Mystery screening", fontWeight = FontWeight.Bold)
+                    }
+                    TextButton(onClick = onOpenGenome) {
+                        Icon(Icons.Rounded.Insights, null, tint = Color(0xFFFFB3FF), modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("View Taste Genome", color = Color(0xFFFFB3FF), fontWeight = FontWeight.Bold)
+                    }
+                    TextButton(onClick = { hero?.let(onOpenMuseum) }, enabled = hero != null) {
+                        Icon(Icons.Rounded.Museum, null, tint = Color(0xFFFFD180), modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Enter Living Museum", color = Color(0xFFFFD180), fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         }

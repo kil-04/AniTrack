@@ -1,6 +1,6 @@
 {
   "name": "anitrack",
-  "version": "7.1.0",
+  "version": "8.0.0",
   "description": "Anime tracker + local player with Discord RPC, MAL two-way sync and legal-site launcher",
   "main": "dist-electron/apps/desktop/main/main.js",
   "author": "Sanjay",
@@ -28,7 +28,7 @@
     "android:next:test": "apps\\android\\gradlew.bat -p apps/android :app:testDebugUnitTest",
     "android:next:release": "node --env-file-if-exists=.env scripts/run-native-gradle.js :app:assembleRelease",
     "android:next:verify": "node scripts/android-release-common.js",
-    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/anikoto-provider.test.mjs tests/anikoto-hls.test.mjs tests/downloads.test.mjs tests/electron-provider-smoke.test.cjs tests/anikoto-source.test.mjs tests/anikoto-transport.test.mjs tests/animepahe-session.test.mjs tests/desktop-player.test.mjs tests/living-museum.test.mjs tests/match.test.mjs tests/miruro-protocol.test.mjs tests/miruro-web-session.test.mjs tests/mkissa-provider.test.mjs tests/provider-client.test.mjs tests/provider-registry.test.mjs tests/provider-search.test.mjs tests/recommendations.test.mjs tests/stream-authorization.test.mjs tests/taste-genome.test.mjs tests/time-machine.test.mjs tests/runtime-config.test.cjs",
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/anikoto-provider.test.mjs tests/anikoto-hls.test.mjs tests/downloads.test.mjs tests/electron-provider-smoke.test.cjs tests/anikoto-source.test.mjs tests/anikoto-transport.test.mjs tests/animepahe-session.test.mjs tests/desktop-player.test.mjs tests/living-museum.test.mjs tests/match.test.mjs tests/miruro-protocol.test.mjs tests/miruro-provider.test.mjs tests/miruro-web-session.test.mjs tests/mkissa-provider.test.mjs tests/provider-client.test.mjs tests/provider-registry.test.mjs tests/provider-search.test.mjs tests/recommendations.test.mjs tests/stream-authorization.test.mjs tests/taste-genome.test.mjs tests/time-machine.test.mjs tests/runtime-config.test.cjs tests/comix-transport.test.mjs",
     "typecheck": "tsc -p apps/desktop/tsconfig.renderer.json --noEmit && tsc -p apps/desktop/tsconfig.main.json --noEmit",
     "legacy:capacitor:sync": "npm run build:vite && cd legacy/capacitor && npx cap sync android",
     "legacy:capacitor:open": "cd legacy/capacitor && npx cap open android",

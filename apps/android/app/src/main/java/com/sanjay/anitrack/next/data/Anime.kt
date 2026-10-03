@@ -54,7 +54,7 @@ data class Anime(
                 format = m.str("format"),
                 year = if (m.isNull("seasonYear")) null else m.getInt("seasonYear"),
                 score = if (m.isNull("averageScore")) null else m.getInt("averageScore"),
-                synopsis = m.str("description")?.replace(Regex("<[^>]+>"), "")?.trim(),
+                synopsis = cleanDescription(m.str("description")),
                 genres = genres,
                 duration = if (m.isNull("duration")) null else m.optInt("duration"),
                 popularity = if (m.isNull("popularity")) null else m.optInt("popularity"),

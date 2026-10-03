@@ -11,8 +11,14 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.FilterList
+import androidx.compose.material.icons.rounded.RestartAlt
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.SearchOff
+import androidx.compose.material.icons.rounded.TravelExplore
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -23,8 +29,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.sanjay.anitrack.next.data.Anime
 import com.sanjay.anitrack.next.data.AniList
-
-private val SearchAccent = Color(0xFFE50914)
 
 // ── Search ────────────────────────────────────────────────────────────────────
 
@@ -71,38 +75,17 @@ fun SearchScreen(onOpen: (Anime) -> Unit) {
     val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 820
 
     Row(Modifier.fillMaxSize()) {
-        Column(Modifier.weight(1f).padding(horizontal = 24.dp, vertical = 16.dp)) {
-            Text("Filter", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(16.dp))
-            // Desktop filter panel: dark rounded box holding search + dropdowns.
+        Column(Modifier.weight(1f).padding(horizontal = 24.dp, vertical = 20.dp)) {
+            ScreenHeader("Browse anime", subtitle = "Filter AniList by genre, season, year and more.", icon = Icons.Rounded.TravelExplore)
+            Spacer(Modifier.height(18.dp))
+            // Filter panel: search plus dropdowns, applied with the Filter button.
             val apply: () -> Unit = { page = 1; reload++ }
-            Column(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
-                    .background(Color.White.copy(alpha = 0.04f)).padding(16.dp),
-            ) {
+            val filtered = query.isNotBlank() || genre != null || year != null || season != null || format != null ||
+                status != null || source != null || epRange != null || sort != "TRENDING_DESC"
+            AniCard(padding = PaddingValues(16.dp)) {
                 @OptIn(ExperimentalLayoutApi::class)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    // Search box
-                    Row(
-                        Modifier.width(240.dp).height(46.dp)
-                            .clip(RoundedCornerShape(10.dp)).background(Color(0xFF101014))
-                            .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(10.dp))
-                            .padding(horizontal = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(Icons.Filled.Search, null, tint = Color.White.copy(alpha = 0.4f), modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                            androidx.compose.foundation.text.BasicTextField(
-                                value = query, onValueChange = { query = it },
-                                singleLine = true,
-                                textStyle = MaterialTheme.typography.bodyMedium.copy(color = Color.White),
-                                cursorBrush = androidx.compose.ui.graphics.SolidColor(SearchAccent),
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                            if (query.isEmpty()) Text("Search...", color = Color.White.copy(alpha = 0.35f), style = MaterialTheme.typography.bodyMedium)
-                        }
-                    }
+                    FilterSearchField(query, { query = it }, "Search titles…", onSearch = apply)
                     FilterDropdown("Select genre", genre, listOf("Select genre" to null) + GENRES.map { it to it }) { genre = it; apply() }
                     FilterDropdown("Select season", SEASONS.entries.firstOrNull { it.value == season }?.key?.takeIf { season != null }, SEASONS.map { it.key to it.value }) { season = it; apply() }
                     FilterDropdown("Select year", year?.toString(), listOf("Select year" to null) + (2026 downTo 1960).map { it.toString() to it }) { year = it; apply() }
@@ -111,77 +94,121 @@ fun SearchScreen(onOpen: (Anime) -> Unit) {
                     FilterDropdown("Select source", SOURCES.entries.firstOrNull { it.value == source }?.key?.takeIf { source != null }, SOURCES.map { it.key to it.value }) { source = it; apply() }
                     FilterDropdown("Episode range", EP_RANGES.entries.firstOrNull { it.value == epRange }?.key?.takeIf { epRange != null }, EP_RANGES.map { it.key to it.value }) { epRange = it; apply() }
                     FilterDropdown("Default sort", SORTS.entries.firstOrNull { it.value == sort }?.key?.takeIf { sort != "TRENDING_DESC" }, SORTS.map { it.key to it.value }) { sort = it ?: "TRENDING_DESC"; apply() }
-                    // Red Filter button
-                    Row(
-                        Modifier.height(46.dp).clip(RoundedCornerShape(10.dp)).background(SearchAccent)
-                            .clickable { apply() }.padding(horizontal = 20.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text("Filter", color = Color.White, fontWeight = FontWeight.Bold)
+                    PillButton("Filter", apply, icon = Icons.Rounded.FilterList, style = PillStyle.Primary)
+                    if (filtered) {
+                        PillButton("Reset", {
+                            query = ""; genre = null; year = null; season = null; format = null
+                            status = null; source = null; epRange = null; sort = "TRENDING_DESC"
+                            apply()
+                        }, icon = Icons.Rounded.RestartAlt, style = PillStyle.Ghost)
                     }
                 }
             }
             Spacer(Modifier.height(16.dp))
             if (searching && results.isEmpty()) {
-                LinearProgressIndicator(Modifier.fillMaxWidth(), color = SearchAccent)
+                LinearProgressIndicator(Modifier.fillMaxWidth().clip(RoundedCornerShape(50)), color = AniColors.Accent, trackColor = AniColors.SurfaceHigh)
             } else if (!searching && results.isEmpty()) {
-                Text("No results — try different filters.", color = Color.White.copy(alpha = 0.4f))
+                EmptyState(Icons.Rounded.SearchOff, "No results", "Nothing matches these filters. Try removing one or searching another title.")
             }
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(120.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                columns = GridCells.Adaptive(140.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
                 modifier = Modifier.weight(1f),
             ) {
-                items(results, key = { it.id }) { a -> AnimeCard(a, onOpen) }
-                item(span = { GridItemSpan(maxLineSpan) }) {
-                    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.Center) {
-                        if (page > 1) TextButton(onClick = { page-- }) { Text("‹ Prev") }
-                        Text("Page $page", Modifier.align(Alignment.CenterVertically), color = Color.White.copy(alpha = 0.6f))
-                        if (hasNext) TextButton(onClick = { page++ }) { Text("Next ›") }
-                    }
+                items(results, key = { it.id }) { a -> AnimeCard(a, onOpen, width = null) }
+                if (results.isNotEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
+                    PageControls(page, hasNext, onPrevious = { page-- }, onNext = { page++ })
                 }
             }
         }
         if (wide && topRated.isNotEmpty()) {
-            Column(Modifier.width(300.dp).fillMaxHeight().padding(16.dp)) {
-                Text("Top rated", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(12.dp))
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    items(topRated.size) { i -> Top10Row(i + 1, topRated[i], onOpen) }
+            Column(Modifier.width(320.dp).fillMaxHeight().padding(top = 20.dp, end = 20.dp, bottom = 20.dp)) {
+                AniCard(Modifier.fillMaxHeight(), padding = PaddingValues(horizontal = 10.dp, vertical = 14.dp)) {
+                    Text("Top rated", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(start = 8.dp, bottom = 8.dp))
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        items(topRated.size) { i -> Top10Row(i + 1, topRated[i], onOpen) }
+                    }
                 }
             }
         }
     }
 }
-// Desktop-style "Select …" dropdown box (dark, bordered, chevron).
+
+/** Previous / page / next controls under result grids. */
 @Composable
-private fun <T> FilterDropdown(placeholder: String, current: String?, options: List<Pair<String, T>>, onPick: (T) -> Unit) {
+internal fun PageControls(page: Int, hasNext: Boolean, onPrevious: () -> Unit, onNext: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 12.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        PillButton("Previous", onPrevious, icon = Icons.AutoMirrored.Rounded.KeyboardArrowLeft, enabled = page > 1, compact = true)
+        Text("Page $page", Modifier.padding(horizontal = 16.dp), color = AniColors.TextSecondary, style = MaterialTheme.typography.labelLarge)
+        PillButton("Next", onNext, icon = Icons.AutoMirrored.Rounded.KeyboardArrowRight, enabled = hasNext, compact = true)
+    }
+}
+
+/** Search input matching the filter dropdowns. */
+@Composable
+internal fun FilterSearchField(value: String, onChange: (String) -> Unit, placeholder: String, onSearch: () -> Unit) {
+    Row(
+        Modifier.width(260.dp).height(44.dp)
+            .clip(RoundedCornerShape(12.dp)).background(AniColors.SurfaceHigh)
+            .border(1.dp, AniColors.BorderSoft, RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Rounded.Search, null, tint = AniColors.TextTertiary, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+            androidx.compose.foundation.text.BasicTextField(
+                value = value, onValueChange = onChange,
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = AniColors.Text),
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(AniColors.Accent),
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { onSearch() }),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (value.isEmpty()) Text(placeholder, color = AniColors.TextTertiary, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+// "Select …" dropdown box; an active filter is outlined in the brand red.
+@Composable
+internal fun <T> FilterDropdown(placeholder: String, current: String?, options: List<Pair<String, T>>, onPick: (T) -> Unit) {
     var open by remember { mutableStateOf(false) }
+    val active = current != null
     Box {
         Row(
-            Modifier.height(46.dp)
-                .clip(RoundedCornerShape(10.dp)).background(Color(0xFF101014))
-                .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(10.dp))
+            Modifier.height(44.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(if (active) AniColors.AccentSoft else AniColors.SurfaceHigh)
+                .border(1.dp, if (active) AniColors.Accent.copy(alpha = 0.55f) else AniColors.BorderSoft, RoundedCornerShape(12.dp))
                 .clickable { open = true }
-                .padding(horizontal = 14.dp),
+                .padding(start = 14.dp, end = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 current ?: placeholder,
-                style = MaterialTheme.typography.bodySmall,
-                color = if (current != null) Color.White else Color.White.copy(alpha = 0.6f),
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
+                color = if (active) AniColors.Text else AniColors.TextSecondary,
             )
-            Spacer(Modifier.width(6.dp))
-            Icon(Icons.Filled.KeyboardArrowDown, null, tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(4.dp))
+            Icon(Icons.Rounded.ExpandMore, null, tint = if (active) AniColors.Text else AniColors.TextTertiary, modifier = Modifier.size(20.dp))
         }
         DropdownMenu(
             expanded = open, onDismissRequest = { open = false },
-            shape = RoundedCornerShape(10.dp), containerColor = Color(0xFF16161C),
+            shape = RoundedCornerShape(14.dp), containerColor = AniColors.Surface,
             modifier = Modifier.heightIn(max = 420.dp),
         ) {
             options.forEach { (name, value) ->
-                DropdownMenuItem(text = { Text(name) }, onClick = { onPick(value); open = false })
+                DropdownMenuItem(
+                    text = { Text(name, fontWeight = if (name == current) FontWeight.Bold else FontWeight.Normal) },
+                    onClick = { onPick(value); open = false },
+                )
             }
         }
     }

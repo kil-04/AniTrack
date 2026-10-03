@@ -8,11 +8,16 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Login
+import androidx.compose.material.icons.automirrored.rounded.Logout
+import androidx.compose.material.icons.rounded.AccountCircle
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Sync
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -28,8 +33,6 @@ import com.sanjay.anitrack.next.data.AniList
 import com.sanjay.anitrack.next.data.Db
 import com.sanjay.anitrack.next.data.Mal
 import kotlinx.coroutines.launch
-
-private val Accent = Color(0xFFE50914)
 
 /**
  * MyAnimeList card for Settings — OAuth in an in-app WebView (PKCE plain,
@@ -48,25 +51,33 @@ fun MalCard(onProfileChanged: (connected: Boolean, username: String?) -> Unit = 
     val scope = rememberCoroutineScope()
     val verifier = remember { Mal.newVerifier() }
 
-    Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
-            .background(Color.White.copy(alpha = 0.04f)).padding(16.dp),
+    SettingsSection(
+        Icons.Rounded.AccountCircle,
+        "MyAnimeList",
+        "Two-way sync with your MAL list: import your anime list and push status changes automatically.",
     ) {
-        Text("MyAnimeList", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        Text(
-            "Two-way sync with your MAL list. Sign in to import your anime list and push status changes automatically.",
-            style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.5f),
-        )
-        Spacer(Modifier.height(14.dp))
         if (connected) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.size(40.dp).clip(CircleShape).background(AniColors.BrandGradient),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        username?.trim()?.firstOrNull()?.uppercaseChar()?.toString() ?: "M",
+                        color = Color.White, fontWeight = FontWeight.Bold,
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
-                    Text("Connected as", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.5f))
+                    Text("Connected as", style = MaterialTheme.typography.labelSmall, color = AniColors.TextSecondary)
                     Text(username ?: "MAL user", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 }
-                Button(
+            }
+            Spacer(Modifier.height(14.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                PillButton(
+                    "Sync from MAL",
                     onClick = {
-                        if (busy) return@Button
                         busy = true; syncMsg = "Syncing…"
                         scope.launch {
                             runCatching {
@@ -78,25 +89,26 @@ fun MalCard(onProfileChanged: (connected: Boolean, username: String?) -> Unit = 
                             busy = false
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Accent),
-                ) {
-                    if (busy) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
-                    else Text("Sync from MAL")
-                }
-                Spacer(Modifier.width(10.dp))
-                OutlinedButton(onClick = {
-                    Mal.disconnect(); connected = false; username = null; syncMsg = null
-                    onProfileChanged(false, null)
-                }) { Text("Disconnect") }
+                    icon = Icons.Rounded.Sync,
+                    style = PillStyle.Primary,
+                    loading = busy,
+                )
+                PillButton(
+                    "Disconnect",
+                    onClick = {
+                        Mal.disconnect(); connected = false; username = null; syncMsg = null
+                        onProfileChanged(false, null)
+                    },
+                    icon = Icons.AutoMirrored.Rounded.Logout,
+                    style = PillStyle.Outline,
+                )
             }
         } else {
-            Button(onClick = { authOpen = true }, colors = ButtonDefaults.buttonColors(containerColor = Accent)) {
-                Text("Connect MyAnimeList")
-            }
+            PillButton("Connect MyAnimeList", { authOpen = true }, icon = Icons.AutoMirrored.Rounded.Login, style = PillStyle.Primary)
         }
         syncMsg?.let {
-            Spacer(Modifier.height(8.dp))
-            Text(it, style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.6f))
+            Spacer(Modifier.height(10.dp))
+            StatusLine(it, if (it.startsWith("Sync failed")) false else if (it.startsWith("Imported")) true else null)
         }
     }
 
@@ -107,14 +119,13 @@ fun MalCard(onProfileChanged: (connected: Boolean, username: String?) -> Unit = 
             properties = DialogProperties(usePlatformDefaultWidth = false),
         ) {
             Column(
-                Modifier.fillMaxSize().padding(12.dp).clip(RoundedCornerShape(14.dp)).background(Color(0xFF101014)),
+                Modifier.fillMaxSize().padding(12.dp).clip(RoundedCornerShape(16.dp)).background(AniColors.Surface),
             ) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 6.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("Sign in to MyAnimeList", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                    Text(
-                        "✕", color = Color.White.copy(alpha = 0.7f),
-                        modifier = Modifier.clickable { authOpen = false }.padding(8.dp),
-                    )
+                    IconButton(onClick = { authOpen = false }) {
+                        Icon(Icons.Rounded.Close, "Close", tint = AniColors.TextSecondary)
+                    }
                 }
                 AndroidView(
                     factory = { ctx ->

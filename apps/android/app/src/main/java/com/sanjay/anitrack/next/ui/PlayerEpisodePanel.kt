@@ -1,5 +1,7 @@
 package com.sanjay.anitrack.next.ui
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -239,7 +241,7 @@ internal fun PlayerEpisodePanel(
                         },
                     )
                     if (watchedPercent >= 85) {
-                        Text("✓", style = MaterialTheme.typography.labelSmall, color = EpisodePanelAccent.copy(alpha = 0.8f))
+                        Icon(Icons.Rounded.CheckCircle, "Watched", tint = EpisodePanelAccent.copy(alpha = 0.8f), modifier = Modifier.size(14.dp))
                     } else if (watchedPercent > 0) {
                         Text(
                             "$watchedPercent%",

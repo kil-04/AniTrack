@@ -1,5 +1,8 @@
 package com.sanjay.anitrack.next.ui
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Insights
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -56,7 +59,11 @@ fun TasteGenomeScreen(onOpen: (Int) -> Unit, onOpenTimeMachine: () -> Unit) {
                 ).padding(horizontal = 24.dp, vertical = 34.dp)
             ) {
                 Column(Modifier.fillMaxWidth()) {
-                    Text("⌁  PERSONAL TASTE SEQUENCE", color = GenomePink, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Rounded.Insights, null, tint = GenomePink, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("PERSONAL TASTE SEQUENCE", color = GenomePink, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+                    }
                     Spacer(Modifier.height(14.dp))
                     Text(genome.archetype, style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Black)
                     Spacer(Modifier.height(10.dp))
@@ -80,7 +87,11 @@ fun TasteGenomeScreen(onOpen: (Int) -> Unit, onOpenTimeMachine: () -> Unit) {
                         Button(
                             onClick = onOpenTimeMachine,
                             colors = ButtonDefaults.buttonColors(containerColor = GenomePink.copy(alpha = 0.16f), contentColor = Color(0xFFFFC4FF)),
-                        ) { Text("Enter the Time Machine →", fontWeight = FontWeight.Bold) }
+                        ) {
+                            Text("Enter the Time Machine", fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.width(6.dp))
+                            Icon(Icons.AutoMirrored.Rounded.ArrowForward, null, modifier = Modifier.size(18.dp))
+                        }
                     }
                 }
             }
@@ -115,7 +126,7 @@ fun TasteGenomeScreen(onOpen: (Int) -> Unit, onOpenTimeMachine: () -> Unit) {
                                 AsyncImage(row.cover, row.title, Modifier.width(126.dp).height(180.dp).clip(RoundedCornerShape(10.dp)).background(Color.White.copy(alpha = 0.05f)), contentScale = ContentScale.Crop)
                                 Spacer(Modifier.height(6.dp))
                                 Text(row.title, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
-                                row.score?.let { Text("★ $it", color = Color(0xFFE8C34A), style = MaterialTheme.typography.labelSmall) }
+                                ScoreBadge(row.score?.toString())
                             }
                         }
                     }

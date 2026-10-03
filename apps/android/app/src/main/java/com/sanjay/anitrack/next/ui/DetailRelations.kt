@@ -17,11 +17,9 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
+import androidx.compose.foundation.shape.CircleShape
 import com.sanjay.anitrack.next.data.Anime
 import com.sanjay.anitrack.next.data.AniList
-
-private val Accent = Color(0xFFE50914)
 
 // ── Related (side stories / specials — non-chain relations, like desktop) ─────
 
@@ -38,36 +36,27 @@ internal fun RelatedSection(anime: Anime, onOpenAnime: (Int) -> Unit) {
     val related = rels.filter { it.type != "PREQUEL" && it.type != "SEQUEL" }
     if (related.isEmpty()) return
 
-    Column(Modifier.padding(bottom = 20.dp)) {
-        Text("Related", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp))
-        Spacer(Modifier.height(10.dp))
-        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(Modifier.padding(bottom = 8.dp)) {
+        SectionHeader("Related")
+        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             items(related.size) { i ->
                 val r = related[i]
-                Column(Modifier.width(120.dp).clickable { onOpenAnime(r.anime.id) }) {
-                    Box(
-                        Modifier.width(120.dp).height(170.dp).clip(RoundedCornerShape(10.dp))
-                            .background(Color.White.copy(alpha = 0.06f)),
-                    ) {
-                        AsyncImage(model = r.anime.cover, contentDescription = r.anime.title, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-                        // Relation label strip (desktop's "Side Story" tag).
-                        Box(
-                            Modifier.align(Alignment.BottomStart).fillMaxWidth()
-                                .background(
-                                    androidx.compose.ui.graphics.Brush.verticalGradient(
-                                        listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f)),
-                                    ),
-                                )
-                                .padding(horizontal = 8.dp, vertical = 6.dp),
-                        ) {
-                            Text(
-                                relationLabels[r.type] ?: r.type.lowercase().replaceFirstChar { c -> c.uppercase() },
-                                style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.85f),
-                            )
-                        }
+                Column(Modifier.width(128.dp).clip(RoundedCornerShape(12.dp)).clickable { onOpenAnime(r.anime.id) }) {
+                    Box {
+                        PosterImage(
+                            r.anime.cover, r.anime.title,
+                            Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).clip(RoundedCornerShape(12.dp)),
+                        )
+                        // Relation label (desktop's "Side Story" tag).
+                        Tag(
+                            relationLabels[r.type] ?: r.type.lowercase().replaceFirstChar { c -> c.uppercase() },
+                            Modifier.align(Alignment.BottomStart).padding(8.dp),
+                            tone = TagTone.Glass,
+                        )
                     }
-                    Spacer(Modifier.height(5.dp))
-                    Text(r.anime.title, style = MaterialTheme.typography.labelMedium, maxLines = 2, overflow = TextOverflow.Ellipsis, color = Color.White.copy(alpha = 0.85f))
+                    Spacer(Modifier.height(8.dp))
+                    Text(r.anime.title, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis, color = AniColors.Text)
+                    Text(metaLine(formatLabel(r.anime.format), r.anime.year?.toString()), style = MaterialTheme.typography.labelSmall, color = AniColors.TextTertiary)
                 }
             }
         }
@@ -114,36 +103,32 @@ internal fun WatchOrderSection(anime: Anime, onOpenAnime: (Int) -> Unit) {
     }
 
     if (chain.size < 2) return
-    Column(Modifier.padding(bottom = 20.dp)) {
-        Text("Watch Order", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp))
-        Spacer(Modifier.height(10.dp))
-        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(Modifier.padding(bottom = 8.dp)) {
+        SectionHeader("Watch Order")
+        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             items(chain.size) { i ->
                 val m = chain[i]
                 val isHere = m.id == anime.id
-                Column(Modifier.width(120.dp).clickable(enabled = !isHere) { onOpenAnime(m.id) }) {
-                    Box(
-                        Modifier.width(120.dp).height(170.dp).clip(RoundedCornerShape(10.dp))
-                            .background(Color.White.copy(alpha = 0.06f))
-                            .then(if (isHere) Modifier.border(2.dp, Accent, RoundedCornerShape(10.dp)) else Modifier),
-                    ) {
-                        AsyncImage(model = m.cover, contentDescription = m.title, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-                        // Number badge
+                Column(Modifier.width(128.dp).clip(RoundedCornerShape(12.dp)).clickable(enabled = !isHere) { onOpenAnime(m.id) }) {
+                    Box {
+                        PosterImage(
+                            m.cover, m.title,
+                            Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).clip(RoundedCornerShape(12.dp))
+                                .then(if (isHere) Modifier.border(2.dp, AniColors.Accent, RoundedCornerShape(12.dp)) else Modifier),
+                        )
+                        // Position in the franchise.
                         Box(
-                            Modifier.align(Alignment.TopStart).padding(6.dp)
-                                .size(24.dp).clip(RoundedCornerShape(50)).background(Accent),
+                            Modifier.align(Alignment.TopStart).padding(8.dp)
+                                .size(26.dp).clip(CircleShape).background(if (isHere) AniColors.Accent else Color.Black.copy(alpha = 0.65f)),
                             contentAlignment = Alignment.Center,
-                        ) { Text("${i + 1}", color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold) }
+                        ) { Text("${i + 1}", color = Color.White, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold) }
                         if (isHere) {
-                            Box(
-                                Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Accent).padding(vertical = 3.dp),
-                                contentAlignment = Alignment.Center,
-                            ) { Text("YOU ARE HERE", color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, letterSpacing = androidx.compose.ui.unit.TextUnit(1f, androidx.compose.ui.unit.TextUnitType.Sp)) }
+                            Tag("YOU ARE HERE", Modifier.align(Alignment.BottomStart).padding(8.dp), tone = TagTone.Accent)
                         }
                     }
-                    Spacer(Modifier.height(5.dp))
-                    Text(m.title, style = MaterialTheme.typography.labelMedium, maxLines = 2, overflow = TextOverflow.Ellipsis, color = Color.White.copy(alpha = 0.85f))
-                    m.year?.let { Text("$it", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.4f)) }
+                    Spacer(Modifier.height(8.dp))
+                    Text(m.title, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis, color = AniColors.Text)
+                    Text(metaLine(formatLabel(m.format), m.year?.toString()), style = MaterialTheme.typography.labelSmall, color = AniColors.TextTertiary)
                 }
             }
         }

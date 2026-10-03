@@ -1,0 +1,11 @@
+Comix image-format interoperability
+
+Format reference: Keiyoushi extensions-source contributors
+https://github.com/keiyoushi/extensions-source
+src/en/comix/src/eu/kanade/tachiyomi/extension/en/comix/Descrambler.kt
+Licensed under Apache License 2.0 (see Apache-2.0.txt in this directory).
+
+AniTrack modifications/reimplementation: strict format validation, bounded
+response/decode sizes, exact-image-only transport without cookies or redirects,
+native cache output, cancellation and synthetic regression tests. No website
+request-signing keys or account credentials are copied or distributed.

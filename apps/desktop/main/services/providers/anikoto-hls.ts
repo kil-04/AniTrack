@@ -3,6 +3,8 @@ import { authorizeResolvedStream } from "./stream-authorization";
 import type { StreamData } from "./types";
 
 interface HlsOptions {
+  /** Provider name shown in error messages. */
+  label?: string;
   deadlineMillis?: number;
   authorize?: (stream: StreamData) => void;
 }
@@ -30,10 +32,11 @@ export async function prepareAnikotoHlsAuthorization(
   fetcher: (url: string, options?: RequestInit) => Promise<Response>,
   options: HlsOptions = {},
 ): Promise<string> {
+  const label = options.label ?? "Anikoto";
   const rootUrl = assertAnikotoMediaUrl(initialUrl);
   const safeReferer = assertAnikotoMediaUrl(referer);
   const controller = new AbortController();
-  const timeoutError = new Error("Anikoto playlist verification timed out. Try again or choose another server.");
+  const timeoutError = new Error(`${label} playlist verification timed out. Try again or choose another server.`);
   let rejectDeadline: (error: Error) => void = () => {};
   const deadline = new Promise<never>((_resolve, reject) => { rejectDeadline = reject; });
   const timer = setTimeout(() => {
@@ -49,11 +52,11 @@ export async function prepareAnikotoHlsAuthorization(
     const url = assertAnikotoMediaUrl(raw);
     const parsed = new URL(url);
     if (/\/segment\/[A-Za-z0-9_+-]{32,}={0,2}\/?$/.test(parsed.pathname)) {
-      throw new Error("Anikoto returned encrypted playlist links. Choose another server while support for this stream format is updated.");
+      throw new Error(`${label} returned encrypted playlist links. Choose another server while support for this stream format is updated.`);
     }
     const directory = `${parsed.origin}${parsed.pathname.slice(0, parsed.pathname.lastIndexOf("/") + 1)}`;
     if (!authorizations.has(directory)) {
-      if (authorizations.size >= MAX_DIRECTORIES) throw new Error("Anikoto playlist references too many media directories");
+      if (authorizations.size >= MAX_DIRECTORIES) throw new Error(`${label} playlist references too many media directories`);
       authorizations.set(directory, {
         url, referer: safeReferer, authorizationScope: "directory", cors: true,
       });
@@ -62,17 +65,17 @@ export async function prepareAnikotoHlsAuthorization(
   }
 
   function reference(raw: string, base: string): string {
-    if (++references > MAX_REFERENCES) throw new Error("Anikoto playlist has too many media references");
+    if (++references > MAX_REFERENCES) throw new Error(`${label} playlist has too many media references`);
     let absolute: string;
     try { absolute = new URL(raw, base).toString(); }
-    catch { throw new Error("Anikoto playlist contains an invalid media reference"); }
+    catch { throw new Error(`${label} playlist contains an invalid media reference`); }
     return remember(absolute);
   }
 
   async function readPlaylist(response: Response): Promise<string> {
     if (Number(response.headers.get("content-length")) > MAX_PLAYLIST_BYTES) {
       void response.body?.cancel().catch(() => {});
-      throw new Error("Anikoto playlist exceeds the supported size");
+      throw new Error(`${label} playlist exceeds the supported size`);
     }
     const reader = response.body?.getReader();
     const chunks: Uint8Array[] = [];
@@ -83,7 +86,7 @@ export async function prepareAnikotoHlsAuthorization(
         controller.signal.throwIfAborted();
         if (part.done) break;
         length += part.value.byteLength;
-        if (length > MAX_PLAYLIST_BYTES) throw new Error("Anikoto playlist exceeds the supported size");
+        if (length > MAX_PLAYLIST_BYTES) throw new Error(`${label} playlist exceeds the supported size`);
         chunks.push(part.value);
       }
     } catch (error) {
@@ -98,9 +101,9 @@ export async function prepareAnikotoHlsAuthorization(
   async function inspect(raw: string, depth: number, ancestors = new Set<string>()): Promise<VerifiedPlaylist> {
     controller.signal.throwIfAborted();
     const url = remember(raw);
-    if (ancestors.has(url)) throw new Error("Anikoto playlist contains a circular rendition link");
+    if (ancestors.has(url)) throw new Error(`${label} playlist contains a circular rendition link`);
     if (verifiedPlaylists.has(url)) return verifiedPlaylists.get(url)!;
-    if (depth > 4 || visited.size >= MAX_PLAYLISTS) throw new Error("Anikoto playlist nesting exceeds the supported limit");
+    if (depth > 4 || visited.size >= MAX_PLAYLISTS) throw new Error(`${label} playlist nesting exceeds the supported limit`);
     visited.add(url);
     const childAncestors = new Set(ancestors).add(url);
     const response = await Promise.race([fetcher(url, {
@@ -115,12 +118,12 @@ export async function prepareAnikotoHlsAuthorization(
         verifiedPlaylists.set(url, missing);
         return missing;
       }
-      throw new Error(`Anikoto playlist request failed (HTTP ${response.status})`);
+      throw new Error(`${label} playlist request failed (HTTP ${response.status})`);
     }
     const base = remember(response.url || url);
     const playlist = await readPlaylist(response);
     const lines = playlist.replace(/^\uFEFF/, "").split(/\r?\n/).map(line => line.trim());
-    if (lines[0] !== "#EXTM3U") throw new Error("Anikoto returned an invalid HLS playlist");
+    if (lines[0] !== "#EXTM3U") throw new Error(`${label} returned an invalid HLS playlist`);
     const children = new Map<string, PlaylistChild>();
     let nextVariant: number | null = null;
     let mediaReferences = 0;
@@ -133,7 +136,7 @@ export async function prepareAnikotoHlsAuthorization(
           nextVariant = Number.isSafeInteger(bandwidth) ? bandwidth : 0;
         }
         const uriAttributes = [...line.matchAll(/\bURI\s*=\s*"([^"]+)"/g)];
-        if (/\bURI\s*=/.test(line) && uriAttributes.length === 0) throw new Error("Anikoto playlist contains an invalid URI attribute");
+        if (/\bURI\s*=/.test(line) && uriAttributes.length === 0) throw new Error(`${label} playlist contains an invalid URI attribute`);
         if (line.startsWith("#EXT-X-MEDIA:") && /\bTYPE=AUDIO(?:,|$)/.test(line) && uriAttributes.length > 0) externalAudio = true;
         for (const match of uriAttributes) {
           const child = reference(match[1], base);
@@ -152,8 +155,8 @@ export async function prepareAnikotoHlsAuthorization(
       else mediaReferences++;
       nextVariant = null;
     }
-    if (nextVariant !== null) throw new Error("Anikoto playlist is missing a rendition URL");
-    if (children.size > MAX_VARIANTS) throw new Error("Anikoto playlist has too many renditions to verify");
+    if (nextVariant !== null) throw new Error(`${label} playlist is missing a rendition URL`);
+    if (children.size > MAX_VARIANTS) throw new Error(`${label} playlist has too many renditions to verify`);
     let complete = true;
     let best: { url: string; bandwidth: number } | null = null;
     for (const [child, metadata] of children) {
@@ -165,7 +168,7 @@ export async function prepareAnikotoHlsAuthorization(
     }
     const available = mediaReferences > 0 || best !== null;
     if (available && !complete && externalAudio) {
-      throw new Error("Anikoto has a missing quality in a stream with separate audio. Choose another server so video and sound stay together.");
+      throw new Error(`${label} has a missing quality in a stream with separate audio. Choose another server so video and sound stay together.`);
     }
     // Returning a master that still advertises a missing quality lets HLS or
     // the downloader select the broken URL again. Keep ABR only when complete.
@@ -180,7 +183,7 @@ export async function prepareAnikotoHlsAuthorization(
   try {
     const result = await Promise.race([inspect(rootUrl, 0), deadline]);
     controller.signal.throwIfAborted();
-    if (!result.url) throw new Error("Anikoto playlist has no accessible media rendition");
+    if (!result.url) throw new Error(`${label} playlist has no accessible media rendition`);
     const authorize = options.authorize ?? authorizeResolvedStream;
     for (const stream of authorizations.values()) authorize(stream);
     return result.url;

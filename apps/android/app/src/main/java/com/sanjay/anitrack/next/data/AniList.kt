@@ -30,16 +30,28 @@ object AniList {
     private const val SPACING_MS = 350L
     private const val CACHE_TTL_MS = 5 * 60 * 1000L
     private const val HOME_STALE_MS = 24 * 60 * 60 * 1000L
+    /** Responses are reused from disk this long, so screens reopen instantly across restarts. */
+    private const val DISK_TTL_MS = 30 * 60 * 1000L
+    /** AniList's degraded API can return an empty page after a server-side timeout; tiny
+     *  responses like that aren't persisted. */
+    private const val MIN_PERSISTED_CHARS = 512
 
     private lateinit var homeCacheFile: File
+    private lateinit var mangaHomeCacheFile: File
+    private lateinit var diskCacheDir: File
 
     fun init(context: Context) {
         if (::homeCacheFile.isInitialized) return
         homeCacheFile = File(context.applicationContext.cacheDir, "anilist-home-v1.json")
+        mangaHomeCacheFile = File(context.applicationContext.cacheDir, "anilist-manga-home-v1.json")
+        diskCacheDir = File(context.applicationContext.cacheDir, "anilist-gql").apply { mkdirs() }
+        backgroundScope.launch { runCatching { pruneDiskCache() } }
     }
 
+    // AniList's large combined queries can take 20+ seconds when the API is
+    // under load; a shorter budget turned those into guaranteed failures.
     private val http = OkHttpClient.Builder()
-        .callTimeout(15, TimeUnit.SECONDS)
+        .callTimeout(35, TimeUnit.SECONDS)
         .build()
     private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -60,10 +72,52 @@ object AniList {
         description(asHtml: false)
     """
 
+    private fun diskFile(key: String): File? {
+        if (!::diskCacheDir.isInitialized) return null
+        val digest = java.security.MessageDigest.getInstance("SHA-1").digest(key.toByteArray())
+        return File(diskCacheDir, digest.joinToString("") { "%02x".format(it) } + ".json")
+    }
+
+    private fun readDisk(key: String, maxAgeMs: Long): JSONObject? = runCatching {
+        val file = diskFile(key)?.takeIf { it.isFile } ?: return@runCatching null
+        val envelope = JSONObject(file.readText())
+        val age = System.currentTimeMillis() - envelope.getLong("savedAt")
+        if (age in 0..maxAgeMs) envelope.getJSONObject("data") else null
+    }.getOrNull()
+
+    private fun writeDisk(key: String, data: JSONObject) {
+        val file = diskFile(key) ?: return
+        val text = data.toString()
+        if (text.length < MIN_PERSISTED_CHARS) return
+        backgroundScope.launch {
+            runCatching {
+                val envelope = JSONObject().put("savedAt", System.currentTimeMillis()).put("data", data).toString()
+                val temporary = File(file.parentFile, "${file.name}.tmp")
+                temporary.writeText(envelope)
+                if (!temporary.renameTo(file)) {
+                    file.writeText(envelope)
+                    temporary.delete()
+                }
+            }
+        }
+    }
+
+    /** Keeps the response cache to a week and a few hundred entries. */
+    private fun pruneDiskCache() {
+        val cutoff = System.currentTimeMillis() - 7 * 24 * 60 * 60 * 1000L
+        diskCacheDir.listFiles().orEmpty().filter { it.lastModified() < cutoff }.forEach { it.delete() }
+        diskCacheDir.listFiles().orEmpty().sortedByDescending { it.lastModified() }.drop(400).forEach { it.delete() }
+    }
+
     private suspend fun gql(query: String, variables: JSONObject): JSONObject = withContext(Dispatchers.IO) {
         val key = query + variables.toString()
         synchronized(cache) {
             cache[key]?.let { (at, v) -> if (System.currentTimeMillis() - at < CACHE_TTL_MS) return@withContext v }
+        }
+        // A recent response from disk answers without queueing behind other requests.
+        readDisk(key, DISK_TTL_MS)?.let { data ->
+            synchronized(cache) { cache[key] = System.currentTimeMillis() to data }
+            return@withContext data
         }
         lock.withLock {
             // Another caller may have populated the cache while this request
@@ -95,6 +149,7 @@ object AniList {
                             if (json.has("errors")) throw Exception(json.getJSONArray("errors").toString())
                             val data = json.getJSONObject("data")
                             synchronized(cache) { cache[key] = System.currentTimeMillis() to data }
+                            writeDisk(key, data)
                             return@withLock data
                         }
                     } catch (e: Exception) {
@@ -125,7 +180,7 @@ object AniList {
     suspend fun trending(): List<Anime> = mediaList(
         gql(
             """query { Page(perPage: 30) {
-                media(type: ANIME, sort: TRENDING_DESC) { $MEDIA_FIELDS }
+                media(type: ANIME, sort: TRENDING_DESC, isAdult: false, popularity_greater: 1000) { $MEDIA_FIELDS }
             } }""",
             JSONObject(),
         )
@@ -233,7 +288,7 @@ object AniList {
         val data = gql(
             """query(${'$'}to: Int) {
                 trending: Page(perPage: 30) {
-                    media(type: ANIME, sort: TRENDING_DESC, isAdult: false) { $MEDIA_FIELDS }
+                    media(type: ANIME, sort: TRENDING_DESC, isAdult: false, popularity_greater: 1000) { $MEDIA_FIELDS }
                 }
                 latest: Page(perPage: 30) {
                     airingSchedules(airingAt_lesser: ${'$'}to, sort: TIME_DESC) {
@@ -245,7 +300,7 @@ object AniList {
                     media(type: ANIME, status: RELEASING, sort: POPULARITY_DESC, isAdult: false) { $MEDIA_FIELDS }
                 }
                 popular: Page(perPage: 20) {
-                    media(type: ANIME, sort: POPULARITY_DESC, isAdult: false) { $MEDIA_FIELDS }
+                    media(type: ANIME, sort: POPULARITY_DESC, isAdult: false, popularity_greater: 50000) { $MEDIA_FIELDS }
                 }
             }""",
             JSONObject().put("to", now),
@@ -260,25 +315,36 @@ object AniList {
     /** Airing schedule for the next 7 days (sorted by time). */
     suspend fun airingWeek(): List<Airing> {
         val now = System.currentTimeMillis() / 1000
-        val week = now + 7 * 24 * 3600
-        val data = gql(
-            """query(${'$'}from: Int, ${'$'}to: Int) {
-                Page(perPage: 50) {
-                    airingSchedules(airingAt_greater: ${'$'}from, airingAt_lesser: ${'$'}to, sort: TIME) {
-                        airingAt episode
-                        media { $MEDIA_FIELDS }
+        return airingBetween(now, now + 7 * 24 * 3600)
+    }
+
+    /** Episodes airing between two epoch seconds, in time order (up to three pages of 50). */
+    suspend fun airingBetween(from: Long, to: Long): List<Airing> {
+        val out = ArrayList<Airing>()
+        for (page in 1..3) {
+            val data = gql(
+                """query(${'$'}from: Int, ${'$'}to: Int, ${'$'}page: Int) {
+                    Page(page: ${'$'}page, perPage: 50) {
+                        pageInfo { hasNextPage }
+                        airingSchedules(airingAt_greater: ${'$'}from, airingAt_lesser: ${'$'}to, sort: TIME) {
+                            airingAt episode
+                            media { $MEDIA_FIELDS }
+                        }
                     }
-                }
-            }""",
-            JSONObject().put("from", now).put("to", week),
-        )
-        val arr = data.getJSONObject("Page").getJSONArray("airingSchedules")
-        return (0 until arr.length()).mapNotNull { i ->
-            val o = arr.getJSONObject(i)
-            val m = o.optJSONObject("media") ?: return@mapNotNull null
-            if (m.optBoolean("isAdult", false)) return@mapNotNull null
-            Airing(rememberAnime(m), o.optInt("episode"), o.optLong("airingAt"))
+                }""",
+                JSONObject().put("from", from).put("to", to).put("page", page),
+            )
+            val pageJson = data.getJSONObject("Page")
+            val arr = pageJson.getJSONArray("airingSchedules")
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                val m = o.optJSONObject("media") ?: continue
+                if (m.optBoolean("isAdult", false)) continue
+                out += Airing(rememberAnime(m), o.optInt("episode"), o.optLong("airingAt"))
+            }
+            if (!pageJson.optJSONObject("pageInfo")?.optBoolean("hasNextPage", false).let { it == true }) break
         }
+        return out
     }
 
     /** Filtered search (the desktop app's Filter page). Any arg may be null. */
@@ -299,6 +365,7 @@ object AniList {
         source?.let { args += "\$src: MediaSource"; mArgs += "source: \$src"; vars.put("src", it) }
         epMin?.let { args += "\$epMin: Int"; mArgs += "episodes_greater: \$epMin"; vars.put("epMin", it - 1) }
         epMax?.let { args += "\$epMax: Int"; mArgs += "episodes_lesser: \$epMax"; vars.put("epMax", it + 1) }
+        if (mArgs.size == 3) mArgs += "popularity_greater: 1000"
         val data = gql(
             """query(${args.joinToString(", ")}) {
                 Page(page: ${'$'}page, perPage: 30) {
@@ -317,7 +384,7 @@ object AniList {
     suspend fun topRated(): List<Anime> = mediaList(
         gql(
             """query { Page(perPage: 12) {
-                media(type: ANIME, sort: SCORE_DESC, isAdult: false) { $MEDIA_FIELDS }
+                media(type: ANIME, sort: SCORE_DESC, isAdult: false, popularity_greater: 10000) { $MEDIA_FIELDS }
             } }""",
             JSONObject(),
         )
@@ -442,7 +509,7 @@ object AniList {
     suspend fun top10(): List<Anime> = mediaList(
         gql(
             """query { Page(perPage: 10) {
-                media(type: ANIME, sort: TRENDING_DESC, isAdult: false) { $MEDIA_FIELDS }
+                media(type: ANIME, sort: TRENDING_DESC, isAdult: false, popularity_greater: 1000) { $MEDIA_FIELDS }
             } }""",
             JSONObject(),
         )
@@ -462,7 +529,7 @@ object AniList {
     suspend fun mostPopular(): List<Anime> = mediaList(
         gql(
             """query { Page(perPage: 20) {
-                media(type: ANIME, sort: POPULARITY_DESC, isAdult: false) { $MEDIA_FIELDS }
+                media(type: ANIME, sort: POPULARITY_DESC, isAdult: false, popularity_greater: 50000) { $MEDIA_FIELDS }
             } }""",
             JSONObject(),
         )
@@ -533,6 +600,182 @@ object AniList {
         }
     } catch (e: Exception) {
         emptyList()
+    }
+
+    // ── Manga ──────────────────────────────────────────────────────────────
+
+    const val MANGA_FIELDS = """
+        id idMal isAdult title { romaji english } coverImage { large } bannerImage
+        chapters volumes status format startDate { year } averageScore popularity
+        genres countryOfOrigin synonyms description(asHtml: false)
+    """
+
+    private val mangaCache = object : LinkedHashMap<Int, Manga>(128, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, Manga>) = size > 300
+    }
+
+    private fun rememberManga(media: JSONObject): Manga {
+        val manga = Manga.fromMedia(media)
+        synchronized(mangaCache) { mangaCache[manga.id] = manga }
+        return manga
+    }
+
+    fun cachedManga(id: Int): Manga? = synchronized(mangaCache) { mangaCache[id] }
+
+    data class MangaFeed(
+        val trending: List<Manga>,
+        val publishing: List<Manga>,
+        val popular: List<Manga>,
+        val topRated: List<Manga>,
+        val manhwa: List<Manga>,
+    )
+
+    @Volatile private var mangaFeedCache: Pair<Long, MangaFeed>? = null
+
+    private fun parseMangaFeed(data: JSONObject): MangaFeed {
+        fun rows(alias: String): List<Manga> {
+            val items = data.optJSONObject(alias)?.optJSONArray("media") ?: return emptyList()
+            return (0 until items.length()).map { rememberManga(items.getJSONObject(it)) }
+        }
+        return MangaFeed(
+            trending = rows("trending"),
+            publishing = rows("publishing"),
+            popular = rows("popular"),
+            topRated = rows("topRated"),
+            manhwa = rows("manhwa"),
+        )
+    }
+
+    /** The last complete Manga Home feed (up to a day old) so the page paints at once. */
+    suspend fun cachedMangaFeed(): MangaFeed? {
+        val now = System.currentTimeMillis()
+        mangaFeedCache?.let { (at, feed) -> if (now - at in 0..HOME_STALE_MS) return feed }
+        if (!::mangaHomeCacheFile.isInitialized) return null
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                val envelope = JSONObject(mangaHomeCacheFile.readText())
+                val savedAt = envelope.getLong("savedAt")
+                require(now - savedAt in 0..HOME_STALE_MS)
+                val feed = parseMangaFeed(envelope.getJSONObject("data"))
+                mangaFeedCache = savedAt to feed
+                feed
+            }.getOrNull()
+        }
+    }
+
+    private fun persistMangaFeed(savedAt: Long, data: JSONObject) {
+        if (!::mangaHomeCacheFile.isInitialized) return
+        backgroundScope.launch {
+            runCatching {
+                val envelope = JSONObject().put("savedAt", savedAt).put("data", data).toString()
+                val temporary = File(mangaHomeCacheFile.parentFile, "${mangaHomeCacheFile.name}.tmp")
+                temporary.writeText(envelope)
+                if (!temporary.renameTo(mangaHomeCacheFile)) {
+                    mangaHomeCacheFile.writeText(envelope)
+                    temporary.delete()
+                }
+            }
+        }
+    }
+
+    /** Manga Home rows in one round trip, mirroring [homeFeed]. Rows AniList returns
+     *  empty (a server-side timeout) keep their last good copy. */
+    suspend fun mangaFeed(): MangaFeed {
+        val nowMs = System.currentTimeMillis()
+        mangaFeedCache?.let { (at, feed) -> if (nowMs - at < CACHE_TTL_MS) return feed }
+        val previous = mangaFeedCache?.second ?: cachedMangaFeed()
+        val data = gql(
+            """query {
+                trending: Page(perPage: 30) {
+                    media(type: MANGA, sort: TRENDING_DESC, isAdult: false, popularity_greater: 5000) { $MANGA_FIELDS }
+                }
+                publishing: Page(perPage: 20) {
+                    media(type: MANGA, status: RELEASING, sort: POPULARITY_DESC, isAdult: false, popularity_greater: 5000) { $MANGA_FIELDS }
+                }
+                popular: Page(perPage: 20) {
+                    media(type: MANGA, sort: POPULARITY_DESC, isAdult: false, popularity_greater: 50000) { $MANGA_FIELDS }
+                }
+                topRated: Page(perPage: 20) {
+                    media(type: MANGA, sort: SCORE_DESC, isAdult: false, popularity_greater: 5000) { $MANGA_FIELDS }
+                }
+                manhwa: Page(perPage: 20) {
+                    media(type: MANGA, countryOfOrigin: "KR", sort: TRENDING_DESC, isAdult: false, popularity_greater: 2000) { $MANGA_FIELDS }
+                }
+            }""",
+            JSONObject(),
+        )
+        val fresh = parseMangaFeed(data)
+        val feed = if (previous == null) fresh else MangaFeed(
+            trending = fresh.trending.ifEmpty { previous.trending },
+            publishing = fresh.publishing.ifEmpty { previous.publishing },
+            popular = fresh.popular.ifEmpty { previous.popular },
+            topRated = fresh.topRated.ifEmpty { previous.topRated },
+            manhwa = fresh.manhwa.ifEmpty { previous.manhwa },
+        )
+        mangaFeedCache = nowMs to feed
+        if (fresh.trending.isNotEmpty()) persistMangaFeed(nowMs, data)
+        return feed
+    }
+
+    suspend fun searchManga(q: String): List<Manga> {
+        val data = gql(
+            """query(${'$'}q: String) { Page(perPage: 30) {
+                media(type: MANGA, search: ${'$'}q, sort: SEARCH_MATCH, isAdult: false) { $MANGA_FIELDS }
+            } }""",
+            JSONObject().put("q", q),
+        )
+        val items = data.getJSONObject("Page").getJSONArray("media")
+        return (0 until items.length()).map { rememberManga(items.getJSONObject(it)) }
+    }
+
+    /**
+     * Filtered manga search (the manga Search tab). [country] narrows MANGA to
+     * manga (JP), manhwa (KR) or manhua (CN); [year] matches the start year.
+     */
+    suspend fun advancedMangaSearch(
+        query: String?, genre: String?, year: Int?, format: String?, country: String?,
+        status: String?, sort: String, page: Int,
+    ): Pair<List<Manga>, Boolean> {
+        val args = mutableListOf("\$page: Int", "\$sort: [MediaSort]")
+        val mArgs = mutableListOf("type: MANGA", "isAdult: false", "sort: \$sort")
+        val vars = JSONObject().put("page", page).put("sort", JSONArray().put(sort))
+        query?.takeIf { it.isNotBlank() }?.let { args += "\$q: String"; mArgs += "search: \$q"; vars.put("q", it) }
+        genre?.let { args += "\$genre: String"; mArgs += "genre: \$genre"; vars.put("genre", it) }
+        year?.let {
+            args += listOf("\$from: FuzzyDateInt", "\$to: FuzzyDateInt")
+            mArgs += listOf("startDate_greater: \$from", "startDate_lesser: \$to")
+            vars.put("from", it * 10000).put("to", (it + 1) * 10000)
+        }
+        format?.let { args += "\$format: MediaFormat"; mArgs += "format: \$format"; vars.put("format", it) }
+        country?.let { args += "\$country: CountryCode"; mArgs += "countryOfOrigin: \$country"; vars.put("country", it) }
+        status?.let { args += "\$status: MediaStatus"; mArgs += "status: \$status"; vars.put("status", it) }
+        if (mArgs.size == 3) mArgs += "popularity_greater: 1000"
+        val data = gql(
+            """query(${args.joinToString(", ")}) {
+                Page(page: ${'$'}page, perPage: 30) {
+                    pageInfo { hasNextPage }
+                    media(${mArgs.joinToString(", ")}) { $MANGA_FIELDS }
+                }
+            }""",
+            vars,
+        )
+        val pageJson = data.getJSONObject("Page")
+        val items = pageJson.getJSONArray("media")
+        return (0 until items.length()).map { rememberManga(items.getJSONObject(it)) } to
+            pageJson.getJSONObject("pageInfo").optBoolean("hasNextPage", false)
+    }
+
+    suspend fun mangaById(id: Int): Manga? {
+        cachedManga(id)?.let { return it }
+        return try {
+            val data = gql(
+                """query(${'$'}id: Int) { Media(id: ${'$'}id, type: MANGA) { $MANGA_FIELDS } }""",
+                JSONObject().put("id", id),
+            )
+            rememberManga(data.getJSONObject("Media"))
+        } catch (e: Exception) {
+            null
+        }
     }
 
     suspend fun byId(id: Int): Anime? {

@@ -1,5 +1,6 @@
 package com.sanjay.anitrack.next.ui
 
+import androidx.compose.material.icons.rounded.SkipNext
 import android.app.Activity
 import android.app.PictureInPictureParams
 import android.content.pm.ActivityInfo
@@ -760,7 +761,11 @@ fun PlayerScreen(
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color.Black.copy(alpha = 0.75f)),
                     modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 96.dp),
-                ) { Text(if (showSkipIntro) "Skip Intro ⏭" else "Skip Outro ⏭", color = Color.White) }
+                ) {
+                    Text(if (showSkipIntro) "Skip Intro" else "Skip Outro", color = Color.White)
+                    Spacer(Modifier.width(6.dp))
+                    Icon(Icons.Rounded.SkipNext, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                }
             }
 
             when {

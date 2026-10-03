@@ -5,6 +5,7 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
+        android:name=".WebsiteSessionApplication"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -13,6 +14,20 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.AniTrackNext">
+
+        <service
+            android:name=".data.manga.comix.ComixSessionService"
+            android:process=":comix"
+            android:exported="false" />
+        <activity
+            android:name=".data.manga.mangadot.MangaDotConnectActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" />
+        <activity
+            android:name=".data.manga.comix.ComixConnectActivity"
+            android:process=":comix"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

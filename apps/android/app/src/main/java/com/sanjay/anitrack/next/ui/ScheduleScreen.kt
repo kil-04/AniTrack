@@ -1,113 +1,181 @@
 package com.sanjay.anitrack.next.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Bookmark
+import androidx.compose.material.icons.rounded.CalendarMonth
+import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.EventBusy
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.EditCalendar
-import androidx.compose.material.icons.filled.Schedule
-import coil.compose.AsyncImage
 import com.sanjay.anitrack.next.data.AniList
-import java.text.SimpleDateFormat
-import java.util.Date
+import com.sanjay.anitrack.next.data.Db
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-private val Accent = Color(0xFFE50914)
-
-// ── Schedule (next 7 days of airing, grouped by day) ──────────────────────────
+// ── Schedule (the next 7 days of airing, one day at a time) ───────────────────
 
 @Composable
 fun ScheduleScreen(onOpen: (Int) -> Unit) {
-    var airing by remember { mutableStateOf<List<AniList.Airing>>(emptyList()) }
+    val zone = remember { ZoneId.systemDefault() }
+    val today = remember { LocalDate.now(zone) }
+    val days = remember(today) { (0L..6L).map { today.plusDays(it) } }
+    // Each day loads when first selected (AniList pages hold 50 episodes, under two days).
+    val byDay = remember { mutableStateMapOf<LocalDate, List<AniList.Airing>>() }
+    var day by remember { mutableStateOf(today) }
     var loading by remember { mutableStateOf(true) }
+    var failed by remember { mutableStateOf(false) }
+    var onList by remember { mutableStateOf<Set<Int>>(emptySet()) }
+    var onlyMine by remember { mutableStateOf(false) }
+    var attempt by remember { mutableIntStateOf(0) }
 
-    LaunchedEffect(Unit) {
-        runCatching { airing = AniList.airingWeek() }
+    LaunchedEffect(day, attempt) {
+        if (day in byDay) { loading = false; return@LaunchedEffect }
+        loading = true
+        failed = false
+        val from = day.atStartOfDay(zone).toEpochSecond()
+        val to = day.plusDays(1).atStartOfDay(zone).toEpochSecond()
+        runCatching { AniList.airingBetween(from, to) }
+            .onSuccess { byDay[day] = it }
+            .onFailure { failed = true }
         loading = false
     }
-
-    val dayFmt = remember { SimpleDateFormat("EEEE, MMM d", Locale.getDefault()) }
-    val timeFmt = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
-    val grouped = remember(airing) { airing.groupBy { dayFmt.format(Date(it.airingAt * 1000)) } }
-
-    if (loading) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(color = Accent)
-        }
-        return
+    LaunchedEffect(Unit) {
+        onList = runCatching { Db.STATUSES.flatMap { Db.listByStatus(it) }.map { it.animeId }.toSet() }.getOrDefault(emptySet())
     }
 
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 24.dp, vertical = 20.dp)) {
+    val timeFmt = remember { DateTimeFormatter.ofPattern("HH:mm", Locale.getDefault()) }
+    val dayFmt = remember { DateTimeFormatter.ofPattern("EEE d", Locale.getDefault()) }
+    fun label(date: LocalDate) = when (date) {
+        today -> "Today"
+        today.plusDays(1) -> "Tomorrow"
+        else -> date.format(dayFmt)
+    }
+
+    val shown = byDay[day].orEmpty().filter { !onlyMine || it.anime.id in onList }
+    val now = System.currentTimeMillis() / 1000
+
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 24.dp, vertical = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
         item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Filled.EditCalendar, null, tint = Accent, modifier = Modifier.size(24.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Schedule", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            }
-            Spacer(Modifier.height(2.dp))
-            Text("Upcoming episodes for the next 7 days.", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.4f))
+            ScreenHeader(
+                "Schedule",
+                subtitle = "Episodes airing over the next 7 days, in your time zone.",
+                icon = Icons.Rounded.CalendarMonth,
+            )
             Spacer(Modifier.height(16.dp))
-        }
-        for ((day, list) in grouped) {
-            item {
-                Text(
-                    day,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = Accent,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(vertical = 8.dp),
+            PillTabs(
+                days.map { it.toString() to label(it) },
+                selected = day.toString(),
+                onSelect = { key -> days.firstOrNull { it.toString() == key }?.let { day = it } },
+                counts = byDay.mapKeys { it.key.toString() }.mapValues { (_, list) -> list.size },
+            )
+            if (onList.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                FilterChip(
+                    selected = onlyMine,
+                    onClick = { onlyMine = !onlyMine },
+                    label = { Text("Only my list") },
+                    leadingIcon = { Icon(Icons.Rounded.Bookmark, null, modifier = Modifier.size(16.dp)) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = AniColors.AccentSoft,
+                        selectedLabelColor = AniColors.Text,
+                        selectedLeadingIconColor = AniColors.Accent,
+                    ),
                 )
             }
-            items(list.size) { i ->
-                val a = list[i]
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(Color.White.copy(alpha = 0.05f))
-                        .clickable { onOpen(a.anime.id) }
-                        .padding(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    AsyncImage(
-                        model = a.anime.cover,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.width(44.dp).height(60.dp).clip(RoundedCornerShape(6.dp)),
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(a.anime.title, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(
-                            "Episode ${a.episode}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color.White.copy(alpha = 0.5f),
-                        )
-                    }
-                    Text(
-                        timeFmt.format(Date(a.airingAt * 1000)),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = Color.White.copy(alpha = 0.7f),
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(6.dp))
+        }
+        if (loading) {
+            items(6) { SkeletonBox(Modifier.fillMaxWidth().height(84.dp), corner = 14.dp) }
+        } else if (shown.isEmpty()) {
+            item {
+                EmptyState(
+                    Icons.Rounded.EventBusy,
+                    if (failed) "Couldn't load the schedule" else "Nothing airing",
+                    when {
+                        failed -> "AniList didn't answer. Check your connection and try again."
+                        onlyMine -> "None of the shows on your list air this day."
+                        else -> "AniList has no episodes listed for this day yet."
+                    },
+                    actionLabel = if (failed) "Retry" else null,
+                    onAction = { attempt++ },
+                )
             }
         }
-        if (grouped.isEmpty()) {
-            item { Text("Nothing airing this week.", color = Color.White.copy(alpha = 0.4f)) }
+        items(shown.size) { i ->
+            val a = shown[i]
+            val mine = a.anime.id in onList
+            val shape = RoundedCornerShape(14.dp)
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(shape)
+                    .background(if (mine) AniColors.AccentSoft.copy(alpha = 0.12f) else AniColors.Surface)
+                    .border(1.dp, if (mine) AniColors.Accent.copy(alpha = 0.35f) else AniColors.BorderSoft, shape)
+                    .clickable { onOpen(a.anime.id) }
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // Time block: the local airing time and how far away it is.
+                Column(Modifier.width(76.dp)) {
+                    Text(
+                        Instant.ofEpochSecond(a.airingAt).atZone(zone).format(timeFmt),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        relativeAiring(a.airingAt, now),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (a.airingAt <= now) AniColors.Success else AniColors.TextTertiary,
+                    )
+                }
+                PosterImage(a.anime.cover, a.anime.title, Modifier.width(44.dp).height(62.dp).clip(RoundedCornerShape(8.dp)))
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(a.anime.title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Spacer(Modifier.height(2.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            metaLine("Episode ${a.episode}", formatLabel(a.anime.format)),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = AniColors.TextSecondary,
+                        )
+                        if (mine) Tag("ON MY LIST", tone = TagTone.Accent, icon = Icons.Rounded.Bookmark)
+                    }
+                }
+                Icon(Icons.Rounded.ChevronRight, null, tint = AniColors.TextTertiary)
+            }
         }
+    }
+}
+
+/** "in 3h 20m", "in 12m" or "Aired". */
+private fun relativeAiring(airingAt: Long, now: Long): String {
+    val secs = airingAt - now
+    if (secs <= 0) return "Aired"
+    val minutes = secs / 60
+    val hours = minutes / 60
+    return when {
+        hours >= 24 -> "in ${hours / 24}d ${hours % 24}h"
+        hours > 0 -> "in ${hours}h ${minutes % 60}m"
+        else -> "in ${minutes.coerceAtLeast(1)}m"
     }
 }

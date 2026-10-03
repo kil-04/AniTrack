@@ -1,5 +1,8 @@
 package com.sanjay.anitrack.next.ui
 
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.FastForward
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -128,7 +131,13 @@ internal fun PlayerGestureLayer(
                 Modifier.align(Alignment.TopCenter).padding(top = 24.dp)
                     .clip(RoundedCornerShape(50)).background(Color.Black.copy(alpha = 0.6f))
                     .padding(horizontal = 16.dp, vertical = 6.dp),
-            ) { Text("2× ▶▶", color = Color.White, style = MaterialTheme.typography.labelLarge) }
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("2×", color = Color.White, style = MaterialTheme.typography.labelLarge)
+                    Spacer(Modifier.width(4.dp))
+                    Icon(Icons.Rounded.FastForward, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                }
+            }
         }
         volumeFeedback?.let { value ->
             Box(

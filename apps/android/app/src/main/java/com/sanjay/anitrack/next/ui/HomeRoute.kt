@@ -12,8 +12,6 @@ import com.sanjay.anitrack.next.data.Anime
 import com.sanjay.anitrack.next.data.AniList
 import kotlinx.coroutines.launch
 
-private val HomeAccent = Color(0xFFE50914)
-
 // ── Home ──────────────────────────────────────────────────────────────────────
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -24,6 +22,25 @@ fun HomeScreen(
     onOpenSearch: () -> Unit,
     onOpenContinue: () -> Unit = {},
     onOpenLatest: () -> Unit = {},
+    onOpenManga: (com.sanjay.anitrack.next.data.Manga) -> Unit = {},
+    onOpenMangaId: (Int) -> Unit = {},
+    /** App-wide Anime/Manga mode, owned by the app shell (search bar, tabs and pages follow it). */
+    mode: HomeMode = HomeMode.Anime,
+    onModeChange: (HomeMode) -> Unit = {},
+) {
+    val toggle: @Composable (Modifier) -> Unit = { modifier -> HomeModeToggle(mode, onModeChange, modifier) }
+    if (mode == HomeMode.Manga) MangaHomeScreen(onOpenManga, onOpenMangaId, toggle)
+    else AnimeHome(onOpen, onPlay, onOpenContinue, onOpenLatest, toggle)
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AnimeHome(
+    onOpen: (Anime) -> Unit,
+    onPlay: () -> Unit,
+    onOpenContinue: () -> Unit,
+    onOpenLatest: () -> Unit,
+    toggle: @Composable (Modifier) -> Unit,
 ) {
     var trending by remember { mutableStateOf<List<Anime>>(emptyList()) }
     var latest by remember { mutableStateOf<List<com.sanjay.anitrack.next.data.AniList.Airing>>(emptyList()) }
@@ -132,15 +149,19 @@ fun HomeScreen(
     }
 
     // The top bar (both orientations) carries the search now — no in-page bar.
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 28.dp)) {
         item {
-            if (trending.isNotEmpty()) HeroCarousel(trending.take(10), onOpen)
-            else Spacer(Modifier.height(16.dp))
+            Box(Modifier.fillMaxWidth()) {
+                if (trending.isNotEmpty()) HeroCarousel(trending.take(10), onOpen)
+                else if (loading) SkeletonBox(Modifier.fillMaxWidth().height(380.dp), corner = 0.dp)
+                else Spacer(Modifier.height(72.dp))
+                toggle(Modifier.align(androidx.compose.ui.Alignment.TopStart).padding(16.dp))
+            }
         }
         if (cw.isNotEmpty()) {
             item { SectionHeader("Continue Watching", onClick = onOpenContinue) }
             item {
-                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     items(cw.size) { i ->
                         val row = cw[i]
                         ContinueCardWide(
@@ -172,7 +193,7 @@ fun HomeScreen(
         if (latest.isNotEmpty()) {
             item { SectionHeader("Latest Episodes", onClick = onOpenLatest) }
             item {
-                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     items(latest.size) { i ->
                         val a = latest[i]
                         LatestCard(a.anime, a.episode, onOpen)
@@ -183,7 +204,7 @@ fun HomeScreen(
         if (recommendations.isNotEmpty()) {
             item(key = "for-you-header") { SectionHeader("For You") }
             item(key = "for-you-row") {
-                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     items(
                         count = recommendations.size,
                         key = { recommendations[it].anime.id },

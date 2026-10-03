@@ -8,29 +8,46 @@ type Fetcher = (url: string, init: RequestInit) => Promise<Response>;
 const COOLDOWN_MS = 5 * 60_000;
 const KEY_TTL_MS = 30 * 60_000;
 
+export interface MiruroClientOptions {
+  fetcher?: Fetcher;
+  now?: () => number;
+  /** Wait after a security check before a new request (default five minutes). */
+  securityCooldownMs?: number;
+  /** Wait after a rate limit before a new request (default five minutes). */
+  rateLimitCooldownMs?: number;
+}
+
 /** Staged read transport; no automatic probes and no media/source cache. */
 export class MiruroClient {
   private readonly fetcher: Fetcher;
   private readonly now: () => number;
+  private readonly securityCooldownMs: number;
+  private readonly rateLimitCooldownMs: number;
   private cooldownUntil = 0;
+  private sequence = 0;
+  /** Requests queued at or before this sequence never reach the network after a block. */
+  private blockedThrough = 0;
   private environment: { key: string; expiresAt: number } | null = null;
   private queue: Promise<unknown> = Promise.resolve();
 
-  constructor(options: { fetcher?: Fetcher; now?: () => number } = {}) {
+  constructor(options: MiruroClientOptions = {}) {
     this.fetcher = options.fetcher ?? ((url, init) => fetch(url, init));
     this.now = options.now ?? Date.now;
+    this.securityCooldownMs = Math.max(0, options.securityCooldownMs ?? COOLDOWN_MS);
+    this.rateLimitCooldownMs = Math.max(0, options.rateLimitCooldownMs ?? COOLDOWN_MS);
   }
 
   read(request: MiruroRequest): Promise<Record<string, unknown>> {
     // Validate and snapshot before queueing so a caller cannot change coordinates.
     const url = miruroRequestUrl(request);
+    const sequence = ++this.sequence;
     const task = this.queue.then(async () => {
-      this.checkCooldown();
-      const { text, obfuscated } = await this.get(url, MIRURO_MAX_RESPONSE_BYTES);
+      this.checkCooldown(sequence);
+      const { text, obfuscated } = await this.get(url, MIRURO_MAX_RESPONSE_BYTES, sequence);
       let key: string | undefined;
       if (obfuscated === "2") {
         if (!this.environment || this.environment.expiresAt <= this.now()) {
-          const response = await this.get(`${MIRURO_ORIGIN}/env2.js`, MIRURO_MAX_ENV_BYTES);
+          const response = await this.get(`${MIRURO_ORIGIN}/env2.js`, MIRURO_MAX_ENV_BYTES, sequence);
           this.environment = { key: parseMiruroEnvironment(response.text), expiresAt: this.now() + KEY_TTL_MS };
         }
         key = this.environment.key;
@@ -46,8 +63,8 @@ export class MiruroClient {
     return task;
   }
 
-  private checkCooldown(): void {
-    if (this.now() < this.cooldownUntil) {
+  private checkCooldown(sequence: number): void {
+    if (sequence <= this.blockedThrough || this.now() < this.cooldownUntil) {
       throw new MiruroProtocolError("Miruro is cooling down after a security check or rate limit. Try another provider.", "COOLDOWN");
     }
   }
@@ -55,13 +72,14 @@ export class MiruroClient {
   private rejectChallenge(status: number, text: string): void {
     const failure = miruroResponseFailure(status, text);
     if (failure) {
-      this.cooldownUntil = this.now() + COOLDOWN_MS;
+      this.blockedThrough = this.sequence;
+      this.cooldownUntil = this.now() + (failure.code === "RATE_LIMITED" ? this.rateLimitCooldownMs : this.securityCooldownMs);
       throw failure;
     }
   }
 
-  private async get(url: string, maximumBytes: number): Promise<{ text: string; obfuscated: string | null }> {
-    this.checkCooldown();
+  private async get(url: string, maximumBytes: number, sequence: number): Promise<{ text: string; obfuscated: string | null }> {
+    this.checkCooldown(sequence);
     const parsed = new URL(url);
     if (parsed.origin !== MIRURO_ORIGIN || parsed.username || parsed.password) {
       throw new MiruroProtocolError("Miruro request left its approved origin");

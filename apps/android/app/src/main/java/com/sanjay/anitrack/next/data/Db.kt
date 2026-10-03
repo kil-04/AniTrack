@@ -14,7 +14,7 @@ object Db {
 
     fun init(ctx: Context) {
         if (::helper.isInitialized) return
-        helper = object : SQLiteOpenHelper(ctx.applicationContext, "anitrack_next.db", null, 6) {
+        helper = object : SQLiteOpenHelper(ctx.applicationContext, "anitrack_next.db", null, 8) {
             override fun onCreate(db: SQLiteDatabase) {
                 db.execSQL(
                     """CREATE TABLE IF NOT EXISTS playback(
@@ -32,6 +32,8 @@ object Db {
                 )
                 createListTable(db)
                 createMalOutbox(db)
+                createReadingTable(db)
+                createMangaListTable(db)
             }
             override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) {
                 if (old < 2) createListTable(db)
@@ -45,6 +47,8 @@ object Db {
                     runCatching { db.execSQL("ALTER TABLE list_entry ADD COLUMN genres TEXT") }
                     runCatching { db.execSQL("ALTER TABLE list_entry ADD COLUMN format TEXT") }
                 }
+                if (old < 7) createReadingTable(db)
+                if (old < 8) createMangaListTable(db)
             }
         }
     }
@@ -62,6 +66,35 @@ object Db {
                 genres     TEXT,
                 format     TEXT,
                 updated_at INTEGER NOT NULL
+            )""",
+        )
+    }
+
+    private fun createMangaListTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS manga_list(
+                manga_id   INTEGER PRIMARY KEY,
+                status     TEXT NOT NULL,
+                title      TEXT,
+                cover      TEXT,
+                updated_at INTEGER NOT NULL
+            )""",
+        )
+    }
+
+    private fun createReadingTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS reading(
+                manga_id    INTEGER NOT NULL,
+                chapter     REAL    NOT NULL,
+                chapter_id  TEXT    NOT NULL,
+                page        INTEGER NOT NULL,
+                page_count  INTEGER NOT NULL,
+                title       TEXT,
+                cover       TEXT,
+                source_id   TEXT    NOT NULL,
+                updated_at  INTEGER NOT NULL,
+                PRIMARY KEY(manga_id, chapter)
             )""",
         )
     }
@@ -408,5 +441,132 @@ object Db {
 
     suspend fun dismiss(animeId: Int) = withContext(Dispatchers.IO) {
         helper.writableDatabase.delete("playback", "anime_id=?", arrayOf(animeId.toString()))
+    }
+
+    // ── Manga reading progress ───────────────────────────────────────────
+
+    data class ReadRow(
+        val mangaId: Int,
+        val chapter: Float,
+        val chapterId: String,
+        val page: Int,
+        val pageCount: Int,
+        val title: String,
+        val cover: String?,
+        val sourceId: String,
+        val updatedAt: Long,
+    )
+
+    suspend fun saveReading(row: ReadRow) = withContext(Dispatchers.IO) {
+        helper.writableDatabase.insertWithOnConflict(
+            "reading",
+            null,
+            ContentValues().apply {
+                put("manga_id", row.mangaId)
+                put("chapter", row.chapter)
+                put("chapter_id", row.chapterId)
+                put("page", row.page)
+                put("page_count", row.pageCount)
+                put("title", row.title)
+                put("cover", row.cover)
+                put("source_id", row.sourceId)
+                put("updated_at", row.updatedAt)
+            },
+            SQLiteDatabase.CONFLICT_REPLACE,
+        )
+    }
+
+    /** chapter number -> read state, for the detail list and resume target. */
+    suspend fun readingFor(mangaId: Int): Map<Float, com.sanjay.anitrack.next.data.manga.ReadState> =
+        withContext(Dispatchers.IO) {
+            val out = mutableMapOf<Float, com.sanjay.anitrack.next.data.manga.ReadState>()
+            helper.readableDatabase.rawQuery(
+                "SELECT chapter, page, page_count, updated_at FROM reading WHERE manga_id=?",
+                arrayOf(mangaId.toString()),
+            ).use { c ->
+                while (c.moveToNext()) {
+                    out[c.getFloat(0)] = com.sanjay.anitrack.next.data.manga.ReadState(c.getInt(1), c.getInt(2), c.getLong(3))
+                }
+            }
+            out
+        }
+
+    /** One card per manga — its most recently read chapter, newest first. */
+    suspend fun continueReading(limit: Int = 30): List<ReadRow> = withContext(Dispatchers.IO) {
+        val out = mutableListOf<ReadRow>()
+        helper.readableDatabase.rawQuery(
+            """SELECT r.manga_id, r.chapter, r.chapter_id, r.page, r.page_count,
+                      r.title, r.cover, r.source_id, r.updated_at
+               FROM reading r
+               JOIN (SELECT manga_id, MAX(updated_at) mu FROM reading GROUP BY manga_id) l
+                 ON r.manga_id = l.manga_id AND r.updated_at = l.mu
+               ORDER BY r.updated_at DESC LIMIT ?""",
+            arrayOf(limit.toString()),
+        ).use { c ->
+            while (c.moveToNext()) {
+                out += ReadRow(
+                    c.getInt(0), c.getFloat(1), c.getString(2), c.getInt(3), c.getInt(4),
+                    c.getString(5) ?: "Unknown", c.getString(6), c.getString(7), c.getLong(8),
+                )
+            }
+        }
+        out
+    }
+
+    suspend fun dismissReading(mangaId: Int) = withContext(Dispatchers.IO) {
+        helper.writableDatabase.delete("reading", "manga_id=?", arrayOf(mangaId.toString()))
+    }
+
+    // ── Manga reading list (local) ───────────────────────────────────────
+
+    val MANGA_STATUSES = listOf("reading", "completed", "on_hold", "dropped", "plan_to_read")
+
+    data class MangaListRow(val mangaId: Int, val status: String, val title: String, val cover: String?, val updatedAt: Long)
+
+    suspend fun setMangaStatus(mangaId: Int, status: String, title: String, cover: String?) = withContext(Dispatchers.IO) {
+        require(status in MANGA_STATUSES)
+        helper.writableDatabase.insertWithOnConflict(
+            "manga_list",
+            null,
+            ContentValues().apply {
+                put("manga_id", mangaId)
+                put("status", status)
+                put("title", title)
+                put("cover", cover)
+                put("updated_at", System.currentTimeMillis())
+            },
+            SQLiteDatabase.CONFLICT_REPLACE,
+        )
+    }
+
+    suspend fun removeMangaFromList(mangaId: Int) = withContext(Dispatchers.IO) {
+        helper.writableDatabase.delete("manga_list", "manga_id=?", arrayOf(mangaId.toString()))
+    }
+
+    suspend fun mangaStatusOf(mangaId: Int): String? = withContext(Dispatchers.IO) {
+        helper.readableDatabase.rawQuery("SELECT status FROM manga_list WHERE manga_id=?", arrayOf(mangaId.toString()))
+            .use { c -> if (c.moveToFirst()) c.getString(0) else null }
+    }
+
+    suspend fun mangaList(): List<MangaListRow> = withContext(Dispatchers.IO) {
+        val out = mutableListOf<MangaListRow>()
+        helper.readableDatabase.rawQuery(
+            "SELECT manga_id, status, title, cover, updated_at FROM manga_list ORDER BY updated_at DESC",
+            null,
+        ).use { c ->
+            while (c.moveToNext()) {
+                out += MangaListRow(c.getInt(0), c.getString(1), c.getString(2) ?: "Unknown", c.getString(3), c.getLong(4))
+            }
+        }
+        out
+    }
+
+    /** The highest chapter number read so far per manga, for "new chapters" counts. */
+    suspend fun lastReadChapters(): Map<Int, Float> = withContext(Dispatchers.IO) {
+        val out = mutableMapOf<Int, Float>()
+        helper.readableDatabase.rawQuery("SELECT manga_id, MAX(chapter) FROM reading GROUP BY manga_id", null).use { c ->
+            while (c.moveToNext()) out[c.getInt(0)] = c.getFloat(1)
+        }
+        out
     }
 }

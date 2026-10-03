@@ -1,5 +1,8 @@
 package com.sanjay.anitrack.next.ui
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Museum
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -82,9 +85,17 @@ fun MuseumScreen(
                 Box(Modifier.matchParentSize().background(Brush.horizontalGradient(listOf(Color.Black, Color.Black.copy(alpha = 0.88f), Color.Transparent))))
                 Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.25f), Color.Transparent, Color.Black))))
                 Column(Modifier.align(Alignment.BottomStart).padding(24.dp)) {
-                    TextButton(onClick = onBack, contentPadding = PaddingValues(0.dp)) { Text("←  RETURN TO TIME MACHINE", color = Color.White.copy(alpha = 0.58f), letterSpacing = 1.sp) }
+                    TextButton(onClick = onBack, contentPadding = PaddingValues(0.dp)) {
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, null, tint = Color.White.copy(alpha = 0.58f), modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("RETURN TO TIME MACHINE", color = Color.White.copy(alpha = 0.58f), letterSpacing = 1.sp)
+                    }
                     Spacer(Modifier.height(20.dp))
-                    Text("⌂  ${exhibit.eyebrow.uppercase()}", color = accent, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Rounded.Museum, null, tint = accent, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(exhibit.eyebrow.uppercase(), color = accent, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
+                    }
                     Text(artifact.title, style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Black, modifier = Modifier.widthIn(max = 760.dp))
                     artifact.titleRomaji?.takeIf { it != artifact.title }?.let { Text(it, color = Color.White.copy(alpha = 0.42f), style = MaterialTheme.typography.titleMedium) }
                     Spacer(Modifier.height(12.dp))

@@ -124,3 +124,15 @@ Regression coverage checks that each manual call makes one request when challeng
 All 66 Android JVM tests and 65 Node regressions passed; debug app and diagnostic
 APK builds succeeded. The updated debug app was installed on the connected tablet
 with data preserved. Live site restrictions may still reject individual attempts.
+
+## Live check (2026-10-02)
+
+On the user's network, Cowboy Bebop episode 1 listed Mp4 (mp4upload.com), Ok
+(ok.ru), Sl-mp4 (streamlare.com) and Uv-mp4 (MKissa's internal clock API).
+mp4upload.com and ok.ru resolve to the same address and reset the TLS
+handshake within ~50 ms, and streamlare.com fails with a TLS alert: an
+ISP-level block, not an upstream fault. AniTrack does not work around network
+blocks. Uv-mp4 returned HTTP 500. Earlier labels (Yt-mp4, Fm-Hls, Uni) were not
+offered. After three title lookups the protected source API answered with a
+security check and stayed challenged an hour later, so live testing stopped.
+MKissa remains disabled; no connector change resulted from this check.

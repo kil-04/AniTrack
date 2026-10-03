@@ -118,10 +118,26 @@ data only: domains, routes, selectors, host rules, ordering and enablement.
 Executable scraping or playback logic must be reviewed, tested and released as
 part of the desktop installer or APK.
 
-Downloaded site JavaScript is untrusted input: parse only the bounded data
-needed by a reviewed connector and never evaluate it with `eval`, `Function`, a
-script tag or a WebView. Do not display advertising/player embed pages merely
-to discover their media URL.
+Downloaded site JavaScript is untrusted input. By default, connectors parse
+bounded data without executing it. A user-approved website-session connector
+may run the provider's normal same-origin website modules in a separate WebView
+profile/process. It must have no app/account bridge, file access, permission
+grants, popups or arbitrary native command execution. Only reviewed, bounded
+catalogue operations may cross back into AniTrack. Do not execute downloaded
+code in the app's native runtime or display advertising/player embeds to
+discover media. Signed automation remains data-only.
+
+Comix manga is an explicit user-approved website-session exception. Its public
+catalogue request signer/response decoder runs only inside the isolated Comix
+WebView. AniTrack retains its native manga reader and locally reviewed image
+decoding. This exception does not expose MAL/Gist credentials, disable manual
+verification or change other providers' access rules.
+
+MangaDot manga uses a user-verified browser session, like AnimePahe. The user
+passes Cloudflare in a visible WebView (`MangaDotConnectActivity`). AniTrack
+then calls MangaDot's plain JSON API with that session's own cookie and genuine
+WebView user agent. No site module decodes data, and the challenge is never
+automated (`docs/providers/manga-sources.md`).
 
 AniTrack does not bypass CAPTCHA or human-verification challenges. A connector
 must recognize challenge responses, stop retrying, enter a bounded cooldown and
