@@ -77,7 +77,13 @@ fun MangaHomeScreen(onOpen: (Manga) -> Unit, onOpenId: (Int) -> Unit, toggle: @C
     var feed by remember { mutableStateOf<AniList.MangaFeed?>(null) }
     var reading by remember { mutableStateOf<List<com.sanjay.anitrack.next.data.Db.ReadRow>>(emptyList()) }
     val scope = rememberCoroutineScope()
-    LaunchedEffect(Unit) { reading = runCatching { com.sanjay.anitrack.next.data.Db.continueReading() }.getOrDefault(emptyList()) }
+    LaunchedEffect(Unit) {
+        reading = runCatching { com.sanjay.anitrack.next.data.Db.continueReading() }.getOrDefault(emptyList())
+        // Continue Reading follows other devices: reconcile, and repaint when that changed anything.
+        if (runCatching { com.sanjay.anitrack.next.data.GistSync.syncMangaReading() }.getOrDefault(false)) {
+            reading = runCatching { com.sanjay.anitrack.next.data.Db.continueReading() }.getOrDefault(reading)
+        }
+    }
     var failed by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         // Paint the last saved feed at once; AniList can take many seconds to answer.
@@ -111,6 +117,7 @@ fun MangaHomeScreen(onOpen: (Manga) -> Unit, onOpenId: (Int) -> Unit, toggle: @C
                             onDismiss = {
                                 scope.launch {
                                     com.sanjay.anitrack.next.data.Db.dismissReading(row.mangaId)
+                                    com.sanjay.anitrack.next.data.GistSync.forgetManga(row.mangaId)
                                     reading = com.sanjay.anitrack.next.data.Db.continueReading()
                                 }
                             },

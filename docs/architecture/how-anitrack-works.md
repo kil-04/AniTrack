@@ -253,15 +253,31 @@ This is the core flow; both apps do the same thing.
     once a minute).
   - **Android:** when the Home screen opens, and from Settings → Sync now.
 
+**Manga reading** (Continue Reading and read marks) syncs through a second
+file in the same gist, `anitrack-manga-sync.json`. A gist update replaces only
+the files it names, so older versions writing `anitrack-sync.json` never erase
+it.
+- **What's in it:** one row per chapter read (AniList id, chapter number, chapter
+  id, page, page count, source), each manga's title and cover, and removal
+  markers for "Remove from Continue Reading" (whole manga) and "mark unread"
+  (one chapter).
+- **How conflicts resolve:** the newest row wins per chapter; a removal hides
+  rows not newer than it, so reading again afterwards wins. Both apps run the
+  same rules (`packages/shared/manga-sync.ts`, `MangaSyncMerge.kt`) and key
+  chapters identically (4 decimals, so Android's `Float` 7.2 matches desktop's).
+- **When it syncs:** Manga Home and title pages reconcile when they open (desktop
+  also when the window regains focus); a few seconds after reading or marking;
+  and from Settings (desktop Pull now / Push all, Android Sync now).
+
 ---
 
 ## 7. Manga mode
 
 | Source | How it works |
 |---|---|
-| **MangaDot** | Biggest catalogue. Needs a one-time Cloudflare check that you complete (desktop connect window, Android `MangaDotConnectActivity`). Requests then reuse that verified session's cookies. |
-| **MangaBall** | Public JSON API, no check needed. |
-| **Comix** | Runs Comix's own page code inside an isolated, sandboxed browser session. A bundled script (`comix_transport.js`) borrows the site's own request function to fetch catalogue data, and the app unscrambles its shuffled page images locally. **Currently refused by Comix's server for the app's built-in browser (HTTP 502).** |
+| **MangaDot** | Biggest catalogue. Needs a one-time Cloudflare check that you complete (desktop connect window, Android `MangaDotConnectActivity`). Android then reuses that verified session's cookies; on desktop the clearance is a partitioned cookie, so the verified mangadot.net page makes the requests itself (`VerifiedPageSession`). |
+| **MangaBall** | Public JSON API, no check needed. Its image CDN host rotates; a chapter's pages follow their own host. |
+| **Comix** | Runs Comix's own page code inside an isolated, sandboxed browser session. A bundled script (`comix_transport.js`) borrows the site's own request function to fetch catalogue data, and the app unscrambles its shuffled page images locally. Comix rate-limits chapter lists (HTTP 502 + `Retry-After`), so pages are requested 2 s apart and Android keeps finished lists across restarts. |
 | MangaPill, MangaDex | Code still exists but not registered. |
 
 How a manga is read:

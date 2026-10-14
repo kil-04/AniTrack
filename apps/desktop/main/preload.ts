@@ -51,6 +51,8 @@ contextBridge.exposeInMainWorld("api", {
       ipcRenderer.invoke(MANGA_IPC.READING_MARK, mangaId, chapters, read, title, cover, sourceId),
     continueReading: () => ipcRenderer.invoke(MANGA_IPC.CONTINUE),
     forgetReading: (mangaId: number) => ipcRenderer.invoke(MANGA_IPC.READING_FORGET, mangaId),
+    readingAll: () => ipcRenderer.invoke(MANGA_IPC.READING_ALL),
+    applyReading: (upserts: unknown, removes: unknown) => ipcRenderer.invoke(MANGA_IPC.READING_APPLY, upserts, removes),
     status: (mangaId: number) => ipcRenderer.invoke(MANGA_IPC.LIST_GET, mangaId),
     setStatus: (mangaId: number, status: string | null, title: string, cover: string | null) =>
       ipcRenderer.invoke(MANGA_IPC.LIST_SET, mangaId, status, title, cover),

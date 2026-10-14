@@ -47,6 +47,13 @@ export interface MangaApi {
   ): Promise<{ ok: boolean }>;
   continueReading(): Promise<ReadingRow[]>;
   forgetReading(mangaId: number): Promise<{ ok: boolean }>;
+  /** Every reading row, for cross-device sync. */
+  readingAll(): Promise<ReadingRow[]>;
+  /** Applies a sync reconcile; rows this version can't accept are skipped. */
+  applyReading(
+    upserts: ReadingRow[],
+    removes: { mangaId: number; chapter: number }[],
+  ): Promise<{ ok: boolean; applied: number; removed: number }>;
   status(mangaId: number): Promise<MangaStatus | null>;
   setStatus(mangaId: number, status: MangaStatus | null, title: string, cover: string | null): Promise<{ ok: boolean }>;
   list(): Promise<MangaListEntry[]>;

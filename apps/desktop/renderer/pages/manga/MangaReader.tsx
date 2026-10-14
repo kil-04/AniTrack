@@ -13,6 +13,7 @@ import {
   type ReaderWidth,
 } from "../../lib/manga-api";
 import { useMangaReader, type ReaderSession } from "../../store/useMangaReader";
+import { mangaReadingChanged } from "../../lib/manga-sync";
 
 type PagesLoad =
   | { state: "loading" }
@@ -154,7 +155,7 @@ export default function MangaReader() {
       title: session.manga.title,
       cover: session.manga.cover,
       sourceId: session.title.sourceId,
-    }).catch(() => {});
+    }).then(() => mangaReadingChanged()).catch(() => {});
   }, [session, chapter]);
   useEffect(() => {
     if (!count) return;

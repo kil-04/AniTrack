@@ -79,6 +79,7 @@ object MangaReading {
                     updatedAt = System.currentTimeMillis(),
                 ),
             )
+            com.sanjay.anitrack.next.data.GistSync.mangaReadingChanged()
         }
     }
 }

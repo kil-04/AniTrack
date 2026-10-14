@@ -5,6 +5,7 @@ import SectionHeader from "../../components/SectionHeader";
 import { chapterLabel, isFinished, mangaKind, publishLabel, type MangaFeed, type ReadingRow } from "../../../../../packages/shared/manga";
 import { MangaRow } from "../../components/manga/MangaCards";
 import { mangaApi } from "../../lib/manga-api";
+import { forgetMangaReading, onMangaSync, syncMangaReading } from "../../lib/manga-sync";
 
 const FEED_KEY = "anitrack.manga.feed.v1";
 const FEED_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -33,13 +34,22 @@ export default function MangaHome() {
     mangaApi().feed()
       .then((value) => { saveFeed(value); if (alive) setFeed(value); })
       .catch(() => { if (alive) setFailed(true); });
-    mangaApi().continueReading().then((rows) => { if (alive) setReading(rows); }).catch(() => {});
+    const loadReading = () => { mangaApi().continueReading().then((rows) => { if (alive) setReading(rows); }).catch(() => {}); };
+    loadReading();
+    // Continue Reading follows other devices: reconcile now and whenever the window
+    // regains focus, and repaint when that changed anything.
+    const stopSync = onMangaSync(loadReading);
+    const reconcile = () => { void syncMangaReading().catch(() => {}); };
+    reconcile();
+    window.addEventListener("focus", reconcile);
     // Warm the title page and reader so the first open doesn't wait for their code.
     const warm = () => { void import("./MangaDetail"); void import("./MangaReader"); };
     const idle = window.requestIdleCallback?.(warm, { timeout: 3000 });
     const timer = idle == null ? window.setTimeout(warm, 1500) : null;
     return () => {
       alive = false;
+      stopSync();
+      window.removeEventListener("focus", reconcile);
       if (idle != null) window.cancelIdleCallback?.(idle);
       if (timer != null) window.clearTimeout(timer);
     };
@@ -111,7 +121,12 @@ export default function MangaHome() {
                     <div className="mt-2.5 line-clamp-2 text-sm font-semibold leading-tight text-white/90 transition-colors group-hover:text-white">{row.title}</div>
                   </Link>
                   <button
-                    onClick={() => { void mangaApi().forgetReading(row.mangaId).then(() => setReading((rows) => rows.filter((r) => r.mangaId !== row.mangaId))); }}
+                    onClick={() => {
+                      void mangaApi().forgetReading(row.mangaId).then(() => {
+                        forgetMangaReading(row.mangaId);
+                        setReading((rows) => rows.filter((r) => r.mangaId !== row.mangaId));
+                      });
+                    }}
                     className="absolute right-2 top-2 hidden h-7 w-7 items-center justify-center rounded-full border border-white/15 bg-black/60 text-white/80 backdrop-blur-md transition hover:scale-110 hover:bg-red-500 hover:text-white group-hover:flex"
                     title="Remove from Continue Reading"
                   >

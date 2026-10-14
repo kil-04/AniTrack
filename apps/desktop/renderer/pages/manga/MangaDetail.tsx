@@ -32,6 +32,7 @@ import SelectField from "../../components/SelectField";
 import { mangaApi, setTitlePref, titlePref } from "../../lib/manga-api";
 import { followMangaDownloads, useMangaDownloads } from "../../store/useMangaDownloads";
 import { useMangaReader } from "../../store/useMangaReader";
+import { mangaReadingChanged, onMangaSync, syncMangaReading, unmarkMangaChapters } from "../../lib/manga-sync";
 
 type Load =
   | { state: "loading" }
@@ -98,7 +99,12 @@ export default function MangaDetail() {
     mangaApi().adaptations(mangaId).then((list) => { if (alive) setAdaptations(list); }).catch(() => {});
     mangaApi().reading(mangaId).then((p) => { if (alive) setProgress(p); }).catch(() => {});
     mangaApi().sources().then((list) => { if (alive) setSources(list); }).catch(() => {});
-    return () => { alive = false; };
+    // Positions read on another device arrive with the next reconcile.
+    const stop = onMangaSync(() => {
+      mangaApi().reading(mangaId).then((p) => { if (alive) setProgress(p); }).catch(() => {});
+    });
+    void syncMangaReading().catch(() => {});
+    return () => { alive = false; stop(); };
   }, [mangaId]);
 
   // Chapters: the chosen source only, or the first source that has the title.
@@ -196,6 +202,8 @@ export default function MangaDetail() {
       manga.cover,
       ready.source.id,
     );
+    if (read) mangaReadingChanged();
+    else unmarkMangaChapters(manga.id, chapters.map((c) => c.number));
     setProgress(await mangaApi().reading(manga.id));
   }
 

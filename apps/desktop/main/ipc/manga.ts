@@ -108,6 +108,17 @@ function readingRow(value: unknown): ReadingRow {
   };
 }
 
+/** A row synced from another device: validated like [readingRow], keeping its own timestamp. */
+function syncedReadingRow(value: unknown): ReadingRow {
+  const row = readingRow(value);
+  const updatedAt = Number((value as Record<string, unknown>).updatedAt);
+  // A far-future timestamp would win every later merge, so it is refused.
+  if (!Number.isSafeInteger(updatedAt) || updatedAt <= 0 || updatedAt > Date.now() + 24 * 3600 * 1000) {
+    throw new Error("Invalid progress time");
+  }
+  return { ...row, updatedAt };
+}
+
 /** Source calls answer with a result instead of throwing, so the page can offer Connect or Retry. */
 async function guarded<T>(work: () => Promise<T>): Promise<SourceResult<T>> {
   try {
@@ -165,6 +176,20 @@ export function registerMangaIpc(getMainWindow: () => BrowserWindow | null) {
   ipcMain.handle(MANGA_IPC.READING_FORGET, (_e, mangaId: unknown) => {
     store.forgetReading(id(mangaId, "manga id"));
     return { ok: true };
+  });
+  ipcMain.handle(MANGA_IPC.READING_ALL, () => store.allReading());
+  ipcMain.handle(MANGA_IPC.READING_APPLY, (_e, upserts: unknown, removes: unknown) => {
+    if (!Array.isArray(upserts) || !Array.isArray(removes) || upserts.length > 20_000 || removes.length > 20_000) {
+      throw new Error("Invalid reading sync");
+    }
+    // Rows come from another device's copy: skip any this version can't accept
+    // (say, a source it doesn't know) instead of failing the whole reconcile.
+    const rows = upserts.flatMap((value) => { try { return [syncedReadingRow(value)]; } catch { return []; } });
+    const gone = removes.flatMap((value: Record<string, unknown> | null) => {
+      try { return [{ mangaId: id(value?.mangaId, "manga id"), chapter: chapterNumber(value?.chapter) }]; } catch { return []; }
+    });
+    store.applySyncedReading(rows, gone);
+    return { ok: true, applied: rows.length, removed: gone.length };
   });
 
   ipcMain.handle(MANGA_IPC.LIST_GET, (_e, mangaId: unknown) => store.mangaStatus(id(mangaId, "manga id")));

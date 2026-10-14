@@ -86,6 +86,28 @@ export function forgetReading(mangaId: number): void {
   getDb().run(`DELETE FROM manga_reading WHERE manga_id = ?`, [mangaId]);
 }
 
+/** Every reading row, newest first, for cross-device sync. */
+export function allReading(limit = 20_000): ReadingRow[] {
+  const rows: any[] = getDb().all(
+    `SELECT manga_id, chapter, chapter_id, page, page_count, title, cover, source_id, updated_at
+       FROM manga_reading ORDER BY updated_at DESC LIMIT ?`,
+    [limit],
+  );
+  return rows.map((row) => ({
+    mangaId: row.manga_id, chapter: row.chapter, chapterId: row.chapter_id, page: row.page, pageCount: row.page_count,
+    title: row.title ?? "Unknown", cover: row.cover ?? null, sourceId: row.source_id, updatedAt: row.updated_at,
+  }));
+}
+
+/** One sync reconcile: newer rows from another device, and rows a removal hides, in one transaction. */
+export function applySyncedReading(upserts: ReadingRow[], removes: { mangaId: number; chapter: number }[]): void {
+  runInTransaction(() => {
+    const db = getDb();
+    for (const row of removes) db.run(`DELETE FROM manga_reading WHERE manga_id = ? AND chapter = ?`, [row.mangaId, row.chapter]);
+    for (const row of upserts) saveReading(row);
+  });
+}
+
 /** The furthest chapter read (or marked read) per manga, for Updates' "N NEW". */
 export function lastReadChapters(): Record<number, number> {
   const rows: any[] = getDb().all(`SELECT manga_id, MAX(chapter) AS chapter FROM manga_reading GROUP BY manga_id`);

@@ -710,6 +710,54 @@ object Db {
         helper.writableDatabase.delete("reading", "manga_id=?", arrayOf(mangaId.toString()))
     }
 
+    /** Every reading row, newest first, for cross-device sync. */
+    suspend fun allReadingRows(limit: Int = 20_000): List<ReadRow> = withContext(Dispatchers.IO) {
+        val out = mutableListOf<ReadRow>()
+        helper.readableDatabase.rawQuery(
+            """SELECT manga_id, chapter, chapter_id, page, page_count, title, cover, source_id, updated_at
+               FROM reading ORDER BY updated_at DESC LIMIT ?""",
+            arrayOf(limit.toString()),
+        ).use { c ->
+            while (c.moveToNext()) {
+                out += ReadRow(
+                    c.getInt(0), c.getFloat(1), c.getString(2), c.getInt(3), c.getInt(4),
+                    c.getString(5) ?: "Unknown", c.getString(6), c.getString(7), c.getLong(8),
+                )
+            }
+        }
+        out
+    }
+
+    /**
+     * One sync reconcile in a transaction: rows from another device, and rows a
+     * removal hides. Chapters are REAL (7.2f is stored as 7.19999…), so removals
+     * match within 0.0001.
+     */
+    suspend fun applySyncedReading(upserts: List<ReadRow>, removes: List<Pair<Int, Double>>) = withContext(Dispatchers.IO) {
+        val db = helper.writableDatabase
+        db.beginTransaction()
+        try {
+            for ((mangaId, chapter) in removes) {
+                db.delete("reading", "manga_id=? AND abs(chapter - ?) < 0.0001", arrayOf(mangaId.toString(), chapter.toString()))
+            }
+            for (row in upserts) {
+                db.insertWithOnConflict(
+                    "reading", null,
+                    ContentValues().apply {
+                        put("manga_id", row.mangaId); put("chapter", row.chapter); put("chapter_id", row.chapterId)
+                        put("page", row.page); put("page_count", row.pageCount)
+                        put("title", row.title); put("cover", row.cover); put("source_id", row.sourceId)
+                        put("updated_at", row.updatedAt)
+                    },
+                    SQLiteDatabase.CONFLICT_REPLACE,
+                )
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
     // ── Manga reading list (local) ───────────────────────────────────────
 
     val MANGA_STATUSES = listOf("reading", "completed", "on_hold", "dropped", "plan_to_read")

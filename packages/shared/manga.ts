@@ -22,6 +22,10 @@ export const MANGA_IPC = {
   READING_MARK: "manga:reading-mark",
   CONTINUE: "manga:continue",
   READING_FORGET: "manga:reading-forget",
+  /** Every reading row, for cross-device sync (packages/shared/manga-sync.ts). */
+  READING_ALL: "manga:reading-all",
+  /** Applies a sync reconcile: rows from another device, and rows a removal hides. */
+  READING_APPLY: "manga:reading-apply",
   LIST_GET: "manga:list-get",
   LIST_SET: "manga:list-set",
   LIST_ALL: "manga:list-all",

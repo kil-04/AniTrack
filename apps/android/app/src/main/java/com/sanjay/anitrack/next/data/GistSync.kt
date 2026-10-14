@@ -16,6 +16,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import com.sanjay.anitrack.next.data.manga.MangaSyncMerge
 import java.util.concurrent.TimeUnit
 
 /**
@@ -321,5 +322,118 @@ object GistSync {
             }
             return@withLock changed
         }
+    }
+
+    // ── Manga reading (Continue Reading + read marks) ─────────────────────
+    // Its own file in the same gist, so anime writers never touch it. Rules and
+    // wire format: MangaSyncMerge (twin of packages/shared/manga-sync.ts). The
+    // local reading table is the source of truth: each reconcile reads it whole
+    // and merges both ways, so a failed upload is simply repeated next time.
+
+    private var mangaJob: Job? = null
+    private val mangaListeners = java.util.concurrent.CopyOnWriteArraySet<() -> Unit>()
+
+    /** False until MainActivity initialised sync (debug entry points never do) or with no token. */
+    private fun mangaSyncOn() = ::prefs.isInitialized && configured()
+
+    private fun mangaPending(): MutableMap<String, Long> = runCatching {
+        val saved = JSONObject(prefs.getString("gist_manga_pending", "{}") ?: "{}")
+        saved.keys().asSequence().associateWith { saved.getLong(it) }.toMutableMap()
+    }.getOrDefault(mutableMapOf())
+
+    private fun saveMangaPending(value: Map<String, Long>) {
+        val json = JSONObject(); for ((key, ts) in value) json.put(key, ts)
+        prefs.edit().putString("gist_manga_pending", json.toString()).apply()
+    }
+
+    private fun addMangaPending(keys: List<String>) = synchronized(this) {
+        val value = mangaPending()
+        val now = System.currentTimeMillis()
+        for (key in keys) value[key] = now
+        saveMangaPending(value)
+    }
+
+    private fun scheduleMangaSync(delayMs: Long) {
+        mangaJob?.cancel()
+        mangaJob = scope.launch { delay(delayMs); runCatching { syncMangaReading() } }
+    }
+
+    /** Reading progress or read marks changed here: upload them shortly (batched). */
+    fun mangaReadingChanged() {
+        if (mangaSyncOn()) scheduleMangaSync(7000)
+    }
+
+    /** Removed from Continue Reading here: hide it on other devices too. */
+    fun forgetManga(mangaId: Int) {
+        if (!mangaSyncOn()) return
+        addMangaPending(listOf(mangaId.toString()))
+        scheduleMangaSync(0)
+    }
+
+    /** Chapters marked unread here: hide those reads on other devices too. */
+    fun unmarkMangaChapters(mangaId: Int, chapters: List<Float>) {
+        if (!mangaSyncOn()) return
+        addMangaPending(chapters.map { MangaSyncMerge.readingKey(mangaId, it.toDouble()) })
+        scheduleMangaSync(0)
+    }
+
+    /** Runs [listener] after a reconcile changed local reading rows; returns the unsubscribe. */
+    fun onMangaSync(listener: () -> Unit): () -> Unit {
+        mangaListeners += listener
+        return { mangaListeners -= listener }
+    }
+
+    /** The manga file's text, or null when the gist has none yet. A failed read throws. */
+    private fun loadMangaFile(id: String): String? {
+        http.newCall(req("$GH/gists/$id").build()).execute().use { res ->
+            if (!res.isSuccessful) throw java.io.IOException("Could not read the sync gist (${res.code})")
+            val file = JSONObject(res.body?.string() ?: throw java.io.IOException("Empty sync gist response"))
+                .optJSONObject("files")?.optJSONObject(MangaSyncMerge.FILE) ?: return null
+            if (!file.optBoolean("truncated", false)) return file.optString("content", "")
+            val raw = file.optString("raw_url", "").ifEmpty { throw java.io.IOException("Truncated manga sync file without raw URL") }
+            http.newCall(req(raw).build()).execute().use { r2 ->
+                if (!r2.isSuccessful) throw java.io.IOException("Could not read the manga sync file (${r2.code})")
+                return r2.body?.string() ?: throw java.io.IOException("Empty manga sync file")
+            }
+        }
+    }
+
+    /** Two-way reconcile now. Returns true when local reading rows changed. */
+    suspend fun syncMangaReading(): Boolean = withContext(Dispatchers.IO) {
+        if (!mangaSyncOn() || !RemoteConfig.current().features.gistSync) return@withContext false
+        val changed = lock.withLock {
+            val id = ensureGistId() ?: throw java.io.IOException("Could not find or create the sync gist")
+            val remote = MangaSyncMerge.parse(loadMangaFile(id))
+            val sent = synchronized(this@GistSync) { mangaPending().toMap() }
+            val local = Db.allReadingRows().map {
+                MangaSyncMerge.LocalRow(MangaSyncMerge.Row(it.mangaId, it.chapter.toDouble(), it.chapterId, it.page, it.pageCount, it.sourceId, it.updatedAt), it.title, it.cover)
+            }
+            val plan = MangaSyncMerge.plan(local, remote, sent, System.currentTimeMillis())
+            if (plan.upsert.isNotEmpty() || plan.remove.isNotEmpty()) {
+                Db.applySyncedReading(
+                    plan.upsert.map {
+                        Db.ReadRow(it.row.mangaId, it.row.chapter.toFloat(), it.row.chapterId, it.row.page, it.row.pageCount,
+                            it.title, it.cover, it.row.sourceId, it.row.updatedAt)
+                    },
+                    plan.remove,
+                )
+            }
+            if (plan.changed) {
+                val body = JSONObject().put("files", JSONObject().put(MangaSyncMerge.FILE, JSONObject().put("content", MangaSyncMerge.serialize(plan.doc))))
+                val ok = http.newCall(
+                    req("$GH/gists/$id").patch(body.toString().toRequestBody("application/json".toMediaType())).build(),
+                ).execute().use { it.isSuccessful }
+                if (!ok) throw java.io.IOException("GitHub rejected the manga sync update")
+            }
+            // Only removals this upload carried are done; one made meanwhile stays pending.
+            synchronized(this@GistSync) {
+                val left = mangaPending()
+                for ((key, ts) in sent) if (left[key] == ts) left.remove(key)
+                saveMangaPending(left)
+            }
+            plan.upsert.isNotEmpty() || plan.remove.isNotEmpty()
+        }
+        if (changed) mangaListeners.forEach { runCatching { it() } }
+        changed
     }
 }

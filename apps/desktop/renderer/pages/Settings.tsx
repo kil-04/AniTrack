@@ -6,6 +6,7 @@ import BrandMark from "../components/BrandMark";
 import type { AniListAuthState } from "../../../../packages/shared/types";
 import type { RuntimeConfigStatus } from "../../../../packages/shared/runtime-config";
 import { getSyncConfig, setSyncConfig, clearSyncConfig, pullAndMerge, pushAllProgress } from "../lib/supabase-sync";
+import { syncMangaReading } from "../lib/manga-sync";
 
 const SECTIONS: { id: string; label: string; icon: LucideIcon }[] = [
   { id: "mal", label: "MyAnimeList", icon: BookMarked },
@@ -572,8 +573,9 @@ export default function Settings() {
                 setSupaError(null);
                 try {
                   const n = await pullAndMerge();
+                  const m = await syncMangaReading();
                   await refreshAll();
-                  setSupaStatus(`Pulled ${n} updated entries`);
+                  setSupaStatus(`Pulled ${n} updated entries${m ? ` and ${m} manga reading changes` : ""}`);
                 } catch (e) {
                   setSupaStatus(null);
                   setSupaError(`Pull failed: ${(e as Error).message}`);
@@ -590,7 +592,9 @@ export default function Settings() {
                 setSupaError(null);
                 try {
                   const n = await pushAllProgress();
-                  setSupaStatus(`Pushed ${n} entries to cloud`);
+                  // Manga reading is reconciled whole, which uploads every local row.
+                  await syncMangaReading();
+                  setSupaStatus(`Pushed ${n} entries to cloud, with manga reading`);
                 } catch (e) {
                   setSupaStatus(null);
                   setSupaError(`Push failed: ${(e as Error).message}`);

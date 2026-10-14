@@ -207,6 +207,12 @@ private fun ChaptersSection(
     // Coming back from the reader refreshes the read markers.
     val reading by MangaReading.current
     LaunchedEffect(reading) { progress = Db.readingFor(manga.id) }
+    // Positions read on another device arrive with a reconcile when the title opens.
+    LaunchedEffect(manga.id) {
+        if (runCatching { com.sanjay.anitrack.next.data.GistSync.syncMangaReading() }.getOrDefault(false)) {
+            progress = Db.readingFor(manga.id)
+        }
+    }
 
     val ready = load as? ChapterLoad.Ready
     val uploads = ready?.uploads.orEmpty()
@@ -230,6 +236,8 @@ private fun ChaptersSection(
                 manga.cover,
                 state.source.id,
             )
+            if (read) com.sanjay.anitrack.next.data.GistSync.mangaReadingChanged()
+            else com.sanjay.anitrack.next.data.GistSync.unmarkMangaChapters(manga.id, chapters.map { it.number })
             progress = Db.readingFor(manga.id)
         }
     }

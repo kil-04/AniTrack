@@ -50,6 +50,13 @@ const isDev = process.env.NODE_ENV === "development";
 
 // Provider websites must retain Chromium's OS sandbox. A global no-sandbox
 // switch would silently defeat the sandboxed, no-preload Comix session.
+//
+// The GPU process alone runs unsandboxed. In the installed app (9.0.0, under
+// %LOCALAPPDATA%\Programs) the sandboxed GPU process exited with
+// STATUS_ACCESS_DENIED nine times and Chromium quit ("GPU process isn't usable"),
+// even with a fresh profile and without the GPU AppContainer. Renderer sandboxes,
+// including every provider window's, are unaffected by this switch.
+app.commandLine.appendSwitch("disable-gpu-sandbox");
 
 // Use the same Chromium identity for provider windows and network requests.
 // Do not claim a different Chrome version through hard-coded client hints.

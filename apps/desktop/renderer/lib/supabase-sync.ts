@@ -65,7 +65,7 @@ export interface PlaybackRow {
   updatedAt: number;
 }
 
-function ghHeaders(token: string) {
+export function ghHeaders(token: string) {
   return {
     Authorization: `token ${token}`,
     Accept: "application/vnd.github+json",
@@ -354,6 +354,18 @@ if (typeof window !== "undefined") {
 }
 
 // ── Public API (backend-neutral names) ────────────────────────────────────────
+
+/**
+ * The sync gist for other files kept beside Continue Watching (manga reading):
+ * found or created for this token, or null when sync is off or unavailable.
+ */
+export async function syncGist(): Promise<{ token: string; gistId: string } | null> {
+  if (!gistNetworkEnabled) return null;
+  const cfg = getSyncConfig();
+  if (!cfg) return null;
+  const gistId = await ensureGistId(cfg);
+  return gistId ? { token: cfg.token, gistId } : null;
+}
 
 export async function pushProgress(p: PlaybackRow): Promise<void> {
   if (!getSyncConfig()) return;
