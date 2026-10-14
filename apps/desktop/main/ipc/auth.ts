@@ -19,6 +19,7 @@ import {
   setClientId as alSetClientId,
 } from "../services/anilist-sync";
 import { getAnime, upsertAnime } from "../services/db";
+import { repairAndNotify } from "../services/list-repair";
 
 export function registerAuthIpc(getMainWindow: () => BrowserWindow | null) {
   // MAL
@@ -34,9 +35,12 @@ export function registerAuthIpc(getMainWindow: () => BrowserWindow | null) {
   });
   ipcMain.handle(IPC.MAL_PULL, async () => {
     const mainWindow = getMainWindow();
-    return await pullList((n) =>
+    const result = await pullList((n) =>
       mainWindow?.webContents.send("mal:pull-progress", n)
     );
+    // Anything the import still had to keep under a stand-in id is folded in now.
+    await repairAndNotify(mainWindow).catch((e) => console.warn("List repair failed", e));
+    return result;
   });
   ipcMain.handle(IPC.MAL_PUSH_PROGRESS, async () => flushDirty());
   ipcMain.handle(IPC.MAL_SET_CLIENT_ID, (_e, id: string) => setMalClientId(id));

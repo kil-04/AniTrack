@@ -14,6 +14,7 @@ import fs from "node:fs";
 import { Readable } from "node:stream";
 import { IPC } from "../../../packages/shared/types";
 import { flushDirty } from "./services/mal";
+import { repairAndNotify } from "./services/list-repair";
 import {
   getPaheBaseUrl,
   getAuthorizedPaheRequestHeaders,
@@ -359,6 +360,12 @@ app.whenReady().then(async () => {
   else prewarm();
 
   initDesktopUpdater(sendToRenderer);
+
+  // Fold stand-in shows (MAL-only and streaming-site ids) into their real AniList
+  // entries, so My List shows each show once. After first paint; quick when clean.
+  setTimeout(() => {
+    void repairAndNotify(mainWindow).catch((e) => console.warn("List repair failed", e));
+  }, 8_000);
 
   // Background flush of dirty list entries to MAL every 30s.
   malFlushTimer = setInterval(() => {

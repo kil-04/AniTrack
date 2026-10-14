@@ -12,6 +12,7 @@ import { ThemeBar } from "./components/ThemeSongs";
 import { hasMangaMode, isMangaPath, lastModeWasManga, rememberMode } from "./lib/manga-api";
 import { isCapacitor } from "./lib/platform";
 import { subscribeDownloads } from "./lib/downloads";
+import { deleteAnimeProgress } from "./lib/supabase-sync";
 import { AnimatePresence, motion } from "framer-motion";
 
 // Short and opacity-led: AnimatePresence waits for the exit before the next page
@@ -102,7 +103,16 @@ export default function App() {
     const offMalPull = window.api.on("mal:pull-progress", (n: any) => {
       setScanStatus(`MAL sync: ${n} entries`);
     });
-    return () => { offMalAuth(); offMalPull(); };
+    // Stand-in shows were folded into their real entries: retire the old ids in
+    // gist sync (or another device's copy would bring them back) and repaint.
+    const offRepaired = window.api.on("list:repaired", (moved: unknown) => {
+      const rows = Array.isArray(moved) ? moved as { from: number; hadPlayback?: boolean }[] : [];
+      for (const row of rows) {
+        if (row?.hadPlayback && Number.isSafeInteger(row.from)) void deleteAnimeProgress(row.from).catch(() => {});
+      }
+      refreshAll();
+    });
+    return () => { offMalAuth(); offMalPull(); offRepaired(); };
   }, [refreshAll, setScanStatus]);
 
   // Auto-sync on return: when the window regains focus (desktop) or the app

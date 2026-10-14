@@ -9,6 +9,7 @@ import type {
   PlaybackProgress,
   WatchStatus,
 } from "../../../../packages/shared/types";
+import { mergeListEntries, type MergeableEntry } from "../../../../packages/shared/list-merge";
 
 let db: Database | null = null;
 
@@ -268,9 +269,55 @@ export function getAnime(id: number): AnimeMeta | null {
   return row ? rowToAnime(row) : null;
 }
 
+/** Ids outside AniList's range: MAL-only stand-ins (1e9 + MAL id) and streaming-site stubs (negative). */
+const STAND_IN_ID_SQL = `(id < 0 OR id >= 1000000000)`;
+
 export function getAnimeByMalId(malId: number): AnimeMeta | null {
-  const row = getDb().get(`SELECT * FROM anime WHERE mal_id = ?`, [malId]);
+  // The real AniList row first: a MAL-only stand-in may carry the same MAL id, and
+  // returning it made every later MAL import update the stand-in instead.
+  const row = getDb().get(`SELECT * FROM anime WHERE mal_id = ? ORDER BY ${STAND_IN_ID_SQL}, id LIMIT 1`, [malId]);
   return row ? rowToAnime(row) : null;
+}
+
+/** Whether the show's list entry has a change not yet sent to MyAnimeList. */
+export function isListEntryDirty(animeId: number): boolean {
+  const row: any = getDb().get(`SELECT mal_dirty FROM list_entry WHERE anime_id = ?`, [animeId]);
+  return row?.mal_dirty === 1;
+}
+
+/** The real AniList id for a MAL id, when this database knows it. */
+export function realAnimeIdForMal(malId: number): number | null {
+  const row: any = getDb().get(`SELECT id FROM anime WHERE mal_id = ? AND NOT ${STAND_IN_ID_SQL} ORDER BY id LIMIT 1`, [malId]);
+  return row ? row.id : null;
+}
+
+/** Stand-in shows still in the list, Continue Watching or the library, newest first. */
+export function standInAnime(): { id: number; malId: number | null; title: string; hasPlayback: boolean }[] {
+  const rows: any[] = getDb().all(
+    `SELECT a.id, a.mal_id, a.title, EXISTS (SELECT 1 FROM playback WHERE anime_id = a.id) AS has_playback,
+            MAX(COALESCE((SELECT updated_at FROM list_entry WHERE anime_id = a.id), 0),
+                COALESCE((SELECT MAX(updated_at) FROM playback WHERE anime_id = a.id), 0)) AS last_used
+       FROM anime a
+      WHERE (a.id < 0 OR a.id >= 1000000000)
+        AND (EXISTS (SELECT 1 FROM list_entry WHERE anime_id = a.id)
+          OR EXISTS (SELECT 1 FROM playback WHERE anime_id = a.id)
+          OR EXISTS (SELECT 1 FROM local_episode WHERE anime_id = a.id))
+      ORDER BY last_used DESC`,
+  );
+  return rows.map((row) => ({ id: row.id, malId: row.mal_id ?? null, title: row.title ?? "", hasPlayback: row.has_playback === 1 }));
+}
+
+/** Real shows whose title, English or romaji title is [title] (case and outer spaces ignored). */
+export function realAnimeIdsByTitle(title: string): number[] {
+  const key = title.trim().toLowerCase();
+  if (!key) return [];
+  const rows: any[] = getDb().all(
+    `SELECT DISTINCT id FROM anime
+      WHERE NOT ${STAND_IN_ID_SQL}
+        AND (LOWER(TRIM(title)) = ? OR LOWER(TRIM(COALESCE(title_english, ''))) = ? OR LOWER(TRIM(COALESCE(title_romaji, ''))) = ?)`,
+    [key, key, key],
+  );
+  return rows.map((row) => row.id);
 }
 
 // ---- List ----
@@ -601,5 +648,53 @@ export function migrateAnimeId(oldId: number, newId: number): void {
     if (oldId < 0) {
       d.run(`DELETE FROM anime WHERE id = ?`, [oldId]);
     }
+  });
+}
+
+/**
+ * Folds a stand-in show into the real one: playback and local files move over,
+ * and the two list entries become one (packages/shared/list-merge.ts: completed
+ * wins, counts never go backwards). Unlike [migrateAnimeId] it never lets the
+ * stand-in's entry overwrite the real one. The stand-in row is then dropped.
+ */
+export function mergeAnimeInto(oldId: number, newId: number): void {
+  if (oldId === newId || !(oldId < 0 || oldId >= 1_000_000_000)) return;
+  runInTransaction(() => {
+    const d = getDb();
+    const oldPlayback = d.all(`SELECT * FROM playback WHERE anime_id = ?`, [oldId]) as any[];
+    for (const pb of oldPlayback) {
+      d.run(
+        `INSERT INTO playback (anime_id, episode, position_sec, duration_sec, updated_at, pahe_session, provider_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(anime_id, episode) DO UPDATE SET
+           position_sec = CASE WHEN excluded.updated_at > playback.updated_at THEN excluded.position_sec ELSE playback.position_sec END,
+           duration_sec = CASE WHEN excluded.updated_at > playback.updated_at THEN excluded.duration_sec ELSE playback.duration_sec END,
+           updated_at = MAX(excluded.updated_at, playback.updated_at),
+           pahe_session = COALESCE(playback.pahe_session, excluded.pahe_session),
+           provider_id = COALESCE(playback.provider_id, excluded.provider_id)`,
+        [newId, pb.episode, pb.position_sec, pb.duration_sec, pb.updated_at, pb.pahe_session, pb.provider_id],
+      );
+    }
+    d.run(`DELETE FROM playback WHERE anime_id = ?`, [oldId]);
+    d.run(`UPDATE OR REPLACE local_episode SET anime_id = ? WHERE anime_id = ?`, [newId, oldId]);
+
+    const entry = (id: number): MergeableEntry | null => {
+      const row: any = d.get(`SELECT status, episodes_watched, score, updated_at, mal_dirty FROM list_entry WHERE anime_id = ?`, [id]);
+      return row ? {
+        status: row.status as WatchStatus, episodesWatched: row.episodes_watched ?? 0, score: row.score ?? null,
+        updatedAt: row.updated_at, dirty: row.mal_dirty === 1,
+      } : null;
+    };
+    const stale = entry(oldId);
+    if (stale) {
+      const current = entry(newId);
+      const merged = current ? mergeListEntries(current, stale) : stale;
+      d.run(
+        `INSERT OR REPLACE INTO list_entry (anime_id, status, episodes_watched, score, updated_at, mal_dirty) VALUES (?, ?, ?, ?, ?, ?)`,
+        [newId, merged.status, merged.episodesWatched, merged.score, merged.updatedAt, merged.dirty ? 1 : 0],
+      );
+      d.run(`DELETE FROM list_entry WHERE anime_id = ?`, [oldId]);
+    }
+    d.run(`DELETE FROM anime WHERE id = ?`, [oldId]);
   });
 }

@@ -14,10 +14,12 @@ import {
   getAnimeByMalId,
   getDirtyEntries,
   getListEntry,
+  isListEntryDirty,
+  realAnimeIdForMal,
   setListEntry,
   upsertAnime,
 } from "./db";
-import { getByMalId } from "./anilist";
+import { getByMalIds } from "./anilist";
 import { getRuntimeConfig } from "./remote-config";
 import type { MalAuthState, WatchStatus } from "../../../../packages/shared/types";
 import { entryAfterEpisode } from "../../../../packages/shared/watch-progress";
@@ -297,22 +299,21 @@ export async function pullList(
     if (!res.ok)
       throw new Error(`MAL pull failed: ${res.status} ${await res.text()}`);
     const j = await res.json() as any;
+    // Resolve this page's MAL ids to AniList in one request per 50. One lookup per
+    // show tripped AniList's rate limit, and every failure became a stand-in.
+    const unknown = (j.data as any[]).map((item) => item.node.id).filter((id: number) => realAnimeIdForMal(id) == null);
+    if (unknown.length) {
+      try {
+        for (const meta of (await getByMalIds(unknown)).values()) upsertAnime(meta);
+      } catch (e) {
+        console.warn("AniList lookup by MAL ids failed", e);
+      }
+    }
     for (const item of j.data as any[]) {
       const node = item.node;
       const ls = item.list_status;
-      // Resolve to AniList ID via MAL ID so we have rich metadata.
+      // Resolve to AniList ID via MAL ID so we have rich metadata (real rows first).
       let anime = getAnimeByMalId(node.id);
-      if (!anime) {
-        try {
-          const remote = await getByMalId(node.id);
-          if (remote) {
-            upsertAnime(remote);
-            anime = remote;
-          }
-        } catch (e) {
-          console.warn("AniList lookup by MAL id failed", node.id, e);
-        }
-      }
       if (!anime) {
         // Fall back to MAL-only stub so list still imports.
         anime = {
@@ -326,6 +327,8 @@ export async function pullList(
         };
         upsertAnime(anime);
       }
+      // A change made here and not yet sent stays: the next flush sends it to MAL.
+      if (isListEntryDirty(anime.id)) continue;
       const status = MAL_STATUS_MAP[ls.status] ?? "plan_to_watch";
       setListEntry({
         animeId: anime.id,

@@ -629,6 +629,31 @@ export async function getByMalId(malId: number): Promise<AnimeMeta | null> {
   return result;
 }
 
+/**
+ * AniList entries for many MAL ids, 50 per request (one request per show tripped
+ * AniList's rate limit on large MAL imports), keyed by MAL id. Ids AniList does not
+ * know are simply absent. Throws when AniList could not be read.
+ */
+export async function getByMalIds(malIds: number[]): Promise<Map<number, AnimeMeta>> {
+  const out = new Map<number, AnimeMeta>();
+  const ids = [...new Set(malIds.filter((id) => Number.isSafeInteger(id) && id > 0))];
+  for (let start = 0; start < ids.length; start += 50) {
+    const data = await gql<{ Page: { media: MediaNode[] } }>(
+      `query($ids: [Int]) { Page(perPage: 50) { media(idMal_in: $ids, type: ANIME) { ${MEDIA_FIELDS} } } }`,
+      { ids: ids.slice(start, start + 50) },
+      "low",
+    );
+    for (const node of data.Page?.media ?? []) {
+      const meta = toAnime(node);
+      if (meta.malId) {
+        out.set(meta.malId, meta);
+        cacheSet(`mal:${meta.malId}`, meta);
+      }
+    }
+  }
+  return out;
+}
+
 interface RelationNode extends MediaNode {
   type?: string | null;
   chapters?: number | null;
