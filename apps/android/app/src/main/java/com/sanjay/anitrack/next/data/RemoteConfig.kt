@@ -148,7 +148,7 @@ object RemoteConfig {
     private val defaults = AndroidRuntimeConfig(
         revision = 0,
         issuedAt = "2026-08-17T00:00:00.000Z",
-        providerOrder = listOf("anikoto", "animepahe", "mkissa"),
+        providerOrder = listOf("anikoto", "animepahe"),
         providers = linkedMapOf(
             "anikoto" to defaultProvider,
             "animepahe" to ProviderRuntimeConfig(

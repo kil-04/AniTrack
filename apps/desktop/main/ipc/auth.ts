@@ -9,7 +9,8 @@ import {
   pullList,
   setMalClientId,
 } from "../services/mal";
-import { getById, getRelations, searchAnime, advancedSearchAnime, trending, getAiringFor, recentEpisodes, recommendations } from "../services/anilist";
+import { getById, getRelations, searchAnime, advancedSearchAnime, trending, getAiringFor, recentEpisodes, recommendations, premieredOn, getStory } from "../services/anilist";
+import { themeRadio, themesForAnime } from "../services/animethemes";
 import {
   beginAuth as alBeginAuth,
   disconnect as alDisconnect,
@@ -67,6 +68,25 @@ export function registerAuthIpc(getMainWindow: () => BrowserWindow | null) {
   ipcMain.handle(IPC.ANILIST_RECOMMENDATIONS, (_e, seedIds: number[], excludedIds: number[]) =>
     recommendations(seedIds, excludedIds));
   ipcMain.handle(IPC.ANILIST_RELATIONS, (_e, id: number) => getRelations(id));
+  ipcMain.handle(IPC.THEMES_FOR_ANIME, (_e, id: unknown) => {
+    const animeId = Number(id);
+    if (!Number.isInteger(animeId) || animeId <= 0) throw new Error("Invalid anime id");
+    return themesForAnime(animeId);
+  });
+  ipcMain.handle(IPC.THEMES_RADIO, () => themeRadio());
+  ipcMain.handle(IPC.ANILIST_STORY, (_e, id: unknown) => {
+    const animeId = Number(id);
+    if (!Number.isInteger(animeId) || animeId <= 0) throw new Error("Invalid anime id");
+    return getStory(animeId);
+  });
+  ipcMain.handle(IPC.ANILIST_PREMIERED_ON, (_e, month: unknown, day: unknown) => {
+    const m = Number(month);
+    const d = Number(day);
+    if (!Number.isInteger(m) || m < 1 || m > 12 || !Number.isInteger(d) || d < 1 || d > 31) {
+      throw new Error("Invalid date");
+    }
+    return premieredOn(m, d);
+  });
   ipcMain.handle(IPC.ANILIST_GET, async (_e, id: number) => {
     console.log(`[IPC.ANILIST_GET] Received id:`, id, `type:`, typeof id);
     // Skip AniList for synthetic IDs

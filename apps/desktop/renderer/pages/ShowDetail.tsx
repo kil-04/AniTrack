@@ -2,10 +2,15 @@ import { useEffect, useState, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
-import { ArrowLeft, Plus, Check } from "lucide-react";
+import { ArrowLeft, Bookmark, Check, ChevronDown, Layers, Play, Star } from "lucide-react";
+import SectionHeader from "../components/SectionHeader";
+import { animeStatusLabel } from "../lib/format";
 import type { AnimeMeta, ListEntry, RelatedAnime, WatchStatus } from "../../../../packages/shared/types";
 import ProviderPanel from "../components/ProviderPanel";
 import WatchOrder from "../components/WatchOrder";
+import { MoreInPrint, StoryCard } from "../components/StoryCard";
+import { ThemeSongs } from "../components/ThemeSongs";
+import type { StoryPlan } from "../../../../packages/shared/story-bridge";
 import { useAppStore } from "../store/useAppStore";
 import { rejectOversizedImage, safeImageSrc } from "../lib/image-guard";
 
@@ -54,7 +59,7 @@ function RelatedCard({ rel, relationType }: { rel: AnimeMeta; relationType: stri
 
   const tooltipPortal = isHovered && rect ? createPortal(
     <div 
-      className="fixed z-[9999] w-72 bg-[#1f1f1f] rounded-xl border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.8)] p-5 flex flex-col pointer-events-none animate-in fade-in zoom-in-95 duration-200"
+      className="pointer-events-none fixed z-[9999] flex w-72 flex-col rounded-2xl border border-white/10 bg-surface-1/95 p-5 shadow-pop backdrop-blur-xl animate-in fade-in zoom-in-95 duration-200"
       style={{
         left: rect.right + 15 + 288 > window.innerWidth ? rect.left - 288 - 15 : rect.right + 15,
         top: Math.max(10, Math.min(window.innerHeight - 320, rect.top + rect.height / 2 - 160)),
@@ -62,14 +67,14 @@ function RelatedCard({ rel, relationType }: { rel: AnimeMeta; relationType: stri
     >
       <h3 className="font-bold text-white text-lg leading-tight mb-2">{displayAnime.title}</h3>
       {displayAnime.averageScore && (
-        <div className="text-sm font-bold text-green-400 mb-3">★ {(displayAnime.averageScore / 10).toFixed(1)} / 10</div>
+        <div className="mb-3 text-sm font-bold text-amber-300">★ {(displayAnime.averageScore / 10).toFixed(1)} / 10</div>
       )}
       {(displayAnime.year || displayAnime.status || displayAnime.episodes || displayAnime.duration) && (
         <div className="flex flex-wrap gap-2 mb-3">
-          {displayAnime.year && <span className="px-1.5 py-0.5 rounded bg-white/10 text-[10px] font-bold">{displayAnime.year}</span>}
-          {displayAnime.status && <span className="px-1.5 py-0.5 rounded bg-white/10 text-[10px] font-bold">{displayAnime.status}</span>}
-          {displayAnime.episodes && <span className="px-1.5 py-0.5 rounded bg-white/10 text-[10px] font-bold">{displayAnime.episodes} EPS</span>}
-          {displayAnime.duration && <span className="px-1.5 py-0.5 rounded bg-white/10 text-[10px] font-bold">{displayAnime.duration}m</span>}
+          {displayAnime.year && <span className="rounded-md bg-white/[0.08] px-1.5 py-0.5 text-[10px] font-bold text-ink-2">{displayAnime.year}</span>}
+          {displayAnime.status && <span className="rounded-md bg-white/[0.08] px-1.5 py-0.5 text-[10px] font-bold text-ink-2">{displayAnime.status}</span>}
+          {displayAnime.episodes && <span className="rounded-md bg-white/[0.08] px-1.5 py-0.5 text-[10px] font-bold text-ink-2">{displayAnime.episodes} EPS</span>}
+          {displayAnime.duration && <span className="rounded-md bg-white/[0.08] px-1.5 py-0.5 text-[10px] font-bold text-ink-2">{displayAnime.duration}m</span>}
         </div>
       )}
       {displayAnime.genres && displayAnime.genres.length > 0 && (
@@ -93,23 +98,23 @@ function RelatedCard({ rel, relationType }: { rel: AnimeMeta; relationType: stri
         onClick={() => navigate(`/anime/${rel.id}`, { state: { anime: displayAnime } })}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
-        className="flex-shrink-0 w-28 text-left group"
+        className="group w-32 flex-shrink-0 text-left"
       >
-        <div className="relative overflow-hidden rounded-lg">
+        <div className="relative overflow-hidden rounded-xl shadow-card ring-1 ring-white/[0.06] transition-all duration-300 group-hover:-translate-y-1 group-hover:shadow-glow group-hover:ring-2 group-hover:ring-accent/60">
           {rel.coverImage ? (
             <img
               src={rel.coverImage}
               alt={rel.title}
-              className="h-40 w-28 object-cover transition group-hover:scale-105"
+              className="h-48 w-32 object-cover transition duration-700 ease-out group-hover:scale-[1.06]"
             />
           ) : (
-            <div className="h-40 w-28 rounded-lg bg-white/5" />
+            <div className="h-48 w-32 rounded-xl bg-white/5" />
           )}
-          <div className="absolute bottom-0 inset-x-0 bg-black/60 px-1.5 py-1 text-[10px] text-white/70 capitalize">
+          <div className="badge badge-glass absolute left-1.5 top-1.5 normal-case tracking-normal">
             {relationType.toLowerCase().replace(/_/g, " ")}
           </div>
         </div>
-        <p className="mt-1.5 text-xs leading-tight text-white/70 line-clamp-2 group-hover:text-white transition">{rel.title}</p>
+        <p className="mt-2 line-clamp-2 text-xs font-medium leading-tight text-ink-2 transition group-hover:text-white">{rel.title}</p>
       </button>
       {tooltipPortal}
     </>
@@ -125,6 +130,7 @@ export default function ShowDetail() {
   const [anime, setAnime] = useState<AnimeMeta | null>(stateAnime || null);
   const [related, setRelated] = useState<RelatedAnime[]>([]);
   const [chainIds, setChainIds] = useState<number[]>([]);
+  const [story, setStory] = useState<StoryPlan | null>(null);
   const list = useAppStore((s) => s.list);
   const refreshList = useAppStore((s) => s.refreshList);
   const entry: ListEntry | undefined = list.find(
@@ -140,6 +146,7 @@ export default function ShowDetail() {
     }
     setRelated([]);
     setChainIds([]);
+    setStory(null);
     window.api.anilist.get(animeId).then((a) => {
       if (cancelled) return;
       if (a) { setAnime(a); return; }
@@ -158,12 +165,19 @@ export default function ShowDetail() {
           setRelated(r.filter((x) => ["SEQUEL", "PREQUEL", "SIDE_STORY", "ALTERNATIVE", "SPIN_OFF", "PARENT"].includes(x.relationType)));
         })
         .catch(() => {});
+      window.api.anilist.story(animeId)
+        .then((plan) => { if (!cancelled) setStory(plan); })
+        .catch(() => {});
     }
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [animeId, stateAnime]);
 
-  if (!anime) return <div className="p-8 text-white/40">Loading…</div>;
+  if (!anime) return (
+    <div className="px-8 pt-6">
+      <div className="skeleton h-[46vh] max-h-[480px] min-h-[320px] w-full rounded-[28px]" />
+    </div>
+  );
 
   async function updateStatus(status: WatchStatus) {
     await window.api.list.set({
@@ -194,21 +208,24 @@ export default function ShowDetail() {
     <div className="relative pb-16">
 
       {/* Banner */}
-      <div className="relative h-[32vh] min-h-[200px] w-full overflow-hidden">
+      <div className="relative h-[46vh] max-h-[480px] min-h-[320px] w-full overflow-hidden">
         {bannerSrc && (
-          <img src={bannerSrc} alt="" className="h-full w-full object-cover object-top" onLoad={(event) => rejectOversizedImage(event, anime.coverImage)} />
+          <img src={bannerSrc} alt="" className="h-full w-full scale-105 object-cover object-top" onLoad={(event) => rejectOversizedImage(event, anime.coverImage)} />
         )}
-        <div className="absolute inset-0 bg-gradient-to-t from-[#000000] via-[#000000]/60 to-transparent" />
+        <div className="absolute inset-0 bg-scrim-b" />
+        <div className="absolute inset-0 bg-[radial-gradient(60%_80%_at_18%_100%,rgb(var(--accent)/0.22),transparent_70%)]" />
+        <div className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-bg/70 to-transparent" />
         <button
           onClick={() => navigate(-1)}
-          className="absolute left-4 top-4 flex h-8 w-8 items-center justify-center rounded-full bg-black/50 backdrop-blur-sm hover:bg-black/80 transition"
+          className="btn btn-secondary btn-icon absolute left-6 top-6 h-10 w-10 rounded-full"
+          title="Back"
         >
-          <ArrowLeft size={16} />
+          <ArrowLeft size={17} />
         </button>
       </div>
 
       {/* Cover + info */}
-      <div className="relative -mt-20 flex flex-col md:flex-row items-start md:items-end gap-7 px-8">
+      <div className="relative -mt-44 flex flex-col items-start gap-8 px-8 md:flex-row md:items-end">
         {anime.coverImage && (
           <motion.img
             initial={{ opacity: 0, y: 20, scale: 0.95 }}
@@ -216,7 +233,7 @@ export default function ShowDetail() {
             transition={{ duration: 0.4, ease: "easeOut" }}
             src={anime.coverImage}
             alt={anime.title}
-            className="h-[260px] w-[175px] flex-shrink-0 rounded-xl object-cover shadow-[0_8px_30px_rgb(0,0,0,0.8)] ring-1 ring-white/20"
+            className="h-[300px] w-[204px] flex-shrink-0 rounded-2xl object-cover shadow-pop ring-1 ring-white/15"
           />
         )}
 
@@ -226,49 +243,63 @@ export default function ShowDetail() {
           transition={{ duration: 0.4, delay: 0.1, ease: "easeOut" }}
           className="min-w-0 flex-1 pb-1"
         >
-          <h1 className="text-3xl font-extrabold leading-tight">{anime.title}</h1>
+          <h1 className="text-4xl font-extrabold leading-[1.05] tracking-tight drop-shadow-[0_4px_24px_rgb(0_0_0/0.5)] xl:text-5xl">{anime.title}</h1>
           {anime.titleRomaji && anime.titleRomaji !== anime.title && (
-            <div className="mt-1 text-sm text-white/50">{anime.titleRomaji}</div>
+            <div className="mt-1.5 text-sm text-ink-2">{anime.titleRomaji}</div>
           )}
 
-          <div className="mt-2.5 flex flex-wrap items-center gap-3 text-sm text-white/70">
-            {anime.year && <span>{anime.year}</span>}
-            {anime.episodes && <span>{anime.episodes} eps</span>}
-            {anime.averageScore && (
-              <span>★ {(anime.averageScore / 10).toFixed(1)}</span>
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            {anime.averageScore != null && (
+              <span className="chip border-amber-300/25 bg-amber-300/10 text-amber-200">
+                <Star size={12} fill="currentColor" /> {(anime.averageScore / 10).toFixed(1)}
+              </span>
             )}
+            {anime.year && <span className="chip">{anime.year}</span>}
+            {anime.format && <span className="chip">{anime.format.replace("_", " ")}</span>}
+            {anime.episodes && <span className="chip">{anime.episodes} episodes</span>}
+            {anime.duration && <span className="chip">{anime.duration} min</span>}
             {anime.status && (
-              <span className="rounded bg-white/10 px-2 py-0.5 text-xs uppercase tracking-wide">
-                {anime.status}
+              <span className="chip">
+                <span className={`h-1.5 w-1.5 rounded-full ${anime.status === "RELEASING" ? "bg-emerald-400 shadow-[0_0_8px_rgb(52_211_153)]" : "bg-white/40"}`} />
+                {animeStatusLabel(anime.status)}
               </span>
             )}
           </div>
 
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {(anime.genres ?? []).map((g) => (
-              <span key={g} className="rounded-full bg-white/10 px-3 py-1 text-xs">{g}</span>
-            ))}
-          </div>
+          {!!anime.genres?.length && (
+            <div className="mt-3 text-sm font-medium text-ink-2">{anime.genres.join("  ·  ")}</div>
+          )}
 
           {/* List controls */}
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <select
-              value={entry?.status ?? ""}
-              onChange={(e) => updateStatus(e.target.value as WatchStatus)}
-              className="rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm text-white backdrop-blur-sm"
+          <div className="mt-6 flex flex-wrap items-center gap-3">
+            <button
+              onClick={() => document.getElementById("episodes")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+              className="btn btn-primary btn-lg"
             >
+              <Play size={18} fill="currentColor" />
+              {entry && entry.episodesWatched > 0 ? `Continue · Ep ${entry.episodesWatched + 1}` : "Start watching"}
+            </button>
+            <label className="relative">
+              <Bookmark size={16} className={`pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 ${entry ? "fill-accent text-accent" : "text-white/80"}`} />
+              <select
+                value={entry?.status ?? ""}
+                onChange={(e) => updateStatus(e.target.value as WatchStatus)}
+                className="btn btn-secondary btn-lg cursor-pointer appearance-none pl-11 pr-10 [&>option]:bg-surface-2"
+              >
               <option value="" disabled>
                 {entry ? "In your list" : "Add to list"}
               </option>
               {STATUS_OPTIONS.map((s) => (
                 <option key={s.value} value={s.value}>{s.label}</option>
               ))}
-            </select>
+              </select>
+              <ChevronDown size={16} className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-white/60" />
+            </label>
 
             {/* Score input */}
             {entry && (
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs text-white/40">★</span>
+              <div className="flex h-12 items-center gap-1.5 rounded-2xl border border-white/10 bg-white/[0.05] px-3">
+                <Star size={14} className="text-amber-300" />
                 <input
                   type="number"
                   min={0}
@@ -282,21 +313,22 @@ export default function ShowDetail() {
                     const n = parseFloat(raw);
                     if (isFinite(n)) updateScore(Math.max(0, Math.min(10, n)));
                   }}
-                  className="w-16 rounded-md border border-white/10 bg-white/5 px-2 py-2 text-center text-sm text-white placeholder-white/30 backdrop-blur-sm focus:border-accent focus:outline-none"
+                  className="w-12 bg-transparent text-center text-sm font-semibold text-white outline-none placeholder:text-white/30"
                   title="Your score (0–10)"
                 />
-                <span className="text-xs text-white/30">/10</span>
+                <span className="text-xs text-ink-3">/ 10</span>
               </div>
             )}
 
-            {entry ? (
-              <span className="flex items-center gap-1.5 text-xs font-semibold text-white/50 bg-white/5 px-2 py-1.5 rounded-md border border-white/5 backdrop-blur-sm">
-                <Check size={13} className="text-green-500" />
-                {entry.episodesWatched}/{anime.episodes ?? "?"} watched
-              </span>
-            ) : (
-              <span className="flex items-center gap-1.5 text-xs font-semibold text-white/40 bg-white/5 px-2 py-1.5 rounded-md border border-white/5 backdrop-blur-sm">
-                <Plus size={13} /> Not in list
+            {entry && (
+              <span className="flex h-12 items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.05] px-4 text-xs font-semibold text-ink-2">
+                <Check size={14} className="text-emerald-400" />
+                {entry.episodesWatched} / {anime.episodes ?? "?"} watched
+                {!!anime.episodes && (
+                  <span className="h-1.5 w-20 overflow-hidden rounded-full bg-white/10">
+                    <span className="block h-full rounded-full bg-accent-gradient" style={{ width: `${Math.min(100, (entry.episodesWatched / anime.episodes) * 100)}%` }} />
+                  </span>
+                )}
               </span>
             )}
           </div>
@@ -309,10 +341,18 @@ export default function ShowDetail() {
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4, delay: 0.2, ease: "easeOut" }}
-          className="mt-6 max-w-4xl px-8 text-sm leading-relaxed text-white/70"
+          className="mt-8 max-w-3xl px-8 text-[15px] leading-relaxed text-ink-2"
         >
           {anime.synopsis}
         </motion.p>
+      )}
+
+      {/* The manga or novel behind this anime */}
+      {story && (
+        <StoryCard
+          plan={story}
+          finishedAnime={entry?.status === "completed" || (!!entry && !!anime.episodes && entry.episodesWatched >= anime.episodes)}
+        />
       )}
 
       {/* Franchise watch order (season spine: prequels → this → sequels) */}
@@ -324,9 +364,9 @@ export default function ShowDetail() {
         const rest = related.filter(({ anime: rel }) => !chainIds.includes(rel.id));
         if (!rest.length) return null;
         return (
-          <div className="mt-8 px-8">
-            <h2 className="mb-3 text-lg font-semibold">Related</h2>
-            <div className="flex gap-4 overflow-x-auto pb-2">
+          <div className="mt-10 px-8">
+            <SectionHeader icon={Layers} title="Related" />
+            <div className="no-scrollbar flex gap-4 overflow-x-auto pb-3 pt-1">
               {rest.map(({ relationType, anime: rel }) => (
                 <RelatedCard key={rel.id} rel={rel} relationType={relationType} />
               ))}
@@ -335,11 +375,13 @@ export default function ShowDetail() {
         );
       })()}
 
+      {story && <MoreInPrint more={story.more} />}
+
       {/* Streaming episodes — always check providers; AniList's "not yet released"
           status is often stale, and the show may already be streamable. */}
-      <div className="mt-8 px-8">
+      <div id="episodes" className="mt-10 scroll-mt-6 px-8">
         {anime.status === "NOT_YET_RELEASED" && (
-          <p className="mb-3 text-xs text-white/30">
+          <p className="mb-3 text-xs text-ink-3">
             AniList lists this as upcoming — checking providers in case it's already streamable…
           </p>
         )}
@@ -356,6 +398,9 @@ export default function ShowDetail() {
           inline
         />
       </div>
+
+      {/* Openings and endings (AnimeThemes.moe) */}
+      <ThemeSongs animeId={animeId} animeTitle={anime.title} />
     </div>
   );
 }

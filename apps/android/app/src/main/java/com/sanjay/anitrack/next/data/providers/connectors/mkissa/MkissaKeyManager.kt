@@ -198,15 +198,21 @@ internal class MkissaKeyManager(
                     MkissaChallengePolicy.classify(response.code, response.body)?.let { kind ->
                         throw MkissaRateLimitedException(kind)
                     }
-                    if (!response.successful) {
-                        if (response.code == 403 || response.code == 404) stale = true
+                    if (MkissaChallengePolicy.cryptoFailure(response.body) || response.code == 404) {
+                        stale = true
                         continue
                     }
-                    val json = runCatching { JSONObject(response.body) }.getOrNull() ?: continue
+                    if (!response.successful) throw MkissaProtocolException("MKissa key service returned HTTP ${response.code}")
+                    if (response.body.length > MAX_BOOTSTRAP_CHARS) throw MkissaProtocolException("MKissa key response was too large")
+                    val json = runCatching { JSONObject(response.body) }.getOrElse {
+                        throw MkissaProtocolException("MKissa key service returned invalid JSON", it)
+                    }
                     val lane = json.nullableString("k")
-                    val partB = json.nullableString("partB") ?: continue
-                    if (lane != null && lane != CONTENT_LANE) continue
-                    val epochValue = json.optLong("epoch", -1).takeIf { it > 0 } ?: continue
+                    val partB = json.nullableString("partB")
+                        ?: throw MkissaProtocolException("MKissa key service returned no key material")
+                    if (lane != null && lane != CONTENT_LANE) throw MkissaProtocolException("MKissa key service returned another content lane")
+                    val epochValue = json.optLong("epoch", -1).takeIf { it > 0 }
+                        ?: throw MkissaProtocolException("MKissa key service returned an invalid epoch")
                     return BootstrapResult(Bootstrap(epochValue, partB, lane), mask)
                 }
             }
@@ -285,6 +291,7 @@ internal class MkissaKeyManager(
         private const val KEY_GROUP = "mkissa"
         private const val MATERIAL_TTL_MS = 6 * 60 * 60 * 1000L
         private const val MAX_BUILD_CHUNKS = 64
+        private const val MAX_BOOTSTRAP_CHARS = 64 * 1024
         private const val CRYPTO_MARKER = "aaReq"
         private val appEntryRegex = Regex(
             """(?:import\(|src\s*=\s*)["']([^"']*/entry/app\.[^"']+\.js)["']""",

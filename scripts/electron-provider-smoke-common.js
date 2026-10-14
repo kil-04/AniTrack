@@ -3,6 +3,16 @@ const { isIP } = require("node:net");
 const MAX_MANIFEST_BYTES = 1024 * 1024;
 const MEDIA_SNIFF_BYTES = 1024;
 
+function verificationIdsMatch(actual, expected) {
+  const positive = value => Number.isSafeInteger(value) && value > 0;
+  if (!actual || !expected) return false;
+  // Never accept a matching secondary ID if another supplied ID contradicts it.
+  for (const name of ["anilistId", "malId"]) {
+    if (positive(actual[name]) && positive(expected[name]) && actual[name] !== expected[name]) return false;
+  }
+  return ["anilistId", "malId"].some(name => positive(actual[name]) && actual[name] === expected[name]);
+}
+
 function publicHttpsUrl(raw, base) {
   let url;
   try { url = new URL(raw, base); } catch { throw new Error("Media URI was invalid"); }
@@ -172,4 +182,4 @@ function createMediaProbe({ fetch, authorization, report = () => {}, timeoutMs =
   return { verifyHls };
 }
 
-module.exports = { createMediaProbe, mediaFormat, playlistSelection, publicHttpsUrl, safeMessage };
+module.exports = { createMediaProbe, mediaFormat, playlistSelection, publicHttpsUrl, safeMessage, verificationIdsMatch };

@@ -48,7 +48,7 @@ internal fun HomeModeToggle(mode: HomeMode, onChange: (HomeMode) -> Unit, modifi
             Row(
                 Modifier
                     .clip(RoundedCornerShape(50))
-                    .background(if (selected) Color.White else Color.Transparent)
+                    .then(if (selected) Modifier.background(AniColors.BrandGradient) else Modifier)
                     .clickable(enabled = !selected) { onChange(option) }
                     .padding(horizontal = 14.dp, vertical = 7.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -56,13 +56,13 @@ internal fun HomeModeToggle(mode: HomeMode, onChange: (HomeMode) -> Unit, modifi
                 Icon(
                     if (option == HomeMode.Anime) Icons.Rounded.LiveTv else Icons.Rounded.AutoStories,
                     null,
-                    tint = if (selected) Color(0xFF0A0A0B) else Color.White.copy(alpha = 0.75f),
+                    tint = if (selected) Color.White else Color.White.copy(alpha = 0.7f),
                     modifier = Modifier.size(17.dp),
                 )
                 Spacer(Modifier.width(7.dp))
                 Text(
                     option.name,
-                    color = if (selected) Color(0xFF0A0A0B) else Color.White.copy(alpha = 0.75f),
+                    color = if (selected) Color.White else Color.White.copy(alpha = 0.7f),
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                 )

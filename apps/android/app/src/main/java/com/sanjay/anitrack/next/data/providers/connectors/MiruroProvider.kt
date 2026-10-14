@@ -8,75 +8,61 @@ import com.sanjay.anitrack.next.data.providers.ProviderDescriptor
 import com.sanjay.anitrack.next.data.providers.ProviderEpisode
 import com.sanjay.anitrack.next.data.providers.ProviderSeries
 import com.sanjay.anitrack.next.data.providers.ProviderStreamVariant
-import com.sanjay.anitrack.next.data.providers.connectors.miruro.MiruroCatalogue
-import com.sanjay.anitrack.next.data.providers.connectors.miruro.MiruroEpisodeChoice
-import com.sanjay.anitrack.next.data.providers.connectors.miruro.MiruroMediaParser
 import com.sanjay.anitrack.next.data.providers.connectors.miruro.MiruroProtocolException
-import com.sanjay.anitrack.next.data.providers.connectors.miruro.MiruroReadRequest
+import com.sanjay.anitrack.next.data.providers.connectors.miruro.MiruroV1Catalogue
+import com.sanjay.anitrack.next.data.providers.connectors.miruro.MiruroV1Choice
+import com.sanjay.anitrack.next.data.providers.connectors.miruro.MiruroV1ReadRequest
 import org.json.JSONObject
 
-/**
- * Staged native adapter. Its owner must supply an explicit live, user-approved session.
- * No global/default browser, automatic verification, source cache or server fan-out.
- * MiruroAndroidProvider supplies the activity-owned session and debug-only registration.
- */
+/** User-approved current catalogue transport. No source cache, embeds or server fan-out. */
 internal class MiruroProvider(
-    private val read: suspend (MiruroReadRequest) -> JSONObject,
+    private val read: suspend (MiruroV1ReadRequest) -> JSONObject,
     private val userAgent: () -> String,
 ) : AnimeProvider {
-    override val descriptor = ProviderDescriptor("miruro", "Miruro",
-        ProviderCapabilities(externalIds = true, downloads = false)) // Category is part of each server variant.
+    override val descriptor = ProviderDescriptor("miruro", "Miruro", ProviderCapabilities(externalIds = true, downloads = false))
 
     override fun acceptsResumeKey(key: String): Boolean = coordinates(key) != null
-
-    override suspend fun match(anime: Anime): ProviderSeries? {
-        if (anime.id <= 0) return null
-        return load(anime.id, "sub")
-    }
-
+    override suspend fun match(anime: Anime): ProviderSeries? = if (anime.id > 0) load(anime.id, "sub") else null
     override suspend fun resume(key: String): ProviderSeries? {
         val (id, translation) = coordinates(key) ?: return null
         return load(id, translation)
     }
 
     private suspend fun load(id: Int, translation: String): ProviderSeries? {
-        val info = read(MiruroReadRequest.Info(id))
-        val actualId = info.optJSONObject("media")?.opt("id") as? Number
-        if (actualId?.toDouble() != id.toDouble()) throw MiruroProtocolException("Miruro show identity could not be verified")
-        val config = read(MiruroReadRequest.Config)
-        val episodes = read(MiruroReadRequest.Episodes(id))
-        return series(id, translation, config, episodes)
+        val showId = MiruroV1Catalogue.show(read(MiruroV1ReadRequest.Lookup(id)), id)
+        return series(id, translation, showId, read(MiruroV1ReadRequest.Episodes(showId)))
     }
 
-    /** Also used by the on-device test with its already validated catalogue, without rereading it. */
-    internal fun series(id: Int, translation: String, config: JSONObject, payload: JSONObject): ProviderSeries? {
-        val choices = MiruroCatalogue.choices(id, translation, config, payload)
-        if (choices.isEmpty()) return null
+    internal fun series(id: Int, translation: String, showId: String, payload: JSONObject): ProviderSeries? {
+        require(id > 0 && translation in setOf("sub", "dub"))
+        val episodes = MiruroV1Catalogue.episodes(payload)
+        if (episodes.isEmpty()) return null
         return ProviderSeries(
-            providerId = descriptor.id,
-            resumeKey = "miruro:$translation:$id",
-            verified = (payload.optJSONObject("mappings")?.opt("aniId") as? Number)?.toDouble() == id.toDouble(),
-            badges = listOf(translation.uppercase()),
-            episodes = choices.groupBy { it.number }.toSortedMap().map { (number, variants) ->
-                suspend fun resolve(choice: MiruroEpisodeChoice) = MiruroMediaParser.directMedia(
-                    read(MiruroReadRequest.Sources(id, choice.episodeId, choice.server, choice.category)),
-                ).firstOrNull()?.resolved(userAgent())
-                    ?: throw MiruroProtocolException("This Miruro server did not return supported direct video")
+            providerId = descriptor.id, resumeKey = "miruro:$translation:$id", verified = true,
+            badges = listOf(translation.uppercase()), episodes = episodes.map { episode ->
+                suspend fun choices(): List<MiruroV1Choice> = MiruroV1Catalogue.choices(
+                    read(MiruroV1ReadRequest.Play(showId, episode.coordinate)), episode.coordinate,
+                ).filter { if (translation == "dub") it.track == "dub" else it.track in setOf("sub", "ssub") }
 
-                fun preferred(preferences: PlaybackPreferences): MiruroEpisodeChoice =
-                    if (preferences.preferHardSub) variants.firstOrNull { it.category == "sub" } ?: variants.first()
-                    else variants.first()
+                fun MiruroV1Choice.resolved() =
+                    media.resolved(userAgent(), headers, episode.intro, episode.outro).copy(variantId = variantId)
+
+                fun preferred(options: List<MiruroV1Choice>, preferences: PlaybackPreferences): MiruroV1Choice {
+                    if (options.isEmpty()) throw MiruroProtocolException("This Miruro episode has no supported direct video for $translation")
+                    val preferredTrack = if (preferences.preferHardSub) "sub" else "ssub"
+                    return options.firstOrNull { it.track == preferredTrack } ?: options.first()
+                }
 
                 ProviderEpisode(
-                    number = number,
-                    title = variants.firstNotNullOfOrNull { it.title },
-                    variantsResolver = { variants.map { ProviderStreamVariant(it.variantId, it.label) } },
+                    number = episode.number, title = episode.title,
+                    // /play resolves media upstream, so call only for the active episode; retain only stable labels.
+                    variantsResolver = { choices().map { ProviderStreamVariant(it.variantId, it.label) } },
                     variantResolver = { selected, _ ->
-                        val choice = variants.firstOrNull { it.variantId == selected }
-                            ?: throw MiruroProtocolException("That Miruro server is not available for this episode")
-                        resolve(choice)
+                        val choice = choices().firstOrNull { it.variantId == selected }
+                            ?: throw MiruroProtocolException("That Miruro server or track is no longer available; reload the episode's server list")
+                        choice.resolved()
                     },
-                    resolver = { preferences -> resolve(preferred(preferences)) },
+                    resolver = { preferences -> preferred(choices(), preferences).resolved() },
                 )
             },
         )

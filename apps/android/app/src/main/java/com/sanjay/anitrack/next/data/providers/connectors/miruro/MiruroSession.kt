@@ -51,12 +51,16 @@ internal class MiruroSession(
         )
     }
 
-    suspend fun read(request: MiruroReadRequest): JSONObject {
+    suspend fun read(request: MiruroReadRequest): JSONObject = readCurrent { it.read(request) }
+
+    suspend fun read(request: MiruroV1ReadRequest): JSONObject = readCurrent { it.read(request) }
+
+    private suspend fun readCurrent(operation: suspend (MiruroClient) -> JSONObject): JSONObject {
         val generation = state.value.generation
         requireReady(generation)
         val active = client ?: throw MiruroProtocolException("Connect to Miruro before watching.")
         try {
-            val result = active.read(request)
+            val result = operation(active)
             requireReady(generation) // Discard a response after cancellation, closure or reconnection.
             expiresAt = now() + 30 * 60_000
             return result

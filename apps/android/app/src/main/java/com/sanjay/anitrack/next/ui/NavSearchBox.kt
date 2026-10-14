@@ -10,16 +10,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Search
 import com.sanjay.anitrack.next.data.Anime
 import com.sanjay.anitrack.next.data.AniList
 import com.sanjay.anitrack.next.data.Manga
+import com.sanjay.anitrack.next.data.SearchHistory
 import kotlinx.coroutines.delay
 
 /** One search result row, for anime or manga. */
@@ -50,12 +55,34 @@ fun NavSearchBox(
     onOpenManga: (Manga) -> Unit = {},
 ) {
     var query by remember(manga) { mutableStateOf("") }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var recent by remember(manga) { mutableStateOf(SearchHistory.recent(context, manga)) }
     var results by remember(manga) { mutableStateOf<List<SearchHit>>(emptyList()) }
     var open by remember { mutableStateOf(false) }
     val focus = androidx.compose.ui.platform.LocalFocusManager.current
     val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    // The dropdown fits between the field and the keyboard; taller, it was pushed up over the field.
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val windowHeight = androidx.compose.ui.platform.LocalView.current.rootView.height
+    val imeBottom = WindowInsets.ime.getBottom(density)
+    var fieldBottom by remember { mutableIntStateOf(0) }
+    // Closing the keyboard (back or its hide key) also lets go of the field, so it
+    // doesn't stay highlighted with a cursor on every screen afterwards.
+    var focused by remember { mutableStateOf(false) }
+    val imeVisible = imeBottom > 0
+    var imeWasVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(imeVisible) {
+        if (imeWasVisible && !imeVisible && focused) focus.clearFocus()
+        imeWasVisible = imeVisible
+    }
+    val menuMax = with(density) {
+        // Less the 6dp offset and the 48dp edge margin Material keeps around menus.
+        (windowHeight - imeBottom - fieldBottom - 60.dp.roundToPx()).toDp().coerceIn(180.dp, 520.dp)
+    }
     // Leaving the search (a result or "view all") releases the field and closes the keyboard.
     fun leave() {
+        SearchHistory.remember(context, manga, query)
+        recent = SearchHistory.recent(context, manga)
         open = false
         query = ""
         focus.clearFocus()
@@ -87,7 +114,9 @@ fun NavSearchBox(
             trailingIcon = if (query.isEmpty()) null else {
                 { IconButton(onClick = { query = "" }) { Icon(Icons.Rounded.Close, "Clear", tint = AniColors.TextSecondary, modifier = Modifier.size(18.dp)) } }
             },
-            modifier = Modifier.fillMaxWidth().height(50.dp),
+            modifier = Modifier.fillMaxWidth().height(50.dp)
+                .onGloballyPositioned { fieldBottom = it.boundsInWindow().bottom.toInt() }
+                .onFocusChanged { focused = it.isFocused },
             textStyle = MaterialTheme.typography.bodyMedium,
             colors = OutlinedTextFieldDefaults.colors(
                 focusedBorderColor = AniColors.Accent.copy(alpha = 0.8f),
@@ -105,7 +134,7 @@ fun NavSearchBox(
             offset = androidx.compose.ui.unit.DpOffset(0.dp, 6.dp),
             shape = RoundedCornerShape(16.dp),
             containerColor = AniColors.Surface,
-            modifier = Modifier.width(360.dp).heightIn(max = 520.dp)
+            modifier = Modifier.width(360.dp).heightIn(max = menuMax)
                 .border(1.dp, AniColors.Border, RoundedCornerShape(16.dp)),
         ) {
             results.take(9).forEach { hit ->
@@ -125,6 +154,35 @@ fun NavSearchBox(
                         Icon(Icons.AutoMirrored.Rounded.ArrowForward, null, tint = AniColors.Accent, modifier = Modifier.size(18.dp))
                     }
                 },
+            )
+        }
+        DropdownMenu(
+            expanded = focused && query.isEmpty() && recent.isNotEmpty(),
+            onDismissRequest = { focus.clearFocus() },
+            properties = androidx.compose.ui.window.PopupProperties(focusable = false),
+            offset = androidx.compose.ui.unit.DpOffset(0.dp, 6.dp),
+            shape = RoundedCornerShape(16.dp),
+            containerColor = AniColors.Surface,
+            modifier = Modifier.width(360.dp).heightIn(max = menuMax)
+                .border(1.dp, AniColors.Border, RoundedCornerShape(16.dp)),
+        ) {
+            Text(
+                "Recent searches",
+                style = MaterialTheme.typography.labelLarge,
+                color = AniColors.TextSecondary,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+            recent.forEach { past ->
+                DropdownMenuItem(
+                    onClick = { query = past },
+                    leadingIcon = { Icon(Icons.Rounded.History, null, tint = AniColors.TextTertiary) },
+                    text = { Text(past, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                )
+            }
+            HorizontalDivider(color = AniColors.BorderSoft)
+            DropdownMenuItem(
+                onClick = { SearchHistory.clear(context, manga); recent = emptyList() },
+                text = { Text("Clear recent searches", color = AniColors.TextSecondary) },
             )
         }
     }

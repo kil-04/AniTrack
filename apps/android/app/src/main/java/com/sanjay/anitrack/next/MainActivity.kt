@@ -52,7 +52,7 @@ import androidx.navigation.navArgument
 // The app background and bars share the theme's near-black (AniColors.Bg);
 // the bars are separated from content by a hairline.
 private val Bg = com.sanjay.anitrack.next.ui.AniColors.Bg
-private val Accent = com.sanjay.anitrack.next.ui.AniColors.Accent
+private val Accent: androidx.compose.ui.graphics.Color get() = com.sanjay.anitrack.next.ui.AniColors.Accent
 
 object PipState {
     val active = mutableStateOf(false)
@@ -92,7 +92,10 @@ class MainActivity : ComponentActivity() {
         com.sanjay.anitrack.next.data.GistSync.init(applicationContext)
         com.sanjay.anitrack.next.data.Downloads.init(applicationContext)
         com.sanjay.anitrack.next.data.Mal.init(applicationContext)
-        com.sanjay.anitrack.next.data.providers.connectors.MkissaProvider.init(applicationContext)
+        com.sanjay.anitrack.next.data.ReleaseAlerts.init(applicationContext)
+        com.sanjay.anitrack.next.data.SmartDownloads.init(applicationContext)
+        com.sanjay.anitrack.next.data.AnimeThemes.init(applicationContext)
+        com.sanjay.anitrack.next.data.ReleaseAlerts.takeRoute(intent)
         com.sanjay.anitrack.next.data.providers.connectors.MiruroAndroidProvider.attach(this)
         com.sanjay.anitrack.next.data.manga.comix.ComixSource.attach(this)
         com.sanjay.anitrack.next.data.Pahe.attach(this)
@@ -101,6 +104,11 @@ class MainActivity : ComponentActivity() {
         java.net.CookieHandler.setDefault(com.sanjay.anitrack.next.data.WebkitCookieHandler())
         enableEdgeToEdge()
         hideSystemBars()
+        // The first frame already needs the saved mode's accent: the shell's SideEffect only
+        // syncs it after that frame, which left the top bar in anime blue on a manga launch.
+        com.sanjay.anitrack.next.ui.AniColors.mangaMode.value =
+            getSharedPreferences("anitrack_next", android.content.Context.MODE_PRIVATE)
+                .getString("home_mode", null) == com.sanjay.anitrack.next.ui.HomeMode.Manga.name
         setContent {
             com.sanjay.anitrack.next.ui.AniTrackTheme {
                 AppShell()
@@ -119,6 +127,18 @@ class MainActivity : ComponentActivity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) hideSystemBars()   // re-hide after dialogs / app switches
+    }
+
+    override fun onStart() {
+        super.onStart()
+        // Opening the app tops up smart downloads (at most every 20 minutes).
+        com.sanjay.anitrack.next.data.SmartDownloads.kick(this)
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        com.sanjay.anitrack.next.data.ReleaseAlerts.takeRoute(intent)
     }
 
     override fun onResume() {
@@ -182,6 +202,13 @@ fun AppShell() {
     val go: (String) -> Unit = { r -> nav.navigate(r) { launchSingleTop = true; popUpTo("home") } }
     val openDetail: (com.sanjay.anitrack.next.data.Anime) -> Unit = { a -> nav.navigate("anime/${a.id}") }
     val openManga: (com.sanjay.anitrack.next.data.Manga) -> Unit = { m -> nav.navigate("manga/${m.id}") }
+    // A tapped new-episode/new-chapter notification opens that title's page.
+    val alertRoute by com.sanjay.anitrack.next.data.ReleaseAlerts.pendingRoute
+    LaunchedEffect(alertRoute) {
+        val route = alertRoute ?: return@LaunchedEffect
+        com.sanjay.anitrack.next.data.ReleaseAlerts.pendingRoute.value = null
+        nav.navigate(route) { launchSingleTop = true }
+    }
     // App-wide Anime/Manga mode (toggled on Home): the search bar, tabs and pages follow it.
     val context = androidx.compose.ui.platform.LocalContext.current
     val modePrefs = remember { context.getSharedPreferences("anitrack_next", android.content.Context.MODE_PRIVATE) }
@@ -196,6 +223,8 @@ fun AppShell() {
         modePrefs.edit().putString("home_mode", it.name).apply()
     }
     val manga = mode == com.sanjay.anitrack.next.ui.HomeMode.Manga
+    // Manga mode deepens the accent a shade, as on desktop.
+    androidx.compose.runtime.SideEffect { com.sanjay.anitrack.next.ui.AniColors.mangaMode.value = manga }
     val tabs = if (manga) mangaDestinations else destinations
     val currentTab = current?.substringBefore('?')
 
@@ -291,7 +320,11 @@ fun AppShell() {
                     }
                     composable("manga/{id}") { entry ->
                         val id = entry.arguments?.getString("id")?.toIntOrNull() ?: 0
-                        com.sanjay.anitrack.next.ui.MangaDetailScreen(id, onRead = { nav.navigate("reader") })
+                        com.sanjay.anitrack.next.ui.MangaDetailScreen(
+                            id,
+                            onRead = { nav.navigate("reader") },
+                            onOpenAnime = { other -> nav.navigate("anime/$other") },
+                        )
                     }
                     composable("reader") {
                         com.sanjay.anitrack.next.ui.MangaReaderScreen(onBack = { nav.popBackStack() })
@@ -344,6 +377,7 @@ fun AppShell() {
                             id,
                             onPlay = { nav.navigate("player") },
                             onOpenAnime = { other -> nav.navigate("anime/$other") },
+                            onOpenManga = { book -> nav.navigate("manga/$book") },
                         )
                     }
                     composable("player") {
@@ -374,6 +408,16 @@ fun AppShell() {
                 }
                 // Floating mini player (the desktop's bottom-right persistent player).
                 val miniOn by com.sanjay.anitrack.next.data.PlayerHolder.miniActive
+                // Theme songs' now-playing bar, bottom-left (above the mini player on phones).
+                if (!hideChrome && com.sanjay.anitrack.next.data.ThemePlayer.current != null) {
+                    val stacked = miniOn && !wideLayout
+                    com.sanjay.anitrack.next.ui.ThemeBar(
+                        Modifier.align(Alignment.BottomStart)
+                            .padding(start = 16.dp, end = 16.dp, bottom = if (stacked) 205.dp else 16.dp)
+                            .then(if (wideLayout) Modifier.width(400.dp) else Modifier.fillMaxWidth()),
+                        onOpenAnime = { id -> nav.navigate("anime/$id") { launchSingleTop = true } },
+                    )
+                }
                 if (miniOn && current != "player") {
                     Box(Modifier.align(Alignment.BottomEnd).padding(16.dp)) {
                         com.sanjay.anitrack.next.ui.MiniPlayer(
@@ -416,8 +460,9 @@ fun AppShell() {
 private fun NavTab(d: Dest, selected: Boolean, showLabel: Boolean, onClick: () -> Unit) {
     val colors = com.sanjay.anitrack.next.ui.AniColors
     Row(
-        Modifier.height(40.dp).clip(RoundedCornerShape(50))
-            .background(if (selected) Color.White.copy(alpha = 0.1f) else Color.Transparent)
+        Modifier.height(40.dp).clip(RoundedCornerShape(12.dp))
+            .background(if (selected) colors.AccentSoft else Color.Transparent)
+            .border(1.dp, if (selected) Accent.copy(alpha = 0.3f) else Color.Transparent, RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = if (showLabel) 14.dp else 11.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -497,6 +542,6 @@ fun PlaceholderScreen(title: String, subtitle: String) {
         Spacer(Modifier.height(8.dp))
         Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(alpha = 0.5f))
         Spacer(Modifier.height(24.dp))
-        Text("AniTrack Next — native Compose shell", color = Accent, style = MaterialTheme.typography.labelLarge)
+        Text("AniTrack", color = Accent, style = MaterialTheme.typography.labelLarge)
     }
 }

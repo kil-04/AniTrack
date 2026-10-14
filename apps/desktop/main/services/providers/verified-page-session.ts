@@ -4,8 +4,9 @@ import { BrowserWindow } from "electron";
  * A provider homepage opened in an app-owned window so the user can complete
  * the website's own check themselves. The verified page then serves fixed,
  * reviewed same-origin GETs from an isolated world: page scripts cannot replace
- * that fetch, nothing downloaded is executed, and only the configured origin is
- * reachable. Video never plays in this window.
+ * that fetch and no downloaded resolver modules are invoked by the connector.
+ * The ordinary website runs only in its sandboxed session; the reviewed GET is
+ * same-origin only. Video never plays in this window.
  */
 
 export interface VerifiedPageResponse {
@@ -33,7 +34,7 @@ const CHALLENGE_TITLE = /just a moment|attention required|checking your browser|
 export class PageVerificationError extends Error {
   readonly code = "SECURITY_CHECK" as const;
   constructor(message: string) {
-    super(message);
+    super(`PROVIDER_SECURITY_CHECK: ${message}`);
     this.name = "PageVerificationError";
   }
 }
@@ -59,7 +60,7 @@ export class VerifiedPageSession {
   }
 
   /** One same-origin GET from the verified page. User-initiated callers only. */
-  async get(url: string, accept: string, headerNames: string[] = []): Promise<VerifiedPageResponse> {
+  async get(url: string, accept: string, headerNames: string[] = [], encoding: "utf8" | "base64" = "utf8"): Promise<VerifiedPageResponse> {
     const target = new URL(url);
     if (target.protocol !== "https:" || target.origin !== this.options.origin || target.username || target.password) {
       throw new Error(`${this.options.label} request left its approved site.`);
@@ -75,6 +76,7 @@ export class VerifiedPageSession {
       headers: headerNames.map((name) => name.toLowerCase()),
       limit: this.options.maxBodyBytes,
       timeout: this.options.requestTimeoutMs,
+      encoding,
     };
     // `request` is passed as data; the code around it is fixed. No top-level
     // declarations: the isolated world keeps its globals between calls.
@@ -83,11 +85,14 @@ export class VerifiedPageSession {
   const timer = setTimeout(() => controller.abort(), request.timeout);
   try {
     const response = await fetch(request.path, {
-      headers: { Accept: request.accept }, credentials: "same-origin", cache: "no-store", signal: controller.signal,
+      headers: { Accept: request.accept }, credentials: "same-origin", redirect: "error", cache: "no-store", signal: controller.signal,
     });
     if (new URL(response.url).origin !== location.origin) return { status: 0, body: "", headers: {} };
     const headers = {};
     for (const name of request.headers) { const value = response.headers.get(name); if (value !== null) headers[name] = value; }
+    if ([403, 429].includes(response.status)) { await response.body?.cancel(); return { status: response.status, body: "", headers }; }
+    if (Number(response.headers.get("content-length")) > request.limit) { await response.body?.cancel(); return { status: response.status, body: null, headers }; }
+    if (!response.body) return { status: response.status, body: "", headers };
     const reader = response.body.getReader();
     const chunks = [];
     let size = 0;
@@ -98,7 +103,14 @@ export class VerifiedPageSession {
       if (size > request.limit) { await reader.cancel(); return { status: response.status, body: null, headers }; }
       chunks.push(value);
     }
-    return { status: response.status, body: await new Blob(chunks).text(), headers };
+    const blob = new Blob(chunks);
+    if (request.encoding === "base64") {
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      let binary = "";
+      for (let start = 0; start < bytes.length; start += 8192) binary += String.fromCharCode(...bytes.subarray(start, start + 8192));
+      return { status: response.status, body: btoa(binary), headers };
+    }
+    return { status: response.status, body: await blob.text(), headers };
   } finally { clearTimeout(timer); }
 })(
 /* request */ ${JSON.stringify(request)}

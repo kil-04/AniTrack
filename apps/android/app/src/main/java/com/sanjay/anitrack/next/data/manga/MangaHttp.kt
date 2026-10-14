@@ -11,8 +11,10 @@ import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.Dns
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.ByteArrayOutputStream
 import java.io.IOException
@@ -111,12 +113,19 @@ internal class MangaHttp(
     private val lock = Mutex()
     private var lastCallAt = 0L
 
-    suspend fun get(url: String, accept: String, maxBytes: Int): String {
+    suspend fun get(url: String, accept: String, maxBytes: Int): String = call(url, accept, maxBytes, null)
+
+    /** POSTs a JSON body, with the same host, spacing, size and challenge rules as [get]. */
+    suspend fun postJson(url: String, json: String, accept: String, maxBytes: Int): String =
+        call(url, accept, maxBytes, jsonBody(json))
+
+    private suspend fun call(url: String, accept: String, maxBytes: Int, body: okhttp3.RequestBody?): String {
         MangaUrlPolicy.requireHost(url, hosts)
         val request = Request.Builder().url(url)
             .header("User-Agent", userAgent())
             .header("Accept", accept)
             .apply { headers().forEach { (name, value) -> header(name, value) } }
+            .apply { if (body != null) post(body) }
             .build()
         return lock.withLock {
             val wait = spacingMs - (System.currentTimeMillis() - lastCallAt)
@@ -182,6 +191,15 @@ internal class MangaHttp(
             "<title[^>]*>\\s*(?:just a moment|attention required)|_cf_chl_opt|verify you are human",
             RegexOption.IGNORE_CASE,
         )
+
+        private val JSON = "application/json".toMediaType()
+
+        /**
+         * [json] typed exactly `application/json`. OkHttp appends `; charset=utf-8` to a
+         * String body's type, and MangaBall then ignores the body (400 "Missing title_id"),
+         * so the UTF-8 bytes are sent instead.
+         */
+        fun jsonBody(json: String): okhttp3.RequestBody = json.toByteArray(Charsets.UTF_8).toRequestBody(JSON)
     }
 }
 

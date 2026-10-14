@@ -1,12 +1,16 @@
 # Manga reading sources (native Android)
 
+> The desktop app has the same two sources and its own manga mode: see
+> `docs/desktop/manga-mode.md`.
+
 AniTrack's manga mode (Home → **Manga**) browses AniList's manga catalogue and
 reads chapters in the native reader (`ui/MangaReaderScreen.kt`). Chapters come
 from reading sources registered in `MangaSources.all`
 (`apps/android/.../data/manga/MangaSource.kt`), tried in order.
 
-**Current registry (user choice, 2026-10-03): MangaDot only.** It has the largest
-catalogue, behind a one-time user-completed Cloudflare check.
+**Current registry (2026-10-11): MangaDot, then MangaBall.** MangaDot has the
+largest catalogue, behind a one-time user-completed Cloudflare check. MangaBall
+(source 2) is a large aggregator with a public JSON API and no browser check.
 
 These are implemented and tested but unregistered:
 
@@ -16,9 +20,11 @@ These are implemented and tested but unregistered:
 
 Add one to the list to offer it again.
 
-With more than one source registered, the detail page's **Try another source**
-button steps past a wrong or empty match. The choice is remembered per title
-(`manga_source_<anilistId>` in the `anitrack_next` preferences).
+With more than one source registered, the detail page shows a **Source** picker.
+Without a choice, the sources are tried in order and the first with English
+chapters wins (a source that asks for its check is skipped, and **Connect** is
+offered). A picked source is the only one tried, and the choice is remembered per
+title (`manga_source_<anilistId>` in the `anitrack_next` preferences).
 
 ## Manga mode across the app
 
@@ -31,13 +37,18 @@ switches to manga counterparts of the anime features:
 | Top-bar search / quick search (anime) | AniList manga search (live dropdown, "View all" opens Search with the query) |
 | Search tab (anime filters) | `MangaSearchScreen`: genre, type (Manga/Manhwa/Manhua/One-shot/Light novel), year, status, sort, "Top rated manga" |
 | My List (watch statuses, MAL sync) | `MangaListScreen`: Reading / Completed / On hold / Dropped / Plan to read, stored locally in `manga_list` (no MAL sync yet); "+ Add to list" on each manga page |
-| Schedule (airing) | `MangaUpdatesScreen`: newest MangaDot chapter for manga in your list or reading history, marked NEW past your last read chapter |
+| Schedule (airing) | `MangaUpdatesScreen`: newest chapter of each manga in your list or reading history, on the source it reads from (the picked one, else a saved match, else the first that finds it), with the source named and "N NEW" past your last read chapter; **All / New chapters** filter; four titles checked at a time |
 | Downloads (HLS episodes, Range) | `MangaDownloadsScreen` + `MangaDownloads`: per-chapter ↓ on chapter rows, or **Download range** (below); pages saved under `filesDir/manga-downloads/<anilistId>/<chapter>/` with `meta.json`; read offline (the reader opens local pages first; strips slice from the local file) |
 | Time Machine | hidden (anime-specific) |
 
-MangaDot matches are remembered (`mangadot_match_<anilistId>`), so titles reopen
-and Updates check them with one small request each (`/api/manga/{id}`:
-`latest_chapter_number`, `last_chapter_date`).
+Matches are remembered (`mangadot_match_<anilistId>`, `mangaball_match_<anilistId>`),
+so titles reopen and Updates check them with one small request each (MangaDot
+`/api/manga/{id}`: `latest_chapter_number`, `last_chapter_date`; MangaBall
+`/title/chapter-listing?…&sort_order=desc&limit=10&language=en`: the newest
+English upload and its `created_at`. MangaBall's `/title/detail` `updated_at` is
+the title's own time and lagged a year behind its chapters, so it isn't used).
+
+The detail hero mirrors **Start reading / Continue · Ch N** once chapters load.
 
 ## Chapter list and scanlation groups
 
@@ -86,7 +97,12 @@ anime Range:
   page counts).
 - **Offline reading** (Downloads → Read) also moves through one upload per
   number, preferring the opened chapter's group.
-- **Order**: chapters download one at a time, in reading order.
+- **Order**: chapters download one at a time, in reading order, each with
+  three pages in flight (MangaBall's CDN served one page in 25 s alone but three
+  in parallel in 6 s on 11 Oct 2026).
+- **Downloads tab**: **Continue · Ch N** per series opens the downloaded chapter
+  you're on (or the next one) offline; the bin deletes a series' downloads after
+  a confirmation; failed chapters have **Retry**.
 - **Cancel N** on the Downloads tab removes a series' queued and in-progress
   chapters. Finished ones stay.
 - **Stopping**: a cancelled or deleted download stops at its next page and
@@ -127,6 +143,13 @@ then native requests reuse that session (details below).
 - Headers on a `MangaPage` apply to that exact image request only.
 - User agent: `AniTrack/<version> (Android)`. MangaDex forbids spoofed browser
   user agents, and MangaPill serves it normally.
+- `postJson` sends the body as UTF-8 bytes typed exactly `application/json`:
+  MangaBall ignores a body whose type carries `; charset=utf-8`, which OkHttp
+  adds to String bodies.
+- Long chapter lists are slow to parse on the tablet: org.json took about 1 s
+  per MB on the Tab S7 FE (12 Oct 2026). One Piece on MangaBall: 3.9 s for the
+  3 MB request, then 2.9 s to parse; on MangaDot the 6.2 MB list took 1.3 s to
+  fetch and about 6 s to parse.
 
 ## MangaDot
 
@@ -136,7 +159,11 @@ is large: Solo Leveling, Omniscient Reader to chapter 311, and Tales of Demons
 and Gods with 1384 chapters, where MangaPill and MangaDex have few or none.
 
 - **Cloudflare**: every page and API request without a session gets a managed
-  challenge (`403`, `cf-mitigated: challenge`). Images are not challenged.
+  challenge (`403`, `cf-mitigated: challenge`). Since October 2026 page images
+  (`/chapters/…`, `/uploads/…`) are challenged too, which showed as "Page N didn't
+  load": `MangaDotSource.resolvePage` gives each image request the session's
+  cookies, the WebView user agent and `Referer: https://mangadot.net/`. Without a
+  session it raises `MangaVerificationRequired`, and the reader offers Connect.
 - **Connection**: `MangaDotConnectActivity` shows mangadot.net in a normal
   WebView with its genuine user agent. Cloudflare's check usually passes by
   itself there. If it shows "Verify you are human", the user ticks it;
@@ -169,6 +196,78 @@ and Gods with 1384 chapters, where MangaPill and MangaDex have few or none.
 - Chapter ids keep their source (`user:25424`) because ids are per source.
   Only English uploads with pages are listed. Each upload keeps its group and
   page count, for the group pickers.
+
+## MangaBall
+
+mangaball.com (inspected 2026-10-11) is a multi-language aggregator whose site
+runs on a public JSON API at `https://api.mangaball.com/api/v1`. No browser
+check; requests carry AniTrack's honest user agent, spaced 250 ms apart.
+
+- Endpoints:
+  - `GET /title/search-advanced?keyword=…&page=1&limit=10&adult_mode=no_18`
+    returns `{data:[{id, name, is18plus,…}]}`. Ids are 24-hex.
+  - `GET /title/detail/{id}` returns `{data:{name, alternateName, links:{myanimelist},
+    date_published, originalLanguage, is18plus, latest_chapter_number, updated_at}}`.
+  - `POST /chapter/chapter-listing-by-title-id` with JSON
+    `{title_id, user_id:"demo_user", lang:"en"}` returns every English upload of
+    the title at once, `{data:[{id, number, name, lang, status, group:{name},
+    created_at}]}` with no pagination. It is the listing mangaball.com's own
+    title page calls (found with REA in the site's script bundle, 12 Oct 2026).
+    The request's `Content-Type` must be exactly `application/json`: with
+    `; charset=utf-8` (OkHttp's default for a String body) it answers 400
+    "Missing title_id", so Android sends the body as UTF-8 bytes.
+    Both apps list chapters with it: One Piece's 4,720 uploads came back in
+    3.5 s (3 MB), where the paged listing below took ~2.2 s for each of its
+    10 pages. Answers are cached for 5 minutes.
+  - `GET /title/chapter-listing?title_id=…&page=N&limit=500&group_by=flat&sort_order=asc&language=en`
+    returns the same uploads paged, with `pagination.total_pages`. It is the
+    fallback when the single call fails or returns nothing (up to 20 pages; a
+    429 from the single call is not retried this way, so a limited source isn't
+    asked twice). With `sort_order=desc&limit=10` it lists the newest uploads
+    first (chapter number descending), which Updates uses.
+  - Chapter numbers carry floating-point noise (Kagurabachi lists 7.199999999999999
+    and 7.2 for one chapter): Android's Float merges them; desktop rounds to four
+    decimals.
+  - `GET /chapter-detail?chapter_id=…&user_id=demo_user` returns
+    `{data:{chapter:{pages:[url,…]}}}`. The site's own reader sends the same
+    `demo_user` id.
+- Matching (`MangaBallParser.matches`): exact-name hits are checked first (top 5),
+  each through `/title/detail`. The MyAnimeList link decides when both sides
+  have one. Otherwise it needs an exact normalized name (title or alternate
+  name) plus the same year (±1) and country (from the original language).
+  Adult titles never match.
+- Chapters: English, published uploads only. MangaBall names each upload's mirror
+  (Pokémon names such as Suicune) as its group, so the group pickers work as on
+  MangaDot. A bare "Chapter N" name is dropped as a title.
+- Pages: only the image CDN (`bulbasaur.poke-black-and-white.net`) is accepted,
+  over HTTPS, with `Referer: https://mangaball.com/` (it answers 403 without).
+- The recently-updated feed (`/title/recently-updated`) is mostly titles without
+  a MyAnimeList link (5 of 24 on 2026-10-11), so it is not used for a Home row.
+
+## Reader
+
+`MangaReaderScreen` reads one chapter at a time (`MangaReading.Session`):
+
+- **Modes** (Reader settings, remembered as `reader_mode`): **Auto** turns
+  Japanese manga right to left and scrolls manhwa, manhua and long strips;
+  **Vertical scroll**; **Pages, left to right**; **Pages, right to left**.
+  Switching keeps the page.
+- **Page modes**: a `HorizontalPager` (reversed for right to left). Tap the
+  left or right third to turn, the middle to show or hide controls. Pinch
+  (1–5×) or double-tap (2.5×) zooms, and dragging pans while zoomed. A last
+  "end of chapter" page marks the chapter read and offers the next one.
+- **Vertical scroll**: page width Narrow / Medium / Full (`reader_width`);
+  strips slice as described below.
+- **Background** Black / Dark gray / White (`reader_bg`).
+- **Volume keys turn pages** (`reader_volume_keys`, off by default): volume down
+  goes forward, volume up goes back (a page, or 85% of a screen when scrolling).
+- Controls: **Chapters** and settings open panels inside the reader's window (a
+  bottom sheet's own window brought the system bars back); a page slider runs
+  the same way as the pages; Previous / Next chapter.
+- Progress saves in both layouts, about 0.6 s after a page settles. Four pages
+  ahead are fetched into the disk cache, and the next chapter's page list is
+  fetched within the last three pages. A refused page shows **Connect** when the
+  source has a check.
 
 ## MangaPill
 
@@ -225,7 +324,7 @@ Official API (<https://api.mangadex.org/docs/>):
 apps\android\gradlew.bat -p apps/android :app:testDebugUnitTest :app:assembleDebug --console=plain
 ```
 
-Unit tests: `MangaDotParserTest`, `PageStripsTest`, `MangaPillParserTest`, `MangaDexParserTest`,
+Unit tests: `MangaDotParserTest`, `MangaBallParserTest`, `PageStripsTest`, `MangaPillParserTest`, `MangaDexParserTest`,
 `MangaDexHomeReporterTest`, `MangaUrlPolicyTest`, `MangaSourcesTest`,
 `MangaChaptersTest`, `MangaTest` (synthetic fixtures only).
 
@@ -248,6 +347,13 @@ MangaDot on the tablet (2026-10-03):
 - Spy x Family, Solo Leveling and Omniscient Reader matched; reading works.
 - First use without a session falls back to MangaPill and shows Connect.
 - Connect passed Cloudflare by itself and closed; the list reloaded "via MangaDot".
+
+Tablet check (2026-10-11), debug build:
+
+- MangaDot pages load again (Berserk 385, right to left, resumes at the saved page).
+- Solo Leveling via MangaBall: chapter 202 (Suicune), 110 pages, vertical scroll.
+- Source picker switches and is remembered; Updates names each title's source.
+- Volume keys turn pages without changing the volume when enabled.
 
 The debug-only `MangaDotProbeActivity` (exported in debug builds only) helps re-inspect the site:
 

@@ -3,7 +3,6 @@ import { getRuntimeConfig } from "../remote-config";
 import { AnimePaheProvider } from "./animepahe";
 import { AnikotoProvider } from "./anikoto";
 import { MiruroProvider } from "./miruro";
-import { MkissaProvider } from "./mkissa";
 import { ProviderRegistry } from "./registry";
 import type { StreamProvider } from "./types";
 
@@ -17,7 +16,7 @@ const LEGACY_STREAM_FLAGS: Record<string, keyof RuntimeFeatureFlags> = {
 function providerEnabled(provider: StreamProvider): boolean {
   const runtime = getRuntimeConfig();
   const rules = (runtime.providers as Record<string, RuntimeProviderConfig | undefined>)[provider.id];
-  // Miruro (like MKissa) stays off until signed configuration enables it: its
+  // Miruro stays off until signed configuration enables it: its
   // October 2026 API returns encrypted payloads this connector cannot read.
   if (!rules?.enabled) return false;
   const legacyFlag = LEGACY_STREAM_FLAGS[provider.id];
@@ -25,7 +24,8 @@ function providerEnabled(provider: StreamProvider): boolean {
 }
 
 export const providerManager = new ProviderRegistry(
-  [new AnimePaheProvider(), new AnikotoProvider(), new MkissaProvider(), new MiruroProvider()],
+  // MKissa was removed at the user's request (Oct 2026); its connector stays in mkissa.ts, unregistered.
+  [new AnimePaheProvider(), new AnikotoProvider(), new MiruroProvider()],
   {
     order: () => getRuntimeConfig().providerOrder,
     isEnabled: providerEnabled,

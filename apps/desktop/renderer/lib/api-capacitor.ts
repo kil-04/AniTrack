@@ -11,6 +11,8 @@
 import { Browser } from "@capacitor/browser";
 import { ScreenOrientation } from "@capacitor/screen-orientation";
 import { classicEraBoost, classicEraLabel } from "../../../../packages/shared/recommendations";
+import { planStory } from "../../../../packages/shared/story-bridge";
+import { mixRadio, parseThemesResponse, themesUrl } from "../../../../packages/shared/anime-themes";
 
 import {
   AniTrackDb,
@@ -212,6 +214,20 @@ export async function installCapacitorApiBridge() {
 
     // ── anilist ───────────────────────────────────────────────────────────────
     anilist: {
+      async premieredOn(month: number, day: number) {
+        const like = `%${String(month).padStart(2, "0")}${String(day).padStart(2, "0")}`;
+        const data = await alGql<any>(`
+          query($like: String) {
+            Page(perPage: 24) {
+              media(type: ANIME, isAdult: false, startDate_like: $like, sort: POPULARITY_DESC, popularity_greater: 2000) {
+                ${MEDIA_FIELDS} startDate { year }
+              }
+            }
+          }`, { like });
+        return (data.Page?.media ?? [])
+          .filter((m: any) => (m.startDate?.year ?? 0) > 1900)
+          .map((m: any) => ({ anime: mapMedia(m), year: m.startDate.year as number }));
+      },
       async search(q: string) {
         const data = await alGql<any>(`
           query($q: String) {
@@ -252,6 +268,11 @@ export async function installCapacitorApiBridge() {
           queryArgs.push("$year: Int");
           mediaArgs.push("seasonYear: $year");
           variables.year = filters.year;
+        }
+        if (filters.startYear) {
+          queryArgs.push("$started: String");
+          mediaArgs.push("startDate_like: $started", "isAdult: false");
+          variables.started = `${filters.startYear}%`;
         }
         if (filters.format) {
           queryArgs.push("$format: MediaFormat");
@@ -451,6 +472,67 @@ export async function installCapacitorApiBridge() {
             relationType: edge.relationType,
             anime: mapMedia(edge.node),
           }));
+        } catch { return []; }
+      },
+      async story(id: number) {
+        if (id <= 0) return planStory(null, []);
+        try {
+          const data = await alGql<any>(`
+            query($id: Int) {
+              Media(id: $id, type: ANIME) {
+                source
+                relations { edges { relationType(version: 2) node {
+                  id type format status chapters volumes popularity isAdult countryOfOrigin
+                  title { romaji english native } coverImage { extraLarge large } startDate { year }
+                } } }
+              }
+            }`, { id }, "low");
+          const links = (data.Media?.relations?.edges ?? [])
+            .filter((edge: any) => edge.node?.type === "MANGA" && !edge.node.isAdult)
+            .map((edge: any) => ({
+              relationType: edge.relationType,
+              book: {
+                id: edge.node.id,
+                title: edge.node.title?.english || edge.node.title?.romaji || edge.node.title?.native || "Untitled",
+                coverImage: edge.node.coverImage?.extraLarge || edge.node.coverImage?.large || null,
+                format: edge.node.format ?? null,
+                status: edge.node.status ?? null,
+                chapters: edge.node.chapters ?? null,
+                volumes: edge.node.volumes ?? null,
+                year: edge.node.startDate?.year ?? null,
+                popularity: edge.node.popularity ?? null,
+                country: edge.node.countryOfOrigin ?? null,
+              },
+            }));
+          return planStory(data.Media?.source ?? null, links);
+        } catch { return planStory(null, []); }
+      },
+    },
+
+    // ── theme songs (AnimeThemes.moe) ─────────────────────────────────────────
+    themes: {
+      async forAnime(id: number) {
+        if (id <= 0) return [];
+        try {
+          const data = await alGql<any>(`
+            query($id: Int) { Media(id: $id, type: ANIME) { ${MEDIA_FIELDS} } }`, { id }, "low");
+          const meta = data.Media ? mapMedia(data.Media) : null;
+          const show = { id, title: meta?.title ?? "Unknown", cover: meta?.coverImage ?? null };
+          const res = await fetch(themesUrl([id]), { headers: { Accept: "application/json" } });
+          if (!res.ok) return [];
+          return parseThemesResponse(await res.json(), [show]).get(id) ?? [];
+        } catch { return []; }
+      },
+      async radio() {
+        try {
+          const raw = await AniTrackDb.continueWatching();
+          const items = JSON.parse(raw.value) as { anime: { id: number; title: string; coverImage: string | null } }[];
+          const shows = items.filter((item) => item.anime?.id > 0).slice(0, 25)
+            .map((item) => ({ id: item.anime.id, title: item.anime.title, cover: item.anime.coverImage ?? null }));
+          if (!shows.length) return [];
+          const res = await fetch(themesUrl(shows.map((show) => show.id)), { headers: { Accept: "application/json" } });
+          if (!res.ok) return [];
+          return mixRadio([...parseThemesResponse(await res.json(), shows).values()].flat());
         } catch { return []; }
       },
     },

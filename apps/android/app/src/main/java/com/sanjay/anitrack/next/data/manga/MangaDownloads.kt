@@ -5,12 +5,16 @@ import android.graphics.BitmapFactory
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import com.sanjay.anitrack.next.data.Manga
+import com.sanjay.anitrack.next.data.manga.comix.ComixCachedPageCopy
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -20,6 +24,7 @@ import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Offline manga chapters: each chapter's page images are saved to
@@ -47,7 +52,12 @@ object MangaDownloads {
     )
 
     private const val MAX_PAGE_BYTES = 40L * 1024 * 1024
+    // A chapter's pages come three at a time, about what the reader asks for:
+    // MangaBall's CDN served one page in 25 s alone but three in parallel in 6 s
+    // (11 Oct 2026), so one at a time took minutes per chapter.
+    private const val PAGE_WORKERS = 3
     private var root: File? = null
+    private var comixPageCopy: ComixCachedPageCopy? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val queue = Channel<Pending>(Channel.UNLIMITED)
     // The live request per chapter: a queued or running download whose generation no
@@ -76,9 +86,22 @@ object MangaDownloads {
     private fun folder(mangaId: Int, chapterId: String) = File(File(root ?: error("not initialised"), mangaId.toString()), safe(chapterId))
     internal fun directory(): File? = root
 
+    /** A saved page (file URL) inside the download folder, or null for anything else. */
+    internal fun localFile(url: String): File? {
+        if (!url.startsWith("file:")) return null
+        val local = runCatching { File(java.net.URI(url)).canonicalFile }.getOrNull() ?: return null
+        val downloads = root?.canonicalFile ?: return null
+        return local.takeIf { it.path.startsWith(downloads.path + File.separator) && it.isFile }
+    }
+
+    /** A page Comix already decoded into its own cache, or null (exact cache names only). */
+    internal fun comixCachedFile(url: String): File? =
+        if (!url.startsWith("file:")) null else runCatching { comixPageCopy?.cachedFile(url) }.getOrNull()
+
     fun init(context: Context) {
         if (root != null) return
         val dir = File(context.filesDir, "manga-downloads")
+        comixPageCopy = ComixCachedPageCopy(File(context.cacheDir, "comix-pages"))
         root = dir
         scope.launch {
             val restored = dir.listFiles().orEmpty().filter { it.isDirectory }.flatMap { mangaDir ->
@@ -198,6 +221,14 @@ object MangaDownloads {
         }
     }
 
+    /** Like [update], with the row built on the main thread (pages finish out of order). */
+    private suspend fun updateWith(pending: Pending, change: () -> Item) = withContext(Dispatchers.Main) {
+        if (!live(pending)) return@withContext
+        val item = change()
+        val index = items.indexOfFirst { it.key == item.key }
+        if (index >= 0) items[index] = item
+    }
+
     /** Updates the row of a still-live download (a removed row is never re-added). */
     private suspend fun update(pending: Pending, item: Item) = withContext(Dispatchers.Main) {
         if (!live(pending)) return@withContext
@@ -216,29 +247,54 @@ object MangaDownloads {
             val pages = pending.source.pages(pending.title, item.chapter)
             item = item.copy(status = Status.DOWNLOADING, total = pages.size, done = 0)
             update(pending, item)
-            val saved = JSONArray()
-            pages.forEachIndexed { index, page ->
-                if (!live(pending)) throw CancellationException("removed")
-                val resolved = pending.source.resolvePage(page)
-                val name = "%03d.%s".format(index + 1, extensionOf(resolved.url))
-                val file = File(dir, name)
-                fetch(resolved, file)
-                val (w, h) = resolved.width?.let { it to (resolved.height ?: 0) } ?: bounds(file)
-                saved.put(JSONObject().put("file", name).put("w", w).put("h", h))
-                item = item.copy(done = index + 1)
-                update(pending, item)
+            val downloading = item
+            val saved = arrayOfNulls<JSONObject>(pages.size)
+            val next = AtomicInteger(0)
+            val finished = AtomicInteger(0)
+            // One failed page cancels the other workers before the chapter fails.
+            coroutineScope {
+                repeat(minOf(PAGE_WORKERS, pages.size)) {
+                    launch {
+                        while (live(pending)) {
+                            val index = next.getAndIncrement()
+                            if (index >= pages.size) break
+                            val resolved = pending.source.resolvePage(pages[index])
+                            val name = "%03d.%s".format(index + 1, extensionOf(resolved.url))
+                            val file = File(dir, name)
+                            fetch(pending, resolved, file)
+                            val (w, h) = resolved.width?.let { it to (resolved.height ?: 0) } ?: bounds(file)
+                            saved[index] = JSONObject().put("file", name).put("w", w).put("h", h)
+                            finished.incrementAndGet()
+                            // Read the count on the main thread so progress never steps back.
+                            updateWith(pending) { downloading.copy(done = finished.get()) }
+                        }
+                    }
+                }
             }
             if (!live(pending)) throw CancellationException("removed")
-            writeMeta(dir, item, saved, complete = true)
+            writeMeta(dir, item, JSONArray().apply { for (page in saved) put(page) }, complete = true)
             update(pending, item.copy(status = Status.DONE, done = pages.size, sizeBytes = dir.listFiles().orEmpty().sumOf { it.length() }, error = null))
         } catch (e: CancellationException) {
             dir.deleteRecursively()
         } catch (e: Exception) {
+            if (com.sanjay.anitrack.next.BuildConfig.DEBUG) {
+                android.util.Log.d("MangaDownloads", "Chapter download failed (${pending.source.id}): ${e.javaClass.simpleName}: ${e.message?.take(160)}")
+            }
             update(pending, item.copy(status = Status.FAILED, error = e.message ?: "Download failed. Try again."))
         }
     }
 
-    private fun fetch(page: MangaPage, target: File) {
+    private suspend fun fetch(pending: Pending, page: MangaPage, target: File) {
+        if (page.url.startsWith("file:", ignoreCase = true)) {
+            val context = currentCoroutineContext()
+            (comixPageCopy ?: error("not initialised")).copy(
+                pending.source.id, page.url, target, MAX_PAGE_BYTES,
+            ) {
+                context.ensureActive()
+                if (!live(pending)) throw CancellationException("removed")
+            }
+            return
+        }
         val url = MangaUrlPolicy.publicHttps(page.url)?.toASCIIString()
             ?: throw MangaSourceException("Refused an unsafe page address.")
         val request = Request.Builder().url(url).apply { page.headers.forEach { (k, v) -> header(k, v) } }.build()

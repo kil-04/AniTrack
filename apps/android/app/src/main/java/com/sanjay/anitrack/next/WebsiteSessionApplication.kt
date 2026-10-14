@@ -13,7 +13,12 @@ class WebsiteSessionApplication : Application(), ImageLoaderFactory {
         if (Build.VERSION.SDK_INT >= 28 && getProcessName().endsWith(":comix")) {
             WebView.setDataDirectorySuffix("comix")
         }
+        // Debug-only fresh-profile diagnostic (declared only in the debug manifest).
+        if (Build.VERSION.SDK_INT >= 28 && getProcessName().endsWith(":comixprobe")) {
+            WebView.setDataDirectorySuffix("comixprobe")
+        }
         com.sanjay.anitrack.next.data.manga.mangadot.MangaDotSource.init(this)
+        com.sanjay.anitrack.next.data.manga.mangaball.MangaBallSource.init(this)
         com.sanjay.anitrack.next.data.manga.PageStrips.init(this)
         com.sanjay.anitrack.next.data.manga.MangaDownloads.init(this)
     }

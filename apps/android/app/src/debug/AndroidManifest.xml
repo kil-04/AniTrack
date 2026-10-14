@@ -2,8 +2,18 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
         <activity
+            android:name=".diagnostics.ProviderPlaybackProbeActivity"
+            android:exported="false"
+            android:hardwareAccelerated="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" />
+        <activity
             android:name=".diagnostics.ComixMangaActivity"
             android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" />
+        <activity
+            android:name=".diagnostics.ComixProfileProbeActivity"
+            android:exported="true"
+            android:process=":comixprobe"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" />
         <activity
             android:name=".diagnostics.MangaDotProbeActivity"

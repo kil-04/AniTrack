@@ -15,7 +15,7 @@ export type MiruroRequest =
 export class MiruroProtocolError extends Error {
   readonly code: "INVALID_RESPONSE" | "SECURITY_CHECK" | "RATE_LIMITED" | "COOLDOWN";
   constructor(message: string, code: MiruroProtocolError["code"] = "INVALID_RESPONSE") {
-    super(message);
+    super(code === "INVALID_RESPONSE" ? message : `MIRURO_${code}: ${message}`);
     this.name = "MiruroProtocolError";
     this.code = code;
   }

@@ -11,6 +11,8 @@ import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -18,7 +20,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 
-private val ControlsAccent = Color(0xFFE50914)
+private val ControlsAccent: Color get() = AniColors.Accent
 
 @Composable
 internal fun NativePlayerControls(
@@ -65,39 +67,68 @@ internal fun NativePlayerControls(
         val shown = if (isSeeking) seekPreviewMs else positionMs
         val progress = (shown.toFloat() / duration).coerceIn(0f, 1f)
         val buffered = (bufferedMs.toFloat() / duration).coerceIn(0f, 1f)
+        // The gesture handlers outlive recompositions, so they read the latest callbacks.
+        val seekTo by rememberUpdatedState(onSeek)
+        val preview by rememberUpdatedState(onSeekPreview)
+        val seeking by rememberUpdatedState(onSeekingChange)
         BoxWithConstraints(
             Modifier
                 .fillMaxWidth()
-                .height(24.dp)
+                .height(36.dp) // A finger-sized target; the bar itself stays thin.
                 .pointerInput(duration, useWeb) {
                     detectTapGestures { offset ->
-                        onSeek((offset.x / size.width * duration).toLong().coerceIn(0, duration))
+                        seekTo((offset.x / size.width * duration).toLong().coerceIn(0, duration))
                     }
                 }
                 .pointerInput(duration, useWeb) {
+                    // The drag target lives here. The seekPreviewMs parameter is the value from
+                    // when this handler started, so releasing used to seek back to that.
+                    var target = 0L
+                    fun at(x: Float) = (x / size.width * duration).toLong().coerceIn(0, duration)
                     detectHorizontalDragGestures(
                         onDragStart = { offset ->
-                            onSeekingChange(true)
-                            onSeekPreview((offset.x / size.width * duration).toLong().coerceIn(0, duration))
+                            target = at(offset.x)
+                            seeking(true)
+                            preview(target)
                         },
                         onHorizontalDrag = { change, _ ->
-                            onSeekPreview((change.position.x / size.width * duration).toLong().coerceIn(0, duration))
+                            change.consume()
+                            target = at(change.position.x)
+                            preview(target)
                         },
                         onDragEnd = {
-                            onSeek(seekPreviewMs)
-                            onSeekingChange(false)
+                            seekTo(target)
+                            seeking(false)
                         },
+                        onDragCancel = { seeking(false) },
                     )
                 },
         ) {
             val width = maxWidth
-            Box(Modifier.align(Alignment.CenterStart).fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)).background(Color.White.copy(alpha = 0.25f)))
-            Box(Modifier.align(Alignment.CenterStart).fillMaxWidth(buffered).height(3.dp).clip(RoundedCornerShape(2.dp)).background(Color.White.copy(alpha = 0.4f)))
-            Box(Modifier.align(Alignment.CenterStart).fillMaxWidth(progress).height(3.dp).clip(RoundedCornerShape(2.dp)).background(ControlsAccent))
+            val bar = if (isSeeking) 5.dp else 3.dp
+            Box(Modifier.align(Alignment.CenterStart).fillMaxWidth().height(bar).clip(RoundedCornerShape(2.dp)).background(Color.White.copy(alpha = 0.25f)))
+            Box(Modifier.align(Alignment.CenterStart).fillMaxWidth(buffered).height(bar).clip(RoundedCornerShape(2.dp)).background(Color.White.copy(alpha = 0.4f)))
+            Box(Modifier.align(Alignment.CenterStart).fillMaxWidth(progress).height(bar).clip(RoundedCornerShape(2.dp)).background(ControlsAccent))
+            val thumb = if (isSeeking) 20.dp else 14.dp
             Box(
-                Modifier.align(Alignment.CenterStart).offset(x = width * progress - 7.dp)
-                    .size(14.dp).clip(RoundedCornerShape(50)).background(ControlsAccent),
+                Modifier.align(Alignment.CenterStart).offset(x = width * progress - thumb / 2)
+                    .size(thumb).clip(RoundedCornerShape(50)).background(ControlsAccent),
             )
+            if (isSeeking) {
+                // Where the drag will land, above the thumb.
+                Text(
+                    formatPlayerTime(seekPreviewMs),
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.align(Alignment.TopStart)
+                        .offset(x = (width * progress - 32.dp).coerceIn(0.dp, (width - 64.dp).coerceAtLeast(0.dp)), y = (-30).dp)
+                        .width(64.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color.Black.copy(alpha = 0.8f))
+                        .padding(vertical = 4.dp),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
+            }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onPrevious, enabled = index > 0) {

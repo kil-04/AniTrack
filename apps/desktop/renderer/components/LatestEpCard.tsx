@@ -27,7 +27,7 @@ const LatestEpCard = React.memo(function LatestEpCard({ ep }: { ep: RecentEpisod
 
   const tooltipPortal = isHovered && rect ? createPortal(
     <div
-      className="fixed z-[9999] w-72 bg-[#1f1f1f] rounded-xl border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.8)] p-5 flex flex-col pointer-events-none animate-in fade-in zoom-in-95 duration-200"
+      className="pointer-events-none fixed z-[9999] flex w-72 flex-col rounded-2xl border border-white/10 bg-surface-1/95 p-5 shadow-pop backdrop-blur-xl animate-in fade-in zoom-in-95 duration-200"
       style={{
         left: rect.right + 15 + 288 > window.innerWidth ? rect.left - 288 - 15 : rect.right + 15,
         top: Math.max(10, Math.min(window.innerHeight - 320, rect.top + rect.height / 2 - 160)),
@@ -35,12 +35,12 @@ const LatestEpCard = React.memo(function LatestEpCard({ ep }: { ep: RecentEpisod
     >
       <h3 className="font-bold text-white text-lg leading-tight mb-2">{anime.title}</h3>
       {anime.averageScore && (
-        <div className="text-sm font-bold text-green-400 mb-3">★ {(anime.averageScore / 10).toFixed(1)} / 10</div>
+        <div className="mb-3 text-sm font-bold text-amber-300">★ {(anime.averageScore / 10).toFixed(1)} / 10</div>
       )}
       <div className="flex flex-wrap gap-2 mb-3">
-        {anime.year && <span className="px-1.5 py-0.5 rounded bg-white/10 text-[10px] font-bold">{anime.year}</span>}
-        {anime.status && <span className="px-1.5 py-0.5 rounded bg-white/10 text-[10px] font-bold">{anime.status}</span>}
-        <span className="px-1.5 py-0.5 rounded bg-[#e50914]/20 text-[10px] font-bold">EP {ep.episode}</span>
+        {anime.year && <span className="rounded-md bg-white/[0.08] px-1.5 py-0.5 text-[10px] font-bold text-ink-2">{anime.year}</span>}
+        {anime.status && <span className="rounded-md bg-white/[0.08] px-1.5 py-0.5 text-[10px] font-bold text-ink-2">{anime.status}</span>}
+        <span className="px-1.5 py-0.5 rounded bg-accent/20 text-[10px] font-bold">EP {ep.episode}</span>
       </div>
       {!!anime.genres?.length && <div className="text-xs text-white/50 mb-3">{anime.genres.join(", ")}</div>}
       <p className="text-xs text-white/80 line-clamp-5 leading-relaxed">
@@ -63,21 +63,21 @@ const LatestEpCard = React.memo(function LatestEpCard({ ep }: { ep: RecentEpisod
           ref={cardRef}
           onMouseEnter={showTooltip}
           onMouseLeave={() => setIsHovered(false)}
-          className="group relative block aspect-[16/9] w-full overflow-hidden rounded-lg bg-[#1b1b1b] transition-all duration-300 ease-out hover:z-10 hover:scale-110 hover:shadow-[0_12px_40px_rgb(0,0,0,0.8)] hover:shadow-[#e50914]/30 hover:ring-2 hover:ring-[#e50914]/50 outline-none"
+          className="group relative block aspect-[16/9] w-full overflow-hidden rounded-2xl bg-surface-1 shadow-card outline-none ring-1 ring-white/[0.06] transition-all duration-300 ease-out hover:z-10 hover:-translate-y-1.5 hover:shadow-glow-lg hover:ring-2 hover:ring-accent/70"
         >
           {image ? (
-            <img src={image} alt={anime.title} className="h-full w-full object-cover opacity-80 transition-transform duration-500 group-hover:scale-105" loading="lazy" onLoad={(event) => rejectOversizedImage(event, anime.coverImage)} />
+            <img src={image} alt={anime.title} className="h-full w-full object-cover opacity-90 transition-transform duration-700 ease-out group-hover:scale-[1.07]" loading="lazy" onLoad={(event) => rejectOversizedImage(event, anime.coverImage)} />
           ) : (
-            <div className="flex h-full w-full items-center justify-center bg-[#222222] text-xs text-white/30">No Image</div>
+            <div className="flex h-full w-full items-center justify-center bg-surface-2 text-xs text-ink-3">No Image</div>
           )}
-          <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent opacity-90 transition-opacity duration-300 group-hover:opacity-100" />
-          <div className="absolute left-2 top-2 rounded bg-[#e50914] px-2 py-1 text-[10px] font-bold text-white">EP {ep.episode}</div>
+          <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/30 to-transparent opacity-90 transition-opacity duration-300 group-hover:opacity-100" />
+          <div className="badge badge-accent absolute left-2 top-2 px-2 py-1">EP {ep.episode}</div>
           <div className="absolute bottom-0 left-0 right-0 p-2.5 flex flex-col justify-end translate-y-1 transition-transform duration-300 group-hover:translate-y-0">
             <div className="line-clamp-1 text-xs font-bold leading-tight text-white drop-shadow-md">{anime.title}</div>
             <div className="mt-1 text-[10px] font-medium text-white/60">{airedLabel(ep.airingAt)}</div>
           </div>
           <div className="absolute inset-0 flex items-center justify-center opacity-0 scale-90 transition-all duration-300 group-hover:opacity-100 group-hover:scale-100">
-            <div className="rounded-full bg-white/25 p-2.5 text-white border border-white/20 shadow-xl">
+            <div className="rounded-full bg-accent-gradient p-2.5 text-white shadow-glow-lg ring-1 ring-white/30">
               <Play size={20} fill="currentColor" className="ml-0.5" />
             </div>
           </div>

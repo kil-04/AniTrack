@@ -50,8 +50,15 @@ export interface ProviderSkipRange {
   end: number;
 }
 
+export interface MediaAccessRejection {
+  mediaAccessId: string;
+  status: 403 | 429;
+}
+
 export interface StreamData {
   url: string;
+  /** Memory-only main-process receipt for this resolution; never a media credential. */
+  mediaAccessId?: string;
   cookies?: string;
   subtitles?: ProviderSubtitle[];
   intro?: ProviderSkipRange;
@@ -110,6 +117,7 @@ export interface ProviderCapabilities {
   top?: boolean;
   externalIds?: boolean;
   downloads?: boolean;
+  /** Explicit false forbids background link discovery/resolution. */
   prefetch?: boolean;
   configurableBaseUrl?: boolean;
   streamVariants?: "quality" | "subtitle-type" | "server";
@@ -150,6 +158,9 @@ export interface ProviderApi {
   episodes(providerId: string, animeId: string, page: number): Promise<ProviderEpisodePage>;
   links(providerId: string, episodeId: string, animeId: string): Promise<StreamLink[]>;
   resolve(providerId: string, linkId: string): Promise<StreamData>;
+  /** Main-process observation of the selected native media request, not a retry. */
+  mediaAccessStatus?(mediaAccessId: string): Promise<403 | 429 | null>;
+  onMediaAccessRejected?(listener: (rejection: MediaAccessRejection) => void): () => void;
   prefetch(providerId: string, linkId: string): Promise<{ ok: boolean }>;
   getExternalIds(
     providerId: string,

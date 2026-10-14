@@ -113,6 +113,91 @@ object Db {
         )
     }
 
+    // ── Backup & restore ─────────────────────────────────────────────────────
+
+    /** Tables a backup carries, with their primary keys. The MAL outbox is account state and stays out. */
+    private val BACKUP_TABLES = linkedMapOf(
+        "playback" to listOf("anime_id", "episode"),
+        "list_entry" to listOf("anime_id"),
+        "reading" to listOf("manga_id", "chapter"),
+        "manga_list" to listOf("manga_id"),
+    )
+
+    /** Every row of the backed-up tables, column by column. */
+    suspend fun exportTables(): org.json.JSONObject = withContext(Dispatchers.IO) {
+        val out = org.json.JSONObject()
+        for (table in BACKUP_TABLES.keys) {
+            val rows = org.json.JSONArray()
+            helper.readableDatabase.rawQuery("SELECT * FROM $table", null).use { c ->
+                while (c.moveToNext()) {
+                    val row = org.json.JSONObject()
+                    for (i in 0 until c.columnCount) {
+                        val name = c.getColumnName(i)
+                        when (c.getType(i)) {
+                            android.database.Cursor.FIELD_TYPE_NULL -> row.put(name, org.json.JSONObject.NULL)
+                            android.database.Cursor.FIELD_TYPE_INTEGER -> row.put(name, c.getLong(i))
+                            android.database.Cursor.FIELD_TYPE_FLOAT -> row.put(name, c.getDouble(i))
+                            android.database.Cursor.FIELD_TYPE_STRING -> row.put(name, c.getString(i))
+                            else -> Unit // No blobs in these tables.
+                        }
+                    }
+                    rows.put(row)
+                }
+            }
+            out.put(table, rows)
+        }
+        out
+    }
+
+    /**
+     * Merges backed-up rows: one is taken when it's missing here or its updated_at
+     * is later than ours. Unknown columns are ignored. Returns rows taken per table.
+     */
+    suspend fun importTables(tables: org.json.JSONObject): Map<String, Int> = withContext(Dispatchers.IO) {
+        val db = helper.writableDatabase
+        val taken = linkedMapOf<String, Int>()
+        db.beginTransaction()
+        try {
+            for ((table, keys) in BACKUP_TABLES) {
+                val rows = tables.optJSONArray(table) ?: continue
+                val columns = db.rawQuery("PRAGMA table_info($table)", null).use { c ->
+                    buildSet { while (c.moveToNext()) add(c.getString(c.getColumnIndexOrThrow("name"))) }
+                }
+                var count = 0
+                for (i in 0 until minOf(rows.length(), 500_000)) {
+                    val row = rows.optJSONObject(i) ?: continue
+                    if (keys.any { !row.has(it) || row.isNull(it) } || row.isNull("updated_at")) continue
+                    val updatedAt = row.optLong("updated_at", -1L).takeIf { it >= 0 } ?: continue
+                    val where = keys.joinToString(" AND ") { "$it=?" }
+                    val args = keys.map { row.get(it).toString() }.toTypedArray()
+                    val ours = db.rawQuery("SELECT updated_at FROM $table WHERE $where", args)
+                        .use { c -> if (c.moveToFirst()) c.getLong(0) else null }
+                    if (ours != null && ours >= updatedAt) continue
+                    val values = ContentValues()
+                    for (column in columns) {
+                        if (!row.has(column)) continue
+                        when (val value = row.get(column)) {
+                            org.json.JSONObject.NULL -> values.putNull(column)
+                            is Int -> values.put(column, value)
+                            is Long -> values.put(column, value)
+                            is Double -> values.put(column, value)
+                            is Number -> values.put(column, value.toDouble())
+                            is Boolean -> values.put(column, if (value) 1 else 0)
+                            else -> values.put(column, value.toString().take(8192))
+                        }
+                    }
+                    db.insertWithOnConflict(table, null, values, SQLiteDatabase.CONFLICT_REPLACE)
+                    count++
+                }
+                taken[table] = count
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        taken
+    }
+
     // ── My List ───────────────────────────────────────────────────────────────
 
     val STATUSES = listOf("watching", "completed", "on_hold", "dropped", "plan_to_watch")
@@ -411,6 +496,65 @@ object Db {
         out
     }
 
+    /**
+     * Marks episodes watched (played to the end) or, with [watched] false, forgets
+     * them. Marked episodes stay older than a later episode watched for real, so
+     * Continue Watching keeps pointing at that one.
+     */
+    suspend fun markEpisodesWatched(
+        animeId: Int,
+        episodes: List<Float>,
+        watched: Boolean,
+        title: String,
+        cover: String?,
+        durationSec: Double,
+        slug: String?,
+        providerId: String?,
+    ) = withContext(Dispatchers.IO) {
+        val db = helper.writableDatabase
+        db.beginTransaction()
+        try {
+            if (!watched) {
+                episodes.forEach { ep ->
+                    db.delete("playback", "anime_id=? AND episode=?", arrayOf(animeId.toString(), ep.toString()))
+                }
+            } else {
+                val sorted = episodes.sorted()
+                val newest = db.rawQuery(
+                    "SELECT episode, updated_at FROM playback WHERE anime_id=? ORDER BY updated_at DESC LIMIT 1",
+                    arrayOf(animeId.toString()),
+                ).use { c -> if (c.moveToFirst()) c.getFloat(0) to c.getLong(1) else null }
+                val highest = sorted.lastOrNull() ?: 0f
+                val base = if (newest != null && newest.first > highest) newest.second - sorted.size - 1
+                    else System.currentTimeMillis() - sorted.size
+                sorted.forEachIndexed { i, ep ->
+                    db.insertWithOnConflict(
+                        "playback", null,
+                        ContentValues().apply {
+                            put("anime_id", animeId); put("episode", ep)
+                            put("position_sec", durationSec); put("duration_sec", durationSec)
+                            put("anime_title", title); put("anime_cover", cover)
+                            put("slug", slug); put("provider_id", providerId)
+                            put("updated_at", base + i)
+                        },
+                        SQLiteDatabase.CONFLICT_REPLACE,
+                    )
+                }
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /** The episode of a show touched most recently, if any (for "next up"). */
+    suspend fun lastWatchedEpisode(animeId: Int): Float? = withContext(Dispatchers.IO) {
+        helper.readableDatabase.rawQuery(
+            "SELECT episode FROM playback WHERE anime_id=? ORDER BY updated_at DESC LIMIT 1",
+            arrayOf(animeId.toString()),
+        ).use { c -> if (c.moveToFirst()) c.getFloat(0) else null }
+    }
+
     /** episode number -> percent watched, for the detail grid indicators. */
     suspend fun positionsFor(animeId: Int): Map<Float, Int> = withContext(Dispatchers.IO) {
         val out = mutableMapOf<Float, Int>()
@@ -490,6 +634,55 @@ object Db {
             }
             out
         }
+
+    /**
+     * Marks chapters (number, chapter id, page count) read — their last page reached —
+     * or, with [read] false, forgets them. Marked chapters stay older than a later
+     * chapter read for real, so Continue Reading keeps pointing at that one.
+     */
+    suspend fun markChaptersRead(
+        mangaId: Int,
+        chapters: List<Triple<Float, String, Int>>,
+        read: Boolean,
+        title: String,
+        cover: String?,
+        sourceId: String,
+    ) = withContext(Dispatchers.IO) {
+        val db = helper.writableDatabase
+        db.beginTransaction()
+        try {
+            if (!read) {
+                chapters.forEach { (number, _, _) ->
+                    db.delete("reading", "manga_id=? AND chapter=?", arrayOf(mangaId.toString(), number.toString()))
+                }
+            } else {
+                val sorted = chapters.sortedBy { it.first }
+                val newest = db.rawQuery(
+                    "SELECT chapter, updated_at FROM reading WHERE manga_id=? ORDER BY updated_at DESC LIMIT 1",
+                    arrayOf(mangaId.toString()),
+                ).use { c -> if (c.moveToFirst()) c.getFloat(0) to c.getLong(1) else null }
+                val highest = sorted.lastOrNull()?.first ?: 0f
+                val base = if (newest != null && newest.first > highest) newest.second - sorted.size - 1
+                    else System.currentTimeMillis() - sorted.size
+                sorted.forEachIndexed { i, (number, chapterId, pages) ->
+                    val count = pages.coerceAtLeast(1)
+                    db.insertWithOnConflict(
+                        "reading", null,
+                        ContentValues().apply {
+                            put("manga_id", mangaId); put("chapter", number); put("chapter_id", chapterId)
+                            put("page", count - 1); put("page_count", count)
+                            put("title", title); put("cover", cover); put("source_id", sourceId)
+                            put("updated_at", base + i)
+                        },
+                        SQLiteDatabase.CONFLICT_REPLACE,
+                    )
+                }
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
 
     /** One card per manga — its most recently read chapter, newest first. */
     suspend fun continueReading(limit: Int = 30): List<ReadRow> = withContext(Dispatchers.IO) {

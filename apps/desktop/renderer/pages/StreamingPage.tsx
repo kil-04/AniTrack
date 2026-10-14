@@ -85,9 +85,9 @@ export default function StreamingPage() {
   }
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#000000]">
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-bg">
       {/* Browser toolbar */}
-      <div className="flex h-11 flex-shrink-0 items-center gap-1 border-b border-white/10 bg-[#000000] px-2">
+      <div className="flex h-11 flex-shrink-0 items-center gap-1 border-b border-white/10 bg-bg px-2">
         {/* Nav buttons */}
         <button
           onClick={() => webviewRef.current?.goBack()}

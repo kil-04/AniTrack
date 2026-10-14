@@ -22,20 +22,38 @@
       if (window.Hls && Hls.isSupported()) {
         // hls.js drives MSE, which tolerates kwik's loosely-muxed TS and seeks
         // cleanly — the exact reason the native decoder couldn't.
-        hls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60, lowLatencyMode: false });
-        hls.loadSource(url);
-        hls.attachMedia(v);
-        hls.on(Hls.Events.MANIFEST_PARSED, function () {
+        var engine = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60, lowLatencyMode: false });
+        hls = engine;
+        var networkRecoveries = 0, mediaRecoveries = 0, stopped = false;
+        function stopPlayback(reason) {
+          if (stopped || hls !== engine) return;
+          stopped = true;
+          hls = null;
+          v.pause();
+          engine.destroy();
+          // Fixed categories only: error objects may contain signed URLs.
+          if (window.Android) Android.onError(reason);
+        }
+        engine.on(Hls.Events.MANIFEST_PARSED, function () {
+          if (stopped || hls !== engine) return;
           if (startAt > 0) { try { v.currentTime = startAt; } catch (e) {} }
           if (shouldPlay) v.play().catch(function(){}); else v.pause();
         });
-        hls.on(Hls.Events.ERROR, function (e, d) {
-          if (d && d.fatal) {
-            if (d.type === 'networkError' && hls) { try { hls.startLoad(); } catch (x) {} }
-            else if (d.type === 'mediaError' && hls) { try { hls.recoverMediaError(); } catch (x) {} }
-            else if (window.Android) Android.onError(String(d.type) + ':' + String(d.details));
-          }
+        engine.on(Hls.Events.ERROR, function (e, d) {
+          if (!d || stopped || hls !== engine) return;
+          var status = Number(d.response && d.response.code || d.networkDetails && d.networkDetails.status || 0);
+          if (status === 403 || status === 429) { stopPlayback('networkError:accessDenied'); return; }
+          if (!d.fatal) return;
+          try {
+            if (d.type === 'networkError' && networkRecoveries++ < 1) { engine.startLoad(); return; }
+            if (d.type === 'mediaError' && mediaRecoveries++ < 1) { engine.recoverMediaError(); return; }
+          } catch (x) { /* A failed recovery is terminal until the user taps Retry. */ }
+          stopPlayback(d.type === 'mediaError' ? 'mediaError:recoveryFailed' : 'networkError:recoveryFailed');
         });
+        // Register handlers before initiating loads; even a synchronous failure
+        // must pass through the access-stop and bounded-recovery policy.
+        engine.loadSource(url);
+        engine.attachMedia(v);
       } else {
         v.src = url;
         v.addEventListener('loadedmetadata', function () { if (startAt > 0) v.currentTime = startAt; }, { once: true });

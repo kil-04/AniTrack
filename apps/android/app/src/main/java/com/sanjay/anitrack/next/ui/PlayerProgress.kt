@@ -22,6 +22,10 @@ internal suspend fun saveWebProgress(index: Int, positionMs: Long, durationMs: L
 
 internal suspend fun saveProgress(player: ExoPlayer, index: Int) {
     if (index >= PlaySession.count || player.duration <= 0) return
+    // Only the episode actually loaded has a position to save: while another episode
+    // is still resolving (or its server refused it), the player holds the old one's.
+    if (com.sanjay.anitrack.next.data.PlayerHolder.loadedKey != com.sanjay.anitrack.next.data.PlayerHolder.keyFor(index)) return
+    if (player.playerError != null) return // A failed stream has no watched position.
     savePlayerProgress(index, player.currentPosition, player.duration)
 }
 

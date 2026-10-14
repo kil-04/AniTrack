@@ -38,7 +38,7 @@ export const BUILTIN_RUNTIME_CONFIG: RuntimeConfig = {
   schemaVersion: 1,
   revision: 0,
   issuedAt: "2026-08-17T00:00:00.000Z",
-  providerOrder: ["anikoto", "animepahe", "mkissa"],
+  providerOrder: ["anikoto", "animepahe"],
   providers: {
     anikoto: {
       enabled: true,

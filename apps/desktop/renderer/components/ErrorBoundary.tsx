@@ -1,4 +1,5 @@
 import { Component, ErrorInfo, ReactNode } from "react";
+import { TriangleAlert } from "lucide-react";
 
 interface Props {
   children: ReactNode;
@@ -24,25 +25,28 @@ export default class ErrorBoundary extends Component<Props, State> {
   render() {
     if (!this.state.error) return this.props.children;
     return (
-      <div className="flex h-screen w-screen items-center justify-center bg-bg p-8 text-white">
-        <div className="max-w-lg rounded-lg border border-red-500/20 bg-red-500/5 p-6">
-          <h1 className="mb-2 text-xl font-semibold">Something went wrong</h1>
-          <p className="mb-4 text-sm text-muted">
+      <div className="app-ambient flex h-screen w-screen items-center justify-center p-8 text-white">
+        <div className="panel max-w-lg p-7">
+          <span className="mb-5 grid h-14 w-14 place-items-center rounded-2xl bg-red-500/[0.12] text-red-300 ring-1 ring-inset ring-red-400/20">
+            <TriangleAlert size={26} />
+          </span>
+          <h1 className="mb-2 text-xl font-bold tracking-tight">Something went wrong</h1>
+          <p className="mb-4 text-sm leading-relaxed text-ink-2">
             An unexpected error occurred. You can try again, or reload the app.
           </p>
-          <pre className="mb-4 max-h-40 overflow-auto rounded bg-black/40 p-3 text-xs text-red-400">
+          <pre className="thin-scrollbar mb-5 max-h-40 overflow-auto rounded-xl border border-white/[0.06] bg-black/40 p-3 text-xs text-red-300">
             {this.state.error.message}
           </pre>
           <div className="flex gap-2">
             <button
               onClick={this.reset}
-              className="rounded-md bg-accent px-4 py-2 text-sm font-medium hover:bg-accent-hover"
+              className="btn btn-primary"
             >
               Try again
             </button>
             <button
               onClick={() => window.location.reload()}
-              className="rounded-md border border-white/10 px-4 py-2 text-sm hover:bg-white/5"
+              className="btn btn-secondary"
             >
               Reload app
             </button>

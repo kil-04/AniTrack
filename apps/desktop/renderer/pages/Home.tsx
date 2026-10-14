@@ -4,13 +4,15 @@ import { useAppStore } from "../store/useAppStore";
 import Row from "../components/Row";
 import Card from "../components/Card";
 import { Link } from "react-router-dom";
-import { Play, RefreshCw, Clock, Loader2, X, ChevronLeft, ChevronRight, ChevronsLeft } from "lucide-react";
-import { secondsToTimestamp } from "../lib/format";
+import { Play, RefreshCw, Clock, X, ChevronLeft, ChevronRight, ChevronsLeft, Flame, Info, Star, Sparkles } from "lucide-react";
+import SectionHeader from "../components/SectionHeader";
+import { animeStatusLabel, secondsToTimestamp } from "../lib/format";
 import LatestEpCard from "../components/LatestEpCard";
 import ContinueWatchingCard from "../components/ContinueWatchingCard";
 import DiscoverRow from "../components/DiscoverRow";
 import Top10Sidebar from "../components/Top10Sidebar";
 import RecommendationCard from "../components/RecommendationCard";
+import { ThemeRadioButton } from "../components/ThemeSongs";
 import { providerClient } from "../lib/provider-api";
 import { rejectOversizedImage, safeImageSrc } from "../lib/image-guard";
 
@@ -47,11 +49,12 @@ export default function Home() {
 
   useEffect(() => {
     if (heroItems.length <= 1) return;
-    const timer = setInterval(() => {
+    // Each slide gets its full 8 s, also after a manual change.
+    const timer = setTimeout(() => {
       setHeroIndex((prev) => (prev + 1) % heroItems.length);
-    }, 8000); // Rotate every 8 seconds
-    return () => clearInterval(timer);
-  }, [heroItems.length]);
+    }, 8000);
+    return () => clearTimeout(timer);
+  }, [heroItems.length, heroIndex]);
 
   // Swipe/Drag gesture handlers for Hero Banner
   const touchStartX = useRef(0);
@@ -232,11 +235,11 @@ export default function Home() {
   );
 
   return (
-    <div className="pb-16 bg-[#000000] min-h-screen">
-      
-      {/* Massive Hero Section (Top 10 Carousel) */}
+    <div className="min-h-screen pb-16">
+
+      {/* Hero: the day's top 5, as an inset cinematic card */}
       {heroItems.length > 0 && (
-        <div 
+        <div
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
@@ -244,137 +247,155 @@ export default function Home() {
           onMouseUp={handleMouseUp}
           onWheel={handleWheel}
           onDragStart={(e) => e.preventDefault()}
-          className="relative w-full h-[65vh] min-h-[480px] max-h-[700px] mb-12 flex shrink-0 group overflow-hidden bg-[#000000] cursor-grab active:cursor-grabbing select-none"
+          className="group relative mx-8 mb-12 mt-6 h-[min(64vh,600px)] min-h-[440px] shrink-0 cursor-grab select-none overflow-hidden rounded-[28px] bg-surface-1 shadow-pop ring-1 ring-white/[0.07] active:cursor-grabbing"
         >
           {heroItems.map((anime, idx) => (
-            <div 
-              key={anime.id} 
+            <div
+              key={anime.id}
               className={`absolute inset-0 transition-opacity duration-1000 ease-in-out ${idx === heroIndex ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}
             >
-              <div className="absolute inset-0">
-                <img
-                  draggable="false"
-                  alt=""
-                  src={
-                    idx === heroIndex ||
-                    idx === (heroIndex + 1) % heroItems.length ||
-                    idx === (heroIndex - 1 + heroItems.length) % heroItems.length
-                      ? safeImageSrc(anime.bannerImage, anime.coverImage)
-                      : undefined
-                  }
-                  loading={idx === heroIndex ? "eager" : "lazy"}
-                  decoding="async"
-                  fetchPriority={idx === heroIndex ? "high" : "low"}
-                  onLoad={(event) => rejectOversizedImage(event, anime.coverImage)}
-                  className={`w-full h-full object-cover transition-transform duration-[20s] ${idx === heroIndex ? 'scale-110' : 'scale-100'}`}
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-[#000000] via-[#000000]/60 to-transparent" />
-                <div className="absolute inset-0 bg-gradient-to-r from-[#000000] via-[#000000]/60 to-transparent" />
-              </div>
-              <div className="relative z-10 flex flex-col justify-end p-6 sm:p-12 pb-12 sm:pb-16 h-full max-w-4xl">
-                <div className="text-white font-bold text-xs sm:text-sm tracking-[0.2em] uppercase mb-2 sm:mb-4 drop-shadow-md">
-                  #{idx + 1} Trending Today
+              <img
+                draggable="false"
+                alt=""
+                src={
+                  idx === heroIndex ||
+                  idx === (heroIndex + 1) % heroItems.length ||
+                  idx === (heroIndex - 1 + heroItems.length) % heroItems.length
+                    ? safeImageSrc(anime.bannerImage, anime.coverImage)
+                    : undefined
+                }
+                loading={idx === heroIndex ? "eager" : "lazy"}
+                decoding="async"
+                fetchPriority={idx === heroIndex ? "high" : "low"}
+                onLoad={(event) => rejectOversizedImage(event, anime.coverImage)}
+                className={`absolute inset-0 h-full w-full object-cover transition-transform duration-[9000ms] ease-out ${idx === heroIndex ? 'scale-[1.06]' : 'scale-100'}`}
+              />
+              <div className="absolute inset-0 bg-scrim-l" />
+              <div className="absolute inset-0 bg-scrim-b" />
+              <div className="absolute inset-0 bg-[radial-gradient(70%_65%_at_0%_100%,rgb(var(--accent)/0.24),transparent_70%)]" />
+              <div className="relative z-10 flex h-full max-w-[700px] flex-col justify-end p-10 pb-12 xl:p-14">
+                <div className="mb-4 inline-flex w-fit items-center gap-1.5 rounded-full border border-accent/30 bg-accent/15 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.18em] text-accent backdrop-blur-md">
+                  <Flame size={13} strokeWidth={2.4} /> #{idx + 1} Trending today
                 </div>
-                <h1 className="text-3xl sm:text-5xl md:text-6xl font-black text-white leading-[1.1] mb-3 sm:mb-4 drop-shadow-lg line-clamp-2">
+                <h1 className="mb-4 line-clamp-2 text-[40px] font-extrabold leading-[1.04] tracking-tight text-white drop-shadow-[0_4px_24px_rgb(0_0_0/0.6)] xl:text-[52px]">
                   {anime.title}
                 </h1>
-                <div className="flex items-center gap-4 text-xs sm:text-sm font-semibold text-white/90 mb-4">
-                  <span className="bg-white/10 px-2 py-0.5 rounded shadow-sm border border-white/10">{anime.year || '2024'}</span>
-                  <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"/> {anime.status || 'Airing'}</span>
-                  <span>{anime.episodes ? anime.episodes + ' Episodes' : 'Ongoing'}</span>
+                <div className="mb-4 flex flex-wrap items-center gap-2">
+                  {anime.averageScore != null && (
+                    <span className="chip border-amber-300/25 bg-amber-300/10 text-amber-200">
+                      <Star size={12} fill="currentColor" /> {(anime.averageScore / 10).toFixed(1)}
+                    </span>
+                  )}
+                  {anime.year && <span className="chip">{anime.year}</span>}
+                  {anime.format && <span className="chip">{anime.format.replace("_", " ")}</span>}
+                  {!!anime.episodes && <span className="chip">{anime.episodes} episodes</span>}
+                  <span className="chip">
+                    <span className={`h-1.5 w-1.5 rounded-full ${anime.status === "RELEASING" ? "bg-emerald-400 shadow-[0_0_8px_rgb(52_211_153)]" : "bg-white/40"}`} />
+                    {animeStatusLabel(anime.status)}
+                  </span>
                 </div>
-                <div className="text-white/70 line-clamp-2 sm:line-clamp-3 mb-6 text-xs sm:text-sm md:text-base max-w-2xl leading-relaxed drop-shadow-md" dangerouslySetInnerHTML={{ __html: anime.synopsis || '' }} />
-                <div className="flex items-center gap-4">
-                  <Link to={`/anime/${anime.id}`} state={{ anime }} className="flex items-center gap-2 bg-white text-black px-8 sm:px-10 py-3 sm:py-4 rounded-full font-bold text-base sm:text-lg hover:scale-105 hover:bg-gray-200 transition-all shadow-[0_0_40px_rgba(255,255,255,0.4)]">
-                    <Play size={20} fill="currentColor" /> Play Now
+                {!!anime.genres?.length && (
+                  <div className="mb-3 text-sm font-medium text-ink-2">{anime.genres.slice(0, 4).join("  ·  ")}</div>
+                )}
+                <div className="mb-7 line-clamp-3 max-w-[600px] text-[15px] leading-relaxed text-white/70" dangerouslySetInnerHTML={{ __html: anime.synopsis || '' }} />
+                <div className="flex items-center gap-3">
+                  <Link to={`/anime/${anime.id}`} state={{ anime }} className="btn btn-primary btn-lg">
+                    <Play size={18} fill="currentColor" /> Watch now
+                  </Link>
+                  <Link to={`/anime/${anime.id}`} state={{ anime }} className="btn btn-secondary btn-lg">
+                    <Info size={18} /> Details
                   </Link>
                 </div>
               </div>
             </div>
           ))}
 
-          {/* Carousel Indicators */}
-          <div className="absolute bottom-6 left-12 z-20 flex items-center gap-2">
+          {/* Slide rail: the thumbnails double as indicators; the active one shows the countdown */}
+          <div className="absolute bottom-8 right-8 z-20 hidden items-center gap-2.5 lg:flex">
+            <button
+              onClick={() => setHeroIndex((prev) => (prev - 1 + heroItems.length) % heroItems.length)}
+              className="btn btn-secondary btn-icon h-10 w-10 rounded-full"
+              aria-label="Previous slide"
+            >
+              <ChevronLeft size={18} />
+            </button>
+            {heroItems.map((anime, idx) => (
+              <button
+                key={anime.id}
+                onClick={() => setHeroIndex(idx)}
+                aria-label={`Show ${anime.title}`}
+                className={`relative h-[58px] shrink-0 overflow-hidden rounded-xl transition-all duration-500 ${idx === heroIndex ? 'w-[124px] ring-2 ring-accent shadow-glow' : 'w-[72px] opacity-55 ring-1 ring-white/15 hover:opacity-100'}`}
+              >
+                <img
+                  draggable="false"
+                  alt=""
+                  src={safeImageSrc(anime.bannerImage, anime.coverImage)}
+                  loading="lazy"
+                  decoding="async"
+                  className="h-full w-full object-cover"
+                />
+                {idx === heroIndex && (
+                  <span key={heroIndex} className="absolute bottom-0 left-0 h-[3px] bg-accent-gradient animate-[heroProgress_8s_linear_forwards]" />
+                )}
+              </button>
+            ))}
+            <button
+              onClick={() => setHeroIndex((prev) => (prev + 1) % heroItems.length)}
+              className="btn btn-secondary btn-icon h-10 w-10 rounded-full"
+              aria-label="Next slide"
+            >
+              <ChevronRight size={18} />
+            </button>
+          </div>
+          {/* Narrow windows: compact bars */}
+          <div className="absolute right-6 top-6 z-20 flex items-center gap-1.5 lg:hidden">
             {heroItems.map((_, idx) => (
               <button
                 key={idx}
                 onClick={() => setHeroIndex(idx)}
-                className={`h-1.5 rounded-full transition-all duration-300 ${idx === heroIndex ? 'w-8 bg-[#e50914] shadow-[0_0_10px_rgba(229, 9, 20,0.8)]' : 'w-2 bg-white/30 hover:bg-white/60'}`}
+                className={`h-1.5 rounded-full transition-all duration-300 ${idx === heroIndex ? 'w-7 bg-accent shadow-glow' : 'w-2 bg-white/35 hover:bg-white/70'}`}
                 aria-label={`Go to slide ${idx + 1}`}
               />
             ))}
           </div>
-
-          {/* Carousel Controls */}
-          <button 
-            onClick={() => setHeroIndex((prev) => (prev - 1 + heroItems.length) % heroItems.length)}
-            className="absolute left-4 top-1/2 -translate-y-1/2 z-20 p-2.5 rounded-full bg-black/40 text-white/80 hover:bg-black/70 hover:text-white hover:scale-110 shadow-lg border border-white/10 transition-all backdrop-blur-md"
-            aria-label="Previous slide"
-          >
-            <ChevronLeft size={28} />
-          </button>
-          <button 
-            onClick={() => setHeroIndex((prev) => (prev + 1) % heroItems.length)}
-            className="absolute right-4 top-1/2 -translate-y-1/2 z-20 p-2.5 rounded-full bg-black/40 text-white/80 hover:bg-black/70 hover:text-white hover:scale-110 shadow-lg border border-white/10 transition-all backdrop-blur-md"
-            aria-label="Next slide"
-          >
-            <ChevronRight size={28} />
-          </button>
         </div>
       )}
 
       {/* Continue Watching */}
       {cw.length > 0 && (
-        <section className="mb-14">
-          <div className="mb-5 flex items-center justify-between px-12">
-            <div className="flex items-center gap-3">
-              <Clock size={20} className="text-white" />
-              <Link
-                to="/continue-watching"
-                className="group flex items-center gap-2 text-2xl font-bold hover:text-white transition-colors"
-              >
-                Continue Watching
-                <ChevronRight size={20} className="opacity-0 -translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 transition-all" />
-              </Link>
-            </div>
+        <section className="mb-12">
+          <SectionHeader icon={Clock} title="Continue Watching" to="/continue-watching" className="px-8">
+            <ThemeRadioButton />
             <button
               onClick={async () => { setCwRefreshing(true); await refreshAll(); setCwRefreshing(false); }}
               disabled={cwRefreshing}
-              className="flex items-center gap-1.5 rounded px-3 py-1.5 text-xs text-white/50 hover:bg-white/10 hover:text-white disabled:opacity-40 transition"
+              className="btn btn-ghost btn-sm"
             >
-              <RefreshCw size={12} className={cwRefreshing ? "animate-spin" : ""} />
+              <RefreshCw size={13} className={cwRefreshing ? "animate-spin" : ""} />
               Refresh
             </button>
-          </div>
+          </SectionHeader>
           <div className="relative group/cwrow">
             {cwCanScrollLeft && (
               <button
                 onClick={() => cwScroll("left")}
-                className="absolute left-0 top-0 bottom-2 z-10 flex w-14 items-center justify-start pl-2
-                           bg-gradient-to-r from-[#000000] to-transparent
-                           opacity-0 group-hover/cwrow:opacity-100 transition-opacity"
+                className="absolute left-2 top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full glass shadow-pop opacity-0 transition hover:scale-105 group-hover/cwrow:opacity-100"
               >
-                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 hover:bg-white/20 transition">
-                  <ChevronLeft size={16} />
-                </div>
+                <ChevronLeft size={18} />
               </button>
             )}
             {cwCanScrollRight && (
               <button
                 onClick={() => cwScroll("right")}
-                className="absolute right-0 top-0 bottom-2 z-10 flex w-14 items-center justify-end pr-2
-                           bg-gradient-to-l from-[#000000] to-transparent
-                           opacity-0 group-hover/cwrow:opacity-100 transition-opacity"
+                className="absolute right-2 top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full glass shadow-pop opacity-0 transition hover:scale-105 group-hover/cwrow:opacity-100"
               >
-                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 hover:bg-white/20 transition">
-                  <ChevronRight size={16} />
-                </div>
+                <ChevronRight size={18} />
               </button>
             )}
             <div
               ref={cwScrollRef}
               onScroll={updateCwScroll}
-              className="no-scrollbar flex gap-5 overflow-x-auto scroll-smooth px-12 pb-6 pt-2"
+              className="no-scrollbar flex gap-5 overflow-x-auto scroll-smooth px-8 pb-6 pt-2"
             >
               {cwCards}
             </div>
@@ -383,40 +404,40 @@ export default function Home() {
       )}
 
       {/* Latest Episodes */}
-      <section className="mb-14 px-12">
-        <div className="mb-5 flex items-center justify-between">
-          <h2 className="text-2xl font-bold">Latest Episodes</h2>
+      <section className="mb-12 px-8">
+        <SectionHeader icon={Sparkles} title="Latest Episodes" subtitle="Fresh from the last few days">
           <button
             onClick={() => refreshLatest(latestPage)}
             disabled={latestLoading}
-            className="flex items-center gap-1.5 rounded px-3 py-1.5 text-xs text-white/50 hover:bg-white/10 hover:text-white disabled:opacity-40 transition"
+            className="btn btn-ghost btn-sm"
           >
-            <RefreshCw size={12} className={latestLoading ? "animate-spin" : ""} />
+            <RefreshCw size={13} className={latestLoading ? "animate-spin" : ""} />
             Refresh
           </button>
-        </div>
+        </SectionHeader>
 
         {latestLoading && latestEpisodes.length === 0 ? (
-          <div className="flex h-48 items-center justify-center text-white/30">
-            <Loader2 size={24} className="animate-spin mr-2" />
-            <span className="text-sm">Loading latest episodes…</span>
+          <div className="grid grid-cols-6 gap-4 xl:grid-cols-6 lg:grid-cols-5 md:grid-cols-4">
+            {Array.from({ length: 12 }, (_, i) => (
+              <div key={i} className="skeleton aspect-video rounded-2xl" />
+            ))}
           </div>
         ) : latestEpisodes.length === 0 ? (
-          <div className="flex h-32 items-center justify-center text-sm text-white/30">
-            No episodes loaded — click Refresh
+          <div className="panel flex h-32 items-center justify-center gap-2 text-sm text-ink-3">
+            No episodes loaded. Try Refresh.
           </div>
         ) : (
           <>
-            <div className={`grid grid-cols-6 gap-3 xl:grid-cols-6 lg:grid-cols-5 md:grid-cols-4 transition-opacity ${latestLoading ? "opacity-40 pointer-events-none" : ""}`}>
+            <div className={`grid grid-cols-6 gap-4 xl:grid-cols-6 lg:grid-cols-5 md:grid-cols-4 transition-opacity ${latestLoading ? "opacity-40 pointer-events-none" : ""}`}>
               {latestCards}
             </div>
 
             {(latestPage > 1 || latestHasNextPage) && (
-              <div className="mt-5 flex items-center justify-center gap-1">
+              <div className="mt-6 flex items-center justify-center gap-1.5">
                 <button
                   onClick={() => refreshLatest(1)}
                   disabled={latestPage === 1 || latestLoading}
-                  className="flex h-8 w-8 items-center justify-center rounded text-white/50 hover:bg-white/10 hover:text-white disabled:opacity-30 transition"
+                  className="flex h-9 w-9 items-center justify-center rounded-xl text-ink-3 transition hover:bg-white/[0.07] hover:text-white disabled:opacity-30"
                   title="First page"
                 >
                   <ChevronsLeft size={14} />
@@ -424,20 +445,20 @@ export default function Home() {
                 <button
                   onClick={() => refreshLatest(latestPage - 1)}
                   disabled={latestPage === 1 || latestLoading}
-                  className="flex h-8 w-8 items-center justify-center rounded text-white/50 hover:bg-white/10 hover:text-white disabled:opacity-30 transition"
+                  className="flex h-9 w-9 items-center justify-center rounded-xl text-ink-3 transition hover:bg-white/[0.07] hover:text-white disabled:opacity-30"
                   title="Previous page"
                 >
                   <ChevronLeft size={14} />
                 </button>
 
-                <span className="flex h-8 min-w-[5rem] items-center justify-center rounded bg-white text-xs font-medium text-black">
+                <span className="flex h-9 min-w-[5.5rem] items-center justify-center rounded-xl bg-accent-gradient px-3 text-xs font-semibold text-white shadow-glow">
                   Page {latestPage}
                 </span>
 
                 <button
                   onClick={() => refreshLatest(latestPage + 1)}
                   disabled={!latestHasNextPage || latestLoading}
-                  className="flex h-8 w-8 items-center justify-center rounded text-white/50 hover:bg-white/10 hover:text-white disabled:opacity-30 transition"
+                  className="flex h-9 w-9 items-center justify-center rounded-xl text-ink-3 transition hover:bg-white/[0.07] hover:text-white disabled:opacity-30"
                   title="Next page"
                 >
                   <ChevronRight size={14} />
@@ -466,7 +487,7 @@ export default function Home() {
           <DiscoverRow title="Top Movies" filters={{ format: "MOVIE", sort: "POPULARITY_DESC" }} />
           <DiscoverRow title="Highest Rated" filters={{ sort: "SCORE_DESC" }} />
         </div>
-        <aside className="hidden w-[330px] shrink-0 pr-8 pt-9 md:block">
+        <aside className="hidden w-[330px] shrink-0 pr-8 pt-1 md:block">
           <div className="sticky top-4">
             <Top10Sidebar />
           </div>

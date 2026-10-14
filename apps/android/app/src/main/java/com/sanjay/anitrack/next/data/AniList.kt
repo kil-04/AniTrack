@@ -69,6 +69,7 @@ object AniList {
         id idMal isAdult title { romaji english } coverImage { large } bannerImage
         episodes duration status format seasonYear averageScore popularity genres
         studios(isMain: true) { nodes { name } }
+        nextAiringEpisode { episode airingAt }
         description(asHtml: false)
     """
 
@@ -352,6 +353,8 @@ object AniList {
         query: String?, genre: String?, year: Int?, season: String?,
         format: String?, status: String?, sort: String, page: Int,
         source: String? = null, epMin: Int? = null, epMax: Int? = null,
+        /** Titles that started in this year, seasonless OVAs and films included. */
+        startYear: Int? = null,
     ): Pair<List<Anime>, Boolean> {
         val args = mutableListOf("\$page: Int", "\$sort: [MediaSort]")
         val mArgs = mutableListOf("type: ANIME", "isAdult: false", "sort: \$sort")
@@ -360,6 +363,7 @@ object AniList {
         genre?.let { args += "\$genre: String"; mArgs += "genre: \$genre"; vars.put("genre", it) }
         year?.let { args += "\$year: Int"; mArgs += "seasonYear: \$year"; vars.put("year", it) }
         season?.let { args += "\$season: MediaSeason"; mArgs += "season: \$season"; vars.put("season", it) }
+        startYear?.let { args += "\$started: String"; mArgs += "startDate_like: \$started"; vars.put("started", "$it%") }
         format?.let { args += "\$format: MediaFormat"; mArgs += "format: \$format"; vars.put("format", it) }
         status?.let { args += "\$status: MediaStatus"; mArgs += "status: \$status"; vars.put("status", it) }
         source?.let { args += "\$src: MediaSource"; mArgs += "source: \$src"; vars.put("src", it) }
@@ -535,6 +539,13 @@ object AniList {
         )
     )
 
+    // Next episode + air time (epoch seconds) per show, filled by episodeTotals.
+    private val nextAirings = java.util.concurrent.ConcurrentHashMap<Int, Pair<Int, Long>>()
+
+    /** The next episode of an airing show and when it airs, once known. */
+    fun nextAiring(id: Int): Pair<Int, Long>? =
+        nextAirings[id] ?: cachedAnime(id)?.let { a -> a.nextEpisode?.let { ep -> a.nextAiringAt?.let { ep to it } } }
+
     /** Episodes available per show for the CW "EP N ▲/✓" badge — one batched
      *  query. Airing shows use aired-so-far (nextAiringEpisode - 1). */
     suspend fun episodeTotals(ids: List<Int>): Map<Int, Int> {
@@ -544,7 +555,7 @@ object AniList {
             """query(${'$'}ids: [Int]) {
                 Page(perPage: 50) {
                     media(id_in: ${'$'}ids, type: ANIME) {
-                        id episodes nextAiringEpisode { episode }
+                        id episodes nextAiringEpisode { episode airingAt }
                     }
                 }
             }""",
@@ -554,11 +565,77 @@ object AniList {
         val out = mutableMapOf<Int, Int>()
         for (i in 0 until arr.length()) {
             val m = arr.getJSONObject(i)
+            m.optJSONObject("nextAiringEpisode")?.let { next ->
+                val episode = next.optInt("episode"); val at = next.optLong("airingAt")
+                if (episode > 0 && at > 0) nextAirings[m.getInt("id")] = episode to at
+            }
             val aired = m.optJSONObject("nextAiringEpisode")?.optInt("episode")?.minus(1)
             val total = aired ?: (if (m.isNull("episodes")) null else m.getInt("episodes"))
             if (total != null && total > 0) out[m.getInt("id")] = total
         }
         return out
+    }
+
+    /** AniList entries for [ids], 50 per request (missing or failed ones are skipped). */
+    suspend fun byIds(ids: List<Int>): List<Anime> {
+        val out = mutableListOf<Anime>()
+        val missing = ids.filter { it > 0 }.distinct().filter { id -> cachedAnime(id)?.let { out += it } == null }
+        for (chunk in missing.chunked(50)) {
+            runCatching {
+                val data = gql(
+                    """query(${'$'}ids: [Int]) { Page(perPage: 50) { media(id_in: ${'$'}ids, type: ANIME) { $MEDIA_FIELDS } } }""",
+                    JSONObject().put("ids", org.json.JSONArray(chunk)),
+                )
+                val arr = data.getJSONObject("Page").getJSONArray("media")
+                for (i in 0 until arr.length()) out += rememberAnime(arr.getJSONObject(i))
+            }
+        }
+        return out
+    }
+
+    /** Anime that premiered on [month]/[day] in any year, most popular first, with that year. */
+    suspend fun premieredOn(month: Int, day: Int): List<Pair<Anime, Int>> {
+        val data = gql(
+            """query(${'$'}like: String) {
+                Page(perPage: 24) {
+                    media(type: ANIME, isAdult: false, startDate_like: ${'$'}like, sort: POPULARITY_DESC, popularity_greater: 2000) {
+                        $MEDIA_FIELDS startDate { year }
+                    }
+                }
+            }""",
+            JSONObject().put("like", "%%%02d%02d".format(month, day)),
+        )
+        val items = data.getJSONObject("Page").getJSONArray("media")
+        return (0 until items.length()).mapNotNull { i ->
+            val m = items.getJSONObject(i)
+            val year = m.optJSONObject("startDate")?.optInt("year")?.takeIf { it > 1900 } ?: return@mapNotNull null
+            rememberAnime(m) to year
+        }
+    }
+
+    /** Episodes of [ids] that aired after [from] and before [to] (epoch seconds), oldest first. */
+    suspend fun airedBetween(ids: List<Int>, from: Long, to: Long): List<Airing> {
+        val out = mutableListOf<Airing>()
+        for (chunk in ids.filter { it > 0 }.distinct().chunked(50)) {
+            val data = gql(
+                """query(${'$'}ids: [Int], ${'$'}from: Int, ${'$'}to: Int) {
+                    Page(perPage: 50) {
+                        airingSchedules(mediaId_in: ${'$'}ids, airingAt_greater: ${'$'}from, airingAt_lesser: ${'$'}to, sort: TIME) {
+                            airingAt episode media { $MEDIA_FIELDS }
+                        }
+                    }
+                }""",
+                JSONObject().put("ids", org.json.JSONArray(chunk)).put("from", from).put("to", to),
+            )
+            val items = data.getJSONObject("Page").getJSONArray("airingSchedules")
+            for (i in 0 until items.length()) {
+                val item = items.getJSONObject(i)
+                val media = item.optJSONObject("media") ?: continue
+                if (media.optBoolean("isAdult", false)) continue
+                out += Airing(rememberAnime(media), item.optInt("episode"), item.optLong("airingAt"))
+            }
+        }
+        return out.sortedBy { it.airingAt }
     }
 
     /** Map MAL ids → AniList entries in batches (for the MAL list import). */
@@ -581,21 +658,71 @@ object AniList {
 
     data class Relation(val type: String, val anime: Anime)
 
-    /** Relation edges for the Watch Order chain (PREQUEL/SEQUEL hops). */
-    suspend fun relations(id: Int): List<Relation> = try {
+    /**
+     * An anime's source type (MANGA, LIGHT_NOVEL, ORIGINAL…) and its relation edges,
+     * anime and print alike. Watch Order, Related and Continue the Story share this one
+     * cached request; print nodes carry the manga fields so their pages paint at once.
+     */
+    private suspend fun relationGraph(id: Int): Pair<String?, JSONArray> {
         val data = gql(
             """query(${'$'}id: Int) {
                 Media(id: ${'$'}id, type: ANIME) {
-                    relations { edges { relationType node { type $MEDIA_FIELDS } } }
+                    source
+                    relations { edges { relationType storyType: relationType(version: 2) node {
+                        type $MEDIA_FIELDS chapters volumes countryOfOrigin synonyms startDate { year }
+                    } } }
                 }
             }""",
             JSONObject().put("id", id),
+        )
+        val media = data.getJSONObject("Media")
+        val source = media.optString("source").takeIf { it.isNotBlank() && it != "null" }
+        return source to media.getJSONObject("relations").getJSONArray("edges")
+    }
+
+    /** Relation edges for the Watch Order chain (PREQUEL/SEQUEL hops). */
+    suspend fun relations(id: Int): List<Relation> = try {
+        val edges = relationGraph(id).second
+        (0 until edges.length()).mapNotNull { i ->
+            val e = edges.getJSONObject(i)
+            val node = e.optJSONObject("node") ?: return@mapNotNull null
+            if (node.optString("type") != "ANIME") return@mapNotNull null   // print nodes: [printRelations]
+            Relation(e.optString("relationType"), rememberAnime(node))
+        }
+    } catch (e: Exception) {
+        emptyList()
+    }
+
+    /** The anime's source type and the manga and novels tied to it ("Continue the story"). */
+    suspend fun printRelations(id: Int): Pair<String?, List<StoryBridge.Link>> = try {
+        val (source, edges) = relationGraph(id)
+        source to (0 until edges.length()).mapNotNull { i ->
+            val e = edges.getJSONObject(i)
+            val node = e.optJSONObject("node") ?: return@mapNotNull null
+            if (node.optString("type") != "MANGA" || node.optBoolean("isAdult")) return@mapNotNull null
+            // Version 2 marks the adapted material SOURCE; version 1 calls it ADAPTATION.
+            val type = e.optString("storyType").takeIf { it.isNotBlank() && it != "null" } ?: e.optString("relationType")
+            StoryBridge.Link(type, rememberManga(node))
+        }
+    } catch (e: Exception) {
+        null to emptyList()
+    }
+
+    /** The anime made from a manga or novel (the manga page's "Watch the anime"). */
+    suspend fun animeAdaptations(mangaId: Int): List<Relation> = try {
+        val data = gql(
+            """query(${'$'}id: Int) {
+                Media(id: ${'$'}id, type: MANGA) {
+                    relations { edges { relationType node { type $MEDIA_FIELDS } } }
+                }
+            }""",
+            JSONObject().put("id", mangaId),
         )
         val edges = data.getJSONObject("Media").getJSONObject("relations").getJSONArray("edges")
         (0 until edges.length()).mapNotNull { i ->
             val e = edges.getJSONObject(i)
             val node = e.optJSONObject("node") ?: return@mapNotNull null
-            if (node.optString("type") != "ANIME") return@mapNotNull null   // skip manga nodes
+            if (node.optString("type") != "ANIME" || node.optBoolean("isAdult")) return@mapNotNull null
             Relation(e.optString("relationType"), rememberAnime(node))
         }
     } catch (e: Exception) {

@@ -71,6 +71,17 @@ Server links and media URLs are often short-lived. Cache only bounded metadata;
 resolve a link immediately before playback or download. A background prefetch
 must never resolve every server in parallel.
 
+Set `capabilities.prefetch: false` when even variant discovery resolves media
+or may change playback authorization. The registry and player must then skip
+background next-episode link discovery as well as media resolution. Current
+Miruro and MKissa desktop connectors opt out. Miruro's current API returns all
+choices in one episode `/play` response; consuming that single catalogue read
+does not authorize probing each server or caching its expiring URLs.
+
+The desktop player's next-episode warm-up requires a loaded descriptor with
+`prefetch: true`; an absent/loading descriptor is not permission to prefetch.
+Anikoto's explicit opt-in covers lightweight server metadata only.
+
 ## Stream authorization
 
 `StreamData` is the complete playback hand-off. In addition to `url`, it may
@@ -95,6 +106,18 @@ HTTPS URL. Reject credential-bearing URLs, local/private hosts and non-network
 schemes. Never apply provider headers to an entire third-party origin when an
 exact URL or stream directory is sufficient, and never log cookies,
 authorization values or source-decoding keys.
+
+Desktop registry resolutions also receive a fresh opaque `mediaAccessId`,
+including when the connector returns a reused URL. This is a memory-only local
+receipt, not a credential or provider-supplied identity. Main snapshots it at
+the start of a trusted player's exact-authorized native media request. A native
+HTTP 403/429 produces a receipt/status-only event plus an authoritative status
+lookup through the typed preload bridge. The player stops the selected load,
+retaining position/play intent for a manual retry; stale events cannot reject a
+new resolution. Missing/expired status lookup must not initiate automatic server
+fallback. Optional captions, HLS-directory fetches and unrelated windows are
+excluded from this native-media observation path; HLS has its own access-stop
+policy. Neither API exposes URLs, cookies or header values.
 
 ### What can be one file
 
@@ -121,7 +144,7 @@ part of the desktop installer or APK.
 Downloaded site JavaScript is untrusted input. By default, connectors parse
 bounded data without executing it. A user-approved website-session connector
 may run the provider's normal same-origin website modules in a separate WebView
-profile/process. It must have no app/account bridge, file access, permission
+profile/process or a dedicated sandboxed Electron website window. It must have no app/account bridge, file access, permission
 grants, popups or arbitrary native command execution. Only reviewed, bounded
 catalogue operations may cross back into AniTrack. Do not execute downloaded
 code in the app's native runtime or display advertising/player embeds to
@@ -129,7 +152,9 @@ discover media. Signed automation remains data-only.
 
 Comix manga is an explicit user-approved website-session exception. Its public
 catalogue request signer/response decoder runs only inside the isolated Comix
-WebView. AniTrack retains its native manga reader and locally reviewed image
+WebView or the desktop `persist:comix` sandboxed session. The locally reviewed
+`comix_transport.js` asset is bundled with both applications, not remotely
+updated executable connector code. AniTrack retains its native manga reader and locally reviewed image
 decoding. This exception does not expose MAL/Gist credentials, disable manual
 verification or change other providers' access rules.
 
@@ -137,7 +162,10 @@ MangaDot manga uses a user-verified browser session, like AnimePahe. The user
 passes Cloudflare in a visible WebView (`MangaDotConnectActivity`). AniTrack
 then calls MangaDot's plain JSON API with that session's own cookie and genuine
 WebView user agent. No site module decodes data, and the challenge is never
-automated (`docs/providers/manga-sources.md`).
+automated (`docs/providers/manga-sources.md`). On desktop the clearance is a
+partitioned cookie that only pages on mangadot.net send, so the verified page
+itself makes the fixed same-origin reads from an isolated world
+(`VerifiedPageSession`), as for Miruro (`docs/desktop/manga-mode.md`).
 
 AniTrack does not bypass CAPTCHA or human-verification challenges. A connector
 must recognize challenge responses, stop retrying, enter a bounded cooldown and
@@ -149,7 +177,9 @@ cooldown: stop the failed attempt without automatic retries, but allow an
 immediate manual retry or server change. Miruro API security errors require a
 fresh user-approved connection; a media-server rejection must not invalidate
 the catalogue session. No CAPTCHA bypass or automatic server rotation is added.
-Desktop cooldown policies are unchanged.
+Desktop MKissa retains a bounded cooldown. Desktop Miruro stops the failed
+attempt and queued reads, offers user-operated session verification on a security
+error, and retains a one-minute rate-limit backoff. There is no automatic retry.
 
 ## Definition of done
 

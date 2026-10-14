@@ -1,5 +1,6 @@
 import type { AnimeMeta, AnimeRecommendation, RecentEpisodesPage, RelatedAnime } from "../../../../packages/shared/types";
 import { classicEraBoost, classicEraLabel } from "../../../../packages/shared/recommendations";
+import { planStory, type PrintMeta, type StoryPlan } from "../../../../packages/shared/story-bridge";
 
 const ENDPOINT = "https://graphql.anilist.co";
 
@@ -26,7 +27,7 @@ function cacheSet(key: string, value: unknown): void {
 }
 
 // Minimal fragment we reuse across queries.
-const MEDIA_FIELDS = `
+export const MEDIA_FIELDS = `
   id
   idMal
   title { romaji english native }
@@ -46,7 +47,7 @@ const MEDIA_FIELDS = `
   studios(isMain: true) { nodes { name } }
 `;
 
-interface MediaNode {
+export interface MediaNode {
   id: number;
   idMal: number | null;
   title: { romaji?: string; english?: string; native?: string };
@@ -66,7 +67,7 @@ interface MediaNode {
   studios?: { nodes: { name: string }[] };
 }
 
-function toAnime(m: MediaNode): AnimeMeta {
+export function toAnime(m: MediaNode): AnimeMeta {
   return {
     id: m.id,
     malId: m.idMal,
@@ -161,7 +162,7 @@ async function gqlPump() {
   }
 }
 
-async function gql<T>(
+export async function gql<T>(
   query: string,
   variables: Record<string, unknown> = {},
   priority: "high" | "low" = "high",
@@ -497,6 +498,11 @@ export async function advancedSearchAnime(filters: import("../../../../packages/
     mediaArgs.push("seasonYear: $year");
     variables.year = filters.year;
   }
+  if (filters.startYear) {
+    queryArgs.push("$started: String");
+    mediaArgs.push("startDate_like: $started", "isAdult: false");
+    variables.started = `${filters.startYear}%`;
+  }
   if (filters.format) {
     queryArgs.push("$format: MediaFormat");
     mediaArgs.push("format: $format");
@@ -556,6 +562,30 @@ export async function advancedSearchAnime(filters: import("../../../../packages/
   return result;
 }
 
+/** Anime that premiered on this month/day in any year, most popular first, with that year. */
+export async function premieredOn(month: number, day: number): Promise<import("../../../../packages/shared/types").PremieredAnime[]> {
+  const like = `%${String(month).padStart(2, "0")}${String(day).padStart(2, "0")}`;
+  const key = `premiered:${like}`;
+  const hit = cacheGet<import("../../../../packages/shared/types").PremieredAnime[]>(key);
+  if (hit) return hit;
+  const data = await gql<{ Page: { media: (MediaNode & { startDate?: { year?: number | null } | null })[] } }>(
+    `query($like: String) {
+      Page(perPage: 24) {
+        media(type: ANIME, isAdult: false, startDate_like: $like, sort: POPULARITY_DESC, popularity_greater: 2000) {
+          ${MEDIA_FIELDS} startDate { year }
+        }
+      }
+    }`,
+    { like },
+    "low",
+  );
+  const result = data.Page.media
+    .filter((node) => (node.startDate?.year ?? 0) > 1900)
+    .map((node) => ({ anime: toAnime(node), year: node.startDate!.year! }));
+  cacheSet(key, result);
+  return result;
+}
+
 export async function trending(): Promise<AnimeMeta[]> {
   const hit = cacheGet<AnimeMeta[]>("trending");
   if (hit) return hit;
@@ -599,19 +629,38 @@ export async function getByMalId(malId: number): Promise<AnimeMeta | null> {
   return result;
 }
 
-export async function getRelations(id: number): Promise<RelatedAnime[]> {
-  const key = `rel:${id}`;
-  const hit = cacheGet<RelatedAnime[]>(key);
+interface RelationNode extends MediaNode {
+  type?: string | null;
+  chapters?: number | null;
+  volumes?: number | null;
+  countryOfOrigin?: string | null;
+  startDate?: { year?: number | null } | null;
+}
+
+interface RelationGraph {
+  source: string | null;
+  edges: { relationType: string; storyType?: string | null; node: RelationNode }[];
+}
+
+/**
+ * An anime's source type and its relation edges, anime and print alike. Related and
+ * Continue the Story share this one request.
+ */
+async function relationGraph(id: number): Promise<RelationGraph | null> {
+  const key = `relgraph:${id}`;
+  const hit = cacheGet<RelationGraph>(key);
   if (hit) return hit;
   const data = await gql<{
-    Media: { relations: { edges: { relationType: string; node: MediaNode }[] } } | null
+    Media: { source?: string | null; relations: { edges: RelationGraph["edges"] } } | null
   }>(
     `query($id: Int) {
       Media(id: $id, type: ANIME) {
+        source
         relations {
           edges {
             relationType
-            node { ${MEDIA_FIELDS} }
+            storyType: relationType(version: 2)
+            node { type ${MEDIA_FIELDS} chapters volumes countryOfOrigin startDate { year } }
           }
         }
       }
@@ -619,10 +668,43 @@ export async function getRelations(id: number): Promise<RelatedAnime[]> {
     { id },
     "low",
   );
-  if (!data.Media) return [];
-  const result = data.Media.relations.edges
-    .filter((e) => e.node.id !== id)
+  if (!data.Media) return null;
+  const graph = { source: data.Media.source ?? null, edges: data.Media.relations.edges };
+  cacheSet(key, graph);
+  return graph;
+}
+
+export async function getRelations(id: number): Promise<RelatedAnime[]> {
+  const graph = await relationGraph(id);
+  if (!graph) return [];
+  // Print nodes (manga, novels) belong to Continue the Story, not the anime rows.
+  return graph.edges
+    .filter((e) => e.node.id !== id && e.node.type === "ANIME")
     .map((e) => ({ relationType: e.relationType, anime: toAnime(e.node) }));
-  cacheSet(key, result);
-  return result;
+}
+
+function toPrint(m: RelationNode): PrintMeta {
+  return {
+    id: m.id,
+    title: m.title.english || m.title.romaji || m.title.native || "Untitled",
+    coverImage: m.coverImage?.extraLarge || m.coverImage?.large || null,
+    format: m.format ?? null,
+    status: m.status ?? null,
+    chapters: m.chapters ?? null,
+    volumes: m.volumes ?? null,
+    year: m.startDate?.year ?? null,
+    popularity: m.popularity ?? null,
+    country: m.countryOfOrigin ?? null,
+  };
+}
+
+/** The manga or novel this anime comes from, and the rest of the franchise in print. */
+export async function getStory(id: number): Promise<StoryPlan> {
+  const graph = await relationGraph(id);
+  if (!graph) return planStory(null, []);
+  const links = graph.edges
+    .filter((e) => e.node.type === "MANGA" && !e.node.isAdult)
+    // Version 2 marks the adapted material SOURCE; version 1 calls it ADAPTATION.
+    .map((e) => ({ relationType: e.storyType || e.relationType, book: toPrint(e.node) }));
+  return planStory(graph.source, links);
 }

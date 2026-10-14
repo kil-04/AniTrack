@@ -8,8 +8,17 @@ import okhttp3.OkHttpClient
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
-internal data class MiruroHttpResponse(val status: Int, val text: String, val obfuscated: String? = null)
+internal class MiruroHttpResponse(
+    val status: Int,
+    val text: String = "",
+    val obfuscated: String? = null,
+    val bytes: ByteArray? = null,
+    val contentType: String = "",
+) {
+    override fun toString() = "MiruroHttpResponse(status=$status, body=[redacted])"
+}
 internal fun interface MiruroTransport {
     suspend fun get(url: String, maximumBytes: Int): MiruroHttpResponse
 }
@@ -22,6 +31,40 @@ internal class MiruroClient(
     private val mutex = Mutex()
     private var key: String? = null
     private var keyExpiresAt = 0L
+    private val issued = AtomicLong()
+    private var blockedThrough = 0L
+    private var blockedFailure = MiruroFailure.SECURITY_CHECK
+
+    suspend fun read(request: MiruroV1ReadRequest): JSONObject {
+        val url = MiruroV1Protocol.requestUrl(request)
+        val sequence = issued.incrementAndGet()
+        return mutex.withLock {
+            if (sequence <= blockedThrough) throw MiruroProtocolException("Miruro stopped queued reads after an access rejection", blockedFailure)
+            try {
+                val response = transport.get(url, MiruroProtocol.MAX_RESPONSE_BYTES)
+                // 403/429 stop before decoding/allocating any error body.
+                rejectChallenge(response.status, "")
+                if (response.status in 300..399) throw MiruroProtocolException("Miruro redirected its API; connector review is required")
+                val bytes = response.bytes ?: response.text.toByteArray(Charsets.UTF_8)
+                if (bytes.size > MiruroProtocol.MAX_RESPONSE_BYTES) throw MiruroProtocolException("Miruro response exceeded its size limit")
+                val prefix = String(bytes, 0, minOf(bytes.size, 32_768), Charsets.UTF_8)
+                rejectChallenge(response.status, prefix.takeIf { it.trimStart().startsWith("<") }.orEmpty())
+                if (response.status !in 200..299) {
+                    rejectChallenge(response.status, prefix)
+                    throw MiruroProtocolException("Miruro catalogue request failed (HTTP ${response.status})")
+                }
+                val payload = MiruroV1Protocol.decode(bytes, response.contentType)
+                rejectChallenge(200, listOf("error", "message", "code").mapNotNull { payload.opt(it) as? String }.joinToString(" "))
+                payload
+            } catch (error: MiruroProtocolException) {
+                if (error.failure != MiruroFailure.INVALID_RESPONSE) {
+                    blockedThrough = issued.get()
+                    blockedFailure = error.failure
+                }
+                throw error
+            }
+        }
+    }
 
     suspend fun read(request: MiruroReadRequest): JSONObject {
         val url = MiruroProtocol.requestUrl(request)
@@ -69,7 +112,7 @@ internal class MiruroHttpTransport(
         val request = MiruroRequestPolicy.request(url, sessionForUrl)
         http.newCall(request).execute().use { response ->
             // Security status must reach the session policy even with an oversized body.
-            if (!response.isSuccessful) return@use MiruroHttpResponse(response.code, "")
+            if (response.code in listOf(403, 429)) return@use MiruroHttpResponse(response.code)
             val body = response.body
             if (body != null && body.contentLength() > maximumBytes) throw MiruroProtocolException("Miruro response exceeded its size limit")
             val output = ByteArrayOutputStream()
@@ -82,7 +125,11 @@ internal class MiruroHttpTransport(
                     output.write(buffer, 0, count)
                 }
             }
-            MiruroHttpResponse(response.code, MiruroProtocol.utf8(output.toByteArray()), response.header("x-obfuscated"))
+            val bytes = output.toByteArray()
+            if (response.header("Content-Type").orEmpty().substringBefore(';').trim().equals("application/octet-stream", true)) {
+                MiruroHttpResponse(response.code, bytes = bytes, contentType = response.header("Content-Type").orEmpty())
+            } else MiruroHttpResponse(response.code, MiruroProtocol.utf8(bytes), response.header("x-obfuscated"),
+                bytes = bytes, contentType = response.header("Content-Type").orEmpty())
         }
     }
 }

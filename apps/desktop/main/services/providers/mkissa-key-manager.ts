@@ -13,14 +13,16 @@ import {
 } from "./mkissa-bundle";
 import {
   assertAllowedOrigin,
-  classifyMkissaFailure,
   MkissaProviderError,
+  mkissaResponseFailure,
   normalizeHeaders,
   publicHttpsUrl,
+  responseErrorText,
   responseText,
   safeRedirectFetch,
   type MkissaFetch,
 } from "./mkissa-utils";
+import { MkissaApiCookies } from "./mkissa-api-cookies";
 
 const DEFAULT_SITE_ORIGIN = "https://mkissa.to";
 const DEFAULT_API_ORIGIN = "https://api.mkissa.net";
@@ -40,6 +42,8 @@ export interface MkissaKeyManagerOptions {
   requestTimeoutMs?: number;
   maxBuildChunks?: number;
   buildResolver?: () => Promise<MkissaBuildInfo>;
+  /** App-owned ordinary API HTTP cookies; never imported from a browser. */
+  apiCookies?: MkissaApiCookies;
 }
 
 interface CachedBuild extends MkissaBuildInfo {
@@ -58,7 +62,6 @@ export class MkissaKeyManager {
   private readonly maxBuildChunks: number;
   private readonly buildResolver?: () => Promise<MkissaBuildInfo>;
   private readonly allowedAssetHosts: Set<string>;
-  private readonly cookies = new Map<string, Map<string, string>>();
 
   private cachedMaterial: MkissaKeyMaterial | null = null;
   private materialPending: Promise<MkissaKeyMaterial> | null = null;
@@ -66,11 +69,13 @@ export class MkissaKeyManager {
   private buildPending: Promise<MkissaBuildInfo> | null = null;
 
   constructor(options: MkissaKeyManagerOptions = {}) {
-    this.fetcher = options.fetch ?? fetch;
     this.siteOrigin = originOnly(options.siteOrigin ?? DEFAULT_SITE_ORIGIN);
     this.apiOrigin = originOnly(options.apiOrigin ?? DEFAULT_API_ORIGIN);
     this.userAgent = options.userAgent ?? DEFAULT_USER_AGENT;
     this.now = options.now ?? Date.now;
+    const apiCookies = options.apiCookies ?? new MkissaApiCookies(this.apiOrigin, this.now);
+    apiCookies.assertOrigin(this.apiOrigin);
+    this.fetcher = apiCookies.fetch(options.fetch ?? fetch);
     this.materialTtlMs = boundedPositive(options.materialTtlMs, 6 * 60 * 60 * 1000, 60_000, 24 * 60 * 60 * 1000);
     this.buildTtlMs = boundedPositive(options.buildTtlMs, 30 * 60 * 1000, 60_000, 24 * 60 * 60 * 1000);
     this.requestTimeoutMs = boundedPositive(options.requestTimeoutMs, 10_000, 1_000, 60_000);
@@ -137,11 +142,13 @@ export class MkissaKeyManager {
               "x-aa-boot": token,
             },
           });
-          if (response.status === 403 || response.status === 404) {
+          const body = await responseText(response, 64 * 1024, "MKissa key service");
+          const classified = mkissaResponseFailure(response.status, body);
+          if (classified?.code === "CAPTCHA_REQUIRED" || classified?.code === "RATE_LIMITED") throw classified;
+          if (classified?.code === "CRYPTO_STALE" || response.status === 404) {
             sawStaleResponse = true;
             continue;
           }
-          const classified = classifyMkissaFailure([], response.status);
           if (classified) throw classified;
           if (!response.ok) {
             throw new MkissaProviderError(
@@ -150,7 +157,6 @@ export class MkissaKeyManager {
               response.status,
             );
           }
-          const body = await responseText(response, 64 * 1024, "MKissa key service");
           const payload = parseObject(body, "MKissa key service");
           if (typeof payload.partB !== "string" || (payload.k != null && payload.k !== CONTENT_LANE)) continue;
           const partB = decodeBase64(payload.partB);
@@ -205,6 +211,8 @@ export class MkissaKeyManager {
       );
     }
     const html = await responseText(homeResponse, 5 * 1024 * 1024, "MKissa home page");
+    const homeFailure = mkissaResponseFailure(homeResponse.status, html);
+    if (homeFailure) throw homeFailure;
     const entry = findMkissaAppEntry(html, this.siteOrigin);
     if (!entry) throw new MkissaProviderError("MKissa application entry was not found", "CRYPTO_STALE");
     const entryUrl = publicHttpsUrl(entry);
@@ -221,6 +229,8 @@ export class MkissaKeyManager {
       const response = await this.request(assetUrl, { headers: { Accept: "application/javascript" } });
       if (!response.ok) continue;
       const source = await responseText(response, 25 * 1024 * 1024, "MKissa application asset");
+      const assetFailure = mkissaResponseFailure(response.status, source);
+      if (assetFailure) throw assetFailure;
       if (/aaReq|x-aa-boot|client-crypto|partB/.test(source)) {
         const build = parseMkissaBundle(source);
         if (build) return build;
@@ -245,10 +255,6 @@ export class MkissaKeyManager {
     const headers = normalizeHeaders(init.headers);
     if (!headers.has("User-Agent")) headers.set("User-Agent", this.userAgent);
     if (!headers.has("Accept-Language")) headers.set("Accept-Language", "en-US,en;q=0.9");
-    const cookie = [...(this.cookies.get(parsed.hostname) ?? [])]
-      .map(([name, value]) => `${name}=${value}`)
-      .join("; ");
-    if (cookie) headers.set("Cookie", cookie);
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
@@ -261,33 +267,18 @@ export class MkissaKeyManager {
       );
       const finalUrl = response.url ? publicHttpsUrl(response.url) : parsed;
       assertAllowedOrigin(finalUrl, allowed);
-      this.rememberCookies(finalUrl.hostname, response.headers);
+      if (!response.ok) {
+        const body = await responseErrorText(response, "MKissa bootstrap error");
+        const failure = mkissaResponseFailure(response.status, body);
+        if (failure?.code === "CAPTCHA_REQUIRED" || failure?.code === "RATE_LIMITED") throw failure;
+        return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+      }
       return response;
     } finally {
       clearTimeout(timeout);
     }
   }
 
-  private rememberCookies(hostname: string, headers: Headers): void {
-    const hostCookies = this.cookies.get(hostname) ?? new Map<string, string>();
-    const extended = headers as Headers & { getSetCookie?: () => string[] };
-    const raw = extended.getSetCookie?.() ?? [headers.get("set-cookie")].filter((value): value is string => !!value);
-    for (const header of raw) {
-      for (const part of header.split(/,(?=[^;,]+=)/)) {
-        const pair = part.split(";", 1)[0]?.trim();
-        const separator = pair?.indexOf("=") ?? -1;
-        if (separator <= 0) continue;
-        const name = pair!.slice(0, separator);
-        const value = pair!.slice(separator + 1);
-        if (/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) && !/[;\r\n]/.test(value)) {
-          if (value) hostCookies.set(name, value);
-          else hostCookies.delete(name);
-        }
-      }
-    }
-    if (hostCookies.size > 0) this.cookies.set(hostname, hostCookies);
-    else this.cookies.delete(hostname);
-  }
 }
 
 function originOnly(value: string): string {

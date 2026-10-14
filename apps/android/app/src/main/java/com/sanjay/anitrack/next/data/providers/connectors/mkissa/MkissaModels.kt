@@ -1,5 +1,7 @@
 package com.sanjay.anitrack.next.data.providers.connectors.mkissa
 
+import org.json.JSONObject
+
 enum class MkissaTranslation(val wireValue: String) {
     SUB("sub"),
     DUB("dub");
@@ -63,7 +65,10 @@ data class MkissaSubtitle(
     val url: String,
     val label: String,
     val language: String? = null,
+    val default: Boolean = false,
 )
+
+data class MkissaSkipRange(val start: Double, val end: Double)
 
 data class MkissaAudioTrack(
     val url: String,
@@ -79,6 +84,7 @@ data class MkissaMediaSource(
     val audioTracks: List<MkissaAudioTrack> = emptyList(),
     val quality: String? = null,
     val downloadable: Boolean = false,
+    val intro: MkissaSkipRange? = null,
 )
 
 open class MkissaException(message: String, cause: Throwable? = null) : Exception(message, cause)
@@ -108,31 +114,52 @@ class MkissaUnsupportedSourceException(message: String) : MkissaException(messag
 /** Centralized, bounded challenge detection used before any retry is attempted. */
 internal object MkissaChallengePolicy {
     fun classify(statusCode: Int, responseBody: String): MkissaChallengeKind? {
-        val sample = responseBody.take(MAX_INSPECTION_CHARS).uppercase()
-        if (CAPTCHA_MARKERS.any(sample::contains)) return MkissaChallengeKind.CAPTCHA
-        if (statusCode == 429 || RATE_MARKERS.any(sample::contains)) return MkissaChallengeKind.RATE_LIMIT
-        return null
+        val sample = responseBody.take(MAX_INSPECTION_CHARS)
+        val messages = errorMessages(sample).toMutableList()
+        if (sample.trimStart().startsWith("<") && HTML_CHALLENGE.containsMatchIn(sample)) {
+            messages += "security check"
+        }
+        return classifyMessages(statusCode, messages)
     }
 
-    private const val MAX_INSPECTION_CHARS = 32 * 1024
-    private val CAPTCHA_MARKERS = listOf(
-        "NEED_CAPTCHA",
-        "CAPTCHA_REQUIRED",
-        "CF-CHL-",
-        "SECURITY CHALLENGE",
-    )
-    private val RATE_MARKERS = listOf(
-        "RATE_LIMIT",
-        "TOO_MANY_REQUESTS",
-        "TOO MANY REQUESTS",
+    fun classifyMessages(statusCode: Int, messages: List<String>): MkissaChallengeKind? = when {
+        statusCode == 429 || messages.any(RATE_LIMIT::containsMatchIn) -> MkissaChallengeKind.RATE_LIMIT
+        messages.any(CAPTCHA::containsMatchIn) -> MkissaChallengeKind.CAPTCHA
+        // Only an explicit crypto error, never an unexplained denial, permits refreshing keys.
+        messages.any(CRYPTO_STALE::containsMatchIn) -> null
+        statusCode == 403 -> MkissaChallengeKind.CAPTCHA
+        else -> null
+    }
+
+    fun cryptoFailure(responseBody: String): Boolean = errorMessages(responseBody).any(CRYPTO_STALE::containsMatchIn)
+
+    private fun errorMessages(body: String): List<String> {
+        val errors = runCatching { JSONObject(body.take(MAX_INSPECTION_CHARS)).optJSONArray("errors") }
+            .getOrNull() ?: return emptyList()
+        return (0 until minOf(errors.length(), 50)).flatMap { index ->
+            val error = errors.optJSONObject(index) ?: return@flatMap emptyList()
+            listOfNotNull(
+                error.optString("message").takeIf { it.isNotBlank() },
+                error.optJSONObject("extensions")?.optString("code")?.takeIf { it.isNotBlank() },
+            ).map { it.take(160) }
+        }
+    }
+
+    private const val MAX_INSPECTION_CHARS = 64 * 1024
+    private val CAPTCHA = Regex("NEED_CAPTCHA|captcha|security.?check|security.?challenge|verify.{0,20}human", RegexOption.IGNORE_CASE)
+    private val RATE_LIMIT = Regex("rate.?limit|too.many.requests", RegexOption.IGNORE_CASE)
+    internal val CRYPTO_STALE = Regex("^AA_CRYPTO_|crypto.*(?:mismatch|stale|invalid)", RegexOption.IGNORE_CASE)
+    private val HTML_CHALLENGE = Regex(
+        "cf-chl-|<title[^>]*>[^<]*(?:just a moment|attention required|verify.{0,20}human)|<form[^>]*(?:challenge|captcha)",
+        RegexOption.IGNORE_CASE,
     )
 }
 
 internal data class MkissaGraphQlError(val code: String?, val message: String?) {
-    fun cryptoFailure(): Boolean = code?.startsWith("AA_CRYPTO") == true
+    fun cryptoFailure(): Boolean = listOfNotNull(code, message).any(MkissaChallengePolicy.CRYPTO_STALE::containsMatchIn)
 
-    fun challengeKind(): MkissaChallengeKind? = MkissaChallengePolicy.classify(
+    fun challengeKind(): MkissaChallengeKind? = MkissaChallengePolicy.classifyMessages(
         statusCode = 200,
-        responseBody = "${code.orEmpty()} ${message.orEmpty()}",
+        messages = listOfNotNull(code, message),
     )
 }

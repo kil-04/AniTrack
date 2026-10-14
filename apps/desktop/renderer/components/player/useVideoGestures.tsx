@@ -321,7 +321,7 @@ export function GestureFeedback({ fb }: { fb: GestureFeedback }) {
           <div className="flex items-center gap-3 rounded-2xl bg-black/60 px-5 py-3 text-white animate-in fade-in duration-100">
             {fb.value === 0 ? <VolumeX size={20} /> : fb.value < 0.5 ? <Volume1 size={20} /> : <Volume2 size={20} />}
             <div className="h-1.5 w-32 overflow-hidden rounded-full bg-white/25">
-              <div className="h-full rounded-full bg-[#e50914]" style={{ width: `${Math.round(fb.value * 100)}%` }} />
+              <div className="h-full rounded-full bg-accent" style={{ width: `${Math.round(fb.value * 100)}%` }} />
             </div>
             <span className="w-9 text-right text-xs font-semibold tabular-nums">{Math.round(fb.value * 100)}%</span>
           </div>
@@ -335,7 +335,7 @@ export function GestureFeedback({ fb }: { fb: GestureFeedback }) {
               {secondsToTimestamp(fb.time)} <span className="text-white/40">/</span>{" "}
               <span className="text-white/60">{secondsToTimestamp(fb.duration)}</span>
             </div>
-            <div className={`text-xs font-medium tabular-nums ${fb.delta < 0 ? "text-[#5eb0ff]" : "text-[#e50914]"}`}>
+            <div className={`text-xs font-medium tabular-nums ${fb.delta < 0 ? "text-[#5eb0ff]" : "text-accent"}`}>
               {fb.delta >= 0 ? "+" : "−"}
               {secondsToTimestamp(Math.abs(fb.delta))}
             </div>

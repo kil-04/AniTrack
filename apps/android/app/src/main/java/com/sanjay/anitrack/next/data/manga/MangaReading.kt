@@ -38,9 +38,29 @@ object MangaReading {
     /** Moves to the neighbouring chapter, starting at its first page. */
     fun step(delta: Int) {
         val session = current.value ?: return
-        val index = session.index + delta
+        jump(session.index + delta)
+    }
+
+    /** Opens the chapter at [index] of the session's reading order, from its first page. */
+    fun jump(index: Int, startPage: Int = 0) {
+        val session = current.value ?: return
         if (index !in session.chapters.indices) return
-        current.value = session.copy(index = index, startPage = 0)
+        current.value = session.copy(index = index, startPage = startPage.coerceAtLeast(0))
+    }
+
+    // Page lists fetched recently (the next chapter is fetched ahead while reading).
+    private val pageCache = object : LinkedHashMap<String, List<MangaPage>>(8, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<MangaPage>>) = size > 6
+    }
+
+    /** A chapter's pages: the downloaded copy first, then a recent fetch, then the source. */
+    suspend fun pages(session: Session, chapter: MangaChapter = session.chapter): List<MangaPage> {
+        MangaDownloads.localPages(session.manga.id, chapter.id)?.let { return it }
+        val key = "${session.source.id}:${chapter.id}"
+        synchronized(pageCache) { pageCache[key] }?.let { return it }
+        val pages = session.source.pages(session.title, chapter)
+        if (pages.isNotEmpty()) synchronized(pageCache) { pageCache[key] = pages }
+        return pages
     }
 
     suspend fun save(session: Session, page: Int, pageCount: Int) {

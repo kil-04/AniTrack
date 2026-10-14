@@ -63,6 +63,7 @@ object PlaySession {
         val downloadable: Boolean = true,
         val conservativeNetwork: Boolean = false,
         val mimeType: String? = null,
+        val variantId: String? = null,
     )
 
     private fun legacyKey(): String = if (provider == "animepahe") paheSession else slug
@@ -232,5 +233,6 @@ object PlaySession {
         downloadable = downloadable,
         conservativeNetwork = conservativeNetwork,
         mimeType = mimeType,
+        variantId = variantId,
     )
 }

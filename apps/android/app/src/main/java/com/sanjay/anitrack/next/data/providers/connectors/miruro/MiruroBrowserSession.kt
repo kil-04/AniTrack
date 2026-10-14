@@ -89,6 +89,12 @@ internal class MiruroBrowserSession : ProviderAccess {
         finally { if (!state.value.ready) destroyPage() }
     }
 
+    suspend fun read(request: MiruroV1ReadRequest): JSONObject = withContext(Dispatchers.Main) {
+        if (!foreground) throw MiruroProtocolException("Return to AniTrack to load Miruro episodes.")
+        try { session.read(request) }
+        finally { if (!state.value.ready) destroyPage() }
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     private fun showVerification(activity: Activity, completion: CompletableDeferred<Boolean>) {
         val panel = Dialog(activity)

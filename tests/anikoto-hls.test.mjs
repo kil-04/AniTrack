@@ -17,6 +17,24 @@ const referer = "https://player.example/";
 const master = (variants) => "#EXTM3U\n" + variants.map(uri => `#EXT-X-STREAM-INF:BANDWIDTH=1000\n${uri}\n`).join("");
 const media = "#EXTM3U\n#EXTINF:6,\nhttps://media.example/episode/seg1.ts\n#EXT-X-ENDLIST\n";
 
+test("Miruro can bound five video/audio renditions and preserves supplied headers on observed directories", async () => {
+  const authorized = [], calls = [];
+  const playlist = "#EXTM3U\n"
+    + '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a1",URI="audio1.m3u8"\n'
+    + '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a2",URI="audio2.m3u8"\n'
+    + [1, 2, 3].map(n => `#EXT-X-STREAM-INF:BANDWIDTH=${n * 1000}\nvideo${n}.m3u8\n`).join("");
+  const headers = { Referer: referer, Origin: "https://explicit.example" };
+  assert.equal(await prepareAnikotoHlsAuthorization(root, referer, async (url, options) => {
+    calls.push(url);
+    assert.deepEqual(options.headers, headers);
+    return new Response(url === root ? playlist : media);
+  }, { maxRenditions: 8, requestHeaders: headers, authorize: value => authorized.push(value) }), root);
+  assert.equal(calls.length, 6);
+  assert.ok(authorized.every(stream => stream.requestHeaders === headers));
+  await assert.rejects(prepareAnikotoHlsAuthorization(root, referer, async () => new Response(playlist), { authorize() {} }), /too many renditions/);
+  await assert.rejects(prepareAnikotoHlsAuthorization(root, referer, async () => { throw Error("must not fetch"); }, { maxRenditions: 100 }), /limit is invalid/);
+});
+
 test("Anikoto verifies HLS renditions and authorizes observed segment/key/map directories without fetching video", async () => {
   const calls = [];
   const authorized = [];

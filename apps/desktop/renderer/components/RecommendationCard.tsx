@@ -5,7 +5,7 @@ export default function RecommendationCard({ recommendation }: { recommendation:
   return (
     <div className="w-36 shrink-0">
       <Card anime={recommendation.anime} size="sm" />
-      <p className="mt-2 line-clamp-2 text-[11px] leading-snug text-white/45">
+      <p className="mt-2 line-clamp-2 text-[11px] leading-snug text-ink-3">
         {recommendation.reason}
       </p>
     </div>

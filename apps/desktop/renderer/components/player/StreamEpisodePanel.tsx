@@ -59,7 +59,7 @@ export function StreamEpisodePanel({
   onPlayEpisode,
 }: StreamEpisodePanelProps) {
   return (
-    <div className={`flex flex-col ${mobile ? "flex-1 overflow-hidden" : "w-[260px] flex-shrink-0 border-r border-white/10"} bg-[#000000]`}>
+    <div className={`flex flex-col ${mobile ? "flex-1 overflow-hidden" : "w-[260px] flex-shrink-0 border-r border-white/10"} bg-bg`}>
       {sources.length > 0 && (
         <div className="border-b border-white/10 p-2">
           <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-white/50">Servers</div>
@@ -73,7 +73,7 @@ export function StreamEpisodePanel({
                   onClick={() => { if (!active) onSwitchProvider(source); }}
                   className={`flex h-8 items-center gap-2 rounded px-3 text-xs font-medium transition-colors ${
                     active
-                      ? "bg-[#e50914] text-white"
+                      ? "bg-accent text-white"
                       : "bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"
                   }`}
                 >
@@ -97,7 +97,7 @@ export function StreamEpisodePanel({
                   onClick={() => onChangeVariant(index)}
                   className={`flex h-8 flex-1 items-center justify-center rounded text-xs font-semibold transition-all duration-200 ${
                     selectedLink === index
-                      ? "bg-[#e50914] text-white shadow-[0_0_12px_rgba(229,9,20,0.4)]"
+                      ? "bg-accent text-white shadow-[0_0_12px_rgb(var(--accent)/0.4)]"
                       : "bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"
                   }`}
                 >
@@ -123,7 +123,7 @@ export function StreamEpisodePanel({
           {rangeOpen && ranges.length > 1 && (
             <>
               <div className="fixed inset-0 z-20" onClick={onToggleRange} />
-              <div className="absolute left-0 top-full z-30 mt-1 max-h-80 w-32 overflow-y-auto rounded-md border border-white/10 bg-[#222222] shadow-xl">
+              <div className="absolute left-0 top-full z-30 mt-1 max-h-80 w-32 overflow-y-auto rounded-md border border-white/10 bg-surface-2 shadow-xl">
                 {ranges.map((range) => (
                   <button
                     key={range.start}
@@ -167,7 +167,7 @@ export function StreamEpisodePanel({
                   onClick={() => onPlayEpisode(episode)}
                   className={`flex h-9 items-center justify-center rounded text-xs font-medium transition ${
                     current
-                      ? "bg-[#e50914] text-white"
+                      ? "bg-accent text-white"
                       : watched
                         ? "bg-green-500/20 text-green-400 ring-1 ring-green-500/30 hover:bg-green-500/30"
                         : "bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"

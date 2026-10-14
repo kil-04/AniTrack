@@ -229,7 +229,7 @@ export function VideoControls({
           {!isMobile && (
             <input type="range" min={0} max={1} step={0.02} value={muted ? 0 : volume}
               onChange={(e) => onVolumeChange(Number(e.target.value))}
-              className="w-24 accent-[#e50914] cursor-pointer hover:accent-[#5eb0ff] transition-all"
+              className="w-24 accent-[rgb(var(--accent))] cursor-pointer hover:accent-[#5eb0ff] transition-all"
             />
           )}
           
@@ -280,7 +280,7 @@ export function VideoControls({
                         e.nativeEvent.stopImmediatePropagation();
                       }}
                       onClick={(e) => e.stopPropagation()}
-                      className="absolute bottom-10 right-0 z-50 w-64 rounded-xl border border-white/10 bg-[#222222]/95 p-4 backdrop-blur-xl shadow-2xl animate-in fade-in slide-in-from-bottom-2 duration-200 pointer-events-auto"
+                      className="absolute bottom-10 right-0 z-50 w-64 rounded-xl border border-white/10 bg-surface-2/95 p-4 backdrop-blur-xl shadow-2xl animate-in fade-in slide-in-from-bottom-2 duration-200 pointer-events-auto"
                     >
                         <div className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-white/50">Subtitle Settings</div>
                         
@@ -300,7 +300,7 @@ export function VideoControls({
                                   setCueFontSize && setCueFontSize(sz.value);
                                   localStorage.setItem("ap-cue-size", sz.value);
                                 }}
-                                className={`rounded px-1.5 py-1 text-[10px] font-semibold transition ${cueFontSize === sz.value ? "bg-[#e50914] text-white" : "bg-white/5 text-white/70 hover:bg-white/10"}`}
+                                className={`rounded px-1.5 py-1 text-[10px] font-semibold transition ${cueFontSize === sz.value ? "bg-accent text-white" : "bg-white/5 text-white/70 hover:bg-white/10"}`}
                               >
                                 {sz.label}
                               </button>
@@ -324,7 +324,7 @@ export function VideoControls({
                                   setCueFontFamily && setCueFontFamily(f.value);
                                   localStorage.setItem("ap-cue-font", f.value);
                                 }}
-                                className={`rounded px-1 py-1 text-[9px] font-semibold truncate transition ${cueFontFamily === f.value ? "bg-[#e50914] text-white" : "bg-white/5 text-white/70 hover:bg-white/10"}`}
+                                className={`rounded px-1 py-1 text-[9px] font-semibold truncate transition ${cueFontFamily === f.value ? "bg-accent text-white" : "bg-white/5 text-white/70 hover:bg-white/10"}`}
                                 title={f.label}
                               >
                                 {f.label}
@@ -350,7 +350,7 @@ export function VideoControls({
                                   setCueBgOpacity && setCueBgOpacity(op.value);
                                   localStorage.setItem("ap-cue-opacity", String(op.value));
                                 }}
-                                className={`rounded py-1 text-[9px] font-semibold transition ${cueBgOpacity === op.value ? "bg-[#e50914] text-white" : "bg-white/5 text-white/70 hover:bg-white/10"}`}
+                                className={`rounded py-1 text-[9px] font-semibold transition ${cueBgOpacity === op.value ? "bg-accent text-white" : "bg-white/5 text-white/70 hover:bg-white/10"}`}
                               >
                                 {op.label}
                               </button>
@@ -374,7 +374,7 @@ export function VideoControls({
                                   setCueColor && setCueColor(c.value);
                                   localStorage.setItem("ap-cue-color", c.value);
                                 }}
-                                className={`flex h-6 w-6 items-center justify-center rounded-full border transition-all ${cueColor === c.value ? "ring-2 ring-[#e50914] scale-110" : "scale-100 opacity-80 hover:opacity-100"} ${c.class}`}
+                                className={`flex h-6 w-6 items-center justify-center rounded-full border transition-all ${cueColor === c.value ? "ring-2 ring-accent scale-110" : "scale-100 opacity-80 hover:opacity-100"} ${c.class}`}
                                 title={c.label}
                               >
                                 {cueColor === c.value && (
@@ -412,7 +412,7 @@ export function VideoControls({
                     e.nativeEvent.stopImmediatePropagation();
                   }}
                   onClick={(e) => e.stopPropagation()}
-                  className="absolute bottom-12 right-0 z-20 min-w-[130px] overflow-hidden rounded-xl border border-white/10 bg-[#222222]/95 backdrop-blur-xl shadow-2xl"
+                  className="absolute bottom-12 right-0 z-20 min-w-[130px] overflow-hidden rounded-xl border border-white/10 bg-surface-2/95 backdrop-blur-xl shadow-2xl"
                 >
                     {links.map((l, i) => (
                       <button 
@@ -460,7 +460,7 @@ export function VideoControls({
                     e.nativeEvent.stopImmediatePropagation();
                   }}
                   onClick={(e) => e.stopPropagation()}
-                  className="absolute bottom-12 right-0 z-20 min-w-[120px] max-h-48 overflow-y-auto rounded-xl border border-white/10 bg-[#222222]/95 backdrop-blur-xl shadow-2xl"
+                  className="absolute bottom-12 right-0 z-20 min-w-[120px] max-h-48 overflow-y-auto rounded-xl border border-white/10 bg-surface-2/95 backdrop-blur-xl shadow-2xl"
                 >
                     {/* Auto option */}
                     <button 

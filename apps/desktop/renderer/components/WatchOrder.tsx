@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Play } from "lucide-react";
+import { ListOrdered, Play } from "lucide-react";
+import SectionHeader from "./SectionHeader";
 import type { AnimeMeta } from "../../../../packages/shared/types";
 
 /**
@@ -104,21 +105,20 @@ export default function WatchOrder({
   const next = curIdx >= 0 && curIdx < chain.length - 1 ? chain[curIdx + 1] : null;
 
   return (
-    <div className="mt-8 px-8">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <h2 className="text-lg font-semibold">Watch Order</h2>
+    <div className="mt-10 px-8">
+      <SectionHeader icon={ListOrdered} title="Watch Order" subtitle="The main series, in order">
         {next && (
           <button
             onClick={() => navigate(`/anime/${next.id}`, { state: { anime: next } })}
-            className="flex items-center gap-1.5 rounded-full bg-[#e50914] px-3.5 py-1.5 text-xs font-bold text-white transition hover:bg-[#f6121d]"
+            className="btn btn-primary btn-sm"
           >
             <Play size={12} fill="currentColor" />
             Continue with {next.title.length > 32 ? next.title.slice(0, 32) + "…" : next.title}
           </button>
         )}
-      </div>
+      </SectionHeader>
 
-      <div className="thin-scrollbar flex gap-3 overflow-x-auto pb-2">
+      <div className="thin-scrollbar flex gap-4 overflow-x-auto pb-3 pt-1">
         {chain.map((m, i) => {
           const isCurrent = m.id === animeId;
           return (
@@ -128,8 +128,8 @@ export default function WatchOrder({
               className={`group relative w-32 flex-shrink-0 text-left ${isCurrent ? "cursor-default" : ""}`}
             >
               <div
-                className={`relative overflow-hidden rounded-lg ${
-                  isCurrent ? "ring-2 ring-[#e50914]" : "ring-1 ring-white/10"
+                className={`relative overflow-hidden rounded-xl shadow-card transition-all duration-300 ${
+                  isCurrent ? "shadow-glow ring-2 ring-accent" : "ring-1 ring-white/[0.06] group-hover:-translate-y-1 group-hover:shadow-glow group-hover:ring-2 group-hover:ring-accent/60"
                 }`}
               >
                 {m.coverImage ? (
@@ -137,29 +137,29 @@ export default function WatchOrder({
                     src={m.coverImage}
                     alt={m.title}
                     loading="lazy"
-                    className={`h-44 w-32 object-cover transition ${isCurrent ? "" : "group-hover:scale-105"}`}
+                    className={`h-48 w-32 object-cover transition duration-700 ease-out ${isCurrent ? "" : "group-hover:scale-[1.06]"}`}
                   />
                 ) : (
-                  <div className="h-44 w-32 bg-white/5" />
+                  <div className="h-48 w-32 bg-white/5" />
                 )}
                 {/* Order badge */}
                 <div
-                  className={`absolute left-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-extrabold ${
-                    isCurrent ? "bg-[#e50914] text-white" : "bg-black/70 text-white/90"
+                  className={`absolute left-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-lg text-[11px] font-extrabold tabular-nums ${
+                    isCurrent ? "bg-accent-gradient text-white shadow-glow" : "border border-white/15 bg-black/60 text-white/90 backdrop-blur-md"
                   }`}
                 >
                   {i + 1}
                 </div>
                 {isCurrent && (
-                  <div className="absolute inset-x-0 bottom-0 bg-[#e50914]/90 py-0.5 text-center text-[10px] font-bold uppercase tracking-wide text-white">
+                  <div className="absolute inset-x-0 bottom-0 bg-accent-gradient py-1 text-center text-[10px] font-bold uppercase tracking-wide text-white">
                     You are here
                   </div>
                 )}
               </div>
-              <p className={`mt-1.5 line-clamp-2 text-xs leading-tight transition ${isCurrent ? "text-white" : "text-white/70 group-hover:text-white"}`}>
+              <p className={`mt-2 line-clamp-2 text-xs font-medium leading-tight transition ${isCurrent ? "text-white" : "text-ink-2 group-hover:text-white"}`}>
                 {m.title}
               </p>
-              <p className="text-[10px] text-white/40">
+              <p className="mt-0.5 text-[10px] text-ink-3">
                 {[m.year, m.format === "TV" ? null : m.format].filter(Boolean).join(" · ")}
               </p>
             </button>

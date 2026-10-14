@@ -10,6 +10,7 @@ import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -68,10 +69,23 @@ internal suspend fun prepareResume(row: com.sanjay.anitrack.next.data.Db.CwRow):
     // Metadata is still loaded for player server switching and is the fallback
     // when a stored source disappeared or the row came from an older client.
     val meta = runCatching { AniList.byId(row.animeId) }.getOrNull()
-    val series = resumed ?: meta?.let { registry.matchFirst(it, runtime) } ?: return false
+    // A saved key can go stale (AnimePahe rotates its ids): look the show up again on
+    // the provider it was watched on before falling back to the first that has it.
+    val sameProvider = if (resumed == null && meta != null) {
+        row.providerId?.let { registry.enabled(it, runtime) }?.let { provider ->
+            try { provider.match(meta) }
+            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (_: Exception) { null }
+        }
+    } else null
+    val series = resumed ?: sameProvider ?: meta?.let { registry.matchFirst(it, runtime) } ?: return false
+    // A finished episode (watched past the credits) carries on with the next one, when it's out.
+    val at = series.episodeIndex(row.episode)
+    val listed = series.episodes.getOrNull(at)?.let { kotlin.math.abs(it.number - row.episode) < 0.01f } == true
+    val selected = if (row.percent >= 85 && listed && at + 1 < series.episodes.size) at + 1 else at
     PlaySession.startSeries(
         series = series,
-        selectedIndex = series.episodeIndex(row.episode),
+        selectedIndex = selected,
         animeId = row.animeId,
         animeTitle = row.title,
         animeCover = row.cover,
@@ -89,7 +103,10 @@ internal fun ContinueCardWide(
     onResume: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val ep = if (row.episode % 1f == 0f) "${row.episode.toInt()}" else "${row.episode}"
+    // Finished with newer episodes out: the card offers the next one.
+    val upNext = row.percent >= 85 && total != null && total > row.episode
+    val shown = if (upNext) row.episode.toInt() + 1f else row.episode
+    val ep = if (shown % 1f == 0f) "${shown.toInt()}" else "$shown"
     Box(
         Modifier.width(300.dp).aspectRatio(16f / 9f)
             .clip(RoundedCornerShape(14.dp))
@@ -105,8 +122,12 @@ internal fun ContinueCardWide(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (total != null) {
-                // Green when newer episodes are out than the one you're on.
+                val now = System.currentTimeMillis() / 1000
+                val upcoming = AniList.nextAiring(row.animeId)?.takeIf { (_, at) -> at > now }
+                // Green when newer episodes are out than the one you're on; caught up on
+                // an airing show, say when the next one comes.
                 if (total > row.episode) Tag("EP $total", tone = TagTone.SuccessSolid, icon = Icons.Rounded.ArrowUpward)
+                else if (upcoming != null) Tag("EP ${upcoming.first} ${relativeAiring(upcoming.second, now)}", tone = TagTone.Glass, icon = Icons.Rounded.Schedule)
                 else Tag("EP $total", tone = TagTone.Glass, icon = Icons.Rounded.Check)
             }
             GlassIconButton(Icons.Rounded.Close, "Remove from Continue Watching", onDismiss)
@@ -125,7 +146,11 @@ internal fun ContinueCardWide(
                     )
                     Spacer(Modifier.height(2.dp))
                     Text(
-                        "${fmtSecs(row.positionSec)} / ${fmtSecs(row.durationSec)}",
+                        when {
+                            upNext -> "Up next · Episode $ep"
+                            row.percent >= 85 -> "Watched"
+                            else -> "${fmtSecs(row.positionSec)} / ${fmtSecs(row.durationSec)}"
+                        },
                         color = Color.White.copy(alpha = 0.75f), style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -136,7 +161,7 @@ internal fun ContinueCardWide(
                 ) { Icon(Icons.Rounded.PlayArrow, "Resume", tint = Color(0xFF0A0A0B), modifier = Modifier.size(24.dp)) }
             }
             Spacer(Modifier.height(10.dp))
-            ProgressStrip(row.percent / 100f, Modifier.fillMaxWidth())
+            ProgressStrip(if (upNext) 0f else row.percent / 100f, Modifier.fillMaxWidth())
         }
     }
 }

@@ -71,7 +71,7 @@ export function Seekbar({
   const trackH = thick ? "h-1.5 group-hover/bar:h-2" : "h-[3px] group-hover/bar:h-[5px]";
   const thumbCls = thick
     ? "h-4 w-4 bg-white"
-    : "h-3.5 w-3.5 bg-[#e50914]";
+    : "h-3.5 w-3.5 bg-accent";
 
   return (
     <div
@@ -86,7 +86,7 @@ export function Seekbar({
         {hoverPreview && hoverPct != null && (
           <div className="absolute inset-y-0 left-0 rounded-full bg-white/30" style={{ width: `${hoverPct * 100}%` }} />
         )}
-        <div ref={fillRef} className="absolute inset-y-0 left-0 rounded-full bg-[#e50914]" style={{ width: "0%" }} />
+        <div ref={fillRef} className="absolute inset-y-0 left-0 rounded-full bg-accent" style={{ width: "0%" }} />
         <div
           ref={thumbRef}
           className={`absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full opacity-0 shadow transition-opacity group-hover/bar:opacity-100 ${thumbCls}`}

@@ -4,10 +4,14 @@ import android.util.Log
 import com.sanjay.anitrack.next.BuildConfig
 import com.sanjay.anitrack.next.data.Anime
 import com.sanjay.anitrack.next.data.Match
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URI
+import java.util.concurrent.atomic.AtomicLong
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -20,12 +24,16 @@ internal class MkissaService(
         diagnostic = { message -> if (BuildConfig.DEBUG) Log.d("AniTrackMkissa", message) },
     ),
     private val nowMillis: () -> Long = System::currentTimeMillis,
+    private val diagnostic: (String) -> Unit = { message -> if (BuildConfig.DEBUG) Log.d(LOG_TAG, message) },
 ) {
 
     private val sourceCache = object : LinkedHashMap<MkissaEpisodeRef, CacheEntry>(32, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<MkissaEpisodeRef, CacheEntry>) =
             size > MAX_SOURCE_CACHE_ENTRIES
     }
+    private val sourceMutex = Mutex()
+    private val accessGeneration = AtomicLong()
+    @Volatile private var lastAccessFailure: MkissaRateLimitedException? = null
 
     suspend fun search(query: String, page: Int = 1): List<MkissaShowSummary> {
         val cleanQuery = query.trim()
@@ -53,13 +61,13 @@ internal class MkissaService(
         }
         val edges = usable.optJSONObject("data")?.optJSONObject("shows")?.optJSONArray("edges")
         if (edges == null) {
-            if (BuildConfig.DEBUG) Log.d(LOG_TAG, "search query=$cleanQuery returned no edges")
+            if (BuildConfig.DEBUG) diagnostic("search query=$cleanQuery returned no edges")
             return emptyList()
         }
         val results = (0 until edges.length()).mapNotNull { index -> parseSummary(edges.optJSONObject(index)) }
             .distinctBy(MkissaShowSummary::id)
         if (BuildConfig.DEBUG) {
-            Log.d(LOG_TAG, "search query=$cleanQuery edges=${edges.length()} parsed=${results.size}")
+            diagnostic("search query=$cleanQuery edges=${edges.length()} parsed=${results.size}")
         }
         return results
     }
@@ -70,9 +78,11 @@ internal class MkissaService(
         val root = graphQl(SHOW_QUERY, variables)
         val raw = root.optJSONObject("data")?.optJSONObject("show")
             ?: throw MkissaProtocolException("MKissa show was missing")
+        val returnedId = raw.nullableString("_id") ?: id
+        if (returnedId != id) throw MkissaProtocolException("MKissa returned another show's catalogue")
         val episodes = raw.optJSONObject("availableEpisodesDetail")
         return MkissaShow(
-            id = raw.nullableString("_id") ?: id,
+            id = returnedId,
             title = raw.nullableString("name") ?: fallback?.title ?: id,
             englishTitle = raw.nullableString("englishName") ?: fallback?.englishTitle,
             nativeTitle = raw.nullableString("nativeName") ?: fallback?.nativeTitle,
@@ -106,6 +116,8 @@ internal class MkissaService(
                         }
                     }
                     if (exactResult || results.size < SEARCH_PAGE_SIZE) break
+                } catch (error: CancellationException) {
+                    throw error
                 } catch (error: MkissaRateLimitedException) {
                     throw error
                 } catch (error: Exception) {
@@ -119,7 +131,7 @@ internal class MkissaService(
             throw MkissaException("MKissa search failed", lastFailure)
         }
         if (candidates.isEmpty()) {
-            if (BuildConfig.DEBUG) Log.d(LOG_TAG, "match anime=${anime.id} had no candidates")
+            if (BuildConfig.DEBUG) diagnostic("match anime=${anime.id} had no candidates")
             return null
         }
 
@@ -143,7 +155,7 @@ internal class MkissaService(
             val top = scored.sortedByDescending { it.second }.take(5).joinToString(" | ") { (candidate, score) ->
                 "${candidate.title} score=$score year=${candidate.year} eps=${candidate.episodeCount}"
             }
-            Log.d(LOG_TAG, "match anime=${anime.id} top=$top")
+            diagnostic("match anime=${anime.id} top=$top")
         }
         val selected = exact ?: scored
             .filter { (_, score) -> score >= 20 }
@@ -151,72 +163,91 @@ internal class MkissaService(
             ?.first
             ?: run {
                 if (BuildConfig.DEBUG) {
-                    Log.d(LOG_TAG, "match anime=${anime.id} rejected ${candidates.size} candidates")
+                    diagnostic("match anime=${anime.id} rejected ${candidates.size} candidates")
                 }
                 return null
             }
         if (BuildConfig.DEBUG) {
-            Log.d(LOG_TAG, "match anime=${anime.id} selected=${selected.id} exact=${exact != null}")
+            diagnostic("match anime=${anime.id} selected=${selected.id} exact=${exact != null}")
         }
         return show(selected.id, selected)
     }
 
-    suspend fun sources(episode: MkissaEpisodeRef): List<MkissaSourceCandidate> {
-        synchronized(sourceCache) {
-            sourceCache[episode]?.takeIf { nowMillis() < it.expiresAtMillis }?.let { return it.sources }
+    suspend fun sources(episode: MkissaEpisodeRef, fresh: Boolean = false): List<MkissaSourceCandidate> {
+        require(episode.showId.matches(SHOW_ID)) { "Invalid MKissa show id" }
+        require(episode.episodeString.matches(EPISODE_ID)) { "Invalid MKissa episode id" }
+        // Reads already queued when access is rejected stop with that failure. A later explicit call
+        // gets the new generation and may retry immediately: Android has no timed cooldown.
+        val generation = accessGeneration.get()
+        return sourceMutex.withLock {
+            if (generation != accessGeneration.get()) {
+                throw lastAccessFailure ?: MkissaRateLimitedException()
+            }
+            if (!fresh) synchronized(sourceCache) {
+                sourceCache[episode]?.takeIf { nowMillis() < it.expiresAtMillis }?.let { return@withLock it.sources }
+            }
+            try {
+                fetchSources(episode).also { sources ->
+                    synchronized(sourceCache) {
+                        sourceCache[episode] = CacheEntry(nowMillis() + SOURCE_CACHE_TTL_MS, sources)
+                    }
+                }
+            } catch (error: MkissaRateLimitedException) {
+                rejectAccess(error)
+                throw error
+            }
         }
+    }
 
-        var lastError: Throwable? = null
+    private suspend fun fetchSources(episode: MkissaEpisodeRef): List<MkissaSourceCandidate> {
         repeat(MAX_CRYPTO_ATTEMPTS) { attempt ->
-            val material = runCatching { keyManager.material(forceRefresh = attempt > 0) }
-                .getOrElse {
-                    if (it is MkissaRateLimitedException) throw it
-                    lastError = it
-                    return@repeat
-                }
-            val response = runCatching { protectedSourceRequest(episode, material) }
-                .getOrElse {
-                    if (it is MkissaRateLimitedException) throw it
-                    lastError = it
-                    return@repeat
-                }
-
-            MkissaChallengePolicy.classify(response.code, response.body)?.let { kind ->
-                throw MkissaRateLimitedException(kind)
-            }
-            if (!response.successful) {
-                lastError = MkissaProtocolException("MKissa stream request returned HTTP ${response.code}")
-                if (response.code == 403) keyManager.invalidateBuild()
-                return@repeat
-            }
-
+            // Transport/build discovery failures are not evidence of stale keys and must not retry.
+            val material = keyManager.material(forceRefresh = attempt > 0)
+            val response = protectedSourceRequest(episode, material)
             val root = runCatching { JSONObject(response.body) }.getOrElse {
-                lastError = MkissaProtocolException("MKissa stream response was not JSON", it)
-                return@repeat
+                throw MkissaProtocolException("MKissa stream response was not JSON", it)
             }
             val errors = root.graphQlErrors()
             errors.firstNotNullOfOrNull(MkissaGraphQlError::challengeKind)?.let { kind ->
-                throw MkissaRateLimitedException(kind)
+                val error = MkissaRateLimitedException(kind)
+                rejectAccess(error)
+                throw error
             }
             if (errors.any(MkissaGraphQlError::cryptoFailure)) {
-                lastError = MkissaProtocolException("MKissa rejected stale crypto material")
-                if (attempt >= 1) keyManager.invalidateBuild() else keyManager.invalidateMaterial()
+                keyManager.invalidateBuild()
+                if (attempt > 0) throw MkissaProtocolException("MKissa rejected stale crypto material after one refresh")
                 return@repeat
             }
+            if (!response.successful) throw MkissaProtocolException("MKissa stream request returned HTTP ${response.code}")
             if (errors.isNotEmpty()) {
                 throw MkissaProtocolException("MKissa: ${errors.first().message ?: errors.first().code}")
             }
 
             val encrypted = root.optJSONObject("data")?.nullableString("tobeparsed")
             val episodeObject = if (encrypted != null) {
+                if (!encrypted.matches(BASE64) || encrypted.length % 4 != 0 || encrypted.length < 40) {
+                    throw MkissaProtocolException("MKissa protected stream response was malformed")
+                }
                 val decrypted = keyManager.decrypt(encrypted, material)
-                val parsed = decrypted?.let { runCatching { JSONObject(it) }.getOrNull() }
-                parsed?.optJSONObject("episode")
+                if (decrypted == null) {
+                    keyManager.invalidateBuild()
+                    if (attempt > 0) throw MkissaProtocolException("MKissa protected source keys remained stale after one refresh")
+                    return@repeat
+                }
+                val parsed = runCatching { JSONObject(decrypted) }.getOrElse {
+                    throw MkissaProtocolException("MKissa protected stream response was not JSON", it)
+                }
+                parsed.optJSONObject("episode") ?: parsed.optJSONObject("data")?.optJSONObject("episode")
             } else {
                 root.optJSONObject("data")?.optJSONObject("episode")
+            } ?: throw MkissaProtocolException("MKissa returned no episode")
+            val returnedShow = episodeObject.optJSONObject("show")?.nullableString("_id")
+            if (returnedShow != null && returnedShow != episode.showId) {
+                throw MkissaProtocolException("MKissa returned another show's episode")
             }
-            val sourceArray = episodeObject?.optJSONArray("sourceUrls")
-            val parsedSources = sourceArray?.let(::parseSources).orEmpty()
+            val sourceArray = episodeObject.optJSONArray("sourceUrls")
+                ?: throw MkissaProtocolException("MKissa returned no stream servers")
+            val parsedSources = parseSources(sourceArray)
             if (parsedSources.isNotEmpty()) {
                 val sorted = parsedSources.sortedByDescending(MkissaSourceCandidate::priority)
                 if (BuildConfig.DEBUG) {
@@ -224,26 +255,16 @@ internal class MkissaService(
                         val uri = runCatching { URI(source.url) }.getOrNull()
                         val extension = uri?.path.orEmpty().substringAfterLast('.', missingDelimiterValue = "none")
                             .take(12)
-                        Log.d(
-                            LOG_TAG,
+                        diagnostic(
                             "source name=${source.name} type=${source.type} host=${uri?.host.orEmpty()} ext=$extension fragment=${!uri?.fragment.isNullOrEmpty()}",
                         )
                     }
                 }
-                synchronized(sourceCache) {
-                    sourceCache[episode] = CacheEntry(nowMillis() + SOURCE_CACHE_TTL_MS, sorted)
-                }
                 return sorted
             }
-
-            lastError = MkissaProtocolException("MKissa returned no usable servers")
-            keyManager.invalidateMaterial()
+            throw MkissaProtocolException("MKissa returned no usable servers")
         }
-
-        throw MkissaProtocolException(
-            "MKissa could not resolve this episode after a bounded key refresh",
-            lastError,
-        )
+        throw MkissaProtocolException("MKissa could not resolve this episode after one key refresh")
     }
 
     /** Resolves just one chosen server. Third-party embed extractors are intentionally not fanned out. */
@@ -290,7 +311,10 @@ internal class MkissaService(
     private suspend fun resolveMp4Upload(candidate: MkissaSourceCandidate): MkissaMediaSource {
         val referer = "https://www.mp4upload.com/"
         val response = embedRequest(candidate.url, referer)
-        if (!response.successful) throw MkissaUnsupportedSourceException("MP4Upload did not respond")
+        if (!response.successful) throw MkissaUnsupportedSourceException("MP4Upload returned HTTP ${response.code}")
+        if (response.body.trim().equals("File was deleted", ignoreCase = true)) {
+            throw MkissaUnsupportedSourceException("This MKissa server's video file was deleted. Choose another server.")
+        }
         val url = extractMediaUrl(response.body, setOf("mp4"))
             ?: throw MkissaUnsupportedSourceException("MP4Upload media was not found")
         return externalMedia(candidate, url, MkissaMediaKind.MP4, referer)
@@ -315,7 +339,7 @@ internal class MkissaService(
         }
         val origin = "${embed.scheme}://${embed.host}"
         val endpoint = "$origin/api/v1/video?id=$identifier&w=1280&h=720&r="
-        val response = transport.execute(
+        val response = checkedRequest(
             MkissaHttpRequest(
                 method = "GET",
                 url = MkissaUrlPolicy.requireMediaUrl(endpoint),
@@ -326,7 +350,7 @@ internal class MkissaService(
                 ),
             ),
         )
-        if (!response.successful) throw MkissaUnsupportedSourceException("MKissa MP4 server did not respond")
+        if (!response.successful) throw MkissaUnsupportedSourceException("MKissa MP4 server returned HTTP ${response.code}")
         val encrypted = response.body.trim()
         if (encrypted.isEmpty() || encrypted.length % 32 != 0 || !encrypted.matches(HEX)) {
             throw MkissaUnsupportedSourceException("MKissa MP4 server response was invalid")
@@ -361,6 +385,9 @@ internal class MkissaService(
         val origin = "${embed.scheme}://${embed.host}"
         val response = embedRequest(candidate.url, "$origin/")
         if (!response.successful) throw MkissaUnsupportedSourceException("${candidate.name} did not respond")
+        if ((embed.host.equals("bysekoze.com", ignoreCase = true) || embed.host.lowercase().endsWith(".bysekoze.com")) &&
+            BYSE_FRONTEND.containsMatchIn(response.body)
+        ) return resolveByseFrontend(candidate)
         val direct = extractMediaUrl(response.body, setOf("m3u8", "mp4"))
             ?: packedBodies(response.body).firstNotNullOfOrNull { extractMediaUrl(it, setOf("m3u8", "mp4")) }
             ?: throw MkissaUnsupportedSourceException("${candidate.name} media was not found")
@@ -372,13 +399,69 @@ internal class MkissaService(
         return externalMedia(candidate, direct, kind, candidate.url, origin)
     }
 
-    private suspend fun embedRequest(url: String, referer: String): MkissaHttpResponse = transport.execute(
-        MkissaHttpRequest(
-            method = "GET",
-            url = MkissaUrlPolicy.requireMediaUrl(url),
-            headers = MkissaKeyManager.browserHeaders() + mapOf("Accept" to "text/html,*/*", "Referer" to referer),
-        ),
-    )
+    private suspend fun resolveByseFrontend(candidate: MkissaSourceCandidate): MkissaMediaSource {
+        val embed = URI(candidate.url)
+        val origin = "${embed.scheme}://${embed.host}"
+        suspend fun read(operation: MkissaByse.Operation): JSONObject {
+            val response = checkedRequest(MkissaHttpRequest(
+                method = "GET",
+                url = MkissaByse.apiUrl(candidate.url, operation),
+                headers = MkissaKeyManager.browserHeaders() + mapOf(
+                    "Accept" to "application/json",
+                    "Referer" to candidate.url,
+                    "Origin" to origin,
+                    "X-Embed-Origin" to URI(SITE_URL).host,
+                    "X-Embed-Referer" to "$SITE_URL/",
+                ),
+            ))
+            // Transport exposes but never follows redirects. Catalogue context may not leave the
+            // selected embed origin, even for a same-site redirect to an unfamiliar operation.
+            if (response.code in REDIRECT_STATUSES) throw MkissaUnsupportedSourceException("MKissa HLS server API redirected; request stopped")
+            if (response.body.length > MAX_BYSE_RESPONSE_CHARS) throw MkissaUnsupportedSourceException("MKissa HLS server API response was too large")
+            val payload = runCatching { JSONObject(response.body) }.getOrElse {
+                throw MkissaUnsupportedSourceException("MKissa HLS server API returned invalid JSON")
+            }
+            MkissaByse.assertAccess(payload)
+            if (!response.successful) throw MkissaUnsupportedSourceException("MKissa HLS server returned HTTP ${response.code}")
+            return payload
+        }
+        try {
+            // The settings gate must stop before playback, media, or any website verification API.
+            read(MkissaByse.Operation.SETTINGS)
+            val media = MkissaByse.media(read(MkissaByse.Operation.PLAYBACK))
+            return externalMedia(candidate, media.url, media.kind, candidate.url, origin)
+                .copy(subtitles = media.subtitles, intro = media.intro)
+        } catch (error: MkissaRateLimitedException) {
+            rejectAccess(error)
+            throw error
+        }
+    }
+
+    private suspend fun embedRequest(url: String, referer: String): MkissaHttpResponse {
+        var current = MkissaUrlPolicy.requireMediaUrl(url)
+        val originalHost = URI(current).host.lowercase().removePrefix("www.")
+        var headers = MkissaKeyManager.browserHeaders() + mapOf("Accept" to "text/html,*/*", "Referer" to referer)
+        repeat(MAX_EMBED_REDIRECTS + 1) { redirect ->
+            val response = checkedRequest(MkissaHttpRequest("GET", current, headers))
+            val location = response.headers.entries.firstOrNull { it.key.equals("Location", ignoreCase = true) }?.value
+            if (response.code !in REDIRECT_STATUSES || location == null) return response
+            // The observed MP4Upload canonical host redirect is the only reviewed embed redirect.
+            // Other embed origins and player advertising redirects are never followed.
+            if (originalHost != "mp4upload.com" || redirect >= MAX_EMBED_REDIRECTS) {
+                throw MkissaUnsupportedSourceException("MKissa embed redirect was not supported")
+            }
+            val next = MkissaUrlPolicy.requireMediaUrl(URI(current).resolve(location).toString())
+            val nextUri = URI(next)
+            if (nextUri.host.lowercase().removePrefix("www.") != originalHost) {
+                throw MkissaUnsupportedSourceException("MKissa embed redirected to an untrusted host")
+            }
+            if (!nextUri.host.equals(URI(current).host, ignoreCase = true)) {
+                headers = headers.filterKeys { it.lowercase() !in CROSS_ORIGIN_SENSITIVE_HEADERS }
+            }
+            current = next
+        }
+        throw MkissaUnsupportedSourceException("MKissa embed redirected too many times")
+    }
 
     private fun externalMedia(
         candidate: MkissaSourceCandidate,
@@ -444,6 +527,8 @@ internal class MkissaService(
             try {
                 val media = resolve(candidate)
                 if (media.isNotEmpty()) return media
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: MkissaRateLimitedException) {
                 throw error
             } catch (error: Exception) {
@@ -455,7 +540,7 @@ internal class MkissaService(
         )
     }
 
-    suspend fun resolveFirst(episode: MkissaEpisodeRef): List<MkissaMediaSource> = resolveFirst(sources(episode))
+    suspend fun resolveFirst(episode: MkissaEpisodeRef): List<MkissaMediaSource> = resolveFirst(sources(episode, fresh = true))
 
     private suspend fun graphQl(
         query: String,
@@ -463,7 +548,7 @@ internal class MkissaService(
         allowErrors: Boolean = false,
     ): JSONObject {
         val body = JSONObject().put("query", query).put("variables", variables).toString()
-        val response = transport.execute(
+        val response = checkedRequest(
             MkissaHttpRequest(
                 method = "POST",
                 url = "$API_URL/api",
@@ -475,15 +560,14 @@ internal class MkissaService(
                 body = body,
             ),
         )
-        MkissaChallengePolicy.classify(response.code, response.body)?.let { kind ->
-            throw MkissaRateLimitedException(kind)
-        }
         if (!response.successful) throw MkissaProtocolException("MKissa API returned HTTP ${response.code}")
         val root = runCatching { JSONObject(response.body) }
             .getOrElse { throw MkissaProtocolException("MKissa API returned invalid JSON", it) }
         val errors = root.graphQlErrors()
         errors.firstNotNullOfOrNull(MkissaGraphQlError::challengeKind)?.let { kind ->
-            throw MkissaRateLimitedException(kind)
+            val error = MkissaRateLimitedException(kind)
+            rejectAccess(error)
+            throw error
         }
         if (!allowErrors) {
             errors.firstOrNull()?.let { error ->
@@ -511,7 +595,7 @@ internal class MkissaService(
             .addQueryParameter("variables", variables.toString())
             .addQueryParameter("extensions", extensions.toString())
             .build().toString()
-        return transport.execute(
+        return checkedRequest(
             MkissaHttpRequest(
                 method = "GET",
                 url = url,
@@ -521,7 +605,35 @@ internal class MkissaService(
                     "x-build-id" to material.buildId,
                 ),
             ),
+            allowCryptoError = true,
         )
+    }
+
+    private suspend fun checkedRequest(
+        request: MkissaHttpRequest,
+        allowCryptoError: Boolean = false,
+    ): MkissaHttpResponse {
+        val response = try {
+            transport.execute(request)
+        } catch (error: MkissaRateLimitedException) {
+            rejectAccess(error)
+            throw error
+        }
+        val kind = MkissaChallengePolicy.classify(response.code, response.body)
+            ?: if (response.code == 403 && !allowCryptoError) MkissaChallengeKind.CAPTCHA else null
+        if (kind != null) {
+            val error = MkissaRateLimitedException(kind)
+            rejectAccess(error)
+            throw error
+        }
+        return response
+    }
+
+    private fun rejectAccess(error: MkissaRateLimitedException) {
+        if (lastAccessFailure === error) return
+        lastAccessFailure = error
+        accessGeneration.incrementAndGet()
+        synchronized(sourceCache) { sourceCache.clear() }
     }
 
     private fun parseSummary(raw: JSONObject?): MkissaShowSummary? {
@@ -566,7 +678,7 @@ internal class MkissaService(
         }
         val path = if (sourcePath.endsWith(".json")) sourcePath else "$sourcePath.json"
         val endpoint = "${MkissaKeyManager.PLAYER_ORIGIN}$path${parsed.rawQuery?.let { "?$it" }.orEmpty()}"
-        val response = transport.execute(
+        val response = checkedRequest(
             MkissaHttpRequest(
                 method = "GET",
                 url = MkissaUrlPolicy.requireMediaUrl(endpoint),
@@ -577,9 +689,6 @@ internal class MkissaService(
                 ),
             ),
         )
-        MkissaChallengePolicy.classify(response.code, response.body)?.let { kind ->
-            throw MkissaRateLimitedException(kind)
-        }
         if (!response.successful) throw MkissaProtocolException(
             "MKissa ${candidate.name} server returned HTTP ${response.code}",
         )
@@ -705,7 +814,14 @@ internal class MkissaService(
         private const val SOURCE_CACHE_TTL_MS = 5 * 60 * 1000L
         private const val MAX_SOURCE_CACHE_ENTRIES = 40
         private const val MAX_SOURCE_CHOICES = 30
+        private const val MAX_EMBED_REDIRECTS = 3
+        private const val MAX_BYSE_RESPONSE_CHARS = 2 * 1024 * 1024
+        private val REDIRECT_STATUSES = setOf(301, 302, 303, 307, 308)
+        private val CROSS_ORIGIN_SENSITIVE_HEADERS = setOf("authorization", "cookie", "origin", "proxy-authorization", "x-aa-boot", "x-build-id")
+        private val BYSE_FRONTEND = Regex("<title[^>]*>\\s*Byse Frontend\\s*</title>", RegexOption.IGNORE_CASE)
         private val SHOW_ID = Regex("[A-Za-z0-9_-]{4,100}")
+        private val EPISODE_ID = Regex("[A-Za-z0-9._-]{1,32}")
+        private val BASE64 = Regex("[A-Za-z0-9+/]+={0,2}")
         private val HEX = Regex("[0-9a-fA-F]+")
         private val CLOCK_PATH = Regex("/apivtwo/clock(?:\\.json)?")
         private val UNS_IDENTIFIER = Regex("[A-Za-z0-9_-]{1,200}")

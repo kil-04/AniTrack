@@ -1,0 +1,32 @@
+{
+  "lookup": { "data": [{ "id": "synthetic-show", "external_ids": { "anilist": ["1"] } }], "has_more": false, "next_cursor": null },
+  "episodes": {
+    "data": [
+      { "episode_number": 2, "title": "Second" },
+      { "episode_number": 1.5, "title": "Special" },
+      { "episode_number": 1, "title": "First", "skip_times": [{ "kind": "intro", "start_seconds": 10, "end_seconds": 50 }] }
+    ],
+    "has_more": false, "next_cursor": null
+  },
+  "play": {
+    "episode_number": 1, "requested_track": null,
+    "tracks": [
+      { "track": "ssub", "providers": [
+        { "provider": "anikoto", "subtitles": [{ "url": "https://subs.example.net/en.vtt", "label": "English", "language": "eng", "format": "vtt" }], "servers": [
+          { "server": "HD-1", "headers": { "Referer": "https://player.example.net/", "Origin": "https://player.example.net" }, "streams": [{ "url": "https://media.example.net/show/episode.m3u8", "format": "hls" }] },
+          { "server": "Embed-only", "headers": { "Referer": "https://player.example.net/" }, "streams": [], "embed": { "url": "https://player.example.net/embed" } }
+        ] }
+      ] },
+      { "track": "sub", "providers": [
+        { "provider": "aniwaves", "subtitles": [], "servers": [
+          { "server": "Vidplay", "headers": { "Referer": "https://player.example.net/" }, "streams": [{ "url": "https://media.example.net/show/hard.mp4", "format": "mp4" }] }
+        ] }
+      ] },
+      { "track": "dub", "providers": [
+        { "provider": "anikoto", "subtitles": [], "servers": [
+          { "server": "HD-1", "headers": { "Referer": "https://player.example.net/" }, "streams": [{ "url": "https://media.example.net/show/dub.m3u8", "format": "hls" }] }
+        ] }
+      ] }
+    ]
+  }
+}

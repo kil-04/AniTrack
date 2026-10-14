@@ -42,7 +42,7 @@ export function MiniProgressBar({ videoRef }: { videoRef: RefObject<HTMLVideoEle
 
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[3px] bg-white/20">
-      <div ref={barRef} className="h-full bg-[#e50914]" style={{ width: "0%" }} />
+      <div ref={barRef} className="h-full bg-accent" style={{ width: "0%" }} />
     </div>
   );
 }

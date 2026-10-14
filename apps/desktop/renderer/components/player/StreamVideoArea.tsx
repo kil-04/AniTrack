@@ -155,7 +155,7 @@ export function StreamVideoArea({
                 Retry
               </button>
               {alternativeProviderLabel && onTryAlternative && (
-                <button onClick={onTryAlternative} className="rounded bg-[#e50914] px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-[#f6121d]">
+                <button onClick={onTryAlternative} className="rounded bg-accent px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover">
                   Try {alternativeProviderLabel}
                 </button>
               )}
@@ -188,7 +188,7 @@ export function StreamVideoArea({
             <button onClick={(event) => { event.stopPropagation(); onPlayUpNext(); }} className={`relative flex items-center justify-center rounded-full bg-white/10 text-white transition hover:bg-white/20 ${minimized ? "h-10 w-10" : "h-16 w-16"}`} title="Play now">
               <svg viewBox="0 0 64 64" className="absolute inset-0 h-full w-full -rotate-90">
                 <circle cx="32" cy="32" r="29" fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="3" />
-                <circle cx="32" cy="32" r="29" fill="none" stroke="#e50914" strokeWidth="3" strokeLinecap="round" strokeDasharray={2 * Math.PI * 29} strokeDashoffset={2 * Math.PI * 29 * (1 - upNext.count / 5)} style={{ transition: "stroke-dashoffset 1s linear" }} />
+                <circle cx="32" cy="32" r="29" fill="none" strokeWidth="3" strokeLinecap="round" strokeDasharray={2 * Math.PI * 29} strokeDashoffset={2 * Math.PI * 29 * (1 - upNext.count / 5)} style={{ transition: "stroke-dashoffset 1s linear", stroke: "rgb(var(--accent))" }} />
               </svg>
               <Play size={minimized ? 16 : 26} fill="currentColor" className="ml-0.5" />
             </button>

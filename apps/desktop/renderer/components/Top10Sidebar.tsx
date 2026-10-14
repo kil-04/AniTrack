@@ -41,16 +41,16 @@ export default function Top10Sidebar() {
   const items = tabs.find((group) => group.id === tab)?.items ?? [];
 
   return (
-    <div className="rounded-xl border border-white/5 bg-[#1b1b1b] p-4">
+    <div className="panel p-4">
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-lg font-bold">Top 10</h2>
-        <div className="flex overflow-hidden rounded-md border border-white/10 text-[11px] font-semibold">
+        <h2 className="text-lg font-bold tracking-tight">Top 10</h2>
+        <div className="flex rounded-lg border border-white/[0.07] bg-white/[0.04] p-0.5 text-[11px] font-semibold">
           {tabs.map((t) => (
             <button
               key={t.id}
               onClick={() => setTab(t.id)}
-              className={`px-2.5 py-1 transition-colors ${
-                tab === t.id ? "bg-white text-black" : "text-white/60 hover:bg-white/5"
+              className={`rounded-md px-2.5 py-1 transition-colors ${
+                tab === t.id ? "bg-accent-gradient text-white shadow-glow" : "text-ink-3 hover:text-white"
               }`}
             >
               {t.title}
@@ -69,22 +69,22 @@ export default function Top10Sidebar() {
             <button
               key={`${a.providerId}:${a.id || i}`}
               onClick={() => open(a)}
-              className="flex items-center gap-3 border-b border-white/5 py-2.5 text-left last:border-0 hover:bg-white/[0.03] transition-colors"
+              className="group flex items-center gap-3 rounded-xl px-1.5 py-2 text-left transition-colors hover:bg-white/[0.04]"
             >
               <span
-                className={`w-6 shrink-0 text-center text-lg font-black tabular-nums ${
-                  i < 3 ? "text-white" : "text-white/25"
+                className={`w-7 shrink-0 text-center text-xl font-black tabular-nums ${
+                  i < 3 ? "bg-accent-gradient bg-clip-text text-transparent" : "text-white/20"
                 }`}
               >
                 {i + 1}
               </span>
               {a.poster ? (
-                <img src={a.poster} alt="" className="h-14 w-10 shrink-0 rounded object-cover" loading="lazy" decoding="async" />
+                <img src={a.poster} alt="" className="h-14 w-10 shrink-0 rounded-lg object-cover shadow-md ring-1 ring-white/10 transition group-hover:ring-accent/50" loading="lazy" decoding="async" />
               ) : (
-                <div className="h-14 w-10 shrink-0 rounded bg-white/5" />
+                <div className="h-14 w-10 shrink-0 rounded-lg bg-white/5" />
               )}
               <div className="min-w-0 flex-1">
-                <div className="line-clamp-2 text-sm font-semibold leading-tight text-white/90">{a.title}</div>
+                <div className="line-clamp-2 text-sm font-semibold leading-tight text-white/90 group-hover:text-white">{a.title}</div>
                 <div className="mt-1 flex items-center gap-2 text-[10px] font-bold text-white/40">
                   {a.subCount != null && (
                     <span className="flex items-center gap-0.5 text-emerald-300">

@@ -1,22 +1,27 @@
 import { lazy, Suspense, useEffect } from "react";
-import { Route, Routes, useLocation } from "react-router-dom";
+import { Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import TopBar from "./components/TopBar";
+import AppSidebar from "./components/AppSidebar";
 import BottomNav from "./components/BottomNav";
 import UpdateBanner from "./components/UpdateBanner";
 import Home from "./pages/Home";
 import { useAppStore } from "./store/useAppStore";
 import { usePlayerStore } from "./store/usePlayerStore";
 import { useMediaQuery } from "./hooks/useMediaQuery";
+import { ThemeBar } from "./components/ThemeSongs";
+import { hasMangaMode, isMangaPath, lastModeWasManga, rememberMode } from "./lib/manga-api";
 import { isCapacitor } from "./lib/platform";
 import { subscribeDownloads } from "./lib/downloads";
 import { AnimatePresence, motion } from "framer-motion";
 
+// Short and opacity-led: AnimatePresence waits for the exit before the next page
+// mounts, so 0.2 s each way made every navigation take ~0.4 s.
 const PageTransition = ({ children }: { children: React.ReactNode }) => (
   <motion.div
-    initial={{ opacity: 0, y: 10, scale: 0.98 }}
-    animate={{ opacity: 1, y: 0, scale: 1 }}
-    exit={{ opacity: 0, scale: 0.98 }}
-    transition={{ duration: 0.2, ease: "easeOut" }}
+    initial={{ opacity: 0, y: 6 }}
+    animate={{ opacity: 1, y: 0 }}
+    exit={{ opacity: 0, transition: { duration: 0.07 } }}
+    transition={{ duration: 0.14, ease: "easeOut" }}
     className="h-full w-full"
   >
     {children}
@@ -36,9 +41,17 @@ const Downloads        = lazy(() => import("./pages/Downloads"));
 const TimeMachine      = lazy(() => import("./pages/TimeMachine"));
 const TasteGenome      = lazy(() => import("./pages/TasteGenome"));
 const Museum           = lazy(() => import("./pages/Museum"));
+const MangaHome        = lazy(() => import("./pages/manga/MangaHome"));
+const MangaSearch      = lazy(() => import("./pages/manga/MangaSearch"));
+const MangaList        = lazy(() => import("./pages/manga/MangaList"));
+const MangaUpdates     = lazy(() => import("./pages/manga/MangaUpdates"));
+const MangaDownloads   = lazy(() => import("./pages/manga/MangaDownloads"));
+const MangaDetail      = lazy(() => import("./pages/manga/MangaDetail"));
+const MangaReader      = lazy(() => import("./pages/manga/MangaReader"));
 
 const PageFallback = () => (
-  <div className="flex h-full items-center justify-center text-white/30 text-sm">
+  <div className="flex h-full items-center justify-center gap-2 text-sm text-ink-3">
+    <span className="h-4 w-4 animate-spin rounded-full border-2 border-accent/30 border-t-accent" />
     Loading…
   </div>
 );
@@ -56,6 +69,22 @@ export default function App() {
   const isTablet      = useMediaQuery(TABLET_LANDSCAPE);
 
   const inStreaming   = location.pathname === "/stream";
+  const inReader      = location.pathname === "/manga/read";
+  const navigate      = useNavigate();
+
+  // Anime or Manga mode follows the page, and the app reopens in the last one used.
+  useEffect(() => {
+    if (hasMangaMode() && lastModeWasManga() && location.pathname === "/") navigate("/manga", { replace: true });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    if (!inReader) rememberMode(isMangaPath(location.pathname));
+  }, [location.pathname, inReader]);
+  // The accent follows the mode (azure for anime, a deeper blue for manga): see index.css.
+  const mangaMode = inReader || isMangaPath(location.pathname);
+  useEffect(() => {
+    document.documentElement.dataset.mode = mangaMode ? "manga" : "anime";
+  }, [mangaMode]);
   const isPlayerRoute = location.pathname === "/stream-player";
   const playerSearch  = usePlayerStore((s) => s.search);
 
@@ -146,6 +175,16 @@ export default function App() {
     </Suspense>
   );
 
+  // The manga reader takes the whole window.
+  if (inReader) {
+    return (
+      <Suspense fallback={<div className="fixed inset-0 bg-black" />}>
+        <MangaReader />
+        {playerOverlay}
+      </Suspense>
+    );
+  }
+
   // Full-screen routes (no shell)
   if (inStreaming) {
     return (
@@ -165,7 +204,9 @@ export default function App() {
   const showTopBar    = !showBottomNav; // top nav carries the links on desktop; hide on mobile
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-bg text-white">
+    <div className="app-ambient flex h-screen w-screen overflow-hidden text-white">
+      {showTopBar && <AppSidebar />}
+      <div className="flex min-w-0 flex-1 flex-col">
       <UpdateBanner />
       {showTopBar && <TopBar />}
       <main className="thin-scrollbar flex-1 overflow-y-auto">
@@ -184,11 +225,19 @@ export default function App() {
               <Route path="/time-machine"       element={<PageTransition><TimeMachine /></PageTransition>} />
               <Route path="/taste-genome"       element={<PageTransition><TasteGenome /></PageTransition>} />
               <Route path="/museum/:id"         element={<PageTransition><Museum /></PageTransition>} />
+              <Route path="/manga"              element={<PageTransition><MangaHome /></PageTransition>} />
+              <Route path="/manga/search"       element={<PageTransition><MangaSearch /></PageTransition>} />
+              <Route path="/manga/list"         element={<PageTransition><MangaList /></PageTransition>} />
+              <Route path="/manga/updates"      element={<PageTransition><MangaUpdates /></PageTransition>} />
+              <Route path="/manga/downloads"    element={<PageTransition><MangaDownloads /></PageTransition>} />
+              <Route path="/manga/:id"          element={<PageTransition><MangaDetail /></PageTransition>} />
             </Routes>
           </AnimatePresence>
         </Suspense>
       </main>
       {showBottomNav && <BottomNav />}
+      </div>
+      {!isPlayerRoute && <ThemeBar />}
       {playerOverlay}
     </div>
   );

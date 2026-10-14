@@ -6,6 +6,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -27,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -38,6 +40,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -49,42 +52,24 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.sanjay.anitrack.next.R
 
 // Shared building blocks for every screen. Keep screens on these so spacing,
 // shapes and colours stay consistent across anime and manga mode.
 
-/** The AniTrack mark (a play button in a watch-progress ring), the launcher icon's geometry. */
+/**
+ * The AniTrack logo: the brand art (res/drawable-nodpi/brand_logo.png) in a rounded tile.
+ * The launcher icon (res/mipmap-*) and the desktop icons come from the same art.
+ */
 @Composable
 fun AniLogo(modifier: Modifier = Modifier, size: Dp = 28.dp) {
-    Canvas(modifier.size(size)) {
-        // The mark spans 56 units of the launcher's 108-unit grid.
-        val unit = this.size.minDimension / 56f
-        val c = Offset(this.size.width / 2f, this.size.height / 2f)
-        val r = 22f * unit
-        val stroke = 6f * unit
-        drawCircle(Color(0xFF4A0C12), radius = r, center = c, style = Stroke(stroke))
-        drawArc(
-            brush = Brush.linearGradient(
-                listOf(Color(0xFFFF4D57), AniColors.Accent, AniColors.AccentDeep),
-                start = Offset(c.x - r, c.y - r),
-                end = Offset(c.x + r, c.y + r),
-            ),
-            startAngle = -90f,
-            sweepAngle = 270f,
-            useCenter = false,
-            topLeft = Offset(c.x - r, c.y - r),
-            size = Size(2 * r, 2 * r),
-            style = Stroke(stroke, cap = StrokeCap.Round),
-        )
-        val play = Path().apply {
-            moveTo(c.x - 5.4f * unit, c.y - 9f * unit)
-            lineTo(c.x - 5.4f * unit, c.y + 9f * unit)
-            lineTo(c.x + 10.4f * unit, c.y)
-            close()
-        }
-        drawPath(play, Color.White)
-        drawPath(play, Color.White, style = Stroke(4.4f * unit, join = StrokeJoin.Round))
-    }
+    val shape = RoundedCornerShape(size * 0.28f)
+    Image(
+        painter = painterResource(R.drawable.brand_logo),
+        contentDescription = null,
+        contentScale = ContentScale.Crop,
+        modifier = modifier.size(size).clip(shape).border(1.dp, Color.White.copy(alpha = 0.15f), shape),
+    )
 }
 
 /** Logo mark plus the two-tone "AniTrack" wordmark. */
@@ -96,7 +81,7 @@ fun AniWordmark(modifier: Modifier = Modifier, compact: Boolean = false) {
         Text(
             buildAnnotatedString {
                 withStyle(SpanStyle(color = AniColors.Text)) { append("Ani") }
-                withStyle(SpanStyle(color = AniColors.Accent)) { append("Track") }
+                withStyle(SpanStyle(brush = AniColors.BrandGradient)) { append("Track") }
             },
             style = if (compact) MaterialTheme.typography.titleMedium else MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.ExtraBold,
@@ -114,8 +99,9 @@ fun IconTile(
     background: Color = AniColors.AccentSoft,
     size: Dp = 44.dp,
 ) {
+    val shape = RoundedCornerShape(size * 0.28f)
     Box(
-        modifier.size(size).clip(RoundedCornerShape(size * 0.28f)).background(background),
+        modifier.size(size).clip(shape).background(background).border(1.dp, tint.copy(alpha = 0.22f), shape),
         contentAlignment = Alignment.Center,
     ) {
         Icon(icon, null, tint = tint, modifier = Modifier.size(size * 0.52f))
@@ -133,11 +119,17 @@ fun ScreenHeader(
 ) {
     Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         if (icon != null) {
-            IconTile(icon)
-            Spacer(Modifier.width(14.dp))
+            IconTile(icon, size = 50.dp)
+            Spacer(Modifier.width(16.dp))
         }
         Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.headlineSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                title,
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
             if (subtitle != null) {
                 Spacer(Modifier.height(2.dp))
                 Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = AniColors.TextSecondary)
@@ -160,7 +152,11 @@ internal fun SectionHeader(
         modifier.fillMaxWidth().padding(start = 16.dp, end = 10.dp, top = 18.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.width(4.dp).height(20.dp).clip(RoundedCornerShape(2.dp)).background(AniColors.BrandGradient))
+        Box(
+            Modifier.width(4.dp).height(22.dp)
+                .shadow(6.dp, RoundedCornerShape(2.dp), ambientColor = AniColors.Accent, spotColor = AniColors.Accent)
+                .clip(RoundedCornerShape(2.dp)).background(AniColors.BrandGradient),
+        )
         Spacer(Modifier.width(10.dp))
         Text(
             title,
@@ -197,12 +193,13 @@ fun EmptyState(
         modifier.fillMaxWidth().padding(vertical = 48.dp, horizontal = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        val tile = RoundedCornerShape(24.dp)
         Box(
-            Modifier.size(76.dp).clip(CircleShape).background(AniColors.SurfaceHigh)
-                .border(1.dp, AniColors.Border, CircleShape),
+            Modifier.size(76.dp).clip(tile).background(AniColors.Accent.copy(alpha = 0.13f))
+                .border(1.dp, AniColors.Accent.copy(alpha = 0.25f), tile),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(icon, null, tint = AniColors.TextSecondary, modifier = Modifier.size(34.dp))
+            Icon(icon, null, tint = AniColors.Accent, modifier = Modifier.size(34.dp))
         }
         Spacer(Modifier.height(18.dp))
         Text(title, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
@@ -234,7 +231,7 @@ fun Tag(
     val (bg, fg) = when (tone) {
         TagTone.Accent -> AniColors.Accent to Color.White
         TagTone.Neutral -> AniColors.SurfaceHighest to AniColors.Text
-        TagTone.Glass -> Color.Black.copy(alpha = 0.62f) to Color.White
+        TagTone.Glass -> Color.Black.copy(alpha = 0.55f) to Color.White
         TagTone.Success -> AniColors.Success.copy(alpha = 0.16f) to AniColors.Success
         TagTone.SuccessSolid -> AniColors.Success to Color(0xFF04261A)
         TagTone.Info -> AniColors.Info.copy(alpha = 0.16f) to AniColors.Info
@@ -242,8 +239,15 @@ fun Tag(
     }
     val shape = RoundedCornerShape(6.dp)
     Row(
-        modifier.clip(shape).background(bg)
-            .then(if (tone == TagTone.Outline) Modifier.border(1.dp, AniColors.Border, shape) else Modifier)
+        modifier.clip(shape)
+            .then(if (tone == TagTone.Accent) Modifier.background(AniColors.BrandGradient) else Modifier.background(bg))
+            .then(
+                when (tone) {
+                    TagTone.Outline -> Modifier.border(1.dp, AniColors.Border, shape)
+                    TagTone.Glass -> Modifier.border(1.dp, Color.White.copy(alpha = 0.15f), shape)
+                    else -> Modifier
+                },
+            )
             .padding(horizontal = 7.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -341,6 +345,7 @@ fun PosterImage(
     }
 }
 
+/** Primary and Light are the main actions (accent gradient); Tonal is glass; Outline and Ghost are quiet. */
 enum class PillStyle { Primary, Light, Tonal, Outline, Ghost }
 
 /** The app's button: a pill with an optional leading icon (or a spinner while [loading]). */
@@ -357,18 +362,32 @@ fun PillButton(
     trailingIcon: ImageVector? = null,
 ) {
     val (bg, fg) = when (style) {
-        PillStyle.Primary -> AniColors.Accent to Color.White
-        PillStyle.Light -> Color.White to Color(0xFF0A0A0B)
-        PillStyle.Tonal -> Color.White.copy(alpha = 0.1f) to AniColors.Text
+        PillStyle.Primary, PillStyle.Light -> AniColors.Accent to Color.White
+        PillStyle.Tonal -> Color.White.copy(alpha = 0.08f) to AniColors.Text
         PillStyle.Outline -> Color.Transparent to AniColors.Text
         PillStyle.Ghost -> Color.Transparent to AniColors.TextSecondary
     }
     val alpha = if (enabled) 1f else 0.45f
-    val shape = RoundedCornerShape(50)
+    val shape = RoundedCornerShape(if (compact) 12.dp else 14.dp)
+    val gradient = style == PillStyle.Primary || style == PillStyle.Light
     Row(
-        modifier.height(if (compact) 36.dp else 44.dp).clip(shape)
-            .background(bg.copy(alpha = bg.alpha * alpha))
-            .then(if (style == PillStyle.Outline) Modifier.border(1.dp, AniColors.Border, shape) else Modifier)
+        modifier.height(if (compact) 36.dp else 46.dp)
+            .then(
+                if (gradient && enabled) Modifier.shadow(12.dp, shape, ambientColor = AniColors.Accent, spotColor = AniColors.Accent)
+                else Modifier,
+            )
+            .clip(shape)
+            .then(
+                if (gradient) Modifier.background(AniColors.BrandGradient, alpha = alpha)
+                else Modifier.background(bg.copy(alpha = bg.alpha * alpha)),
+            )
+            .then(
+                when (style) {
+                    PillStyle.Outline -> Modifier.border(1.dp, AniColors.Border, shape)
+                    PillStyle.Tonal -> Modifier.border(1.dp, Color.White.copy(alpha = 0.12f), shape)
+                    else -> Modifier
+                },
+            )
             .clickable(enabled = enabled && !loading, onClick = onClick)
             .padding(horizontal = if (compact) 14.dp else 20.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -413,15 +432,15 @@ fun PillTabs(
             val shape = RoundedCornerShape(50)
             Row(
                 Modifier.height(if (compact) 32.dp else 38.dp).clip(shape)
-                    .background(if (on) Color.White else AniColors.SurfaceHigh)
-                    .border(1.dp, if (on) Color.Transparent else AniColors.BorderSoft, shape)
+                    .background(if (on) AniColors.AccentSoft else AniColors.SurfaceHigh)
+                    .border(1.dp, if (on) AniColors.Accent.copy(alpha = 0.45f) else AniColors.BorderSoft, shape)
                     .clickable(enabled = !on) { onSelect(key) }
                     .padding(horizontal = if (compact) 12.dp else 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
                     label,
-                    color = if (on) Color(0xFF0A0A0B) else AniColors.TextSecondary,
+                    color = if (on) Color.White else AniColors.TextSecondary,
                     style = if (compact) MaterialTheme.typography.labelMedium else MaterialTheme.typography.labelLarge,
                     fontWeight = if (on) FontWeight.Bold else FontWeight.Medium,
                 )
@@ -429,7 +448,7 @@ fun PillTabs(
                     Spacer(Modifier.width(7.dp))
                     Text(
                         "$count",
-                        color = if (on) Color(0xFF0A0A0B).copy(alpha = 0.5f) else AniColors.TextTertiary,
+                        color = if (on) AniColors.AccentBright else AniColors.TextTertiary,
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
                     )
@@ -470,21 +489,27 @@ fun ProgressStrip(
     Box(modifier.height(height).clip(RoundedCornerShape(50)).background(track)) {
         Box(
             Modifier.fillMaxWidth(fraction.coerceIn(0f, 1f)).fillMaxHeight()
-                .clip(RoundedCornerShape(50)).background(color),
+                .clip(RoundedCornerShape(50))
+                .then(
+                    if (color == AniColors.Accent) Modifier.background(Brush.horizontalGradient(listOf(AniColors.AccentBright, AniColors.Accent)))
+                    else Modifier.background(color),
+                ),
         )
     }
 }
 
-/** Bordered surface card. */
+/** Bordered surface card, lit slightly from the top like the desktop panels. */
 @Composable
 fun AniCard(
     modifier: Modifier = Modifier,
     padding: PaddingValues = PaddingValues(18.dp),
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val shape = RoundedCornerShape(16.dp)
+    val shape = RoundedCornerShape(18.dp)
     Column(
-        modifier.fillMaxWidth().clip(shape).background(AniColors.Surface).border(1.dp, AniColors.BorderSoft, shape)
+        modifier.fillMaxWidth().clip(shape)
+            .background(Brush.verticalGradient(listOf(AniColors.SurfaceHigh, AniColors.Surface)))
+            .border(1.dp, Color.White.copy(alpha = 0.07f), shape)
             .padding(padding),
         content = content,
     )

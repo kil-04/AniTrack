@@ -11,6 +11,7 @@ import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.EventBusy
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -40,6 +41,8 @@ fun ScheduleScreen(onOpen: (Int) -> Unit) {
     var loading by remember { mutableStateOf(true) }
     var failed by remember { mutableStateOf(false) }
     var onList by remember { mutableStateOf<Set<Int>>(emptySet()) }
+    // Shows you're watching without listing them (Continue Watching) count as yours too.
+    var watching by remember { mutableStateOf<Set<Int>>(emptySet()) }
     var onlyMine by remember { mutableStateOf(false) }
     var attempt by remember { mutableIntStateOf(0) }
 
@@ -56,7 +59,9 @@ fun ScheduleScreen(onOpen: (Int) -> Unit) {
     }
     LaunchedEffect(Unit) {
         onList = runCatching { Db.STATUSES.flatMap { Db.listByStatus(it) }.map { it.animeId }.toSet() }.getOrDefault(emptySet())
+        watching = runCatching { Db.continueWatching(60).map { it.animeId }.toSet() }.getOrDefault(emptySet())
     }
+    val mineIds = onList + watching
 
     val timeFmt = remember { DateTimeFormatter.ofPattern("HH:mm", Locale.getDefault()) }
     val dayFmt = remember { DateTimeFormatter.ofPattern("EEE d", Locale.getDefault()) }
@@ -66,7 +71,7 @@ fun ScheduleScreen(onOpen: (Int) -> Unit) {
         else -> date.format(dayFmt)
     }
 
-    val shown = byDay[day].orEmpty().filter { !onlyMine || it.anime.id in onList }
+    val shown = byDay[day].orEmpty().filter { !onlyMine || it.anime.id in mineIds }
     val now = System.currentTimeMillis() / 1000
 
     LazyColumn(
@@ -87,12 +92,12 @@ fun ScheduleScreen(onOpen: (Int) -> Unit) {
                 onSelect = { key -> days.firstOrNull { it.toString() == key }?.let { day = it } },
                 counts = byDay.mapKeys { it.key.toString() }.mapValues { (_, list) -> list.size },
             )
-            if (onList.isNotEmpty()) {
+            if (mineIds.isNotEmpty()) {
                 Spacer(Modifier.height(10.dp))
                 FilterChip(
                     selected = onlyMine,
                     onClick = { onlyMine = !onlyMine },
-                    label = { Text("Only my list") },
+                    label = { Text("Only my shows") },
                     leadingIcon = { Icon(Icons.Rounded.Bookmark, null, modifier = Modifier.size(16.dp)) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = AniColors.AccentSoft,
@@ -112,7 +117,7 @@ fun ScheduleScreen(onOpen: (Int) -> Unit) {
                     if (failed) "Couldn't load the schedule" else "Nothing airing",
                     when {
                         failed -> "AniList didn't answer. Check your connection and try again."
-                        onlyMine -> "None of the shows on your list air this day."
+                        onlyMine -> "None of your shows air this day."
                         else -> "AniList has no episodes listed for this day yet."
                     },
                     actionLabel = if (failed) "Retry" else null,
@@ -122,7 +127,8 @@ fun ScheduleScreen(onOpen: (Int) -> Unit) {
         }
         items(shown.size) { i ->
             val a = shown[i]
-            val mine = a.anime.id in onList
+            val listed = a.anime.id in onList
+            val mine = listed || a.anime.id in watching
             val shape = RoundedCornerShape(14.dp)
             Row(
                 Modifier
@@ -158,7 +164,8 @@ fun ScheduleScreen(onOpen: (Int) -> Unit) {
                             style = MaterialTheme.typography.labelMedium,
                             color = AniColors.TextSecondary,
                         )
-                        if (mine) Tag("ON MY LIST", tone = TagTone.Accent, icon = Icons.Rounded.Bookmark)
+                        if (listed) Tag("ON MY LIST", tone = TagTone.Accent, icon = Icons.Rounded.Bookmark)
+                        else if (mine) Tag("WATCHING", tone = TagTone.Accent, icon = Icons.Rounded.PlayArrow)
                     }
                 }
                 Icon(Icons.Rounded.ChevronRight, null, tint = AniColors.TextTertiary)
@@ -168,7 +175,7 @@ fun ScheduleScreen(onOpen: (Int) -> Unit) {
 }
 
 /** "in 3h 20m", "in 12m" or "Aired". */
-private fun relativeAiring(airingAt: Long, now: Long): String {
+internal fun relativeAiring(airingAt: Long, now: Long): String {
     val secs = airingAt - now
     if (secs <= 0) return "Aired"
     val minutes = secs / 60

@@ -16,6 +16,9 @@ data class MangaChapter(
     val uploadedAt: Long? = null,
 )
 
+/** A title's newest chapter on a source, and when it was added (epoch ms). */
+data class SourceLatest(val chapter: Float?, val at: Long?)
+
 /** One page image. [headers] apply to this exact image URL only. */
 data class MangaPage(
     val url: String,
@@ -29,23 +32,38 @@ interface MangaSource {
     val label: String
     /** Optional user-operated connection screen; never opened automatically. */
     val connectionActivity: Class<out android.app.Activity>? get() = null
+    /**
+     * Catalogue reads that need AniTrack in the foreground (Comix shows its own
+     * loading window for each batch), so bulk and background checks skip it.
+     */
+    val foregroundOnly: Boolean get() = false
     suspend fun find(manga: Manga): SourceTitle?
     suspend fun chapters(title: SourceTitle): List<MangaChapter>
+    /**
+     * The last complete chapter list this device saved for [manga], shown at once
+     * while [chapters] refreshes it; null when the source keeps none.
+     */
+    suspend fun savedChapters(manga: Manga): Pair<SourceTitle, List<MangaChapter>>? = null
     suspend fun pages(title: SourceTitle, chapter: MangaChapter): List<MangaPage>
     /** Providers with encoded page images return a decoded cache file here. */
     suspend fun resolvePage(page: MangaPage): MangaPage = page
+    /** A match confirmed earlier and saved, so a title reopens without a search. */
+    fun knownTitle(anilistId: Int): SourceTitle? = null
+    /** Newest chapter of a matched title (for Updates); null when the source can't tell cheaply. */
+    suspend fun latest(title: SourceTitle): SourceLatest? = null
 }
 
 object MangaSources {
     /**
-     * Registered reading sources, in preference order. Only MangaDot for now
-     * (user choice, 2026-10-03): it has the largest catalogue and needs a
-     * one-time user-completed Cloudflare check. MangaPill, MangaDex
-     * (data/manga/mangapill, mangadex) and Comix (data/manga/comix) stay
-     * implemented but unregistered; add them here to offer them again.
+     * Registered reading sources, in preference order (user choice): MangaDot
+     * first (largest catalogue, one-time user-completed Cloudflare check), then
+     * MangaBall (public JSON API), then Comix's separately connected catalogue.
+     * MangaPill and MangaDex remain implemented but unregistered.
      */
     val all: List<MangaSource> = listOf(
         com.sanjay.anitrack.next.data.manga.mangadot.MangaDotSource,
+        com.sanjay.anitrack.next.data.manga.mangaball.MangaBallSource,
+        com.sanjay.anitrack.next.data.manga.comix.ComixSource,
     )
 
     fun byId(id: String): MangaSource? = all.firstOrNull { it.id == id }

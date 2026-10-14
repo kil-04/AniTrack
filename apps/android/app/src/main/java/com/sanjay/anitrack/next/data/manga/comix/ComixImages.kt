@@ -35,8 +35,7 @@ internal class ComixImages(context: Context) {
                 file.setLastModified(System.currentTimeMillis())
                 return@withLock page.copy(url=file.toURI().toString(),headers=emptyMap())
             }
-            val request = Request.Builder().url(url).header("Referer", "${ComixProtocol.ORIGIN}/")
-                .header("Origin",ComixProtocol.ORIGIN).build()
+            val request = imageRequest(url)
             val call = client.newCall(request)
             val response = await(call)
             val tmp = File(directory,"$digest.tmp")
@@ -61,8 +60,11 @@ internal class ComixImages(context: Context) {
                     require(ComixImageCodec.imageSignature(bytes)) { "Comix did not return a supported image." }
                     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                     BitmapFactory.decodeByteArray(bytes,0,bytes.size,bounds)
-                    require(bounds.outWidth > 0 && bounds.outHeight > 0 && bounds.outWidth.toLong() * bounds.outHeight <= MAX_PIXELS) { "Comix image dimensions too large." }
                     val seed = r.header("x-scramble-seed")?.toLongOrNull()?.toInt()
+                    // Restoring tiles decodes the whole bitmap, so scrambled pages keep the tight
+                    // bound. Plain pages are only saved; tall strips are later decoded in slices.
+                    val pixels = if (seed != null && seed != 0) MAX_PIXELS else MAX_PLAIN_PIXELS
+                    require(bounds.outWidth > 0 && bounds.outHeight > 0 && bounds.outWidth.toLong() * bounds.outHeight <= pixels) { "Comix image dimensions too large." }
                     if (seed != null && seed != 0) {
                         require(r.header("x-scramble-grid") == "5x5") { "Unsupported Comix image grid." }
                         val order = ComixImageCodec.tileSources(seed,r.header("x-scramble-algo"),r.header("x-scramble-hash"))
@@ -71,12 +73,15 @@ internal class ComixImages(context: Context) {
                         try {
                             val canvas = Canvas(output)
                             canvas.drawBitmap(input,0f,0f,null) // Keep trailing pixels outside the 5x5 grid.
+                            // Restored tiles replace the scrambled pixels, including
+                            // transparent pixels; SRC_OVER would leave old tiles visible.
+                            val tilePaint = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC) }
                             val w = input.width / 5; val h = input.height / 5
                             require(w > 0 && h > 0) { "Invalid Comix image grid." }
                             for (dst in 0 until 25) {
                                 val src = order[dst]
                                 canvas.drawBitmap(input,Rect(src%5*w,src/5*h,(src%5+1)*w,(src/5+1)*h),
-                                    Rect(dst%5*w,dst/5*h,(dst%5+1)*w,(dst/5+1)*h),null)
+                                    Rect(dst%5*w,dst/5*h,(dst%5+1)*w,(dst/5+1)*h),tilePaint)
                             }
                             tmp.outputStream().use { out -> check(output.compress(Bitmap.CompressFormat.PNG,100,out)) { "Comix image save failed." } }
                         } finally { input.recycle(); output.recycle() }
@@ -113,6 +118,12 @@ internal class ComixImages(context: Context) {
     companion object {
         private const val MAX_BYTES = 24 * 1024 * 1024
         private const val MAX_PIXELS = 12_000_000L
+        private const val MAX_PLAIN_PIXELS = 60_000_000L
+        // Comix's image hosts reject Origin/Referer. Keep the exact request
+        // cookie-free; do not reuse catalogue-session or caller-supplied headers.
+        internal fun imageRequest(url: String): Request = Request.Builder()
+            .url(ComixProtocol.imageUrl(url)).build()
+
         internal fun privateAddress(address: InetAddress): Boolean {
             if (address.isAnyLocalAddress || address.isLoopbackAddress || address.isLinkLocalAddress ||
                 address.isSiteLocalAddress || address.isMulticastAddress) return true

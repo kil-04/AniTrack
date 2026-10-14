@@ -10,6 +10,10 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.DoneAll
+import androidx.compose.material.icons.rounded.RadioButtonUnchecked
+import androidx.compose.foundation.combinedClickable
+import kotlinx.coroutines.launch
 import androidx.compose.material.icons.rounded.Checklist
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.DownloadDone
@@ -45,7 +49,12 @@ private data class EpUi(
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
 @Composable
-internal fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay: () -> Unit) {
+internal fun EpisodesSection(
+    anime: com.sanjay.anitrack.next.data.Anime,
+    onPlay: () -> Unit,
+    /** The next episode to watch (label + action) for the hero, null until one is known. */
+    onNextUp: (Pair<String, () -> Unit>?) -> Unit = {},
+) {
     val runtime = RemoteConfig.current()
     val registry = Providers.registry
     val enabledProviders = remember(runtime) { registry.enabled(runtime) }
@@ -62,9 +71,13 @@ internal fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay:
     var accessRevision by remember(anime.id) { mutableIntStateOf(0) }
     var rangeStart by remember { mutableStateOf(0) }
     var watched by remember { mutableStateOf<Map<Float, Int>>(emptyMap()) }
+    var lastWatched by remember(anime.id) { mutableStateOf<Float?>(null) }
 
     LaunchedEffect(anime.id) {
-        runCatching { watched = com.sanjay.anitrack.next.data.Db.positionsFor(anime.id) }
+        runCatching {
+            watched = com.sanjay.anitrack.next.data.Db.positionsFor(anime.id)
+            lastWatched = com.sanjay.anitrack.next.data.Db.lastWatchedEpisode(anime.id)
+        }
     }
     // Load the selected server on demand.
     LaunchedEffect(anime.id, server, accessRevision) {
@@ -122,6 +135,40 @@ internal fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay:
         }
     }
 
+    val markScope = rememberCoroutineScope()
+    /** Marks episodes watched/unwatched by hand (seen elsewhere, or to start over). */
+    fun markWatched(episodes: List<Float>, isWatched: Boolean) {
+        val series = activeSeries
+        markScope.launch {
+            com.sanjay.anitrack.next.data.Db.markEpisodesWatched(
+                anime.id, episodes, isWatched, anime.title, anime.cover,
+                durationSec = (anime.duration ?: 24) * 60.0,
+                slug = series?.resumeKey,
+                providerId = series?.providerId,
+            )
+            watched = com.sanjay.anitrack.next.data.Db.positionsFor(anime.id)
+            lastWatched = com.sanjay.anitrack.next.data.Db.lastWatchedEpisode(anime.id)
+        }
+    }
+
+    // Next up: carry on from the episode watched last (finish it, or the one after);
+    // without history (or caught up), the first episode not finished yet.
+    val nextUp = run {
+        val last = lastWatched
+        val at = if (last != null) epUi.indexOfFirst { it.number == last } else -1
+        val fromHistory = if (at < 0) null
+            else if ((watched[epUi[at].number] ?: 0) < 85) epUi[at] else epUi.getOrNull(at + 1)
+        fromHistory ?: epUi.firstOrNull { (watched[it.number] ?: 0) < 85 } ?: epUi.firstOrNull()
+    }
+    val nextUpLabel = nextUp?.let {
+        val pct = watched[it.number] ?: 0
+        (when { pct >= 85 -> "Rewatch · Ep "; pct > 0 -> "Continue · Ep "; else -> "Watch · Ep " }) + epLabel(it.number)
+    }
+    // Mirror the action into the hero, above the fold.
+    LaunchedEffect(nextUpLabel, epUi) {
+        onNextUp(if (nextUp != null && nextUpLabel != null) nextUpLabel to nextUp.play else null)
+    }
+
     Column {
         // Header with SUB/DUB badges.
         SectionHeader("Episodes", trailing = {
@@ -172,15 +219,14 @@ internal fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay:
             if (epUi.isNotEmpty()) {
                 val ranges = epUi.chunked(100)
                 val current = ranges.getOrElse(rangeStart) { emptyList() }
-                val next = epUi.firstOrNull { (watched[it.number] ?: 0) < 85 } ?: epUi.first()
-                val nextPct = watched[next.number] ?: 0
+                val next = nextUp ?: epUi.first()
 
                 // Actions: play the next episode, Download N, Range (desktop parity).
                 var rangeDialog by remember(server) { mutableStateOf(false) }
                 @OptIn(ExperimentalLayoutApi::class)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     PillButton(
-                        (if (nextPct > 0) "Continue · Ep " else "Watch · Ep ") + epLabel(next.number),
+                        nextUpLabel ?: ("Watch · Ep " + epLabel(next.number)),
                         { next.play() },
                         icon = Icons.Rounded.PlayArrow,
                         style = PillStyle.Light,
@@ -252,17 +298,37 @@ internal fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay:
 
                 // Episode list: thumbnail, title, watch state and download control.
                 val dls = com.sanjay.anitrack.next.data.Downloads.items
+                Text(
+                    "Long-press an episode to mark it watched or unwatched.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AniColors.TextTertiary,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    for (ep in current) {
+                    for (ep in current) key(ep.number) {
                         val pct = watched[ep.number] ?: 0
                         val dl = dls.firstOrNull { it.id == com.sanjay.anitrack.next.data.Downloads.idOf(anime.id, ep.number) }
                         val shape = RoundedCornerShape(14.dp)
+                        var menu by remember { mutableStateOf(false) }
+                        Box {
+                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                            DropdownMenuItem(
+                                text = { Text(if (pct >= 85) "Mark as unwatched" else "Mark as watched") },
+                                leadingIcon = { Icon(if (pct >= 85) Icons.Rounded.RadioButtonUnchecked else Icons.Rounded.CheckCircle, null) },
+                                onClick = { menu = false; markWatched(listOf(ep.number), pct < 85) },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Mark this and earlier as watched") },
+                                leadingIcon = { Icon(Icons.Rounded.DoneAll, null) },
+                                onClick = { menu = false; markWatched(epUi.map { it.number }.filter { it <= ep.number }, true) },
+                            )
+                        }
                         Row(
                             Modifier.fillMaxWidth()
                                 .clip(shape)
                                 .background(AniColors.Surface)
                                 .border(1.dp, AniColors.BorderSoft, shape)
-                                .clickable { ep.play() }
+                                .combinedClickable(onClick = { ep.play() }, onLongClick = { menu = true })
                                 .padding(10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -334,6 +400,7 @@ internal fun EpisodesSection(anime: com.sanjay.anitrack.next.data.Anime, onPlay:
                                     compact = true,
                                 )
                             }
+                        }
                         }
                     }
                 }

@@ -19,11 +19,17 @@ import {
   getAuthorizedPaheRequestHeaders,
 } from "./services/providers/animepahe";
 import { providerManager } from "./services/providers";
-import { getResolvedStreamAuthorization } from "./services/providers/stream-authorization";
+import {
+  getResolvedStreamAuthorization,
+  getResolvedStreamAccessStatus,
+  recordResolvedStreamAccessRejection,
+} from "./services/providers/stream-authorization";
+import { NativeMediaAccessObserver } from "./services/providers/native-media-access";
 import { registerProviderIpc } from "./ipc/providers";
 import { registerAuthIpc } from "./ipc/auth";
 import { registerDbIpc } from "./ipc/db";
 import { registerDownloadsIpc } from "./ipc/downloads";
+import { registerMangaIpc, registerMangaProtocol } from "./ipc/manga";
 import { downloadsDir } from "./services/downloads";
 import {
   getRuntimeConfig,
@@ -42,8 +48,8 @@ import {
 
 const isDev = process.env.NODE_ENV === "development";
 
-// Disable Chromium Sandbox to prevent EXCEPTION_BREAKPOINT (0x80000003) crashes on certain Windows setups.
-app.commandLine.appendSwitch("no-sandbox");
+// Provider websites must retain Chromium's OS sandbox. A global no-sandbox
+// switch would silently defeat the sandboxed, no-preload Comix session.
 
 // Use the same Chromium identity for provider windows and network requests.
 // Do not claim a different Chrome version through hard-coded client hints.
@@ -55,6 +61,11 @@ let mainWindow: BrowserWindow | null = null;
 let malFlushTimer: NodeJS.Timeout | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
+const nativeMediaAccess = new NativeMediaAccessObserver(getResolvedStreamAuthorization, (mediaAccessId, status) => {
+  if ((status === 403 || status === 429) && recordResolvedStreamAccessRejection(mediaAccessId, status)) {
+    sendToRenderer(IPC.PROVIDERS_MEDIA_ACCESS_REJECTED, { mediaAccessId, status });
+  }
+});
 
 function sendToRenderer(channel: string, payload?: unknown) {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
@@ -63,6 +74,7 @@ function sendToRenderer(channel: string, payload?: unknown) {
 // Web request interceptors — installed once at startup, re-installed when the
 // AnimePahe base URL changes (so the snapshot/CDN host derivations stay current).
 function registerWebRequestHandlers() {
+  nativeMediaAccess.clear();
   const runtime = getRuntimeConfig();
   const paheRules = runtime.providers.animepahe;
   const paheEnabled = paheRules.enabled && runtime.features.animepaheStreaming;
@@ -94,6 +106,7 @@ function registerWebRequestHandlers() {
   // per-stream credentials together; never use the last resolved player's
   // origin for unrelated media sharing a CDN or a .m3u8 extension.
   session.defaultSession.webRequest.onBeforeSendHeaders({ urls: ["*://*/*"] }, (details, callback) => {
+    nativeMediaAccess.begin(details, mainWindow?.webContents.id);
     const headers: Record<string, string> = { ...details.requestHeaders as Record<string, string> };
     let host = "";
     try { host = new URL(details.url).hostname.toLowerCase(); } catch {}
@@ -111,6 +124,7 @@ function registerWebRequestHandlers() {
   });
 
   session.defaultSession.webRequest.onHeadersReceived({ urls: ["*://*/*"] }, (details, callback) => {
+    nativeMediaAccess.response(details);
     if (!authorizationFor(details.url)?.cors) {
       callback({ responseHeaders: details.responseHeaders });
       return;
@@ -127,6 +141,8 @@ function registerWebRequestHandlers() {
     headers["Access-Control-Expose-Headers"] = ["*"];
     callback({ responseHeaders: headers });
   });
+  session.defaultSession.webRequest.onCompleted({ urls: ["*://*/*"] }, details => nativeMediaAccess.finish(details.id));
+  session.defaultSession.webRequest.onErrorOccurred({ urls: ["*://*/*"] }, details => nativeMediaAccess.finish(details.id));
 }
 
 // Allow our app to be the default handler for anitrack:// URLs.
@@ -147,6 +163,8 @@ protocol.registerSchemesAsPrivileged([
     scheme: "anitrack-dl",
     privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true, corsEnabled: true },
   },
+  // Manga page images, fetched by the main process with each source's headers.
+  { scheme: "anitrack-manga", privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
 ]);
 
 function createWindow() {
@@ -281,6 +299,8 @@ app.whenReady().then(async () => {
     }
   });
 
+  registerMangaProtocol();
+
   registerIpc();
   createWindow();
 
@@ -324,8 +344,12 @@ app.whenReady().then(async () => {
   });
 
   // Pre-warm the AnimePahe hidden window so the Cloudflare session is
-  // established before the user opens a show detail page.
-  providerManager.prewarmAll();
+  // established before the user opens a show detail page. It waits for the
+  // main window's first paint: its page (often a Cloudflare check) competed
+  // with startup for the CPU.
+  const prewarm = () => { setTimeout(() => providerManager.prewarmAll(), 2_500); };
+  if (mainWindow) mainWindow.once("ready-to-show", prewarm);
+  else prewarm();
 
   initDesktopUpdater(sendToRenderer);
 
@@ -374,6 +398,12 @@ function registerIpc() {
   registerDbIpc(getMainWindow);
   registerProviderIpc(registerWebRequestHandlers);
   registerDownloadsIpc(getMainWindow);
+  registerMangaIpc(getMainWindow);
+
+  ipcMain.handle(IPC.PROVIDERS_MEDIA_ACCESS_STATUS, (event, mediaAccessId: string) => {
+    if (event.sender !== mainWindow?.webContents) throw new Error("Media access status is only available to AniTrack's player.");
+    return getResolvedStreamAccessStatus(mediaAccessId);
+  });
 
   ipcMain.handle(IPC.UPDATE_CHECK, () => checkForDesktopUpdates(true));
   ipcMain.handle(IPC.UPDATE_STATUS, () => getDesktopUpdateState());

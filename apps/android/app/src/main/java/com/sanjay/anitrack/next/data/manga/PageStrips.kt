@@ -77,13 +77,11 @@ object PageStrips {
 
     /** The page image as a local file, downloaded once (headers apply to this URL only). */
     suspend fun file(page: MangaPage): File = withContext(Dispatchers.IO) {
-        // Downloaded chapters are already on disk (only inside AniTrack's download folder).
+        // Downloaded chapters are already on disk (only inside AniTrack's download folder),
+        // and Comix pages arrive already decoded into Comix's own page cache.
         if (page.url.startsWith("file:")) {
-            val local = runCatching { File(java.net.URI(page.url)).canonicalFile }.getOrNull()
-            val downloads = MangaDownloads.directory()?.canonicalFile
-            if (local != null && downloads != null && local.path.startsWith(downloads.path + File.separator) && local.isFile) {
-                return@withContext local
-            }
+            MangaDownloads.localFile(page.url)?.let { return@withContext it }
+            MangaDownloads.comixCachedFile(page.url)?.let { return@withContext it }
             throw MangaSourceException("This downloaded page is missing. Download the chapter again.")
         }
         val dir = directory ?: throw MangaSourceException("The reader isn't ready yet. Reopen AniTrack.")
@@ -103,7 +101,7 @@ object PageStrips {
                 .build()
             val partial = File(dir, "$name.part")
             client.newCall(request).await().use { response ->
-                if (!response.isSuccessful) throw MangaSourceException("This page didn't load (HTTP ${response.code}). Retry.")
+                if (!response.isSuccessful) throw MangaSourceException("This page didn't load (HTTP ${response.code}). Retry.", response.code)
                 val body = response.body ?: throw MangaSourceException("This page came back empty. Retry.")
                 if (body.contentLength() > MAX_BYTES) throw MangaSourceException("This page is too large to show.")
                 partial.outputStream().use { out ->

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   AnimeInfo,
   ExternalIds,
@@ -101,7 +102,10 @@ export class ProviderRegistry {
   }
 
   async resolveStream(providerId: string, linkId: string) {
-    const stream = await this.get(providerId).resolveStream(linkId);
+    const resolved = await this.get(providerId).resolveStream(linkId);
+    // A new receipt even when an expiring URL is reused: an older response
+    // must never mark a later manual selection as rejected.
+    const stream = { ...resolved, mediaAccessId: randomUUID() };
     authorizeResolvedStream(stream);
     return stream;
   }
@@ -134,6 +138,7 @@ export class ProviderRegistry {
 
   prefetch(providerId: string, linkId: string): void {
     const provider = this.get(providerId);
+    if (provider.capabilities.prefetch === false) return;
     try {
       const task = provider.prefetch
         ? provider.prefetch(linkId)

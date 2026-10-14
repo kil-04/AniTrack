@@ -9,6 +9,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Hd
 import androidx.compose.material.icons.filled.Speed
@@ -27,7 +28,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
-private val Accent = Color(0xFFE50914)
+private val Accent: Color get() = AniColors.Accent
 
 /**
  * Desktop-style layered settings panel: main menu (speed / quality /
@@ -48,6 +49,11 @@ internal fun PlayerSettingsPanel(
     capColor: Int, onCapColor: (Int) -> Unit,
     autoplay: Boolean, onAutoplay: (Boolean) -> Unit,
     autoNext: Boolean, onAutoNext: (Boolean) -> Unit,
+    autoSkip: Boolean, onAutoSkip: (Boolean) -> Unit,
+    /** 0 off, -1 after this episode, else the minutes chosen. */
+    sleepMode: Int = 0,
+    sleepMinutesLeft: Int? = null,
+    onSleep: (Int) -> Unit = {},
 ) {
     val panelBg = Color(0xF2141419)
     val speedLabel = if (speed == 1f) "Normal" else "${speed}x"
@@ -117,6 +123,19 @@ internal fun PlayerSettingsPanel(
         Modifier.width(300.dp).clip(RoundedCornerShape(12.dp)).background(panelBg).padding(vertical = 6.dp),
     ) {
         when (menu) {
+            "sleep" -> {
+                BackHeader("Sleep timer")
+                listOf(0 to "Off", -1 to "End of episode", 15 to "15 minutes", 30 to "30 minutes", 45 to "45 minutes", 60 to "1 hour")
+                    .forEach { (minutes, label) ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable { onSleep(minutes); onMenu("main") }.padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(label, color = Color.White, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                            if (minutes == sleepMode) Icon(Icons.Filled.Check, null, tint = Accent, modifier = Modifier.size(18.dp))
+                        }
+                    }
+            }
             "speed" -> {
                 BackHeader("Playback speed")
                 listOf(0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f).forEach { sp ->
@@ -216,9 +235,19 @@ internal fun PlayerSettingsPanel(
                     "quality",
                 )
                 if (hasSubs) MenuRow(Icons.Filled.ClosedCaption, "Subtitles", if (ccOn) "On" else "Off", "subtitles")
+                MenuRow(
+                    Icons.Filled.Bedtime, "Sleep timer",
+                    when {
+                        sleepMode == -1 -> "End of episode"
+                        sleepMode > 0 -> "${sleepMinutesLeft ?: sleepMode} min left"
+                        else -> "Off"
+                    },
+                    "sleep",
+                )
                 HorizontalDivider(color = Color.White.copy(alpha = 0.08f), modifier = Modifier.padding(vertical = 4.dp))
                 ToggleRow("Autoplay", autoplay, onAutoplay)
                 ToggleRow("Auto-next episode", autoNext, onAutoNext)
+                ToggleRow("Auto-skip intro & outro", autoSkip, onAutoSkip)
             }
         }
     }

@@ -13,8 +13,10 @@ import com.sanjay.anitrack.next.data.providers.ProviderStreamVariant
 import com.sanjay.anitrack.next.data.providers.ProviderSubtitle
 import com.sanjay.anitrack.next.data.providers.ResolvedMedia
 import com.sanjay.anitrack.next.data.providers.SeekMode
+import com.sanjay.anitrack.next.data.providers.SkipRange
 import com.sanjay.anitrack.next.data.providers.StreamAuthorizationScope
 import com.sanjay.anitrack.next.data.providers.connectors.mkissa.MkissaMediaKind
+import com.sanjay.anitrack.next.data.providers.connectors.mkissa.MkissaProtocolException
 import com.sanjay.anitrack.next.data.providers.connectors.mkissa.MkissaNetwork
 import com.sanjay.anitrack.next.data.providers.connectors.mkissa.MkissaService
 import com.sanjay.anitrack.next.data.providers.connectors.mkissa.MkissaShow
@@ -23,8 +25,8 @@ import com.sanjay.anitrack.next.data.providers.connectors.mkissa.MkissaTranslati
 /**
  * Registered for connector discovery but kept disabled by signed runtime configuration until its
  * playback path is verified. The service preserves all sub/dub episodes and server choices; this
- * adapter exposes a conservative single-translation view until the player can present those choices
- * directly. Resolution still walks the server aliases lazily when the preferred one fails.
+ * adapter exposes a conservative single-translation view. Every explicitly selected server is
+ * resolved freshly and by its stable alias; only default selection walks ordinary failures lazily.
  */
 object MkissaProvider : AnimeProvider {
     private val service by lazy { MkissaService(transport = MkissaNetwork.transport()) }
@@ -39,7 +41,9 @@ object MkissaProvider : AnimeProvider {
         capabilities = ProviderCapabilities(
             externalIds = true,
             downloads = false,
-            subtitleModes = true,
+            // Sources do not expose a reliable hard/soft coordinate, and this
+            // adapter does not consume PlaybackPreferences.preferHardSub.
+            subtitleModes = false,
         ),
     )
 
@@ -62,7 +66,11 @@ object MkissaProvider : AnimeProvider {
             ?.let { series(it, translation) }
     }
 
-    internal fun series(show: MkissaShow, translation: MkissaTranslation): ProviderSeries = ProviderSeries(
+    internal fun series(
+        show: MkissaShow,
+        translation: MkissaTranslation,
+        connector: MkissaService = service,
+    ): ProviderSeries = ProviderSeries(
         providerId = descriptor.id,
         resumeKey = "mkissa:${translation.wireValue}:${show.id}",
         verified = show.aniListId != null,
@@ -78,22 +86,17 @@ object MkissaProvider : AnimeProvider {
                 number = number,
                 title = "Episode ${episode.episodeString} (${translation.name})",
                 variantsResolver = {
-                    streamVariants(service.sources(episode))
+                    streamVariants(connector.sources(episode))
                 },
                 variantResolver = { variantId, _ ->
-                    val sources = service.sources(episode)
+                    val sources = connector.sources(episode, fresh = true)
                     val selected = sourceForVariant(sources, variantId)
-                    // Server aliases and ordering can rotate between discovery and playback.
-                    // If the chosen alias disappeared, retain the provider's safe automatic fallback.
-                    val media = if (selected != null) {
-                        service.resolve(selected).first()
-                    } else {
-                        service.resolveFirst(sources).first()
-                    }
+                        ?: throw MkissaProtocolException("MKissa server is no longer available. Reload the server list or choose another server.")
+                    val media = connector.resolve(selected).first()
                     toResolvedMedia(media)
                 },
             ) {
-                toResolvedMedia(service.resolveFirst(episode).first())
+                toResolvedMedia(connector.resolveFirst(episode).first())
             }
         },
     )
@@ -133,15 +136,23 @@ object MkissaProvider : AnimeProvider {
             userAgent = media.headers.entries.firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }
                 ?.value.orEmpty(),
             requestHeaders = media.headers,
-            authorizationScope = if (media.kind == MkissaMediaKind.HLS) {
+            authorizationScope = if (media.kind == MkissaMediaKind.HLS || media.kind == MkissaMediaKind.DASH) {
                 StreamAuthorizationScope.DIRECTORY
             } else {
                 StreamAuthorizationScope.EXACT
             },
-            subtitles = media.subtitles.map { ProviderSubtitle(it.url, it.label) },
+            subtitles = media.subtitles.map { ProviderSubtitle(it.url, it.label, language = it.language, default = it.default) },
+            intro = media.intro?.let { SkipRange(it.start.toLong(), it.end.toLong()) },
             backend = PlaybackBackend.NATIVE,
             seekMode = if (media.kind == MkissaMediaKind.MP4) SeekMode.EXACT else SeekMode.CLOSEST_SYNC,
             downloadable = false,
+            conservativeNetwork = true,
+            mimeType = when (media.kind) {
+                MkissaMediaKind.HLS -> "application/x-mpegURL"
+                MkissaMediaKind.MP4 -> "video/mp4"
+                MkissaMediaKind.DASH -> "application/dash+xml"
+                MkissaMediaKind.DIRECT -> null
+            },
         )
 
     private val RESUME_KEY = Regex("^mkissa:(sub|dub):([A-Za-z0-9_-]{4,100})$")

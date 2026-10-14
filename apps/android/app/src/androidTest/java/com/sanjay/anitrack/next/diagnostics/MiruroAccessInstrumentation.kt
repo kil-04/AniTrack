@@ -26,6 +26,13 @@ class MiruroAccessInstrumentation : Instrumentation() {
     private var inPageRequests = false
     private var sourceProvider: String? = null
     private var nativePlayback = false
+    private var providerProbe = false
+    private var probeCatalogueOnly = false
+    private var probeProvider = "miruro"
+    private var probeTitle = "Cowboy Bebop"
+    private var probeEpisode = 1f
+    private var probeServer = "KICKASSANIME · Vid · Soft sub"
+    private var probeSwitch: String? = "ANIKOTO · HD-1 · Soft sub"
 
     override fun onCreate(arguments: Bundle?) {
         super.onCreate(arguments)
@@ -35,10 +42,21 @@ class MiruroAccessInstrumentation : Instrumentation() {
         inPageRequests = arguments?.getString("miruro_in_page") == "true"
         sourceProvider = arguments?.getString("miruro_source")
         nativePlayback = arguments?.getString("miruro_native") == "true"
+        providerProbe = arguments?.getString("provider_probe") == "true"
+        probeCatalogueOnly = arguments?.getString("catalogue_only") == "true"
+        probeProvider = arguments?.getString("provider") ?: "miruro"
+        probeTitle = arguments?.getString("title") ?: "Cowboy Bebop"
+        probeEpisode = arguments?.getString("episode")?.toFloatOrNull() ?: 1f
+        probeServer = arguments?.getString("server_label") ?: "KICKASSANIME · Vid · Soft sub"
+        probeSwitch = if (arguments?.getString("skip_switch") == "true") null else (
+            arguments?.getString("switch_label")?.takeIf { it.isNotBlank() }
+            ?: if (probeProvider == "miruro") "ANIKOTO · HD-1 · Soft sub" else null
+        )
         start()
     }
 
     override fun onStart() {
+        if (providerProbe) { runProviderProbe(); return }
         val report = Bundle()
         if (!optedIn || animeId <= 0 || sourceProvider?.matches(Regex("[a-zA-Z0-9_-]{1,64}")) == false) {
             report.putString("result", "SKIPPED: requires miruro_probe=true and a positive anilist_id")
@@ -142,6 +160,72 @@ class MiruroAccessInstrumentation : Instrumentation() {
             MiruroNativePlaybackActivity.result = null
             MiruroNativePlaybackActivity.userAgent = "AniTrack"
             verificationActivity?.let { activity -> runOnMainSync { if (!activity.isFinishing) activity.finish() } }
+        }
+    }
+
+    /** Bounded app-owned UI actions only. Website/human-verification controls are never clicked. */
+    private fun runProviderProbe() {
+        val report = Bundle()
+        if (probeProvider !in setOf("miruro", "mkissa", "anikoto", "animepahe") || animeId <= 0 || !probeEpisode.isFinite() ||
+            probeEpisode <= 0 || probeEpisode > 100_000 || probeTitle.length > 200 || probeServer.length > 150 ||
+            (probeSwitch?.length ?: 0) > 150) {
+            report.putString("result", "SKIPPED: invalid opted-in provider coordinates")
+            finish(Activity.RESULT_CANCELED, report)
+            return
+        }
+        var activity: Activity? = null
+        val navigationReport = Bundle()
+        try {
+            val completion = CompletableFuture<Bundle>()
+            val fixtureMalId = if (animeId == 1 && probeTitle == "Cowboy Bebop") 1 else null
+            val anime = com.sanjay.anitrack.next.data.Anime(animeId, fixtureMalId, probeTitle, null, null, null,
+                null, null, null, null, null, null, emptyList())
+            ProviderPlaybackProbeActivity.request = ProviderPlaybackProbeActivity.Request(probeProvider,
+                anime, probeEpisode, probeServer, probeSwitch, probeCatalogueOnly)
+            ProviderPlaybackProbeActivity.result = completion
+            ProviderPlaybackProbeActivity.clickServer = { label ->
+                val playerActivity = activity
+                if (playerActivity == null) false else {
+                    val selection = ProviderProbeServerNavigation.selectResult(ProviderProbeServerUi(
+                        this, playerActivity, label, ProviderProbeServerNavigation.panelHeading(
+                            com.sanjay.anitrack.next.data.providers.Providers.enabled()
+                                .firstOrNull { it.descriptor.id == probeProvider }?.descriptor?.name,
+                        ),
+                    ))
+                    navigationReport.putBoolean("server_ui_selected", selection.selected)
+                    selection.stopReason?.let { navigationReport.putString("server_ui_stop", it.name) }
+                    navigationReport.putString("server_ui_actions", selection.actions.joinToString(",") { it.name })
+                    selection.lastObservation?.let { state ->
+                        navigationReport.putInt("server_ui_exact_matches", state.exactMatches)
+                        navigationReport.putBoolean("server_ui_target_visible", state.targetVisible)
+                        navigationReport.putBoolean("server_ui_target_enabled", state.targetEnabled)
+                        navigationReport.putBoolean("server_ui_panel_visible", state.panelVisible)
+                        navigationReport.putBoolean("server_ui_fullscreen_control", state.fullscreenControlVisible)
+                        navigationReport.putBoolean("server_ui_video_visible", state.videoVisible)
+                    }
+                    selection.selected
+                }
+            }
+            activity = startActivitySync(Intent(targetContext, ProviderPlaybackProbeActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            // Includes the separately bounded 180-second human connection step
+            // and every playback/seek/switch stage; watchdog expiry is not HTTP failure.
+            val result = completion.get(720, TimeUnit.SECONDS)
+            report.putAll(result)
+            report.putAll(navigationReport)
+            report.putString("result", if (result.getBoolean("passed") && result.getBoolean("catalogue_only"))
+                "SUCCESS: catalogue choices received; no playback performed"
+                else if (result.getBoolean("passed")) "SUCCESS: normal player verification passed"
+                else "STOPPED: normal player verification did not pass; no automatic retry")
+            finish(if (result.getBoolean("passed")) Activity.RESULT_OK else Activity.RESULT_CANCELED, report)
+        } catch (error: Exception) {
+            report.putString("result", "STOPPED: ${error.javaClass.simpleName}; no automatic retry")
+            finish(Activity.RESULT_CANCELED, report)
+        } finally {
+            activity?.let { runOnMainSync { if (!it.isFinishing) it.finish() } }
+            ProviderPlaybackProbeActivity.request = null
+            ProviderPlaybackProbeActivity.result = null
+            ProviderPlaybackProbeActivity.clickServer = null
         }
     }
 

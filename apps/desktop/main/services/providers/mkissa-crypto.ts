@@ -268,6 +268,13 @@ function decryptPayloadWithKey(blob: Buffer, key: Buffer): string {
   return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString("utf8");
 }
 
+export class MkissaPayloadAuthenticationError extends Error {
+  constructor() {
+    super("MKissa protected payload authentication failed");
+    this.name = "MkissaPayloadAuthenticationError";
+  }
+}
+
 export function decryptProtectedPayload(payload: string, key: Buffer): string {
   if (!isCanonicalBase64(payload) || key.length !== KEY_BYTES) {
     throw new Error("Invalid MKissa protected payload");
@@ -286,7 +293,7 @@ export function decryptProtectedPayload(payload: string, key: Buffer): string {
     try {
       return decryptPayloadWithKey(blob, legacyKey);
     } catch {
-      throw new Error("MKissa protected payload authentication failed");
+      throw new MkissaPayloadAuthenticationError();
     }
   }
 }

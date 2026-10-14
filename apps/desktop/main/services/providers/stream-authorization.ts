@@ -8,6 +8,7 @@ export interface StreamAuthorizationOptions {
   cookie?: string;
   scope?: StreamAuthorizationScope;
   cors?: boolean;
+  mediaAccessId?: string;
 }
 
 export interface StreamAuthorization {
@@ -16,6 +17,7 @@ export interface StreamAuthorization {
   cookie: string;
   headers: Record<string, string>;
   cors: boolean;
+  mediaAccessId?: string;
 }
 
 interface StoredAuthorization extends StreamAuthorization {
@@ -23,6 +25,7 @@ interface StoredAuthorization extends StreamAuthorization {
   exactUrl: string | null;
   pathPrefix: string;
   authorizedAt: number;
+  accessRejection: 403 | 429 | null;
 }
 
 const BLOCKED_HEADERS = new Set([
@@ -135,6 +138,11 @@ export class StreamAuthorizationRegistry {
       headers,
       cors: options.cors ?? true,
       authorizedAt: now,
+      // HLS receipts remain known, but get() exposes receipts only for exact
+      // native-media requests. Optional captions do not receive a receipt.
+      mediaAccessId: /^[A-Za-z0-9_-]{1,80}$/.test(options.mediaAccessId ?? "")
+        ? options.mediaAccessId : undefined,
+      accessRejection: null,
     });
     this.prune(now);
   }
@@ -161,7 +169,29 @@ export class StreamAuthorizationRegistry {
       cookie: best.cookie,
       headers: { ...best.headers },
       cors: best.cors,
+      ...(best.exactUrl && best.mediaAccessId ? { mediaAccessId: best.mediaAccessId } : {}),
     } : null;
+  }
+
+  recordMediaAccessRejection(mediaAccessId: string, status: number, now = Date.now()): boolean {
+    if (status !== 403 && status !== 429) return false;
+    this.prune(now);
+    for (const entry of this.entries.values()) {
+      if (entry.exactUrl && entry.mediaAccessId === mediaAccessId && entry.accessRejection === null) {
+        entry.accessRejection = status;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  mediaAccessStatus(mediaAccessId: string, now = Date.now()): 403 | 429 | null {
+    if (typeof mediaAccessId !== "string" || !/^[A-Za-z0-9_-]{1,80}$/.test(mediaAccessId)) throw new Error("Invalid media access receipt.");
+    this.prune(now);
+    for (const entry of this.entries.values()) {
+      if (entry.mediaAccessId === mediaAccessId) return entry.accessRejection;
+    }
+    throw new Error("Media access receipt is no longer available. Retry manually.");
   }
 
   clear(): void {
@@ -191,6 +221,7 @@ export function authorizeResolvedStream(stream: StreamData): void {
     cookie: stream.cookies,
     scope: stream.authorizationScope ?? "exact",
     cors: stream.cors ?? true,
+    mediaAccessId: stream.mediaAccessId,
   });
 }
 
@@ -200,4 +231,12 @@ export function getResolvedStreamAuthorization(raw: string): StreamAuthorization
 
 export function clearResolvedStreamAuthorizations(): void {
   resolvedStreamAuthorizations.clear();
+}
+
+export function recordResolvedStreamAccessRejection(mediaAccessId: string, status: number): boolean {
+  return resolvedStreamAuthorizations.recordMediaAccessRejection(mediaAccessId, status);
+}
+
+export function getResolvedStreamAccessStatus(mediaAccessId: string): 403 | 429 | null {
+  return resolvedStreamAuthorizations.mediaAccessStatus(mediaAccessId);
 }

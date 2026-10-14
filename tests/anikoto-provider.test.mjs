@@ -44,6 +44,19 @@ function fixture(fetcher, sourceRoute) {
   return new AnikotoProvider();
 }
 
+test("Anikoto explicitly permits lightweight link warming without resolving media", async () => {
+  const calls = [];
+  const provider = fixture(async url => {
+    calls.push(url);
+    assert.equal(new URL(url).pathname, "/ajax/server/list");
+    return Response.json({ result: type("SUB", "soft-server") });
+  });
+  assert.equal(provider.capabilities.prefetch, true);
+  assert.equal((await provider.getStreamLinks(episodeId, animeId))[0].variant, "soft");
+  assert.equal(calls.length, 1);
+  assert.equal(getResolvedStreamAuthorization("https://media.example/unresolved/episode.mp4"), null);
+});
+
 test("Anikoto hard-sub hash sources keep their fragment and return an authorized working HLS quality", async () => {
   const master = "https://playlist.example/title/master.m3u8";
   const iframe = "https://player.example/plyr.php#" + Buffer.from(master).toString("base64url");

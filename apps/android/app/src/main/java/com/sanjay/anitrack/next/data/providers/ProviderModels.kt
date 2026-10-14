@@ -51,6 +51,8 @@ data class ResolvedMedia(
     /** Do not retry, modify playlists or import ambient WebView cookies for this media. */
     val conservativeNetwork: Boolean = false,
     val mimeType: String? = null,
+    /** The provider-native server this media came from, when the connector chose one itself. */
+    val variantId: String? = null,
 )
 
 class ProviderEpisode(

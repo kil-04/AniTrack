@@ -23,7 +23,7 @@ import com.sanjay.anitrack.next.data.PlaySession
 import com.sanjay.anitrack.next.data.providers.ProviderDescriptor
 import com.sanjay.anitrack.next.data.providers.ProviderStreamVariant
 
-private val EpisodePanelAccent = Color(0xFFE50914)
+private val EpisodePanelAccent: Color get() = AniColors.Accent
 private const val EPISODE_RANGE_SIZE = 100
 
 @OptIn(ExperimentalLayoutApi::class)

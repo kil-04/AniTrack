@@ -4,6 +4,7 @@ import com.sanjay.anitrack.next.data.providers.PlaybackBackend
 import com.sanjay.anitrack.next.data.providers.ProviderSubtitle
 import com.sanjay.anitrack.next.data.providers.ResolvedMedia
 import com.sanjay.anitrack.next.data.providers.SeekMode
+import com.sanjay.anitrack.next.data.providers.SkipRange
 import com.sanjay.anitrack.next.data.providers.StreamAuthorizationScope
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import org.json.JSONObject
@@ -15,14 +16,19 @@ internal class MiruroMedia(
     val referer: String,
     val subtitles: List<ProviderSubtitle>,
 ) {
-    fun resolved(userAgent: String) = ResolvedMedia(
+    fun resolved(
+        userAgent: String,
+        headers: Map<String, String> = if (referer.isEmpty()) emptyMap() else mapOf("Referer" to referer),
+        intro: SkipRange? = null,
+        outro: SkipRange? = null,
+    ) = ResolvedMedia(
         url = url, referer = referer, userAgent = userAgent,
-        requestHeaders = if (referer.isEmpty()) emptyMap() else mapOf("Referer" to referer),
+        requestHeaders = headers,
         // Miruro manifests can send video segments and subtitles to a rotating
         // HTTPS CDN host. The Referer is public hotlink context, never a cookie
         // or token, so carry it only to recognized HLS media paths.
         authorizationScope = if (hls) StreamAuthorizationScope.PUBLIC_HLS else StreamAuthorizationScope.EXACT,
-        subtitles = subtitles, backend = PlaybackBackend.NATIVE,
+        subtitles = subtitles, intro = intro, outro = outro, backend = PlaybackBackend.NATIVE,
         seekMode = if (hls) SeekMode.CLOSEST_SYNC else SeekMode.EXACT,
         downloadable = false,
         conservativeNetwork = true,
@@ -73,7 +79,7 @@ internal object MiruroMediaParser {
         }.sortedByDescending { it.first }.map { it.second }.distinctBy { it.url }
     }
 
-    private fun https(value: String?): String? {
+    internal fun https(value: String?): String? {
         if (value.isNullOrBlank() || value.length > 8192 || value.any { it.code <= 32 || it.code == 127 || it == '\\' }) return null
         val url = value.toHttpUrlOrNull() ?: return null
         val host = url.host

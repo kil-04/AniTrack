@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Status-bar icon: status-bar icons must be a single-colour shape, so this stays the ring + play mark. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="56"
+    android:viewportHeight="56">
+    <group
+        android:translateX="-26"
+        android:translateY="-26">
+        <path
+            android:pathData="M54,32a22,22 0,1 1,0 44a22,22 0,1 1,0 -44"
+            android:strokeAlpha="0.35"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="6" />
+        <path
+            android:pathData="M54,32A22,22 0,1 1,32 54"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeLineCap="round"
+            android:strokeWidth="6" />
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M48.6,45L48.6,63L64.4,54Z"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeLineJoin="round"
+            android:strokeWidth="4.4" />
+    </group>
+</vector>

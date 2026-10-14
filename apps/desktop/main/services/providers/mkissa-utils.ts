@@ -17,7 +17,7 @@ export class MkissaProviderError extends Error {
     code: MkissaErrorCode,
     status?: number,
   ) {
-    super(message);
+    super(code === "CAPTCHA_REQUIRED" || code === "RATE_LIMITED" ? `MKISSA_${code}: ${message}` : message);
     this.name = "MkissaProviderError";
     this.code = code;
     this.status = status;
@@ -92,6 +92,7 @@ export function positiveNumber(value: unknown): number | undefined {
 export async function responseText(response: Response, maximumBytes: number, label: string): Promise<string> {
   const declared = Number(response.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > maximumBytes) {
+    await response.body?.cancel().catch(() => {});
     throw new MkissaProviderError(`${label} response was unexpectedly large`, "INVALID_RESPONSE");
   }
   if (!response.body) return "";
@@ -115,6 +116,17 @@ export async function responseText(response: Response, maximumBytes: number, lab
   return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
 }
 
+/** An unreadable denial must not become permission to refresh keys or retry. */
+export async function responseErrorText(response: Response, label: string): Promise<string> {
+  try {
+    return await responseText(response, 64 * 1024, label);
+  } catch (error) {
+    const failure = classifyMkissaFailure([], response.status);
+    if (failure) throw failure;
+    throw error;
+  }
+}
+
 export function errorMessages(payload: unknown): string[] {
   if (!payload || typeof payload !== "object") return [];
   const errors = (payload as { errors?: unknown }).errors;
@@ -131,12 +143,12 @@ export function errorMessages(payload: unknown): string[] {
 export function classifyMkissaFailure(messages: string[], status?: number): MkissaProviderError | null {
   if (status === 429 || messages.some((message) => /rate.?limit|too many requests/i.test(message))) {
     return new MkissaProviderError(
-      "MKissa is temporarily rate limiting this network. Streaming will retry after cooldown.",
+      "MKissa is temporarily rate limiting this network. Try again after cooldown.",
       "RATE_LIMITED",
       status,
     );
   }
-  if (messages.some((message) => /NEED_CAPTCHA|captcha/i.test(message))) {
+  if (messages.some((message) => /NEED_CAPTCHA|captcha|security.?check|verify.{0,20}human/i.test(message))) {
     return new MkissaProviderError(
       "MKissa requires a browser security check. AniTrack will not automate or repeatedly retry it.",
       "CAPTCHA_REQUIRED",
@@ -146,7 +158,21 @@ export function classifyMkissaFailure(messages: string[], status?: number): Mkis
   if (messages.some((message) => /^AA_CRYPTO_|crypto.*(?:mismatch|stale|invalid)/i.test(message))) {
     return new MkissaProviderError("MKissa client keys are stale", "CRYPTO_STALE", status);
   }
+  if (status === 403) {
+    return new MkissaProviderError("MKissa denied this request. Complete any website check yourself; no automatic retry was sent.", "CAPTCHA_REQUIRED", status);
+  }
   return null;
+}
+
+/** Classify errors, not ordinary catalogue titles/descriptions. */
+export function mkissaResponseFailure(status: number, body: string): MkissaProviderError | null {
+  const bounded = body.slice(0, 65_536);
+  let messages: string[] = [];
+  try { messages = errorMessages(JSON.parse(bounded)); } catch { /* HTML/empty error */ }
+  if (bounded.trimStart().startsWith("<") && /cf-chl-|<title[^>]*>[^<]*(?:just a moment|attention required|verify.{0,20}human)|<form[^>]*(?:challenge|captcha)/i.test(bounded)) {
+    messages.push("security check");
+  }
+  return classifyMkissaFailure(messages, status);
 }
 
 export function normalizeHeaders(value?: RequestInit["headers"]): Headers {

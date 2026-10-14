@@ -34,6 +34,12 @@ export function capturePlaybackPosition(live: number | undefined, pending: numbe
   return live !== undefined && Number.isFinite(live) && live > 0 ? live : 0;
 }
 
+export function currentMediaAccessRejection(rejection: unknown, mediaAccessId: string | null): 403 | 429 | null {
+  if (!mediaAccessId || !rejection || typeof rejection !== "object") return null;
+  const value = rejection as { mediaAccessId?: unknown; status?: unknown };
+  return value.mediaAccessId === mediaAccessId && (value.status === 403 || value.status === 429) ? value.status : null;
+}
+
 /** An explicit switch position, including zero, wins over older saved progress. */
 export function chooseResumePosition(explicit: number | undefined, saved: number | null): number | null {
   if (explicit !== undefined && Number.isFinite(explicit) && explicit >= 0) return explicit;
@@ -47,7 +53,7 @@ function errorMessage(error: unknown): string {
 }
 
 // Electron wraps invoke failures and does not preserve custom Error fields.
-const MANUAL_ACCESS_ERROR = /\b(?:PAHE_SECURITY_CHECK|PAHE_RATE_LIMITED|ANIKOTO_SECURITY_CHECK|ANIKOTO_RATE_LIMITED|ANIKOTO_COOLDOWN):\s*/;
+const MANUAL_ACCESS_ERROR = /\b(?:PAHE_SECURITY_CHECK|PAHE_RATE_LIMITED|ANIKOTO_SECURITY_CHECK|ANIKOTO_RATE_LIMITED|ANIKOTO_COOLDOWN|MIRURO_SECURITY_CHECK|MIRURO_RATE_LIMITED|MIRURO_COOLDOWN|MKISSA_CAPTCHA_REQUIRED|MKISSA_RATE_LIMITED|PROVIDER_SECURITY_CHECK|PROVIDER_ACCESS_DENIED):\s*/;
 
 export function requiresManualProviderRetry(error: unknown): boolean {
   return MANUAL_ACCESS_ERROR.test(errorMessage(error));

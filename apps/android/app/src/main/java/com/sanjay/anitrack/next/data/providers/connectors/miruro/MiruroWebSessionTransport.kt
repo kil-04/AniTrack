@@ -15,6 +15,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 import java.io.IOException
 import java.util.UUID
+import java.util.Base64
 import kotlin.coroutines.resume
 
 /**
@@ -47,17 +48,17 @@ internal class MiruroWebSessionTransport(
                         try {
                           const response = await fetch($quotedUrl, {
                             method:'GET', credentials:'same-origin', redirect:'error', cache:'no-store',
-                            headers:{Accept:'application/json, text/plain, */*'}, signal:controller.signal
+                            headers:{Accept:'application/json, application/octet-stream'}, signal:controller.signal
                           });
-                          if (!response.ok) {
+                          if (response.status === 403 || response.status === 429) {
                             if (response.body) await response.body.cancel();
-                            state.result = {status:response.status, text:'', obfuscated:null};
+                            state.result = {status:response.status, base64:'', contentType:''};
                             return;
                           }
                           if (Number(response.headers.get('content-length')) > $maximumBytes) throw new Error('size');
-                          const reader = response.body.getReader();
+                          const reader = response.body && response.body.getReader();
                           const chunks = []; let count = 0;
-                          while (true) {
+                          while (reader) {
                             const part = await reader.read();
                             if (part.done) break;
                             count += part.value.byteLength;
@@ -66,8 +67,11 @@ internal class MiruroWebSessionTransport(
                           }
                           const bytes = new Uint8Array(count); let offset = 0;
                           for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+                          let binary = '';
+                          for (let index = 0; index < bytes.length; index += 8192)
+                            binary += String.fromCharCode(...bytes.subarray(index, index + 8192));
                           state.result = {status:response.status,
-                            text:new TextDecoder('utf-8', {fatal:true}).decode(bytes),
+                            base64:btoa(binary), contentType:response.headers.get('content-type') || '',
                             obfuscated:response.headers.get('x-obfuscated')};
                         } catch (_) { state.failed = true; }
                         finally { clearTimeout(timer); state.done = true; }
@@ -89,15 +93,24 @@ internal class MiruroWebSessionTransport(
                         })()
                     """.trimIndent())
                     if (encoded != "null") {
-                        if (encoded.length > maximumBytes * 12 + 4096) throw IOException("Verification response exceeded its limit")
+                        if (encoded.length > ((maximumBytes + 2) / 3) * 4 + 4096) throw IOException("Verification response exceeded its limit")
                         val text = JSONTokener(encoded).nextValue() as? String ?: throw IOException("Invalid verification response")
                         val result = JSONObject(text)
                         if (result.optBoolean("failed")) throw IOException("Same-session request failed")
                         val status = result.optInt("status", 0)
                         if (status !in 100..599) throw IOException("Invalid verification status")
-                        val body = result.opt("text") as? String ?: throw IOException("Invalid verification body")
-                        if (body.toByteArray(Charsets.UTF_8).size > maximumBytes) throw IOException("Verification response exceeded its limit")
-                        response = MiruroHttpResponse(status, body, result.opt("obfuscated") as? String)
+                        val base64 = result.opt("base64") as? String ?: throw IOException("Invalid verification body")
+                        if (base64.length > ((maximumBytes + 2) / 3) * 4) throw IOException("Verification response exceeded its limit")
+                        val bytes = try { Base64.getDecoder().decode(base64) }
+                            catch (_: IllegalArgumentException) { throw IOException("Invalid verification body encoding") }
+                        if (bytes.size > maximumBytes || Base64.getEncoder().encodeToString(bytes) != base64)
+                            throw IOException("Invalid verification body encoding")
+                        val contentType = (result.opt("contentType") as? String)?.takeIf { it.length <= 256 }
+                            ?: throw IOException("Invalid verification content type")
+                        val textBody = if (contentType.substringBefore(';').trim().equals("application/octet-stream", true)) ""
+                            else MiruroProtocol.utf8(bytes)
+                        response = MiruroHttpResponse(status, textBody, result.opt("obfuscated") as? String,
+                            bytes = bytes, contentType = contentType)
                     } else delay(200)
                 }
                 response

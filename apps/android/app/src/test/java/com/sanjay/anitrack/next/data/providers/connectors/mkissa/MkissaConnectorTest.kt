@@ -1,6 +1,14 @@
 package com.sanjay.anitrack.next.data.providers.connectors.mkissa
 
 import com.sanjay.anitrack.next.data.providers.connectors.MkissaProvider
+import com.sanjay.anitrack.next.data.Anime
+import com.sanjay.anitrack.next.data.providers.PlaybackBackend
+import com.sanjay.anitrack.next.data.providers.SeekMode
+import com.sanjay.anitrack.next.data.providers.StreamAuthorizationScope
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -8,11 +16,32 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.json.JSONObject
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Response
+import okhttp3.ResponseBody
+import okio.Buffer
+import okio.Source
+import okio.Timeout
+import okio.buffer
+import java.util.Base64
+import java.io.IOException
+import javax.net.ssl.SSLHandshakeException
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 class MkissaConnectorTest {
+    @Test
+    fun descriptorDoesNotAdvertiseIgnoredHardSoftSubtitlePreference() {
+        assertFalse(
+            "MKissa's single-translation adapter cannot select hard/soft sources",
+            MkissaProvider.descriptor.capabilities.subtitleModes,
+        )
+    }
+
     @Test
     fun urlPolicyAllowsOnlyPublicCredentialFreeHttpsUrls() {
         assertEquals(
@@ -301,5 +330,354 @@ class MkissaConnectorTest {
         assertEquals("https://player.example/", resolved.referer)
         assertEquals("mkissa-test-agent", resolved.userAgent)
         assertFalse(resolved.downloadable)
+        assertTrue("MKissa native playback must not rotate/retry after denial", resolved.conservativeNetwork)
+    }
+
+    @Test
+    fun nativeMediaMimeSeekAndScopedHeadersFollowActualFormat() {
+        val cases = listOf(
+            Triple(MkissaMediaKind.HLS, "application/x-mpegURL", StreamAuthorizationScope.DIRECTORY),
+            Triple(MkissaMediaKind.MP4, "video/mp4", StreamAuthorizationScope.EXACT),
+            Triple(MkissaMediaKind.DASH, "application/dash+xml", StreamAuthorizationScope.DIRECTORY),
+        )
+        for ((kind, mime, scope) in cases) {
+            val media = MkissaMediaSource(
+                url = "https://media.example/episode/manifest",
+                serverName = "Fixture",
+                kind = kind,
+                headers = mapOf("Referer" to "https://player.example/", "Origin" to "https://player.example"),
+            )
+            val native = MkissaProvider.toResolvedMedia(media)
+            assertEquals(kind.name, mime, native.mimeType)
+            assertEquals(kind.name, scope, native.authorizationScope)
+            assertEquals(media.headers, native.requestHeaders)
+            assertEquals(PlaybackBackend.NATIVE, native.backend)
+            assertEquals(if (kind == MkissaMediaKind.MP4) SeekMode.EXACT else SeekMode.CLOSEST_SYNC, native.seekMode)
+            assertTrue(native.conservativeNetwork)
+            assertFalse(native.downloadable)
+        }
+    }
+
+    @Test
+    fun accessPolicyDistinguishesCryptoErrorsAndDoesNotInspectOrdinaryTitles() {
+        assertEquals(MkissaChallengeKind.CAPTCHA, MkissaChallengePolicy.classify(403, "Forbidden"))
+        assertEquals(MkissaChallengeKind.RATE_LIMIT, MkissaChallengePolicy.classify(429, ""))
+        assertNull(MkissaChallengePolicy.classify(
+            403,
+            """{"errors":[{"extensions":{"code":"AA_CRYPTO_MISMATCH"}}]}""",
+        ))
+        assertNull(MkissaChallengePolicy.classify(
+            200,
+            """{"data":{"show":{"name":"CAPTCHA_REQUIRED: Security Challenge"}}}""",
+        ))
+        assertEquals(MkissaChallengeKind.CAPTCHA, MkissaChallengePolicy.classify(
+            503,
+            """ <html><title>Just a moment...</title><script src="/cf-chl-verify.js"></script></html>""",
+        ))
+    }
+
+    @Test
+    fun sourceDiscoveryCacheDoesNotReuseExpiringUrlsAtPlayback() = runBlocking {
+        var protectedReads = 0
+        val service = fixtureService {
+            protectedReads++
+            sourceResponse(url = "https://media.example/episode.mp4?generation=$protectedReads")
+        }
+        val episode = MkissaEpisodeRef("fixture_show", "1.5", MkissaTranslation.SUB)
+        assertEquals(service.sources(episode), service.sources(episode))
+        assertEquals(1, protectedReads)
+        assertEquals(
+            "https://media.example/episode.mp4?generation=2",
+            service.sources(episode, fresh = true).single().url,
+        )
+        assertEquals(2, protectedReads)
+        service.resolveFirst(episode)
+        assertEquals("Default playback also requests current sources", 3, protectedReads)
+    }
+
+    @Test
+    fun explicitServerSelectionTracksAliasAfterReorderAndRejectsDisappearedAlias() = runBlocking {
+        var protectedReads = 0
+        val service = fixtureService {
+            protectedReads++
+            val choices = when (protectedReads) {
+                1 -> """[{"sourceName":"Mp4","type":"player","priority":3,"sourceUrl":"https://media.example/old.mp4"},{"sourceName":"Ok","type":"player","priority":2,"sourceUrl":"https://media.example/ok.mp4"}]"""
+                2 -> """[{"sourceName":"Ok","type":"player","priority":4,"sourceUrl":"https://media.example/ok-new.mp4"},{"sourceName":"Mp4","type":"player","priority":1,"sourceUrl":"https://media.example/fresh.mp4"}]"""
+                else -> """[{"sourceName":"Ok","type":"player","priority":4,"sourceUrl":"https://media.example/never-selected.mp4"}]"""
+            }
+            sourceResponse(choices = choices)
+        }
+        val show = MkissaShow("fixture_show", "Fixture", subEpisodes = listOf("1"))
+        val episode = MkissaProvider.series(show, MkissaTranslation.SUB, service).episodes.single()
+        val selected = episode.variants().first { it.label == "Mp4" }
+        assertEquals("https://media.example/fresh.mp4", episode.resolve(variantId = selected.id).url)
+        val failure = runCatching { episode.resolve(variantId = selected.id) }.exceptionOrNull()
+        assertTrue(failure is MkissaProtocolException)
+        assertTrue(failure?.message.orEmpty().contains("no longer available"))
+        assertEquals(3, protectedReads)
+    }
+
+    @Test
+    fun invalidSourcePayloadsNeverCauseAnotherKeyHandshake() = runBlocking {
+        val payloads = listOf(
+            "not-json",
+            """{"data":{"episode":{"sourceUrls":[]}}}""",
+            """{"data":{"episode":{"show":{"_id":"other_show"},"sourceUrls":[{"sourceName":"Mp4","sourceUrl":"https://media.example/wrong.mp4"}]}}}""",
+            """{"data":{"tobeparsed":"not-base64"}}""",
+            """{"data":{"episode":{"sourceUrls":"unexpected"}}}""",
+        )
+        for (payload in payloads) {
+            var protectedReads = 0
+            var bootstrapReads = 0
+            val service = fixtureService(onBootstrap = { bootstrapReads++ }) {
+                protectedReads++
+                MkissaHttpResponse(200, payload)
+            }
+            val failure = runCatching {
+                service.sources(MkissaEpisodeRef("fixture_show", "1", MkissaTranslation.SUB))
+            }.exceptionOrNull()
+            assertTrue(payload, failure is MkissaProtocolException)
+            assertEquals(payload, 1, protectedReads)
+            assertEquals(payload, 1, bootstrapReads)
+        }
+    }
+
+    @Test
+    fun decryptedMalformedJsonIsNotMistakenForStaleKeys() = runBlocking {
+        var bootstrapReads = 0
+        var protectedReads = 0
+        val key = MkissaCrypto.deriveKey(
+            MkissaCrypto.maskCandidates(FIXTURE_BUILD.buildId, FIXTURE_BUILD.seeds).first(),
+            FIXTURE_PART_B,
+        )
+        val envelope = MkissaCrypto.encryptPayload("not-json", key, ByteArray(12) { it.toByte() })
+        val service = fixtureService(onBootstrap = { bootstrapReads++ }) {
+            protectedReads++
+            MkissaHttpResponse(200, JSONObject().put("data", JSONObject().put("tobeparsed", envelope)).toString())
+        }
+        val failure = runCatching { service.sources(MkissaEpisodeRef("fixture_show", "1", MkissaTranslation.SUB)) }.exceptionOrNull()
+        assertTrue(failure is MkissaProtocolException)
+        assertEquals(1, bootstrapReads)
+        assertEquals(1, protectedReads)
+    }
+
+    @Test
+    fun explicitlyStaleKeysPermitOnlyOneRefresh() = runBlocking {
+        var bootstrapReads = 0
+        var protectedReads = 0
+        val service = fixtureService(onBootstrap = { bootstrapReads++ }) {
+            protectedReads++
+            MkissaHttpResponse(403, """{"errors":[{"extensions":{"code":"AA_CRYPTO_MISMATCH"}}]}""")
+        }
+        val failure = runCatching { service.sources(MkissaEpisodeRef("fixture_show", "1", MkissaTranslation.SUB)) }.exceptionOrNull()
+        assertTrue(failure is MkissaProtocolException)
+        assertEquals(2, bootstrapReads)
+        assertEquals(2, protectedReads)
+    }
+
+    @Test
+    fun queuedSourcesStopAfterChallengeButLaterManualRequestWorksImmediately() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var protectedReads = 0
+        val service = fixtureService {
+            protectedReads++
+            if (protectedReads == 1) {
+                started.complete(Unit)
+                release.await()
+                MkissaHttpResponse(403, "Forbidden")
+            } else sourceResponse()
+        }
+        val first = async(start = CoroutineStart.UNDISPATCHED) {
+            runCatching { service.sources(MkissaEpisodeRef("fixture_show", "1", MkissaTranslation.SUB)) }
+        }
+        started.await()
+        val queued = async(start = CoroutineStart.UNDISPATCHED) {
+            runCatching { service.sources(MkissaEpisodeRef("fixture_show", "2", MkissaTranslation.SUB)) }
+        }
+        release.complete(Unit)
+        assertTrue(first.await().exceptionOrNull() is MkissaRateLimitedException)
+        assertTrue(queued.await().exceptionOrNull() is MkissaRateLimitedException)
+        assertEquals("Queued reads must not reach the rejected API", 1, protectedReads)
+        assertEquals(1, service.sources(MkissaEpisodeRef("fixture_show", "2", MkissaTranslation.SUB)).size)
+        assertEquals(2, protectedReads)
+    }
+
+    @Test
+    fun bootstrapUnknownDenialsAndMalformedBodiesStopAtFirstToken() = runBlocking {
+        for (response in listOf(MkissaHttpResponse(403, "Forbidden"), MkissaHttpResponse(503, "down"), MkissaHttpResponse(200, "not-json"))) {
+            var calls = 0
+            val keys = MkissaKeyManager(
+                transport = MkissaHttpTransport { calls++; response },
+                externalBuildResolver = { FIXTURE_BUILD },
+                nowMillis = { 1_000L },
+            )
+            assertTrue(runCatching { keys.material() }.isFailure)
+            assertEquals("Bootstrap must not rotate token candidates for arbitrary failures", 1, calls)
+        }
+    }
+
+    @Test
+    fun mediaAccessDenialNeverRotatesToAnotherServer() = runBlocking {
+        var calls = 0
+        val service = MkissaService(transport = MkissaHttpTransport {
+            calls++
+            MkissaHttpResponse(403, "Forbidden")
+        })
+        val failure = runCatching {
+            service.resolveFirst(listOf(
+                MkissaSourceCandidate("https://mp4upload.com/embed-one.html", "Mp4", "iframe", 2f),
+                MkissaSourceCandidate("https://media.example/never-reached.mp4", "Fallback", "player", 1f),
+            ))
+        }.exceptionOrNull()
+        assertTrue(failure is MkissaRateLimitedException)
+        assertEquals(1, calls)
+    }
+
+    @Test
+    fun cancelledSearchDoesNotTryAnotherTitleOrBecomeAnAvailabilityError() = runBlocking {
+        val cancellation = CancellationException("Fixture search cancelled")
+        var calls = 0
+        val service = MkissaService(transport = MkissaHttpTransport {
+            calls++
+            throw cancellation
+        })
+        val anime = Anime(
+            id = 1, malId = null, title = "English fixture", titleRomaji = "Romaji fixture",
+            cover = null, banner = null, episodes = 26, status = "FINISHED", format = "TV",
+            year = 1998, score = null, synopsis = null, genres = emptyList(),
+        )
+        val failure = runCatching { service.match(anime) }.exceptionOrNull()
+        assertTrue("Cancellation must reach the caller unchanged", failure === cancellation)
+        assertEquals("Cancelled matching must not search alternate titles", 1, calls)
+    }
+
+    @Test
+    fun cancelledResolutionDoesNotReturnAFallbackServer() = runBlocking {
+        val cancellation = CancellationException("Fixture resolution cancelled")
+        var calls = 0
+        val service = MkissaService(transport = MkissaHttpTransport {
+            calls++
+            throw cancellation
+        })
+        val failure = runCatching {
+            service.resolveFirst(listOf(
+                MkissaSourceCandidate("https://mp4upload.com/embed-one.html", "Mp4", "iframe", 2f),
+                MkissaSourceCandidate("https://media.example/never-selected.mp4", "Fallback", "player", 1f),
+            ))
+        }.exceptionOrNull()
+        assertTrue("A cancelled resolver must not silently choose another server", failure === cancellation)
+        assertEquals(1, calls)
+    }
+
+    @Test
+    fun canonicalMp4UploadRedirectIsValidatedAndDeletedFileIsActionable() = runBlocking {
+        val requests = mutableListOf<MkissaHttpRequest>()
+        val service = MkissaService(transport = MkissaHttpTransport { request ->
+            requests += request
+            if (requests.size == 1) MkissaHttpResponse(302, "", mapOf("location" to "https://www.mp4upload.com/embed-fixture.html"))
+            else MkissaHttpResponse(200, "File was deleted")
+        })
+        val failure = runCatching {
+            service.resolve(MkissaSourceCandidate("https://mp4upload.com/embed-fixture.html", "Mp4", "iframe", 1f))
+        }.exceptionOrNull()
+        assertEquals(2, requests.size)
+        assertEquals("https://www.mp4upload.com/embed-fixture.html", requests.last().url)
+        assertTrue(requests.last().headers.keys.none { it.equals("Cookie", true) || it.equals("Authorization", true) })
+        assertTrue(failure is MkissaUnsupportedSourceException)
+        assertTrue(failure?.message.orEmpty().contains("file was deleted"))
+    }
+
+    @Test
+    fun embedRedirectCannotFollowAdvertisingOrPrivateHosts() = runBlocking {
+        for (location in listOf("https://ads.example/player", "https://127.0.0.1/video", "http://www.mp4upload.com/embed-fixture.html")) {
+            var calls = 0
+            val service = MkissaService(transport = MkissaHttpTransport {
+                calls++
+                MkissaHttpResponse(302, "", mapOf("Location" to location))
+            })
+            assertTrue(runCatching {
+                service.resolve(MkissaSourceCandidate("https://mp4upload.com/embed-fixture.html", "Mp4", "iframe", 1f))
+            }.isFailure)
+            assertEquals(location, 1, calls)
+        }
+    }
+
+    @Test
+    fun wrongShowCatalogueIsRejected() = runBlocking {
+        val service = MkissaService(transport = MkissaHttpTransport {
+            MkissaHttpResponse(200, """{"data":{"show":{"_id":"other_show","name":"Wrong title"}}}""")
+        })
+        assertTrue(runCatching { service.show("fixture_show") }.exceptionOrNull() is MkissaProtocolException)
+    }
+
+    @Test
+    fun browserTlsFallbackNeverRetriesApiDenialsNetworkResetsOrUnsafeDns() {
+        val embed = "https://mp4upload.com/embed-fixture.html"
+        assertTrue(MkissaNetwork.allowsBrowserTlsFallback(embed, SSLHandshakeException("TLS handshake")))
+        assertFalse(MkissaNetwork.allowsBrowserTlsFallback("https://api.mkissa.net/api", SSLHandshakeException("TLS handshake")))
+        assertFalse(MkissaNetwork.allowsBrowserTlsFallback("https://arbitrary.example/player", SSLHandshakeException("TLS handshake")))
+        assertFalse(MkissaNetwork.allowsBrowserTlsFallback(embed, IOException("Connection reset")))
+        assertFalse(MkissaNetwork.allowsBrowserTlsFallback(embed, IOException("Unsafe DNS answer")))
+        assertFalse(MkissaNetwork.allowsBrowserTlsFallback("https://127.0.0.1/player", SSLHandshakeException("TLS handshake")))
+    }
+
+    @Test
+    fun unreadableDeniedResponseRemainsTypedAccessStopRatherThanNetworkRetry() = runBlocking {
+        var calls = 0
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            calls++
+            val brokenBody = object : ResponseBody() {
+                override fun contentType() = "text/plain".toMediaType()
+                override fun contentLength() = -1L
+                override fun source() = object : Source {
+                    override fun read(sink: Buffer, byteCount: Long): Long = throw IOException("Unreadable denial")
+                    override fun timeout() = Timeout.NONE
+                    override fun close() = Unit
+                }.buffer()
+            }
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                .code(403).message("Forbidden").body(brokenBody).build()
+        }.build()
+        val failure = runCatching {
+            MkissaOkHttpTransport(client).execute(MkissaHttpRequest("GET", "https://mp4upload.com/embed-fixture.html"))
+        }.exceptionOrNull()
+        assertTrue(failure is MkissaRateLimitedException)
+        assertEquals(1, calls)
+    }
+
+    private fun fixtureService(
+        onBootstrap: () -> Unit = {},
+        sources: suspend (MkissaHttpRequest) -> MkissaHttpResponse,
+    ): MkissaService {
+        val transport = MkissaHttpTransport { request ->
+            if (request.url.contains("/client-crypto/v1/bootstrap")) {
+                onBootstrap()
+                MkissaHttpResponse(200, JSONObject()
+                    .put("epoch", 1234)
+                    .put("k", "k7")
+                    .put("partB", Base64.getEncoder().encodeToString(FIXTURE_PART_B))
+                    .toString())
+            } else sources(request)
+        }
+        return MkissaService(
+            transport = transport,
+            keyManager = MkissaKeyManager(transport, externalBuildResolver = { FIXTURE_BUILD }, nowMillis = { 1_000L }),
+            nowMillis = { 1_000L },
+            diagnostic = {},
+        )
+    }
+
+    private fun sourceResponse(
+        url: String = "https://media.example/episode.mp4",
+        choices: String = """[{"sourceName":"Mp4","type":"player","priority":1,"sourceUrl":"$url"}]""",
+    ) = MkissaHttpResponse(200, """{"data":{"episode":{"show":{"_id":"fixture_show"},"sourceUrls":$choices}}}""")
+
+    companion object {
+        private val FIXTURE_PART_B = ByteArray(32) { (it + 1).toByte() }
+        private val FIXTURE_BUILD = MkissaBundleParser.BuildInfo(
+            "149",
+            listOf("YWJjZGVmZ2g=", "aWprbG1ub3A=", "cXJzdHV2d3g=", "eXoxMjM0NTY="),
+        )
     }
 }

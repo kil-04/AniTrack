@@ -1,7 +1,9 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
-import { Clock, Play, X, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
+import { History, Play, X, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
+import PageHeader from "../components/PageHeader";
+import EmptyState from "../components/EmptyState";
 import { secondsToTimestamp } from "../lib/format";
 import { deleteAnimeProgress } from "../lib/supabase-sync";
 import { cwResumeUrl } from "../components/ContinueWatchingCard";
@@ -36,22 +38,27 @@ export default function ContinueWatching() {
   }
 
   return (
-    <div className="pb-16 px-8 pt-6">
-      {/* Header */}
-      <div className="mb-6 flex items-center gap-2">
-        <Clock size={18} className="text-white" />
-        <h1 className="text-xl font-bold">Continue Watching</h1>
-        {total > 0 && (
-          <span className="ml-1 rounded-full bg-white/10 px-2 py-0.5 text-xs text-white/50">{total}</span>
-        )}
-      </div>
+    <div className="mx-auto max-w-[1680px] px-8 pb-16 pt-8">
+      <PageHeader
+        icon={History}
+        title="Continue Watching"
+        subtitle={total > 0 ? `${total} show${total === 1 ? "" : "s"} in progress` : "Pick up right where you left off"}
+      />
 
       {loading && items.length === 0 ? (
-        <div className="flex h-48 items-center justify-center text-sm text-white/30">Loading…</div>
-      ) : items.length === 0 ? (
-        <div className="flex h-48 items-center justify-center text-sm text-white/30">
-          Nothing here yet — start watching something!
+        <div className="grid grid-cols-4 gap-5 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-7 xl:grid-cols-8">
+          {Array.from({ length: 16 }, (_, i) => (
+            <div key={i} className="skeleton aspect-[2/3] rounded-2xl" />
+          ))}
         </div>
+      ) : items.length === 0 ? (
+        <EmptyState
+          icon={Play}
+          title="Nothing to resume"
+          action={<Link to="/" className="btn btn-primary">Browse anime</Link>}
+        >
+          Start an episode and it shows up here, on this device and your others.
+        </EmptyState>
       ) : (
         <>
           <div className={`grid grid-cols-4 gap-5 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-7 xl:grid-cols-8 transition-opacity ${loading ? "opacity-40 pointer-events-none" : ""}`}>
@@ -66,11 +73,11 @@ export default function ContinueWatching() {
 
           {/* Pagination */}
           {lastPage > 1 && (
-            <div className="mt-8 flex items-center justify-center gap-1">
+            <div className="mt-10 flex items-center justify-center gap-1.5">
               <button
                 onClick={() => setPage(1)}
                 disabled={page === 1 || loading}
-                className="flex h-8 w-8 items-center justify-center rounded text-white/50 hover:bg-white/10 hover:text-white disabled:opacity-30 transition"
+                className="flex h-9 w-9 items-center justify-center rounded-xl text-ink-3 transition hover:bg-white/[0.07] hover:text-white disabled:pointer-events-none disabled:opacity-30"
                 title="First page"
               >
                 <ChevronsLeft size={14} />
@@ -78,7 +85,7 @@ export default function ContinueWatching() {
               <button
                 onClick={() => setPage((p) => p - 1)}
                 disabled={page === 1 || loading}
-                className="flex h-8 w-8 items-center justify-center rounded text-white/50 hover:bg-white/10 hover:text-white disabled:opacity-30 transition"
+                className="flex h-9 w-9 items-center justify-center rounded-xl text-ink-3 transition hover:bg-white/[0.07] hover:text-white disabled:pointer-events-none disabled:opacity-30"
                 title="Previous page"
               >
                 <ChevronLeft size={14} />
@@ -93,16 +100,16 @@ export default function ContinueWatching() {
                 }, [])
                 .map((p, i) =>
                   p === "…" ? (
-                    <span key={`e-${i}`} className="px-1 text-xs text-white/30">…</span>
+                    <span key={`e-${i}`} className="px-1 text-xs text-ink-3">…</span>
                   ) : (
                     <button
                       key={p}
                       onClick={() => setPage(p as number)}
                       disabled={loading}
-                      className={`flex h-8 min-w-[2rem] items-center justify-center rounded px-2 text-xs font-medium transition
+                      className={`flex h-9 min-w-[2.25rem] items-center justify-center rounded-xl px-2 text-xs font-semibold tabular-nums transition
                         ${page === p
-                          ? "bg-white text-black"
-                          : "text-white/60 hover:bg-white/10 hover:text-white disabled:opacity-40"}`}
+                          ? "bg-accent-gradient text-white shadow-glow"
+                          : "text-ink-2 hover:bg-white/[0.07] hover:text-white disabled:opacity-40"}`}
                     >
                       {p}
                     </button>
@@ -112,7 +119,7 @@ export default function ContinueWatching() {
               <button
                 onClick={() => setPage((p) => p + 1)}
                 disabled={page === lastPage || loading}
-                className="flex h-8 w-8 items-center justify-center rounded text-white/50 hover:bg-white/10 hover:text-white disabled:opacity-30 transition"
+                className="flex h-9 w-9 items-center justify-center rounded-xl text-ink-3 transition hover:bg-white/[0.07] hover:text-white disabled:pointer-events-none disabled:opacity-30"
                 title="Next page"
               >
                 <ChevronRight size={14} />
@@ -120,7 +127,7 @@ export default function ContinueWatching() {
               <button
                 onClick={() => setPage(lastPage)}
                 disabled={page === lastPage || loading}
-                className="flex h-8 w-8 items-center justify-center rounded text-white/50 hover:bg-white/10 hover:text-white disabled:opacity-30 transition"
+                className="flex h-9 w-9 items-center justify-center rounded-xl text-ink-3 transition hover:bg-white/[0.07] hover:text-white disabled:pointer-events-none disabled:opacity-30"
                 title="Last page"
               >
                 <ChevronsRight size={14} />
@@ -180,7 +187,7 @@ function ContinueWatchingPageCard({ item, dismiss }: { item: any, dismiss: (id: 
 
   const tooltipPortal = isHovered && rect ? createPortal(
     <div 
-      className="fixed z-[9999] w-72 bg-[#1f1f1f] rounded-xl border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.8)] p-5 flex flex-col pointer-events-none animate-in fade-in zoom-in-95 duration-200"
+      className="pointer-events-none fixed z-[9999] flex w-72 flex-col rounded-2xl border border-white/10 bg-surface-1/95 p-5 shadow-pop backdrop-blur-xl animate-in fade-in zoom-in-95 duration-200"
       style={{
         left: rect.right + 15 + 288 > window.innerWidth ? rect.left - 288 - 15 : rect.right + 15,
         top: Math.max(10, Math.min(window.innerHeight - 320, rect.top + rect.height / 2 - 160)),
@@ -188,14 +195,14 @@ function ContinueWatchingPageCard({ item, dismiss }: { item: any, dismiss: (id: 
     >
       <h3 className="font-bold text-white text-lg leading-tight mb-2">{displayAnime.title}</h3>
       {displayAnime.averageScore && (
-        <div className="text-sm font-bold text-green-400 mb-3">★ {(displayAnime.averageScore / 10).toFixed(1)} / 10</div>
+        <div className="mb-3 text-sm font-bold text-amber-300">★ {(displayAnime.averageScore / 10).toFixed(1)} / 10</div>
       )}
       {(displayAnime.year || displayAnime.status || displayAnime.episodes || displayAnime.duration) && (
         <div className="flex flex-wrap gap-2 mb-3">
-          {displayAnime.year && <span className="px-1.5 py-0.5 rounded bg-white/10 text-[10px] font-bold">{displayAnime.year}</span>}
-          {displayAnime.status && <span className="px-1.5 py-0.5 rounded bg-white/10 text-[10px] font-bold">{displayAnime.status}</span>}
-          {displayAnime.episodes && <span className="px-1.5 py-0.5 rounded bg-white/10 text-[10px] font-bold">{displayAnime.episodes} EPS</span>}
-          {displayAnime.duration && <span className="px-1.5 py-0.5 rounded bg-white/10 text-[10px] font-bold">{displayAnime.duration}m</span>}
+          {displayAnime.year && <span className="rounded-md bg-white/[0.08] px-1.5 py-0.5 text-[10px] font-bold text-ink-2">{displayAnime.year}</span>}
+          {displayAnime.status && <span className="rounded-md bg-white/[0.08] px-1.5 py-0.5 text-[10px] font-bold text-ink-2">{displayAnime.status}</span>}
+          {displayAnime.episodes && <span className="rounded-md bg-white/[0.08] px-1.5 py-0.5 text-[10px] font-bold text-ink-2">{displayAnime.episodes} EPS</span>}
+          {displayAnime.duration && <span className="rounded-md bg-white/[0.08] px-1.5 py-0.5 text-[10px] font-bold text-ink-2">{displayAnime.duration}m</span>}
         </div>
       )}
       {displayAnime.genres && displayAnime.genres.length > 0 && (
@@ -216,7 +223,7 @@ function ContinueWatchingPageCard({ item, dismiss }: { item: any, dismiss: (id: 
     <div className="group relative w-full">
       <button
         onClick={() => dismiss(item.anime.id)}
-        className="absolute right-1.5 top-1.5 z-20 flex h-6 w-6 items-center justify-center rounded-full bg-black/70 text-white opacity-0 transition hover:bg-black/90 group-hover:opacity-100"
+        className="absolute right-2 top-2 z-20 flex h-7 w-7 items-center justify-center rounded-full border border-white/15 bg-black/60 text-white/80 opacity-0 backdrop-blur-md transition hover:scale-110 hover:bg-red-500 hover:text-white group-hover:opacity-100"
         title="Remove from Continue Watching"
       >
         <X size={12} />
@@ -230,12 +237,12 @@ function ContinueWatchingPageCard({ item, dismiss }: { item: any, dismiss: (id: 
         onMouseLeave={() => setIsHovered(false)}
         className="block"
       >
-        <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-white/5 transition duration-200 group-hover:scale-105 group-hover:ring-2 group-hover:ring-white/50">
+        <div className="relative aspect-[2/3] w-full overflow-hidden rounded-2xl bg-surface-1 shadow-card ring-1 ring-white/[0.06] transition-all duration-300 ease-out group-hover:-translate-y-1.5 group-hover:shadow-glow-lg group-hover:ring-2 group-hover:ring-accent/70">
           {displayAnime.coverImage ? (
             <img
               src={displayAnime.coverImage}
               alt={displayAnime.title}
-              className="h-full w-full object-cover"
+              className="h-full w-full object-cover transition-transform duration-700 ease-out group-hover:scale-[1.07]"
               loading="lazy"
             />
           ) : (
@@ -243,33 +250,33 @@ function ContinueWatchingPageCard({ item, dismiss }: { item: any, dismiss: (id: 
               {displayAnime.title.slice(0, 2).toUpperCase()}
             </div>
           )}
-          <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent" />
+          <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/25 to-transparent" />
 
-          <div className="absolute left-2 top-2 rounded bg-[#e50914] px-1.5 py-0.5 text-xs font-semibold text-white">
+          <div className="badge badge-accent absolute left-2 top-2">
             EP {item.episode}
           </div>
 
-          <div className="absolute inset-0 flex items-center justify-center opacity-0 transition group-hover:opacity-100">
-            <div className="rounded-full bg-white/90 p-3 text-black shadow-lg">
-              <Play size={20} fill="currentColor" />
+          <div className="absolute inset-0 flex scale-90 items-center justify-center opacity-0 transition-all duration-300 group-hover:scale-100 group-hover:opacity-100">
+            <div className="rounded-full bg-accent-gradient p-3 text-white shadow-glow-lg ring-1 ring-white/30">
+              <Play size={20} fill="currentColor" className="ml-0.5" />
             </div>
           </div>
 
-          <div className="absolute bottom-4 left-0 right-0 px-2 text-xs text-white/80">
+          <div className="absolute bottom-3 left-0 right-0 px-2.5 text-[11px] font-medium text-white/80">
             <div className="tabular-nums">
               {secondsToTimestamp(item.positionSec)} / {secondsToTimestamp(item.durationSec)}
             </div>
           </div>
 
-          <div className="absolute bottom-0 left-0 right-0 h-1 bg-white/20">
+          <div className="absolute bottom-0 left-0 right-0 h-1 bg-white/15">
             <div
-              className="h-full bg-[#e50914]"
+              className="h-full rounded-r-full bg-accent-gradient shadow-[0_0_12px_rgb(var(--accent)/0.85)]"
               style={{ width: `${Math.min(100, item.percent)}%` }}
             />
           </div>
         </div>
 
-        <div className="mt-2 line-clamp-2 text-xs font-medium leading-snug text-white/80">
+        <div className="mt-2.5 line-clamp-2 text-[13px] font-semibold leading-snug text-white/85 transition-colors group-hover:text-white">
           {item.anime.title}
         </div>
       </Link>

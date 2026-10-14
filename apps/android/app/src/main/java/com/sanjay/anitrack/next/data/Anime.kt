@@ -19,6 +19,9 @@ data class Anime(
     val duration: Int? = null,
     val popularity: Int? = null,
     val studios: List<String> = emptyList(),
+    /** The next episode to air and when (epoch seconds), for airing shows. */
+    val nextEpisode: Int? = null,
+    val nextAiringAt: Long? = null,
 ) {
     companion object {
         fun fromMedia(m: JSONObject): Anime {
@@ -59,6 +62,8 @@ data class Anime(
                 duration = if (m.isNull("duration")) null else m.optInt("duration"),
                 popularity = if (m.isNull("popularity")) null else m.optInt("popularity"),
                 studios = studios,
+                nextEpisode = m.optJSONObject("nextAiringEpisode")?.optInt("episode")?.takeIf { it > 0 },
+                nextAiringAt = m.optJSONObject("nextAiringEpisode")?.optLong("airingAt")?.takeIf { it > 0 },
             )
         }
     }

@@ -9,6 +9,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -36,6 +37,8 @@ internal fun DetailHero(
     score: String?,
     meta: String,
     genres: List<String>,
+    /** A short status line under the meta, e.g. when the next episode airs. */
+    note: String? = null,
     actions: @Composable RowScope.() -> Unit,
 ) {
     val wide = LocalConfiguration.current.screenWidthDp >= 820
@@ -77,6 +80,10 @@ internal fun DetailHero(
                     ScoreBadge(score)
                     if (meta.isNotBlank()) Text(meta, style = MaterialTheme.typography.labelLarge, color = AniColors.TextSecondary)
                 }
+                if (!note.isNullOrBlank()) {
+                    Spacer(Modifier.height(10.dp))
+                    Tag(note, tone = TagTone.Info, icon = Icons.Rounded.Schedule)
+                }
                 if (genres.isNotEmpty()) {
                     Spacer(Modifier.height(12.dp))
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -84,7 +91,7 @@ internal fun DetailHero(
                     }
                 }
                 Spacer(Modifier.height(16.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically, content = actions)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp), content = actions)
             }
         }
     }

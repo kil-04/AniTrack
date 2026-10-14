@@ -13,10 +13,12 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.net.URI
 import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLHandshakeException
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -27,7 +29,7 @@ internal data class MkissaHttpRequest(
     val body: String? = null,
 )
 
-internal data class MkissaHttpResponse(val code: Int, val body: String) {
+internal data class MkissaHttpResponse(val code: Int, val body: String, val headers: Map<String, String> = emptyMap()) {
     val successful: Boolean get() = code in 200..299
 }
 
@@ -58,10 +60,23 @@ internal object MkissaNetwork {
             try {
                 primary.execute(request)
             } catch (error: IOException) {
+                // A network reset, unsafe DNS result, API denial or other failure must not cause
+                // an automatic change of network stack. This compatibility path is only for a
+                // TLS handshake failure on a reviewed embed, before any HTTP response existed.
+                if (!allowsBrowserTlsFallback(request.url, error)) throw error
                 browser.execute(request)
             }
         }
     }
+
+    internal fun allowsBrowserTlsFallback(url: String, error: IOException): Boolean {
+        val host = runCatching { URI(MkissaUrlPolicy.requireMediaUrl(url)).host.lowercase().removePrefix("www.") }
+            .getOrNull() ?: return false
+        if (host !in TLS_EMBED_HOSTS && !host.endsWith(".uns.bio") && !host.endsWith(".bysekoze.com")) return false
+        return generateSequence<Throwable>(error) { it.cause }.take(8).any { it is SSLHandshakeException }
+    }
+
+    private val TLS_EMBED_HOSTS = setOf("mp4upload.com", "ok.ru", "uns.bio", "bysekoze.com", "streamsb.net")
 }
 
 private class MkissaCronetHttpTransport(
@@ -87,7 +102,9 @@ private class MkissaCronetHttpTransport(
                 ) {
                     request.cancel()
                     if (continuation.isActive) {
-                        continuation.resumeWithException(IOException("MKissa embed redirected; redirect rejected"))
+                        // Return the redirect as data. Only the connector may follow a reviewed
+                        // canonical redirect after validating the destination and request headers.
+                        continuation.resume(MkissaHttpResponse(info.httpStatusCode, "", mapOf("Location" to newLocationUrl)))
                     }
                 }
 
@@ -106,10 +123,15 @@ private class MkissaCronetHttpTransport(
                     byteBuffer.flip()
                     val bytes = ByteArray(byteBuffer.remaining())
                     byteBuffer.get(bytes)
-                    if (output.size() + bytes.size > MAX_RESPONSE_BYTES) {
+                    val maximum = if (info.httpStatusCode in 200..299) MAX_RESPONSE_BYTES else MAX_ERROR_BYTES
+                    if (output.size() + bytes.size > maximum) {
                         request.cancel()
                         if (continuation.isActive) {
-                            continuation.resumeWithException(MkissaProtocolException("MKissa response was too large"))
+                            val failure = MkissaChallengePolicy.classify(info.httpStatusCode, "")
+                            continuation.resumeWithException(
+                                failure?.let { MkissaRateLimitedException(it) }
+                                    ?: MkissaProtocolException("MKissa response was too large"),
+                            )
                         }
                         return
                     }
@@ -123,7 +145,12 @@ private class MkissaCronetHttpTransport(
                     info: org.chromium.net.UrlResponseInfo,
                 ) {
                     if (continuation.isActive) {
-                        continuation.resume(MkissaHttpResponse(info.httpStatusCode, output.toString(Charsets.UTF_8.name())))
+                        continuation.resume(MkissaHttpResponse(
+                            info.httpStatusCode,
+                            output.toString(Charsets.UTF_8.name()),
+                            info.allHeaders.entries.firstOrNull { it.key.equals("Location", ignoreCase = true) }
+                                ?.let { mapOf("Location" to it.value.firstOrNull().orEmpty()) }.orEmpty(),
+                        ))
                     }
                 }
 
@@ -132,7 +159,12 @@ private class MkissaCronetHttpTransport(
                     info: org.chromium.net.UrlResponseInfo?,
                     error: org.chromium.net.CronetException,
                 ) {
-                    if (continuation.isActive) continuation.resumeWithException(IOException(error.message, error))
+                    if (continuation.isActive) {
+                        val failure = info?.let { MkissaChallengePolicy.classify(it.httpStatusCode, "") }
+                        continuation.resumeWithException(
+                            failure?.let { MkissaRateLimitedException(it) } ?: IOException(error.message, error),
+                        )
+                    }
                 }
             }
             val builder = engine.newUrlRequestBuilder(safeUrl, callback, executor)
@@ -151,6 +183,7 @@ private class MkissaCronetHttpTransport(
 
     companion object {
         private const val MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+        private const val MAX_ERROR_BYTES = 64 * 1024
     }
 }
 
@@ -178,11 +211,20 @@ internal class MkissaOkHttpTransport(
             else -> error("Unsupported MKissa HTTP method")
         }
         client.newCall(builder.build()).execute().use { response ->
-            MkissaHttpResponse(response.code, readBounded(response.body?.byteStream()))
+            val maximum = if (response.isSuccessful) MAX_RESPONSE_BYTES else MAX_ERROR_BYTES
+            val body = try {
+                readBounded(response.body?.byteStream(), maximum)
+            } catch (error: Exception) {
+                // Oversized/unreadable access-denial bodies must not become retry permission.
+                val failure = MkissaChallengePolicy.classify(response.code, "")
+                if (failure != null) throw MkissaRateLimitedException(failure)
+                throw error
+            }
+            MkissaHttpResponse(response.code, body, response.header("Location")?.let { mapOf("Location" to it) }.orEmpty())
         }
     }
 
-    private fun readBounded(input: java.io.InputStream?): String {
+    private fun readBounded(input: java.io.InputStream?, maximum: Int): String {
         if (input == null) return ""
         return input.use { stream ->
             val output = ByteArrayOutputStream(8_192)
@@ -192,7 +234,7 @@ internal class MkissaOkHttpTransport(
                 val count = stream.read(buffer)
                 if (count < 0) break
                 total += count
-                if (total > MAX_RESPONSE_BYTES) throw MkissaProtocolException("MKissa response was too large")
+                if (total > maximum) throw MkissaProtocolException("MKissa response was too large")
                 output.write(buffer, 0, count)
             }
             output.toString(Charsets.UTF_8.name())
@@ -201,6 +243,7 @@ internal class MkissaOkHttpTransport(
 
     companion object {
         private const val MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+        private const val MAX_ERROR_BYTES = 64 * 1024
         private val HEADER_NAME = Regex("[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}")
 
         fun defaultClient(): OkHttpClient = OkHttpClient.Builder()

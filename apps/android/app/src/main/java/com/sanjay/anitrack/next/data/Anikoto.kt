@@ -2,6 +2,8 @@ package com.sanjay.anitrack.next.data
 
 import android.util.Log
 import com.sanjay.anitrack.next.data.providers.connectors.anikoto.AnikotoSource
+import com.sanjay.anitrack.next.data.providers.connectors.anikoto.AnikotoRequestPolicy
+import com.sanjay.anitrack.next.data.providers.connectors.anikoto.AnikotoServerPolicy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -83,7 +85,10 @@ object Anikoto {
 
     private val http = OkHttpClient.Builder()
         .callTimeout(20, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(false)
         .build()
+    private val requestPolicy = AnikotoRequestPolicy()
+    private const val MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 
     data class SearchResult(
         val slug: String,
@@ -127,17 +132,34 @@ object Anikoto {
                 } else referer
             }.getOrDefault(referer)
             try {
+                val candidateOrigin = java.net.URI(candidateUrl).let { "${it.scheme}://${it.host}" }
+                requestPolicy.beforeRequest(candidateOrigin)
                 val b = Request.Builder().url(candidateUrl)
                     .header("User-Agent", UA)
                     .header("Referer", candidateReferer)
                 if (xhr) b.header("X-Requested-With", "XMLHttpRequest")
                 http.newCall(b.build()).execute().use { res ->
-                    if (!res.isSuccessful) throw Exception("Anikoto ${res.code} for $candidateUrl")
-                    val body = res.body?.string() ?: throw Exception("empty body")
+                    requestPolicy.checkResponse(candidateOrigin, res.code)
+                    val responseBody = res.body ?: error("Anikoto returned an empty response.")
+                    require(responseBody.contentLength() <= MAX_RESPONSE_BYTES) { "Anikoto response is too large." }
+                    val buffer = java.io.ByteArrayOutputStream()
+                    responseBody.byteStream().use { stream ->
+                        val chunk = ByteArray(8192)
+                        while (true) {
+                            val count = stream.read(chunk)
+                            if (count < 0) break
+                            require(buffer.size() + count <= MAX_RESPONSE_BYTES) { "Anikoto response is too large." }
+                            buffer.write(chunk, 0, count)
+                        }
+                    }
+                    val body = buffer.toString(Charsets.UTF_8.name())
+                    requestPolicy.checkResponse(candidateOrigin, res.code, body)
+                    if (!res.isSuccessful) throw Exception("Anikoto request failed (HTTP ${res.code}).")
                     if (providerRequest) activeBase = candidateBase
                     return body
                 }
             } catch (error: Exception) {
+                AnikotoRequestPolicy.rethrowTerminal(error)
                 lastError = error
             }
         }
@@ -184,7 +206,10 @@ object Anikoto {
                 }
                 out[name] = items
             }
-        } catch (e: Exception) { /* offline / layout change */ }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            /* Optional homepage rail can stay empty when offline. */
+        }
         out
     }
 
@@ -193,7 +218,11 @@ object Anikoto {
         for (page in 1..2) {
             val html = try {
                 get(providerUrl("search", mapOf("query" to query, "page" to page)))
-            } catch (e: Exception) { break }
+            } catch (e: Exception) {
+                AnikotoRequestPolicy.rethrowTerminal(e)
+                if (page == 1) throw e
+                break
+            }
             val itemClass = Regex.escape(selector("searchItemClass"))
             val blocks = html.split(Regex("""<div\s+class=["'][^"']*\b$itemClass\b[^"']*["'][^>]*>""", RegexOption.IGNORE_CASE))
             for (i in 1 until blocks.size) {
@@ -266,54 +295,31 @@ object Anikoto {
     suspend fun resolve(slug: String, ep: Episode, preferHardSub: Boolean = false): Stream = withContext(Dispatchers.IO) {
         // Warm cookies the way the site expects.
         val watchUrl = providerUrl("watch", mapOf("animeId" to slug))
-        runCatching { get(watchUrl) }
+        runCatching { get(watchUrl) }.onFailure(AnikotoRequestPolicy::rethrowTerminal)
 
         val serversHtml = JSONObject(
             get(providerUrl("serverList", mapOf("servers" to ep.serversToken)), referer = watchUrl, xhr = true),
         ).optString("result", "")
 
-        data class ServerType(val label: String, val linkIds: List<String>)
         val types = Regex("""<div class="type"[^>]*>([\s\S]*?)</ul>\s*</div>""").findAll(serversHtml).map { tm ->
             val body = tm.groupValues[1]
             val label = Regex("""<label[^>]*>([\s\S]*?)</label>""").find(body)
                 ?.groupValues?.get(1)?.replace(Regex("<[^>]+>"), "")?.trim() ?: ""
             val ids = Regex("""<li\b[^>]*>""", RegexOption.IGNORE_CASE).findAll(body)
                 .mapNotNull { attribute(it.value, selector("serverLinkAttribute")) }.toList()
-            ServerType(label, ids)
+            AnikotoServerPolicy.Group(label, ids)
         }.toList()
-
-        fun isHard(l: String): Boolean {
-            val u = l.uppercase()
-            return u.contains("H-SUB") || u.contains("H SUB") || u.contains("HARDSUB") || u.contains("HARD SUB") || u.contains("HSUB")
-        }
-        fun isSoft(l: String) = l.uppercase().contains("SUB") && !isHard(l)
-
-        val target = types.firstOrNull { if (preferHardSub) isHard(it.label) else isSoft(it.label) }
-            ?: types.firstOrNull { it.linkIds.isNotEmpty() }
-            ?: throw Exception("no stream servers listed")
-        if (target.linkIds.isEmpty()) throw Exception("no server link id")
-        val actualHard = isHard(target.label)
+        val target = AnikotoServerPolicy.select(types, preferHardSub)
+        val actualHard = AnikotoServerPolicy.isHard(target.label)
 
         // The first advertised server is often dead for a given episode, so try
         // a bounded number in order (as the desktop connector does). For soft
         // sub, a server without caption tracks is serving burned-in subtitles:
         // keep looking, but fall back to it if nothing better resolves.
-        var firstResolved: Stream? = null
-        var lastError: Exception? = null
-        for (linkId in target.linkIds.take(MAX_SERVER_ATTEMPTS)) {
-            try {
-                val stream = resolveServer(linkId, actualHard)
-                if (firstResolved == null) firstResolved = stream
-                if (actualHard || stream.subtitles.isNotEmpty()) return@withContext stream
-            } catch (error: Exception) {
-                lastError = error
-                Log.w("Anikoto", "An episode server was unavailable; trying the next advertised server")
-            }
+        AnikotoServerPolicy.resolve<Stream>(target.ids, preferred = { actualHard || it.subtitles.isNotEmpty() }) { linkId ->
+            resolveServer(linkId, actualHard)
         }
-        firstResolved ?: throw (lastError ?: Exception("every Anikoto server failed"))
     }
-
-    private const val MAX_SERVER_ATTEMPTS = 5
     private const val CIPHER_TTL_MS = 15 * 60 * 1000L
     // Null marks a client with no readable source decoder.
     private val cipherCache = HashMap<String, Pair<Long, AnikotoSource.Cipher256?>>()
@@ -415,6 +421,7 @@ object Anikoto {
             val result = runCatching { search(q) }
                 .onSuccess { successfulSearches++ }
                 .onFailure {
+                    AnikotoRequestPolicy.rethrowTerminal(it)
                     lastSearchError = it
                     Log.w("AniTrack/Anikoto", "Search failed for '$q': ${it.message}")
                 }
@@ -454,6 +461,7 @@ object Anikoto {
             val result = runCatching { episodes(cand.slug) }
                 .onSuccess { successfulEpisodeLists++ }
                 .onFailure {
+                    AnikotoRequestPolicy.rethrowTerminal(it)
                     lastEpisodeError = it
                     Log.w("AniTrack/Anikoto", "Episode lookup failed for ${cand.slug}: ${it.message}")
                 }
@@ -468,6 +476,7 @@ object Anikoto {
         val finalResult = runCatching { episodes(top.slug) }
             .onSuccess { successfulEpisodeLists++ }
             .onFailure {
+                AnikotoRequestPolicy.rethrowTerminal(it)
                 lastEpisodeError = it
                 Log.w("AniTrack/Anikoto", "Fallback episode lookup failed for ${top.slug}: ${it.message}")
             }

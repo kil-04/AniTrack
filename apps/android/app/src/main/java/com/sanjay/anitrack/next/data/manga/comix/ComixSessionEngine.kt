@@ -5,13 +5,16 @@ import android.content.Context
 import android.os.Message
 import android.webkit.*
 import java.io.ByteArrayInputStream
-import java.net.URI
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 import org.json.JSONTokener
+
+/** Typed across the process boundary so the native UI can offer Connect Comix. */
+internal class ComixConnectionRequired : IllegalStateException("Connect Comix to load its catalogue.")
 
 /** Exists only in :comix. The website sees no JavascriptInterface or app tokens. */
 @SuppressLint("SetJavaScriptEnabled")
@@ -20,9 +23,14 @@ internal class ComixSessionEngine private constructor(context: Context) {
         private set
     @Volatile private var rejected = false
     private var loaded = false
+    private var destroyed = false
     @Volatile private var connecting = false
     private var generation = 0
+    private var lastChapterPageAt = 0L
+    /** Set from the website's own Retry-After; reads fail fast until then, with no automatic retry. */
+    @Volatile private var cooldownUntil = 0L
     private val transport = context.assets.open("comix_transport.js").bufferedReader().use { it.readText() }
+    private val connectionHelp = context.assets.open("comix_connection_help.js").bufferedReader().use { it.readText() }
     val web: WebView
 
     init {
@@ -67,19 +75,41 @@ internal class ComixSessionEngine private constructor(context: Context) {
                 }
 
                 override fun onPageFinished(view: WebView, url: String) {
-                    loaded = url == "${ComixProtocol.ORIGIN}/"
-                    if (loaded && connecting) rejected = false
+                    loaded = ComixProtocol.isPublicConnectionPage(url)
+                    if (loaded && connecting) {
+                        rejected = false
+                        view.evaluateJavascript(connectionHelp, null)
+                    }
                 }
 
                 override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
                     val uri = request.url
+                    if (uri.path?.startsWith("/api/v1/") == true && allowed(request)) {
+                        val header = response.responseHeaders?.entries?.firstOrNull { it.key.equals("retry-after", ignoreCase = true) }?.value
+                        ComixProtocol.retryAfterMillis(response.statusCode, header)?.let { wait ->
+                            cooldownUntil = maxOf(cooldownUntil, System.currentTimeMillis() + wait)
+                        }
+                    }
                     if (com.sanjay.anitrack.next.BuildConfig.DEBUG && uri.path?.startsWith("/api/v1/") == true) {
-                        android.util.Log.d("ComixDiagnostics", "Website catalogue HTTP ${response.statusCode}; permitted=${allowed(request)}")
+                        // Fixed metadata only: never print bodies, URLs, cookies,
+                        // signature fields or source-decoding values.
+                        val challenge = response.responseHeaders?.entries?.any {
+                            it.key.equals("cf-mitigated", ignoreCase = true) && it.value.equals("challenge", ignoreCase = true)
+                        } == true
+                        val kind = when {
+                            challenge -> "challenge"
+                            response.mimeType?.contains("json", ignoreCase = true) == true -> "json"
+                            response.mimeType?.contains("html", ignoreCase = true) == true -> "html"
+                            else -> "other"
+                        }
+                        android.util.Log.d("ComixDiagnostics", "Website catalogue HTTP ${response.statusCode}; permitted=${allowed(request)}; kind=$kind")
                     }
                     if ((request.isForMainFrame || (uri.path?.startsWith("/api/v1/") == true && allowed(request))) && response.statusCode in setOf(401,403,429)) {
-                        rejected = true
                         ready = false
-                        if (!connecting) view.stopLoading()
+                        // In the visible connection screen the website may ask
+                        // the user to finish its own WAF modal. Do not block that
+                        // normal flow; hidden/native catalogue reads still stop.
+                        if (!connecting) { rejected = true; view.stopLoading() }
                     }
                 }
 
@@ -93,53 +123,127 @@ internal class ComixSessionEngine private constructor(context: Context) {
         }
     }
 
-    private fun allowed(request: WebResourceRequest): Boolean {
-        val u = runCatching { URI(request.url.toString()) }.getOrNull() ?: return false
-        if (u.scheme != "https" || u.userInfo != null || u.port !in listOf(-1,443)) return false
-        if (u.host == "challenges.cloudflare.com") return connecting && !request.isForMainFrame && request.method in setOf("GET","POST")
-        if (u.host != "comix.to") return false
-        if (connecting && u.path.startsWith("/cdn-cgi/challenge-platform/") && request.method == "POST") return !request.isForMainFrame
-        if (request.method != "GET") return false
-        if (request.isForMainFrame) return (connecting || !rejected) && (u.path == "/" || (connecting && u.path.startsWith("/cdn-cgi/")))
-        if (u.path.startsWith("/api/v1/")) return !rejected && (
-            u.path == "/api/v1/manga" || Regex("/api/v1/manga/[a-zA-Z0-9]{1,32}(/chapters)?").matches(u.path) ||
-                Regex("/api/v1/chapters/[0-9]{1,15}").matches(u.path))
-        return u.path.startsWith("/assets/") || (connecting && u.path.startsWith("/cdn-cgi/")) || u.path == "/favicon.ico"
-    }
+    private fun allowed(request: WebResourceRequest): Boolean = !destroyed &&
+        ComixProtocol.allowedWebsiteRequest(request.url.toString(), request.method,
+            request.isForMainFrame, connecting, rejected)
 
     fun beginConnection() {
+        check(!destroyed) { "Return to AniTrack and connect Comix again." }
         ready = false; rejected = false; loaded = false; connecting = true; generation++
+        web.onResume()
         web.loadUrl("${ComixProtocol.ORIGIN}/")
     }
 
-    suspend fun acceptConnection() {
-        check(loaded && web.url == "${ComixProtocol.ORIGIN}/") { "Wait for the Comix homepage to load, then continue." }
-        val challenge = evaluate("(/just a moment|verify you are human|attention required/i.test(document.title + ' ' + (document.body?.innerText || '').slice(0,1500)))")
-        check(challenge != "true") { "Complete the website verification yourself before continuing." }
-        connecting = false
-        rejected = false
-        evaluate(transport)
-        check(evaluate("typeof window.__anitrackComix === 'object'") == "true") { "Comix connection could not be initialized." }
-        ready = true
+    suspend fun acceptConnection() = withContext(Dispatchers.Main) {
+        check(!destroyed && connecting && loaded && ComixProtocol.isPublicConnectionPage(web.url.orEmpty())) {
+            "Wait for a normal Comix homepage, browse or title page. Finish any website check yourself before continuing."
+        }
+        val current = generation
+        ready = false
+        try {
+            withTimeout(30_000) {
+                check(evaluate(normalPublicPageScript) == "true") {
+                    "Complete the website verification yourself, then return to a normal Comix page before continuing."
+                }
+                if (web.url != "${ComixProtocol.ORIGIN}/" || evaluate(homepageDataScript) != "true") {
+                    // Explicit Continue returns to the normal homepage in this
+                    // same profile; it never retries a refused native API call.
+                    loaded = false
+                    web.loadUrl("${ComixProtocol.ORIGIN}/")
+                }
+                while (true) {
+                    check(!destroyed && connecting && current == generation) { "Comix connection was closed. Connect again." }
+                    if (loaded && web.url == "${ComixProtocol.ORIGIN}/" && evaluate(homepageDataScript) == "true") break
+                    delay(200)
+                }
+                evaluate(transport)
+                val initialized = evaluate("typeof window.__anitrackComix === 'object'") == "true"
+                check(!destroyed && connecting && current == generation && web.url == "${ComixProtocol.ORIGIN}/" &&
+                    initialized) { "Comix connection could not be initialized." }
+                evaluate("window.__anitrackComixConnectionHelp?.disable?.()")
+                rejected = false
+                connecting = false
+                ready = true
+            }
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            ready = false
+            error("Comix did not return to its homepage in time. Complete any visible website check yourself, then continue again.")
+        } catch (e: CancellationException) {
+            ready = false
+            throw e
+        } catch (e: Exception) {
+            ready = false
+            throw e
+        }
     }
 
-    fun cancelConnection() { connecting = false; ready = false; web.stopLoading() }
+    // These locally reviewed probes return booleans only, never website data,
+    // cookies, WAF parameters or verification tokens.
+    private val normalPublicPageScript = """
+        (() => {
+            if (location.origin !== '${ComixProtocol.ORIGIN}') return false;
+            if (location.pathname === '/@waf/challenge' || location.pathname.startsWith('/cdn-cgi/')) return false;
+            if (/just a moment|verify you are human|attention required|performing security verification/i.test(
+                document.title + ' ' + (document.body?.innerText || '').slice(0,1500))) return false;
+            return !Array.from(document.querySelectorAll('iframe')).some(frame => {
+                try {
+                    const url = new URL(frame.src,location.href);
+                    const bounds = frame.getBoundingClientRect();
+                    const challengeFrame = (url.origin === location.origin && url.pathname === '/@waf/challenge') ||
+                        url.origin === 'https://challenges.cloudflare.com';
+                    return challengeFrame &&
+                        bounds.width > 0 && bounds.height > 0 && getComputedStyle(frame).visibility !== 'hidden';
+                } catch { return false; }
+            });
+        })()
+    """.trimIndent()
 
-    suspend fun read(path: String, params: JSONObject): JSONObject = withContext(Dispatchers.Main) {
+    private val homepageDataScript = """
+        (() => {
+            if (location.origin !== '${ComixProtocol.ORIGIN}' || location.pathname !== '/' || !($normalPublicPageScript)) return false;
+            const node = document.querySelector('script#initial-data');
+            if (!node || !node.textContent || node.textContent.length > 2000000) return false;
+            try {
+                const queries = JSON.parse(node.textContent)?.queries;
+                return !!queries && typeof queries === 'object' && !Array.isArray(queries);
+            } catch { return false; }
+        })()
+    """.trimIndent()
+
+    fun cancelConnection() {
+        connecting = false; ready = false; generation++
+        if (!destroyed) {
+            web.evaluateJavascript("window.__anitrackComixConnectionHelp?.disable?.()", null)
+            web.stopLoading()
+        }
+    }
+
+    private fun checkCooldown() {
+        val left = cooldownUntil - System.currentTimeMillis()
+        check(left <= 0) { "Comix is limiting requests. Try again in ${maxOf(1, (left + 999) / 1000)} s." }
+    }
+
+    suspend fun read(path: String, params: JSONObject, lease: String): JSONObject = withContext(Dispatchers.Main) {
         check(ComixProtocol.validRequest(path, params)) { "Unsupported Comix request." }
-        check(ready && !rejected && web.url == "${ComixProtocol.ORIGIN}/") { "Connect Comix to load manga chapters." }
+        if (destroyed || !ready || rejected || web.url != "${ComixProtocol.ORIGIN}/") throw ComixConnectionRequired()
+        checkCooldown()
+        if (ComixProtocol.isChapterList(path)) {
+            delay(lastChapterPageAt + ComixProtocol.CHAPTER_PAGE_INTERVAL_MS - System.currentTimeMillis())
+            lastChapterPageAt = System.currentTimeMillis()
+        }
         val current = generation
         val id = java.util.UUID.randomUUID().toString()
         val qid = JSONObject.quote(id)
         web.onResume()
         try {
-            withTimeout(25_000) {
+            withTimeout(35_000) {
                 if (com.sanjay.anitrack.next.BuildConfig.DEBUG) android.util.Log.d("ComixDiagnostics", "Starting isolated catalogue operation")
                 check(evaluate("window.__anitrackComix.start($qid,${JSONObject.quote(path)},$params)") == "true") { "Comix is busy. Try again." }
                 var lastPhase = ""
                 while (true) {
-                    check(ready && !rejected && current == generation) { "Comix requires a fresh connection. Complete any check yourself." }
-                    check(evaluate("typeof window.__anitrackComix === 'object'") == "true") { "Comix session reloaded. Connect again." }
+                    check(ComixCatalogueActivity.active(lease)) { "Comix loading was cancelled." }
+                    if (!ready || rejected || current != generation) throw ComixConnectionRequired()
+                    if (evaluate("typeof window.__anitrackComix === 'object'") != "true") throw ComixConnectionRequired()
                     if (com.sanjay.anitrack.next.BuildConfig.DEBUG) {
                         val phase = evaluate("window.__anitrackComix.phase($qid)")
                         if (phase != lastPhase && phase in setOf("\"website-module\"", "\"catalogue\"", "\"website-decode\"", "\"response-format\"", "\"idle\"")) {
@@ -154,7 +258,16 @@ internal class ComixSessionEngine private constructor(context: Context) {
                         require(body.length <= ComixProtocol.MAX_RESPONSE) { "Comix response too large." }
                         val value = JSONObject(body)
                         if (!value.optBoolean("ok")) {
-                            if (value.optInt("status") in setOf(401,403,429)) { ready = false; rejected = true; web.stopLoading() }
+                            val status = value.optInt("status")
+                            // The header callback can trail the response; never keep asking either way.
+                            if (ComixProtocol.isRateLimit(status) && cooldownUntil <= System.currentTimeMillis()) {
+                                cooldownUntil = System.currentTimeMillis() + ComixProtocol.DEFAULT_COOLDOWN_MS
+                            }
+                            checkCooldown()
+                            if (status in setOf(401,403,429)) {
+                                ready = false; rejected = true; web.stopLoading()
+                                throw ComixConnectionRequired()
+                            }
                             error(value.optString("error", "Comix failed.").take(150))
                         }
                         return@withTimeout value.getJSONObject("value")
@@ -176,6 +289,8 @@ internal class ComixSessionEngine private constructor(context: Context) {
     }
 
     fun destroy() {
+        if (destroyed) return
+        destroyed = true
         ready = false; generation++
         web.stopLoading()
         (web.parent as? android.view.ViewGroup)?.removeView(web)

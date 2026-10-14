@@ -48,6 +48,8 @@ Desktop.ini
 *.bak
 /artifacts/
 /.device-backups/
+# Local diagnostics: screenshots, captured website bundles, smoke-test copies
+/out/
 
 # Electron runtime assets generated or downloaded locally. Keep
 # apps/desktop/build itself tracked: it contains icons and installer.nsh.

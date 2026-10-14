@@ -62,7 +62,7 @@ export function SettingsMenuContent(props: SettingsMenuProps) {
 
   return (
     <div
-      className={`max-h-[60vh] w-64 overflow-y-auto rounded-xl border border-white/10 bg-[#1f1f1f]/97 py-1.5 text-sm text-white shadow-2xl backdrop-blur-xl ${className}`}
+      className={`max-h-[60vh] w-64 overflow-y-auto rounded-xl border border-white/10 bg-surface-2/97 py-1.5 text-sm text-white shadow-2xl backdrop-blur-xl ${className}`}
       onClick={(e) => e.stopPropagation()}
     >
       {view === "main" && (
@@ -157,7 +157,7 @@ export function SettingsMenuContent(props: SettingsMenuProps) {
                   <button
                     key={val}
                     onClick={() => { setCueColor && setCueColor(val); localStorage.setItem("ap-cue-color", val); }}
-                    className={`h-6 w-6 rounded-full border border-white/20 transition-all ${cueColor === val ? "ring-2 ring-[#e50914] scale-110" : "opacity-80 hover:opacity-100"}`}
+                    className={`h-6 w-6 rounded-full border border-white/20 transition-all ${cueColor === val ? "ring-2 ring-accent scale-110" : "opacity-80 hover:opacity-100"}`}
                     style={{ background: val }}
                   />
                 ))}
@@ -194,7 +194,7 @@ function ToggleRow({ label, on, onClick }: { label: string; on: boolean; onClick
   return (
     <button onClick={onClick} className="flex w-full items-center gap-2 px-3 py-2.5 text-left transition-colors hover:bg-white/10">
       <span className="flex-1">{label}</span>
-      <span className={`relative h-4 w-8 rounded-full transition-colors ${on ? "bg-[#e50914]" : "bg-white/25"}`}>
+      <span className={`relative h-4 w-8 rounded-full transition-colors ${on ? "bg-accent" : "bg-white/25"}`}>
         <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all ${on ? "left-[18px]" : "left-0.5"}`} />
       </span>
     </button>
@@ -209,7 +209,7 @@ function Grid({ cols, children }: { cols: number; children: React.ReactNode }) {
 }
 function Chip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
-    <button onClick={onClick} className={`rounded px-1.5 py-1 text-[11px] font-semibold transition ${active ? "bg-[#e50914] text-white" : "bg-white/5 text-white/70 hover:bg-white/10"}`}>
+    <button onClick={onClick} className={`rounded px-1.5 py-1 text-[11px] font-semibold transition ${active ? "bg-accent text-white" : "bg-white/5 text-white/70 hover:bg-white/10"}`}>
       {children}
     </button>
   );

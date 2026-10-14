@@ -145,7 +145,7 @@ object PlayerHolder {
             }
             val scope = s.authorizationScope
                 ?: if (isHls) StreamAuthorizationScope.DIRECTORY else StreamAuthorizationScope.EXACT
-            val authorization = ScopedRequestAuthorization.create(s.url, scope, headers)
+            val authorization = ScopedRequestAuthorization.create(s.url, scope, headers, s.subtitles.map { it.url })
             if (BuildConfig.DEBUG && PlaySession.provider == "anikoto") {
                 val root = Uri.parse(s.url)
                 Log.d(

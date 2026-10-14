@@ -35,6 +35,14 @@ interface ApiBridge {
     recommendations(seedIds: number[], excludedIds: number[]): Promise<import("../../../packages/shared/types").AnimeRecommendation[]>;
     get(id: number): Promise<AnimeMeta | null>;
     relations(id: number): Promise<RelatedAnime[]>;
+    story(id: number): Promise<import("../../../packages/shared/story-bridge").StoryPlan>;
+    premieredOn(month: number, day: number): Promise<import("../../../packages/shared/types").PremieredAnime[]>;
+  };
+  /** Manga mode (Electron only; the legacy Android shell has no manga sources). */
+  manga?: import("./lib/manga-api").MangaApi;
+  themes: {
+    forAnime(id: number): Promise<import("../../../packages/shared/anime-themes").ThemeSong[]>;
+    radio(): Promise<import("../../../packages/shared/anime-themes").ThemeSong[]>;
   };
   list: {
     getAll(): Promise<{ entry: ListEntry; anime: AnimeMeta | null }[]>;
@@ -48,6 +56,7 @@ interface ApiBridge {
     set(p: PlaybackProgress): Promise<{ ok: boolean }>;
     getForAnime(id: number): Promise<PlaybackProgress[]>;
   };
+  /** Includes the typed opaque media-access status/event bridge on Electron. */
   providers?: ProviderApi;
   pahe: {
     latest(page?: number): Promise<{ data: any[]; total: number; lastPage: number }>;

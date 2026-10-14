@@ -7,6 +7,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material3.*
@@ -17,6 +18,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.dp
 import com.sanjay.anitrack.next.data.Anime
+import com.sanjay.anitrack.next.data.SearchHistory
 import kotlinx.coroutines.delay
 
 // ── Quick search (instant dropdown-style results, like the desktop header) ────
@@ -33,6 +35,8 @@ fun QuickSearchScreen(
     var searching by remember { mutableStateOf(false) }
     var searched by remember { mutableStateOf(false) }
     val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var recent by remember(manga) { mutableStateOf(SearchHistory.recent(context, manga)) }
 
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     LaunchedEffect(query) {
@@ -71,6 +75,25 @@ fun QuickSearchScreen(
             LinearProgressIndicator(Modifier.fillMaxWidth().clip(RoundedCornerShape(50)), color = AniColors.Accent, trackColor = AniColors.SurfaceHigh)
         }
         when {
+            query.isBlank() && recent.isNotEmpty() -> Column {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Recent searches", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { SearchHistory.clear(context, manga); recent = emptyList() }) {
+                        Text("Clear", color = AniColors.TextSecondary)
+                    }
+                }
+                recent.forEach { past ->
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { query = past }
+                            .padding(horizontal = 12.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Rounded.History, null, tint = AniColors.TextTertiary, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(14.dp))
+                        Text(past, style = MaterialTheme.typography.bodyLarge)
+                    }
+                }
+            }
             query.isBlank() -> EmptyState(
                 Icons.Rounded.Search,
                 if (manga) "Find a manga" else "Find an anime",
@@ -86,7 +109,8 @@ fun QuickSearchScreen(
             items(results.size) { i ->
                 val hit = results[i]
                 Box(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { hit.open() }
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                        .clickable { SearchHistory.remember(context, manga, query); hit.open() }
                         .padding(horizontal = 8.dp, vertical = 8.dp),
                 ) { SearchHitRow(hit) }
             }

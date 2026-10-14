@@ -21,6 +21,90 @@ const {
 const fixture = JSON.parse(readFileSync(new URL("./fixtures/miruro-protocol.json", import.meta.url), "utf8"));
 const env = `window.env=JSON.parse(${JSON.stringify(JSON.stringify({ VITE_PIPE_OBF_KEY: fixture.syntheticKey }))});`;
 const config = { operation: "config" };
+const { MiruroV1Client, decodeMiruroV1, miruroV1Url } = await import("../apps/desktop/main/services/providers/miruro-v1-client.ts");
+
+function v1Wire(payload) {
+  const bytes = gzipSync(Buffer.from(JSON.stringify(payload)));
+  const mask = Buffer.from("miruro/catalog");
+  for (let index = 0; index < bytes.length; index++) bytes[index] ^= mask[index % mask.length];
+  return bytes;
+}
+
+test("Miruro current REST routes use exact approved queries and numeric episode identities", () => {
+  assert.equal(miruroV1Url({ operation: "lookup", anilistId: 1 }), "https://www.miruro.ru/api/v1/anime?anilist_id_in=1&limit=100");
+  assert.equal(miruroV1Url({ operation: "episodes", showId: "synthetic-show" }), "https://www.miruro.ru/api/v1/anime/synthetic-show/episodes?limit=10000");
+  assert.equal(miruroV1Url({ operation: "play", showId: "synthetic-show", episode: 1.5 }), "https://www.miruro.ru/api/v1/anime/synthetic-show/episodes/1.5/play");
+  for (const request of [
+    { operation: "lookup", anilistId: 0 }, { operation: "episodes", showId: "../account" },
+    { operation: "play", showId: "show", episode: NaN }, { operation: "play", showId: "show", episode: -1 },
+    { operation: "delete", showId: "show" },
+  ]) assert.throws(() => miruroV1Url(request));
+});
+
+test("Miruro current binary codec preserves Unicode without modifying input or executing code", () => {
+  const payload = { title: "カウボーイビバップ", episode_number: 1 };
+  const bytes = v1Wire(payload), original = Buffer.from(bytes);
+  assert.deepEqual(decodeMiruroV1(bytes, "application/octet-stream; charset=binary"), payload);
+  assert.deepEqual(bytes, original);
+  assert.deepEqual(decodeMiruroV1(Buffer.from(JSON.stringify(payload)), "application/json"), payload);
+  for (const body of [Buffer.from("[]"), Buffer.from("{bad}"), Buffer.from([255]), Buffer.alloc(MIRURO_MAX_RESPONSE_BYTES + 1)]) {
+    assert.throws(() => decodeMiruroV1(body, "application/json"));
+  }
+  assert.throws(() => decodeMiruroV1(v1Wire({ value: "a".repeat(MIRURO_MAX_RESPONSE_BYTES) }), "application/octet-stream"));
+  assert.throws(() => decodeMiruroV1(Buffer.from("unknown codec"), "application/octet-stream"));
+});
+
+test("Miruro current transport reads fresh binary responses and stops queued requests after rejection", async () => {
+  let calls = 0;
+  const client = new MiruroV1Client({ securityCooldownMs: 0, fetcher: async (url, init) => {
+    calls++;
+    assert.equal(init.redirect, "manual");
+    assert.equal(init.credentials, "omit");
+    assert.equal(url.includes("api/secure/pipe"), false);
+    if (calls === 1) return new Response("blocked", { status: 403 });
+    return new Response(v1Wire({ episode_number: 1 }), { headers: { "content-type": "application/octet-stream" } });
+  } });
+  const request = { operation: "play", showId: "synthetic-show", episode: 1 };
+  const results = await Promise.allSettled([client.read(request), client.read(request)]);
+  assert.deepEqual(results.map(result => result.reason.code), ["SECURITY_CHECK", "COOLDOWN"]);
+  assert.equal(calls, 1);
+  assert.deepEqual(await client.read(request), { episode_number: 1 });
+  await client.read(request);
+  assert.equal(calls, 3, "no cache of expiring /play responses");
+});
+
+test("Miruro current transport rejects oversized chunked responses, redirects and HTTP-200 challenges", async () => {
+  const request = { operation: "lookup", anilistId: 1 };
+  for (const response of [
+    new Response(null, { status: 302, headers: { location: "https://other.example/api" } }),
+    new Response("x".repeat(MIRURO_MAX_RESPONSE_BYTES + 1)),
+    new Response("{}", { headers: { "content-length": String(MIRURO_MAX_RESPONSE_BYTES + 1) } }),
+  ]) {
+    let calls = 0;
+    const client = new MiruroV1Client({ fetcher: async () => { calls++; return response; } });
+    await assert.rejects(client.read(request));
+    assert.equal(calls, 1);
+  }
+  let calls = 0;
+  const client = new MiruroV1Client({ fetcher: async () => { calls++; return new Response("  <html><title>Just a moment</title></html>"); } });
+  await assert.rejects(client.read(request), error => error.code === "SECURITY_CHECK");
+  await assert.rejects(client.read(request), error => error.code === "COOLDOWN");
+  assert.equal(calls, 1);
+});
+
+test("Miruro current transport stops queued reads on HTTP-503 website checks but not ordinary server errors", async () => {
+  for (const [body, codes, expectedCalls] of [
+    ["<html><title>Just a moment</title><div id='cf-chl-widget'></div></html>", ["SECURITY_CHECK", "COOLDOWN"], 1],
+    ["Service temporarily unavailable", ["INVALID_RESPONSE", "INVALID_RESPONSE"], 2],
+  ]) {
+    let calls = 0;
+    const client = new MiruroV1Client({ fetcher: async () => { calls++; return new Response(body, { status: 503 }); } });
+    const request = { operation: "lookup", anilistId: 1 };
+    const results = await Promise.allSettled([client.read(request), client.read(request)]);
+    assert.deepEqual(results.map(result => result.reason.code), codes);
+    assert.equal(calls, expectedCalls);
+  }
+});
 
 test("Miruro encodes only bounded read operations and preserves source coordinates", () => {
   for (const [request, path, query] of [

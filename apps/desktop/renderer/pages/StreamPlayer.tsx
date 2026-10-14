@@ -28,6 +28,7 @@ import { StreamEpisodePanel } from "../components/player/StreamEpisodePanel";
 import { StreamVideoArea } from "../components/player/StreamVideoArea";
 import {
   capturePlaybackPosition,
+  currentMediaAccessRejection,
   chooseResumePosition,
   HlsRecoveryBudget,
   PlaybackRequestGate,
@@ -36,6 +37,7 @@ import {
 } from "../components/player/playbackRequests";
 import { discoverProviderSources } from "../components/provider/providerDiscovery";
 import Hls from "hls.js";
+import { hlsAccessRejectionStatus, protectedHlsLoadPolicies } from "../components/player/hlsRequestPolicy";
 import { secondsToTimestamp } from "../lib/format";
 import { fetchAnimeSkipTimes, type SkipTimes } from "../lib/skip-times";
 import { useMediaQuery } from "../hooks/useMediaQuery";
@@ -220,6 +222,8 @@ export default function StreamPlayer({
   // the CapacitorLoader sends it as Referer so the segment CDN's hotlink check passes.
   const refererRef = useRef<string | null>(null);
   const currentStreamUrlRef = useRef<string | null>(null);
+  const currentMediaAccessIdRef = useRef<string | null>(null);
+  const rejectedPlaybackIntentRef = useRef<{ context: string; episodeId: string; play: boolean } | null>(null);
   // Per-episode link cache so prefetched episodes switch without re-scraping.
   const linksCacheRef = useRef<Map<string, any[]>>(new Map());
   // Live ref to playEpisode so the PiP-return hook can reload the current episode
@@ -271,6 +275,7 @@ export default function StreamPlayer({
   const malIdCacheRef = useRef<number | null>(null);
 
   function resetPlayer() {
+    currentMediaAccessIdRef.current = null;
     seekingRef.current = false; // clear any stuck seek flag (e.g. across a PiP transition)
     const video = videoRef.current;
     if (video) {
@@ -600,6 +605,7 @@ export default function StreamPlayer({
     prevSessionKeyRef.current = key;
     playbackRequestsRef.current.invalidate();
     loadingStreamRef.current = false;
+    currentMediaAccessIdRef.current = null;
     // Kill the PREVIOUS show's stream immediately. If the new episode load
     // fails (network, provider anti-bot), the old video must not keep playing
     // under the new title ("says Cat's Eye, plays Dragon Ball").
@@ -829,13 +835,20 @@ export default function StreamPlayer({
     return -1;
   }
 
-  function attachStream(url: string, subtitles?: any[], startPos?: number) {
+  function attachStream(url: string, subtitles?: any[], startPos?: number, mediaAccessId?: string) {
     const video = videoRef.current;
     if (!video) return;
     const request = playbackRequestsRef.current.current();
     const isCurrent = () => playbackRequestsRef.current.isCurrent(request, playbackContextRef.current);
     currentStreamUrlRef.current = url;
+    currentMediaAccessIdRef.current = mediaAccessId ?? null;
+    const retryIntent = rejectedPlaybackIntentRef.current;
+    const episodeId = String(currentEpRef.current?.id ?? currentEpRef.current?.session ?? "");
+    const playOnReady = retryIntent?.context === playbackContextRef.current && retryIntent.episodeId === episodeId
+      ? retryIntent.play : autoPlay;
+    rejectedPlaybackIntentRef.current = null;
 
+    streamErrorRef.current = null;
     setStreamError(null);
 
     // Reset HLS qualities state for the new stream
@@ -867,15 +880,15 @@ export default function StreamPlayer({
     const isHls = url.includes(".m3u8");
 
     if (isHls && Hls.isSupported()) {
-      buildHls(url, video, { worker: !isCapacitor, startLevel: -1, attempt: 1, startPosition: startPos ?? -1 });
+      buildHls(url, video, { worker: !isCapacitor, startLevel: -1, attempt: 1, startPosition: startPos ?? -1, playOnReady });
     } else if (isHls && video.canPlayType("application/vnd.apple.mpegurl")) {
       video.src = url;
       if (startPos && startPos > 0) pendingSeekRef.current = startPos;
-      if (autoPlay) video.play().catch(() => {});
+      if (playOnReady) video.play().catch(() => {});
     } else {
       video.src = url;
       if (startPos && startPos > 0) pendingSeekRef.current = startPos;
-      if (autoPlay) video.play().catch(() => {});
+      if (playOnReady) video.play().catch(() => {});
     }
 
     // Filter to English subtitles to avoid irrelevant subtitles in other languages
@@ -967,10 +980,40 @@ export default function StreamPlayer({
     }
   }
 
+  function stopForMediaAccess(status: 403 | 429) {
+    const video = videoRef.current;
+    pendingSeekRef.current = capturePlaybackPosition(video?.currentTime, pendingSeekRef.current);
+    rejectedPlaybackIntentRef.current = {
+      context: playbackContextRef.current,
+      episodeId: String(currentEpRef.current?.id ?? currentEpRef.current?.session ?? ""),
+      play: !!video && !video.paused,
+    };
+    const message = `Streaming server rejected this request (HTTP ${status}). Retry manually or choose another provider.`;
+    streamErrorRef.current = message;
+    // pause alone can keep native MP4 range reads alive. Clearing the source
+    // cancels them; the pending position/intent above survives a manual retry.
+    resetPlayer();
+    loadingStreamRef.current = false;
+    setStreamError(message);
+    setLoadingStream(false);
+    setBuffering(false);
+    setFallbackNotice(null);
+  }
+
+  useEffect(() => {
+    const onAccessRejected = (rejection: unknown) => {
+      const status = currentMediaAccessRejection(rejection, currentMediaAccessIdRef.current);
+      const request = playbackRequestsRef.current.current();
+      if (status === null || !playbackRequestsRef.current.isCurrent(request, playbackContextRef.current)) return;
+      stopForMediaAccess(status);
+    };
+    return window.api.providers?.onMediaAccessRejected?.(onAccessRejected);
+  }, []);
+
   function buildHls(
     url: string,
     video: HTMLVideoElement,
-    opts: { worker: boolean; startLevel: number; attempt: number; startPosition?: number; recovery?: HlsRecoveryBudget },
+    opts: { worker: boolean; startLevel: number; attempt: number; startPosition?: number; recovery?: HlsRecoveryBudget; playOnReady?: boolean },
   ) {
     if (hlsRef.current) {
       hlsRef.current.destroy();
@@ -978,6 +1021,7 @@ export default function StreamPlayer({
     }
 
     const hlsConfig: Partial<Hls["config"]> = {
+      ...protectedHlsLoadPolicies(Hls.DefaultConfig),
       enableWorker: opts.worker,
       lowLatencyMode: false,
       preferManagedMediaSource: false,
@@ -1035,7 +1079,7 @@ export default function StreamPlayer({
         setHlsLevels([]);
       }
 
-      if (autoPlay) video.play().catch(() => {});
+      if (opts.playOnReady ?? autoPlay) video.play().catch(() => {});
     });
 
     hls.on(Hls.Events.LEVEL_SWITCHED, (_e, data) => {
@@ -1046,6 +1090,19 @@ export default function StreamPlayer({
       if (!isActive()) return;
       const errInfo = `type=${data.type} details=${data.details} fatal=${data.fatal}`;
       console.error('[HLS ERROR]', errInfo);
+      const accessStatus = hlsAccessRejectionStatus(data);
+      if (accessStatus !== null) {
+        // Do this even for nonfatal events: the SDK may otherwise retry first.
+        // Access errors are not evidence that another mirror should be probed.
+        pendingSeekRef.current = capturePlaybackPosition(video.currentTime, pendingSeekRef.current);
+        const message = `Streaming server rejected this request (HTTP ${accessStatus}). Retry manually or choose another provider.`;
+        streamErrorRef.current = message;
+        hls.stopLoad();
+        video.pause();
+        setStreamError(message);
+        setLoadingStream(false);
+        return;
+      }
       if (!data.fatal) return;
 
       if (data.details === Hls.ErrorDetails.BUFFER_ADD_CODEC_ERROR) {
@@ -1056,6 +1113,7 @@ export default function StreamPlayer({
             startLevel: opts.attempt === 1 ? -1 : 0,
             attempt: opts.attempt + 1,
             recovery,
+            playOnReady: opts.playOnReady,
           });
           return;
         }
@@ -1212,14 +1270,14 @@ export default function StreamPlayer({
         
         const activeSubs = streamVariant(fetchedLinks[bestIdx]) === "hard" ? [] : subtitles;
 
-        attachStream(url, activeSubs);
+        attachStream(url, activeSubs, undefined, resolved.mediaAccessId);
 
         // Warm only the NEXT episode's lightweight links. Do not resolve its
         // stream while this episode is playing: Kwik may rotate the cookie that
         // authorized the active media session, which used to make playback stop
         // as soon as the initial ~30-second buffer was consumed.
         const nextEp = episodesRef.current.find((e) => e.episodeNumber === ep.episodeNumber + 1);
-        if (nextEp) {
+        if (nextEp && descriptor?.capabilities.prefetch === true) {
           const nextKey = `${providerId}:${session}:${String(nextEp.session ?? nextEp.id)}`;
           const cached = linksCacheRef.current.get(nextKey);
           const warm = cached
@@ -1349,7 +1407,7 @@ export default function StreamPlayer({
     resetPlayer();
     pendingSeekRef.current = resumePosition;
     try {
-      const { url, subtitles, referer } = await providerClient.resolve(providerId, link.id ?? link.kwik);
+      const { url, subtitles, referer, mediaAccessId } = await providerClient.resolve(providerId, link.id ?? link.kwik);
       if (!isCurrent()) return;
       refererRef.current = referer ?? null;
       if (!url) {
@@ -1361,7 +1419,7 @@ export default function StreamPlayer({
 
       const activeSubs = streamVariant(link) === "hard" ? [] : subtitles;
 
-      attachStream(url, activeSubs);
+      attachStream(url, activeSubs, undefined, mediaAccessId);
     } catch (e: any) {
       if (!isCurrent()) return;
       if (requiresManualProviderRetry(e)) {
@@ -1658,7 +1716,7 @@ export default function StreamPlayer({
     };
     const onEnterPiP = () => setIsPiP(true);
     const onLeavePiP = () => setIsPiP(false);
-    const onError = () => {
+    const onError = async () => {
       const err = video.error;
       // Ignore errors caused by intentionally resetting the source to empty string
       const cleanSrc = video.src ? video.src.split("?")[0].split("#")[0] : "";
@@ -1667,6 +1725,30 @@ export default function StreamPlayer({
         return;
       }
       if (err) {
+        if (streamErrorRef.current) return;
+        const request = playbackRequestsRef.current.current();
+        const accessId = currentMediaAccessIdRef.current;
+        const isCurrent = () => playbackRequestsRef.current.isCurrent(request, playbackContextRef.current)
+          && currentMediaAccessIdRef.current === accessId;
+        if (!isCurrent()) return;
+        // Native MediaError hides HTTP status. Read the main-process receipt
+        // before deciding on fallback; no media request or URL crosses IPC.
+        try {
+          const lookup = window.api.providers?.mediaAccessStatus;
+          if (!accessId || !lookup) throw new Error("Media status is unavailable");
+          const accessStatus = await lookup(accessId);
+          if (!isCurrent()) return;
+          if (accessStatus === 403 || accessStatus === 429) {
+            stopForMediaAccess(accessStatus);
+            return;
+          }
+          if (accessStatus !== null) throw new Error("Media status was invalid");
+        } catch {
+          if (!isCurrent()) return;
+          setStreamError("Unable to verify this video request. Retry manually or choose another provider.");
+          setLoadingStream(false);
+          return;
+        }
         const failedIndex = selectedLinkRef.current;
         const failedLink = linksRef.current[failedIndex];
         if (failedLink) failedLinkIdsRef.current.add(streamLinkKey(failedLink));
@@ -2230,12 +2312,12 @@ export default function StreamPlayer({
         className={
           minimized
             ? "fixed bottom-20 right-3 z-[60] aspect-video w-[min(62vw,320px)] overflow-hidden rounded-xl border border-white/15 bg-black text-white shadow-2xl"
-            : "fixed inset-0 z-[60] flex flex-col overflow-hidden bg-[#000000] text-white"
+            : "fixed inset-0 z-[60] flex flex-col overflow-hidden bg-bg text-white"
         }
         style={minimized ? miniCardStyle : undefined}
       >
         {/* Top bar */}
-        <div className={`flex h-12 flex-shrink-0 items-center gap-2 bg-[#000000] px-3 ${minimized || fs ? "hidden" : ""}`}>
+        <div className={`flex h-12 flex-shrink-0 items-center gap-2 bg-bg px-3 ${minimized || fs ? "hidden" : ""}`}>
           <button onClick={() => navigate("/")} className="flex h-9 w-9 items-center justify-center rounded-full hover:bg-white/10">
             <ArrowLeft size={18} />
           </button>
@@ -2267,13 +2349,13 @@ export default function StreamPlayer({
       className={
         minimized
           ? "fixed bottom-6 right-6 z-[60] aspect-video w-[400px] overflow-hidden rounded-xl border border-white/15 bg-black text-white shadow-2xl"
-          : "fixed inset-0 z-[60] flex flex-col overflow-hidden bg-[#000000] text-white"
+          : "fixed inset-0 z-[60] flex flex-col overflow-hidden bg-bg text-white"
       }
       style={minimized ? miniCardStyle : undefined}
     >
 
       {/* Top bar */}
-      <div className={`flex h-10 flex-shrink-0 items-center gap-3 border-b border-white/10 bg-[#000000] px-3 ${minimized ? "hidden" : ""}`}>
+      <div className={`flex h-10 flex-shrink-0 items-center gap-3 border-b border-white/10 bg-bg px-3 ${minimized ? "hidden" : ""}`}>
         <button
           onClick={() => navigate("/")}
           className="flex items-center gap-1 rounded px-2 py-1 text-sm text-white/60 hover:bg-white/10 hover:text-white"

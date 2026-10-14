@@ -6,83 +6,91 @@ import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * AniTrack's design tokens. Screens use these instead of ad-hoc colours so the
- * whole app shares one dark palette: layered near-black surfaces, hairline
- * borders and the brand red.
+ * AniTrack's design tokens, matching the desktop app (apps/desktop/renderer/index.css):
+ * midnight blue-black surfaces stepped up by elevation, hairline borders, and an azure
+ * accent that turns a deep royal blue in manga mode. Screens use these instead of ad-hoc
+ * colours.
  */
 object AniColors {
-    val Bg = Color(0xFF09090B)
+    /** Set by the app shell; reading the accent in composition recomposes on a mode change. */
+    val mangaMode = mutableStateOf(false)
+
+    val Bg = Color(0xFF05060B)
     /** Cards and panels. */
-    val Surface = Color(0xFF121215)
+    val Surface = Color(0xFF0C0F19)
     /** Inputs, chips and raised controls. */
-    val SurfaceHigh = Color(0xFF1A1A1F)
-    val SurfaceHighest = Color(0xFF232329)
+    val SurfaceHigh = Color(0xFF111522)
+    val SurfaceHighest = Color(0xFF191E2F)
     val Border = Color(0x1AFFFFFF)
     val BorderSoft = Color(0x0FFFFFFF)
 
-    val Accent = Color(0xFFE50914)
-    val AccentBright = Color(0xFFFF3B47)
-    val AccentDeep = Color(0xFFA3060E)
-    /** Brand red at low opacity, for selected backgrounds and icon tiles. */
-    val AccentSoft = Color(0x2EE50914)
+    // Manga: a deep royal blue into navy indigo, clearly darker than anime's azure.
+    val Accent: Color get() = if (mangaMode.value) Color(0xFF1D4ED8) else Color(0xFF3D8BFF)
+    val AccentBright: Color get() = if (mangaMode.value) Color(0xFF3563E9) else Color(0xFF6EA8FF)
+    val AccentDeep: Color get() = if (mangaMode.value) Color(0xFF2E2C9E) else Color(0xFF635BFF)
+    /** The accent at low opacity, for selected backgrounds and icon tiles. */
+    val AccentSoft: Color get() = Accent.copy(alpha = 0.18f)
 
-    val Text = Color(0xFFF4F4F5)
-    val TextSecondary = Color(0xFFA1A1AA)
-    val TextTertiary = Color(0xFF71717A)
+    val Text = Color(0xFFECF0F8)
+    val TextSecondary = Color(0xFF9EA7BD)
+    val TextTertiary = Color(0xFF656F87)
 
     val Success = Color(0xFF34D399)
     val Warning = Color(0xFFFBBF24)
     val Danger = Color(0xFFFF6B6B)
-    val Info = Color(0xFF5FC9C0)
+    val Info = Color(0xFF22D3EE)
     val Star = Color(0xFFFFC857)
 
-    val BrandGradient = Brush.linearGradient(listOf(AccentBright, Accent, AccentDeep))
+    val BrandGradient: Brush get() = Brush.linearGradient(listOf(AccentBright, Accent, AccentDeep))
 }
 
-private val AniDarkScheme = darkColorScheme(
-    primary = AniColors.Accent,
+private fun aniDarkScheme(accent: Color, deep: Color) = darkColorScheme(
+    primary = accent,
     onPrimary = Color.White,
-    primaryContainer = Color(0xFF4A0B10),
-    onPrimaryContainer = Color(0xFFFFDAD8),
-    inversePrimary = AniColors.AccentDeep,
-    secondary = Color(0xFFE4E4E7),
-    onSecondary = Color(0xFF18181B),
-    secondaryContainer = Color(0xFF27272A),
+    primaryContainer = deep.copy(alpha = 0.32f).compositeOver(AniColors.Bg),
+    onPrimaryContainer = Color(0xFFDCE6FF),
+    inversePrimary = deep,
+    secondary = Color(0xFFE2E7F2),
+    onSecondary = Color(0xFF111522),
+    secondaryContainer = Color(0xFF1A2033),
     onSecondaryContainer = AniColors.Text,
     tertiary = AniColors.Info,
-    onTertiary = Color(0xFF00201D),
-    tertiaryContainer = Color(0xFF0F3A36),
-    onTertiaryContainer = Color(0xFFA6F2E9),
+    onTertiary = Color(0xFF002025),
+    tertiaryContainer = Color(0xFF0C3440),
+    onTertiaryContainer = Color(0xFFA5F3FC),
     background = AniColors.Bg,
     onBackground = AniColors.Text,
     surface = AniColors.Bg,
     onSurface = AniColors.Text,
-    surfaceVariant = Color(0xFF1F1F24),
+    surfaceVariant = Color(0xFF161B2B),
     onSurfaceVariant = AniColors.TextSecondary,
-    surfaceTint = Color(0xFF8A8A93),
+    surfaceTint = Color(0xFF7E8AA8),
     inverseSurface = AniColors.Text,
-    inverseOnSurface = Color(0xFF18181B),
+    inverseOnSurface = Color(0xFF111522),
     error = AniColors.Danger,
     onError = Color(0xFF2D0001),
     errorContainer = Color(0xFF4A1014),
     onErrorContainer = Color(0xFFFFDAD6),
-    outline = Color(0xFF3F3F46),
-    outlineVariant = Color(0xFF27272A),
+    outline = Color(0xFF2F3650),
+    outlineVariant = Color(0xFF1E2436),
     scrim = Color.Black,
-    surfaceBright = Color(0xFF2A2A30),
+    surfaceBright = Color(0xFF262C40),
     surfaceDim = AniColors.Bg,
-    surfaceContainerLowest = Color(0xFF050506),
-    surfaceContainerLow = Color(0xFF0F0F12),
-    surfaceContainer = Color(0xFF141418),
-    surfaceContainerHigh = Color(0xFF1A1A1F),
-    surfaceContainerHighest = Color(0xFF222228),
+    surfaceContainerLowest = Color(0xFF030409),
+    surfaceContainerLow = Color(0xFF0A0D16),
+    surfaceContainer = Color(0xFF0E1220),
+    surfaceContainerHigh = Color(0xFF131827),
+    surfaceContainerHighest = Color(0xFF1A2032),
 )
 
 private val Base = Typography()
@@ -116,5 +124,8 @@ private val AniShapes = Shapes(
 /** The app theme: every Material component (buttons, switches, chips, dialogs) picks up the AniTrack palette. */
 @Composable
 fun AniTrackTheme(content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = AniDarkScheme, typography = AniTypography, shapes = AniShapes, content = content)
+    val accent = AniColors.Accent
+    val deep = AniColors.AccentDeep
+    val scheme = remember(accent, deep) { aniDarkScheme(accent, deep) }
+    MaterialTheme(colorScheme = scheme, typography = AniTypography, shapes = AniShapes, content = content)
 }

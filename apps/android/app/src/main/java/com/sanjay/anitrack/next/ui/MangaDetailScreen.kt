@@ -49,6 +49,8 @@ import com.sanjay.anitrack.next.data.manga.MangaVerificationRequired
 import com.sanjay.anitrack.next.data.manga.ReadState
 import com.sanjay.anitrack.next.data.manga.SourceTitle
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -57,12 +59,15 @@ import androidx.compose.ui.platform.LocalContext
 import android.app.Activity
 import android.content.Intent
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 
-private val MangaDetailAccent = Color(0xFFE50914)
+// Follows the mode's accent (manga mode's deep royal blue), like the rest of the app.
+private val MangaDetailAccent: Color get() = AniColors.Accent
 
 @Composable
-fun MangaDetailScreen(mangaId: Int, onRead: () -> Unit) {
+fun MangaDetailScreen(mangaId: Int, onRead: () -> Unit, onOpenAnime: (Int) -> Unit = {}) {
     var manga by remember(mangaId) { mutableStateOf(AniList.cachedManga(mangaId)) }
+    var nextUp by remember(mangaId) { mutableStateOf<Pair<String, () -> Unit>?>(null) }
     var failed by remember(mangaId) { mutableStateOf(false) }
     LaunchedEffect(mangaId) {
         if (manga == null) {
@@ -94,12 +99,16 @@ fun MangaDetailScreen(mangaId: Int, onRead: () -> Unit) {
             ),
             genres = m.genres,
         ) {
+            nextUp?.let { (label, read) ->
+                PillButton(label, read, icon = Icons.Rounded.AutoStories, style = PillStyle.Light)
+            }
             MangaListStatusButton(m)
         }
         Spacer(Modifier.height(14.dp))
         ExpandableSynopsis(m.synopsis)
         Spacer(Modifier.height(12.dp))
-        ChaptersSection(m, onRead)
+        AdaptationsSection(m, onOpenAnime)
+        ChaptersSection(m, onRead, onNextUp = { nextUp = it })
         Spacer(Modifier.height(32.dp))
     }
 }
@@ -124,18 +133,25 @@ private sealed interface ChapterLoad {
 private const val CHAPTER_PAGE = 60
 
 @Composable
-private fun ChaptersSection(manga: Manga, onRead: () -> Unit) {
+private fun ChaptersSection(
+    manga: Manga,
+    onRead: () -> Unit,
+    /** The chapter to read next (label + action) for the hero, null until chapters load. */
+    onNextUp: (Pair<String, () -> Unit>?) -> Unit = {},
+) {
     var load by remember(manga.id) { mutableStateOf<ChapterLoad>(ChapterLoad.Loading) }
     var progress by remember(manga.id) { mutableStateOf<Map<Float, ReadState>>(emptyMap()) }
     var newestFirst by remember(manga.id) { mutableStateOf(true) }
     var attempt by remember(manga.id) { mutableIntStateOf(0) }
-    // Sources the user stepped past with "Try another source" on this visit.
-    var skipped by remember(manga.id) { mutableStateOf(emptySet<String>()) }
     // Sources that asked for their one-time human check during the last load.
     var needsConnect by remember(manga.id) { mutableStateOf(emptySet<String>()) }
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("anitrack_next", android.content.Context.MODE_PRIVATE) }
     val preferenceKey = "manga_source_${manga.id}"
+    // The source picked for this title (remembered); null tries each source in order.
+    var chosenSource by remember(manga.id) {
+        mutableStateOf(prefs.getString(preferenceKey, null)?.takeIf { id -> MangaSources.all.any { it.id == id } })
+    }
     val groupKey = "manga_group_${manga.id}"
     // Group filter for this title (remembered); null shows every group's uploads.
     var groupFilter by remember(manga.id) { mutableStateOf(prefs.getString(groupKey, null)) }
@@ -143,7 +159,7 @@ private fun ChaptersSection(manga: Manga, onRead: () -> Unit) {
     val connect = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         if (it.resultCode == Activity.RESULT_OK) attempt++
     }
-    LaunchedEffect(manga.id, attempt) {
+    LaunchedEffect(manga.id, attempt, chosenSource) {
         load = ChapterLoad.Loading
         progress = Db.readingFor(manga.id)
         if (MangaSources.all.isEmpty()) {
@@ -152,10 +168,14 @@ private fun ChaptersSection(manga: Manga, onRead: () -> Unit) {
         }
         var lastError: Throwable? = null
         val needing = mutableSetOf<String>()
-        // A source the user picked for this title before goes first.
-        val preferred = prefs.getString(preferenceKey, null)
-        val order = MangaSources.all.sortedBy { if (it.id == preferred) 0 else 1 }.filter { it.id !in skipped }
+        // A picked source is the only one tried; otherwise the first source with the title wins.
+        val order = chosenSource?.let { id -> MangaSources.all.filter { it.id == id } } ?: MangaSources.all
         for (source in order) {
+            // A list saved by an earlier run shows at once; the fetch below refreshes it.
+            val saved = runCatching { source.savedChapters(manga) }.getOrNull()
+                ?.let { (title, list) -> ChapterLoad.Ready(source, title, list) }
+                ?.takeIf { MangaChapters.uploads(it.uploads).isNotEmpty() }
+            if (saved != null) load = saved
             val result = runCatching {
                 source.find(manga)?.let { title -> ChapterLoad.Ready(source, title, source.chapters(title)) }
             }
@@ -166,18 +186,22 @@ private fun ChaptersSection(manga: Manga, onRead: () -> Unit) {
             }
             val ready = result.getOrNull()
             if (ready != null && MangaChapters.uploads(ready.uploads).isNotEmpty()) {
-                if (skipped.isNotEmpty()) prefs.edit().putString(preferenceKey, source.id).apply()
                 needsConnect = needing
                 load = ready
                 return@LaunchedEffect
             }
+            // A failed refresh keeps the saved list rather than trying other sources.
+            if (saved != null && result.isFailure) {
+                needsConnect = needing
+                return@LaunchedEffect
+            }
         }
         needsConnect = needing
+        val only = order.singleOrNull()
         load = ChapterLoad.Message(
-            when {
-                skipped.isNotEmpty() -> "No other source has this title."
-                else -> lastError?.message ?: "No chapters found for this title on the connected sources."
-            },
+            lastError?.message
+                ?: if (only != null && MangaSources.all.size > 1) "${only.label} doesn't have this title. Try another source."
+                else "No chapters found for this title on the connected sources.",
         )
     }
     // Coming back from the reader refreshes the read markers.
@@ -193,6 +217,22 @@ private fun ChaptersSection(manga: Manga, onRead: () -> Unit) {
         MangaChapters.listing(uploads, activeGroup, query, newestFirst)
     }
     var limit by remember(manga.id, activeGroup, query, newestFirst) { mutableIntStateOf(CHAPTER_PAGE) }
+
+    val markScope = rememberCoroutineScope()
+    /** Marks chapters read/unread by hand (read elsewhere, or to start over). */
+    fun mark(state: ChapterLoad.Ready, chapters: List<MangaChapter>, read: Boolean) {
+        markScope.launch {
+            Db.markChaptersRead(
+                manga.id,
+                chapters.map { Triple(it.number, it.id, it.pageCount ?: 0) },
+                read,
+                manga.title,
+                manga.cover,
+                state.source.id,
+            )
+            progress = Db.readingFor(manga.id)
+        }
+    }
 
     /** Opens [chapter]; next/previous then follow its group where that group has the chapter. */
     fun open(state: ChapterLoad.Ready, chapter: MangaChapter) {
@@ -211,13 +251,24 @@ private fun ChaptersSection(manga: Manga, onRead: () -> Unit) {
                 }
             }
         }
-        if (ready != null) {
-            Tag("via ${ready.source.label}", tone = TagTone.Outline)
-            if (MangaSources.all.any { it.id != ready.source.id && it.id !in skipped }) {
-                TextButton(onClick = {
-                    skipped = skipped + ready.source.id
-                    attempt++
-                }) { Text("Try another source", color = Color.White.copy(alpha = 0.7f)) }
+        if (MangaSources.all.size < 2 && ready != null) Tag("via ${ready.source.label}", tone = TagTone.Outline)
+    }
+    if (MangaSources.all.size > 1) {
+        // Source picker: the loaded source is highlighted; picking one sticks for this title.
+        Row(Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Source", style = MaterialTheme.typography.labelLarge, color = AniColors.TextSecondary, modifier = Modifier.width(64.dp))
+            PillTabs(
+                MangaSources.all.map { it.id to it.label },
+                selected = ready?.source?.id ?: chosenSource.orEmpty(),
+                onSelect = { id ->
+                    chosenSource = id
+                    prefs.edit().putString(preferenceKey, id).apply()
+                },
+                compact = true,
+            )
+            if (load is ChapterLoad.Loading) {
+                Spacer(Modifier.width(12.dp))
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = MangaDetailAccent)
             }
         }
     }
@@ -230,28 +281,27 @@ private fun ChaptersSection(manga: Manga, onRead: () -> Unit) {
             style = MaterialTheme.typography.labelMedium,
         )
     }
+    // The hero's read button follows the loaded source; drop it while another loads.
+    if (load !is ChapterLoad.Ready) LaunchedEffect(load) { onNextUp(null) }
     when (val state = load) {
-        ChapterLoad.Loading -> Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(color = MangaDetailAccent)
+        ChapterLoad.Loading -> Column(Modifier.padding(horizontal = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            repeat(5) { SkeletonBox(Modifier.fillMaxWidth().height(56.dp), corner = 10.dp) }
         }
         is ChapterLoad.Message -> AniCard(Modifier.padding(horizontal = 24.dp)) {
             StatusLine(state.text)
             if (MangaSources.all.isNotEmpty()) {
-                TextButton(onClick = {
-                    if (skipped.isNotEmpty()) {
-                        skipped = emptySet()
-                        prefs.edit().remove(preferenceKey).apply()
-                    }
-                    attempt++
-                }) {
-                    Text(if (skipped.isNotEmpty()) "Back to the first source" else "Retry", color = MangaDetailAccent)
-                }
+                Spacer(Modifier.height(10.dp))
+                PillButton("Retry", { attempt++ }, icon = Icons.Rounded.Refresh, compact = true)
             }
         }
         is ChapterLoad.Ready -> {
             // One upload per chapter: the chosen group's (or the automatic pick), as Continue reads.
             val readingList = remember(state, activeGroup) { MangaChapters.normalize(state.uploads, activeGroup) }
             val target = MangaChapters.resumeTarget(readingList, progress)
+            val heroLabel = target?.let { (if (progress.isNotEmpty()) "Continue · Ch " else "Start reading · Ch ") + MangaChapters.label(it.number) }
+            LaunchedEffect(heroLabel, state, activeGroup) {
+                onNextUp(if (target != null && heroLabel != null) heroLabel to { open(state, target) } else null)
+            }
             var rangeOpen by remember(manga.id) { mutableStateOf(false) }
             Row(
                 Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
@@ -311,6 +361,12 @@ private fun ChaptersSection(manga: Manga, onRead: () -> Unit) {
                 ChapterSearch(query, { query = it }, Modifier.weight(1f))
                 NewestOldest(newestFirst) { newestFirst = it }
             }
+            Text(
+                "Long-press a chapter to mark it read or unread.",
+                style = MaterialTheme.typography.labelSmall,
+                color = AniColors.TextTertiary,
+                modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
+            )
             val now = remember(ready) { System.currentTimeMillis() }
             Column(Modifier.padding(horizontal = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (rows.isEmpty()) {
@@ -322,13 +378,34 @@ private fun ChaptersSection(manga: Manga, onRead: () -> Unit) {
                 }
                 rows.take(limit).forEach { chapter ->
                     key(chapter.id) {
-                        ChapterRow(
-                            chapter,
-                            progress[chapter.number],
-                            now,
-                            download = MangaDownloads.items.firstOrNull { it.key == MangaDownloads.keyOf(manga.id, chapter.id) },
-                            onDownload = { MangaDownloads.enqueue(manga, state.source, state.title, chapter) },
-                        ) { open(state, chapter) }
+                        var menu by remember { mutableStateOf(false) }
+                        Box {
+                            ChapterRow(
+                                chapter,
+                                progress[chapter.number],
+                                now,
+                                download = MangaDownloads.items.firstOrNull { it.key == MangaDownloads.keyOf(manga.id, chapter.id) },
+                                onDownload = { MangaDownloads.enqueue(manga, state.source, state.title, chapter) },
+                                onLongClick = { menu = true },
+                            ) { open(state, chapter) }
+                            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                                val isRead = progress[chapter.number]?.finished == true
+                                DropdownMenuItem(
+                                    text = { Text(if (isRead) "Mark as unread" else "Mark as read") },
+                                    leadingIcon = { Icon(if (isRead) Icons.Rounded.RadioButtonUnchecked else Icons.Rounded.CheckCircle, null) },
+                                    onClick = { menu = false; mark(state, listOf(chapter), !isRead) },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Mark this and earlier as read") },
+                                    leadingIcon = { Icon(Icons.Rounded.DoneAll, null) },
+                                    onClick = {
+                                        menu = false
+                                        // One upload per chapter number, so each number is marked once.
+                                        mark(state, MangaChapters.normalize(state.uploads, activeGroup).filter { it.number <= chapter.number }, true)
+                                    },
+                                )
+                            }
+                        }
                     }
                 }
                 if (rows.size > limit) {
@@ -338,7 +415,7 @@ private fun ChaptersSection(manga: Manga, onRead: () -> Unit) {
                     ) {
                         Text(
                             "• SHOW ${rows.size - limit} MORE CHAPTERS",
-                            color = Color(0xFF5FC9C0),
+                            color = AniColors.AccentBright,
                             letterSpacing = 2.sp,
                             fontFamily = FontFamily.Monospace,
                         )
@@ -440,14 +517,14 @@ private fun NewestOldest(newestFirst: Boolean, onChange: (Boolean) -> Unit) {
             val selected = value == newestFirst
             Box(
                 Modifier.fillMaxHeight().clip(RoundedCornerShape(8.dp))
-                    .background(if (selected) Color(0xFF5FC9C0).copy(alpha = 0.18f) else Color.Transparent)
+                    .background(if (selected) AniColors.AccentSoft else Color.Transparent)
                     .clickable(enabled = !selected) { onChange(value) }
                     .padding(horizontal = 14.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     label,
-                    color = if (selected) Color(0xFF5FC9C0) else Color.White.copy(alpha = 0.7f),
+                    color = if (selected) Color.White else Color.White.copy(alpha = 0.7f),
                     fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                     style = MaterialTheme.typography.labelLarge,
                 )
@@ -457,6 +534,7 @@ private fun NewestOldest(newestFirst: Boolean, onChange: (Boolean) -> Unit) {
 }
 
 /** One upload, laid out like MangaDot's rows: state · number · title · flag · group · pages · date. */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun ChapterRow(
     chapter: MangaChapter,
@@ -464,6 +542,7 @@ private fun ChapterRow(
     nowMs: Long,
     download: MangaDownloads.Item?,
     onDownload: () -> Unit,
+    onLongClick: () -> Unit = {},
     onClick: () -> Unit,
 ) {
     val read = state?.finished == true
@@ -472,7 +551,7 @@ private fun ChapterRow(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
             .background(Color.White.copy(alpha = if (read) 0.02f else 0.045f))
             .border(1.dp, Color.White.copy(alpha = 0.07f), RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -545,7 +624,8 @@ private fun ChapterRow(
             fontFamily = FontFamily.Monospace,
             textAlign = TextAlign.End,
             maxLines = 1,
-            modifier = Modifier.width(110.dp),
+            // Wide enough for "Aug 13, 2025" in monospace.
+            modifier = Modifier.width(136.dp),
         )
         Spacer(Modifier.width(8.dp))
         DownloadControl(download, onDownload)
@@ -622,10 +702,10 @@ private fun DownloadRangeDialog(
                         val chosen = from == low && to == high
                         Text(
                             label,
-                            color = if (chosen) Color.Black else Color.White.copy(alpha = 0.8f),
+                            color = if (chosen) Color.White else Color.White.copy(alpha = 0.8f),
                             style = MaterialTheme.typography.labelLarge,
                             modifier = Modifier.clip(RoundedCornerShape(50))
-                                .background(if (chosen) Color.White else Color.White.copy(alpha = 0.08f))
+                                .background(if (chosen) AniColors.AccentSoft else Color.White.copy(alpha = 0.08f))
                                 .clickable {
                                     fromText = MangaChapters.label(low)
                                     toText = MangaChapters.label(high)

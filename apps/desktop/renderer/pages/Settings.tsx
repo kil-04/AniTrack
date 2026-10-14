@@ -1,10 +1,30 @@
 import { useEffect, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { useAppStore } from "../store/useAppStore";
-import { RefreshCcw } from "lucide-react";
+import { BookMarked, Cloud, DownloadCloud, Globe, Info, Library, RefreshCcw, ShieldCheck, type LucideIcon } from "lucide-react";
+import BrandMark from "../components/BrandMark";
 import type { AniListAuthState } from "../../../../packages/shared/types";
 import type { RuntimeConfigStatus } from "../../../../packages/shared/runtime-config";
 import { getSyncConfig, setSyncConfig, clearSyncConfig, pullAndMerge, pushAllProgress } from "../lib/supabase-sync";
+
+const SECTIONS: { id: string; label: string; icon: LucideIcon }[] = [
+  { id: "mal", label: "MyAnimeList", icon: BookMarked },
+  { id: "anilist", label: "AniList", icon: Library },
+  { id: "pahe", label: "AnimePahe URL", icon: Globe },
+  { id: "updates", label: "Updates", icon: DownloadCloud },
+  { id: "providers", label: "Provider fixes", icon: ShieldCheck },
+  { id: "sync", label: "Cross-device Sync", icon: Cloud },
+  { id: "about", label: "About", icon: Info },
+];
+
+function SettingsHead({ icon: Icon, title }: { icon: LucideIcon; title: string }) {
+  return (
+    <div className="mb-3 flex items-center gap-3">
+      <span className="icon-tile"><Icon size={18} strokeWidth={2.1} /></span>
+      <h2 className="text-lg font-bold tracking-tight">{title}</h2>
+    </div>
+  );
+}
 
 export default function Settings() {
   const mal = useAppStore((s) => s.mal);
@@ -197,18 +217,38 @@ export default function Settings() {
 
 
   return (
-    <div className="px-8 py-8">
-      <h1 className="mb-8 text-3xl font-bold">Settings</h1>
+    <div className="mx-auto flex max-w-[1240px] gap-10 px-8 py-8">
+      <nav className="sticky top-6 hidden h-fit w-56 shrink-0 lg:block">
+        <div className="mb-3 px-3 text-[10px] font-bold uppercase tracking-[0.2em] text-ink-3">On this page</div>
+        {SECTIONS.filter((x) => x.id !== "providers" || (window.api.automation && automationStatus)).map((x) => (
+          <button
+            key={x.id}
+            onClick={() => document.getElementById(x.id)?.scrollIntoView({ behavior: "smooth", block: "start" })}
+            className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-[13.5px] font-medium text-ink-2 transition hover:bg-white/[0.05] hover:text-white"
+          >
+            <x.icon size={16} className="text-ink-3" />
+            {x.label}
+          </button>
+        ))}
+      </nav>
+      <div className="min-w-0 flex-1 space-y-6">
+      <header className="mb-2 flex items-center gap-4">
+        <BrandMark size={52} />
+        <div>
+          <h1 className="text-[32px] font-extrabold leading-tight tracking-tight">Settings</h1>
+          <p className="text-sm text-ink-3">Accounts, sync, providers and updates</p>
+        </div>
+      </header>
 
-      <section className="mb-10 rounded-lg border border-white/10 bg-bg-card p-6">
-        <h2 className="mb-2 text-xl font-semibold">MyAnimeList</h2>
-        <p className="mb-4 text-sm text-muted">
+      <section id="mal" className="panel scroll-mt-6 p-6">
+        <SettingsHead icon={BookMarked} title="MyAnimeList" />
+        <p className="mb-5 text-sm leading-relaxed text-ink-2">
           Two-way sync with your MAL list. Sign in with your MyAnimeList account to import
           your anime list and keep progress in sync automatically.
         </p>
 
         {mal.connected ? (
-          <div className="flex items-center justify-between rounded-md bg-bg-elev px-4 py-3">
+          <div className="flex items-center justify-between rounded-xl border border-white/[0.06] bg-white/[0.03] px-4 py-3">
             <div>
               <div className="text-sm text-muted">Connected as</div>
               <div className="font-medium">{mal.username || "(unknown)"}</div>
@@ -217,7 +257,7 @@ export default function Settings() {
               <button
                 disabled={busy}
                 onClick={pull}
-                className="flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-sm font-medium hover:bg-accent-hover disabled:opacity-50"
+                className="btn btn-primary"
               >
                 <RefreshCcw size={14} />
                 Sync from MAL
@@ -227,7 +267,7 @@ export default function Settings() {
                   await window.api.mal.disconnect();
                   refreshAll();
                 }}
-                className="rounded-md border border-white/10 px-4 py-2 text-sm hover:bg-white/5"
+                className="btn btn-secondary"
               >
                 Disconnect
               </button>
@@ -238,7 +278,7 @@ export default function Settings() {
             <button
               onClick={connectMal}
               disabled={awaitingAuth}
-              className="rounded-md bg-accent px-4 py-2 text-sm font-medium hover:bg-accent-hover disabled:opacity-50"
+              className="btn btn-primary"
             >
               {awaitingAuth ? "Waiting for browser…" : "Connect MyAnimeList"}
             </button>
@@ -248,7 +288,7 @@ export default function Settings() {
               </div>
             )}
             {authError && (
-              <div className="text-sm text-red-400">{authError}</div>
+              <div className="text-sm text-red-300">{authError}</div>
             )}
           </div>
         )}
@@ -265,14 +305,14 @@ export default function Settings() {
               <p className="text-xs text-muted">
                 Custom MAL client ID. Leave blank to use the built-in shared one.
                 Create your own at <span className="text-white/60">myanimelist.net/apiconfig</span> (App Type: Other, Redirect URL: <span className="font-mono">https://malsync.moe/mal/oauth</span>).
-                {malUsingCustom && <span className="ml-1 text-green-400">Currently using custom.</span>}
+                {malUsingCustom && <span className="ml-1 text-emerald-400">Currently using custom.</span>}
               </p>
               <div className="flex gap-2">
                 <input
                   value={malClientId}
                   onChange={(e) => { setMalClientIdInput(e.target.value); setMalClientSaved(false); }}
                   placeholder="MAL Client ID (optional)"
-                  className="flex-1 rounded-md border border-white/10 bg-bg-elev px-3 py-2 text-sm font-mono focus:border-accent focus:outline-none"
+                  className="input flex-1 font-mono"
                 />
                 <button
                   onClick={async () => {
@@ -281,7 +321,7 @@ export default function Settings() {
                     setMalClientSaved(true);
                     setTimeout(() => setMalClientSaved(false), 2000);
                   }}
-                  className="rounded-md bg-accent px-4 py-2 text-sm font-medium hover:bg-accent-hover"
+                  className="btn btn-primary"
                 >
                   {malClientSaved ? "Saved ✓" : "Save"}
                 </button>
@@ -291,16 +331,16 @@ export default function Settings() {
         </div>
       </section>
 
-      <section className="mb-10 rounded-lg border border-white/10 bg-bg-card p-6">
-        <h2 className="mb-2 text-xl font-semibold">AniList</h2>
-        <p className="mb-4 text-sm text-muted">
+      <section id="anilist" className="panel scroll-mt-6 p-6">
+        <SettingsHead icon={Library} title="AniList" />
+        <p className="mb-5 text-sm leading-relaxed text-ink-2">
           Sync your watch list with AniList. You need a free AniList API client ID —
           create one at <span className="text-white/60">anilist.co/settings/developer</span> with
           redirect URL set to <span className="font-mono text-white/60">http://localhost</span>.
         </p>
 
         {alState.connected ? (
-          <div className="flex items-center justify-between rounded-md bg-bg-elev px-4 py-3">
+          <div className="flex items-center justify-between rounded-xl border border-white/[0.06] bg-white/[0.03] px-4 py-3">
             <div>
               <div className="text-sm text-muted">Connected as</div>
               <div className="font-medium">{alState.username || "(unknown)"}</div>
@@ -309,7 +349,7 @@ export default function Settings() {
               <button
                 disabled={busy}
                 onClick={pullAniList}
-                className="flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-sm font-medium hover:bg-accent-hover disabled:opacity-50"
+                className="btn btn-primary"
               >
                 <RefreshCcw size={14} />
                 Sync from AniList
@@ -321,7 +361,7 @@ export default function Settings() {
                   setAlState(s);
                   refreshAll();
                 }}
-                className="rounded-md border border-white/10 px-4 py-2 text-sm hover:bg-white/5"
+                className="btn btn-secondary"
               >
                 Disconnect
               </button>
@@ -335,14 +375,14 @@ export default function Settings() {
                   value={alClientId}
                   onChange={(e) => setAlClientId(e.target.value)}
                   placeholder="AniList Client ID"
-                  className="flex-1 rounded-md border border-white/10 bg-bg-elev px-3 py-2 text-sm focus:border-accent focus:outline-none"
+                  className="input flex-1"
                 />
               </div>
             )}
             <button
               onClick={connectAniList}
               disabled={alAwaitingAuth}
-              className="rounded-md bg-accent px-4 py-2 text-sm font-medium hover:bg-accent-hover disabled:opacity-50"
+              className="btn btn-primary"
             >
               {alAwaitingAuth ? "Waiting for browser…" : "Connect AniList"}
             </button>
@@ -352,15 +392,15 @@ export default function Settings() {
               </div>
             )}
             {alAuthError && (
-              <div className="text-sm text-red-400">{alAuthError}</div>
+              <div className="text-sm text-red-300">{alAuthError}</div>
             )}
           </div>
         )}
       </section>
 
-      <section className="mb-10 rounded-lg border border-white/10 bg-bg-card p-6">
-        <h2 className="mb-2 text-xl font-semibold">AnimePahe URL</h2>
-        <p className="mb-4 text-sm text-muted">
+      <section id="pahe" className="panel scroll-mt-6 p-6">
+        <SettingsHead icon={Globe} title="AnimePahe URL" />
+        <p className="mb-5 text-sm leading-relaxed text-ink-2">
           If AnimePahe moves to a new domain (e.g. .si, .cx), update it here.
           The app will reconnect immediately — no restart needed.
         </p>
@@ -369,7 +409,7 @@ export default function Settings() {
             value={paheUrl}
             onChange={(e) => { setPaheUrl(e.target.value); setPaheUrlSaved(false); setPaheUrlError(null); }}
             placeholder="https://animepahe.pw"
-            className="flex-1 rounded-md border border-white/10 bg-bg-elev px-3 py-2 text-sm font-mono focus:border-accent focus:outline-none"
+            className="input flex-1 font-mono"
           />
           <button
             onClick={async () => {
@@ -383,32 +423,32 @@ export default function Settings() {
               setPaheUrlSaved(true);
               setTimeout(() => setPaheUrlSaved(false), 2000);
             }}
-            className="rounded-md bg-accent px-4 py-2 text-sm font-medium hover:bg-accent-hover"
+            className="btn btn-primary"
           >
             {paheUrlSaved ? "Saved ✓" : "Save"}
           </button>
         </div>
         {paheUrlError && (
-          <div className="mt-2 text-sm text-red-400">{paheUrlError}</div>
+          <div className="mt-2 text-sm text-red-300">{paheUrlError}</div>
         )}
       </section>
 
-      <section className="mb-10 rounded-lg border border-white/10 bg-bg-card p-6">
-        <h2 className="mb-2 text-xl font-semibold">Updates</h2>
-        <p className="mb-4 text-sm text-muted">
+      <section id="updates" className="panel scroll-mt-6 p-6">
+        <SettingsHead icon={DownloadCloud} title="Updates" />
+        <p className="mb-5 text-sm leading-relaxed text-ink-2">
           AniTrack checks for updates automatically on startup. You can also check manually here.
         </p>
         <div className="flex items-center gap-4">
           <button
             onClick={checkForUpdates}
             disabled={updateState.phase === "checking" || updateState.phase === "downloading"}
-            className="rounded-md bg-accent px-4 py-2 text-sm font-medium hover:bg-accent-hover disabled:opacity-50"
+            className="btn btn-primary"
           >
             {updateState.phase === "checking" ? "Checking…" : "Check for Updates"}
           </button>
 
           {updateState.phase === "not-available" && (
-            <span className="text-sm text-green-400">You're up to date.</span>
+            <span className="text-sm text-emerald-400">You're up to date.</span>
           )}
           {updateState.phase === "available" && (
             <span className="text-sm text-muted">v{updateState.version} found — downloading…</span>
@@ -416,38 +456,38 @@ export default function Settings() {
           {updateState.phase === "downloading" && (
             <div className="flex items-center gap-2">
               <div className="h-1.5 w-32 overflow-hidden rounded-full bg-white/10">
-                <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${updateState.percent}%` }} />
+                <div className="h-full rounded-full bg-accent-gradient transition-all" style={{ width: `${updateState.percent}%` }} />
               </div>
               <span className="text-sm text-muted">{updateState.percent}%</span>
             </div>
           )}
           {updateState.phase === "ready" && (
             <div className="flex items-center gap-3">
-              <span className="text-sm text-green-400">v{updateState.version} ready to install.</span>
+              <span className="text-sm text-emerald-400">v{updateState.version} ready to install.</span>
               <button
                 onClick={() => window.api.updater.install()}
-                className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium hover:bg-accent-hover"
+                className="btn btn-primary btn-sm"
               >
                 {Capacitor.isNativePlatform() ? "Download Update" : "Restart Now"}
               </button>
               <button
                 onClick={() => setUpdateState({ phase: "idle" })}
-                className="rounded-md border border-white/10 px-3 py-1.5 text-sm hover:bg-white/5"
+                className="btn btn-secondary btn-sm"
               >
                 Later
               </button>
             </div>
           )}
           {updateState.phase === "error" && (
-            <span className="text-sm text-red-400">{updateState.message}</span>
+            <span className="text-sm text-red-300">{updateState.message}</span>
           )}
         </div>
       </section>
 
       {window.api.automation && automationStatus && (
-        <section className="mb-10 rounded-lg border border-white/10 bg-bg-card p-6">
-          <h2 className="mb-2 text-xl font-semibold">Automatic Provider Fixes</h2>
-          <p className="mb-4 text-sm text-muted">
+        <section id="providers" className="panel scroll-mt-6 p-6">
+          <SettingsHead icon={ShieldCheck} title="Automatic Provider Fixes" />
+          <p className="mb-5 text-sm leading-relaxed text-ink-2">
             Signed provider and network rules update independently of the desktop installer. The last verified
             configuration remains active if an update cannot be verified.
           </p>
@@ -477,7 +517,7 @@ export default function Settings() {
               try { setAutomationStatus(await window.api.automation!.refresh()); }
               finally { setAutomationBusy(false); }
             }}
-            className="rounded-md border border-white/10 px-4 py-2 text-sm hover:bg-white/5 disabled:opacity-50"
+            className="btn btn-secondary"
           >
             {automationBusy ? "Refreshing…" : "Refresh provider fixes"}
           </button>
@@ -492,9 +532,9 @@ export default function Settings() {
         </section>
       )}
 
-      <section className="rounded-lg border border-white/10 bg-bg-card p-6">
-        <h2 className="mb-4 text-xl font-semibold">Cross-device Sync</h2>
-        <p className="mb-4 text-sm text-muted">
+      <section id="sync" className="panel scroll-mt-6 p-6">
+        <SettingsHead icon={Cloud} title="Cross-device Sync" />
+        <p className="mb-5 text-sm leading-relaxed text-ink-2">
           Syncs your continue-watching progress across desktop and Android via a private GitHub Gist —
           nothing to host and it never expires. Create a token at{" "}
           <span className="font-mono text-white/70">github.com/settings/tokens</span> with the{" "}
@@ -509,7 +549,7 @@ export default function Settings() {
               value={gistToken}
               onChange={(e) => setGistToken(e.target.value)}
               placeholder="ghp_… or github_pat_…"
-              className="w-full rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+              className="input"
             />
           </div>
           <div className="flex flex-wrap gap-2 pt-1">
@@ -522,7 +562,7 @@ export default function Settings() {
                 setTimeout(() => setSupaSaved(false), 2000);
               }}
               disabled={!gistToken.trim()}
-              className="rounded-md bg-accent px-4 py-2 text-sm font-medium hover:bg-accent-hover disabled:opacity-50"
+              className="btn btn-primary"
             >
               {supaSaved ? "Saved ✓" : "Save"}
             </button>
@@ -540,7 +580,7 @@ export default function Settings() {
                 }
               }}
               disabled={!getSyncConfig()}
-              className="flex items-center gap-2 rounded-md border border-white/10 px-4 py-2 text-sm hover:bg-white/5 disabled:opacity-50"
+              className="btn btn-secondary"
             >
               <RefreshCcw size={14} /> Pull now
             </button>
@@ -557,36 +597,37 @@ export default function Settings() {
                 }
               }}
               disabled={!getSyncConfig()}
-              className="rounded-md border border-white/10 px-4 py-2 text-sm hover:bg-white/5 disabled:opacity-50"
+              className="btn btn-secondary"
             >
               Push all to cloud
             </button>
             {getSyncConfig() && (
               <button
                 onClick={() => { clearSyncConfig(); setGistToken(""); setSupaStatus(null); setSupaError(null); }}
-                className="rounded-md border border-white/10 px-4 py-2 text-sm hover:bg-white/5"
+                className="btn btn-secondary"
               >
                 Disconnect
               </button>
             )}
           </div>
           {supaStatus && <p className="text-sm text-muted">{supaStatus}</p>}
-          {supaError  && <p className="text-sm text-red-400">{supaError}</p>}
+          {supaError  && <p className="text-sm text-red-300">{supaError}</p>}
         </div>
       </section>
 
-      <section className="rounded-lg border border-white/10 bg-bg-card p-6">
-        <h2 className="mb-2 text-xl font-semibold">About</h2>
-        <p className="mb-3 text-sm text-muted">
+      <section id="about" className="panel scroll-mt-6 p-6">
+        <SettingsHead icon={Info} title="About" />
+        <p className="mb-4 text-sm leading-relaxed text-ink-2">
           AniTrack is a personal anime tracker with a Netflix-style UI, MAL two-way sync, and a local file player.
           It is not affiliated with MyAnimeList or any streaming service. For streaming, use a licensed provider
           via the "Watch on" menu on each show.
         </p>
-        <div className="inline-flex items-center gap-2 rounded-md bg-white/5 px-3 py-1.5 text-sm">
+        <div className="chip h-8 text-sm">
           <span className="text-muted">Version</span>
           <span className="font-mono font-medium">{__APP_VERSION__}</span>
         </div>
       </section>
+      </div>
     </div>
   );
 }

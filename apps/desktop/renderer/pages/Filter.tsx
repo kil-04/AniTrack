@@ -2,7 +2,12 @@ import { useState, useEffect, useRef } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import Card from '../components/Card';
 import type { AnimeMeta, AdvancedSearchFilters } from '../../../../packages/shared/types';
-import { Search, Filter as FilterIcon, ChevronDown, Square, CheckSquare, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
+import { Search, SlidersHorizontal, ChevronDown, Check, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, X, Star, Trophy, LayoutGrid, SearchX, TriangleAlert, RotateCcw } from 'lucide-react';
+import PageHeader from '../components/PageHeader';
+import SectionHeader from '../components/SectionHeader';
+import SelectField from '../components/SelectField';
+import EmptyState from '../components/EmptyState';
+import { animeStatusLabel } from '../lib/format';
 
 const ANILIST_GENRES = ['Action', 'Adventure', 'Comedy', 'Drama', 'Ecchi', 'Fantasy', 'Horror', 'Mahou Shoujo', 'Mecha', 'Music', 'Mystery', 'Psychological', 'Romance', 'Sci-Fi', 'Slice of Life', 'Sports', 'Supernatural', 'Thriller'];
 
@@ -83,38 +88,53 @@ function MultiSelectDropdown({ label, options, selected, onChange }: { label: st
 
   return (
     <div className="relative" ref={ref}>
-      <button 
-        type="button" 
-        onClick={() => setOpen(!open)} 
-        className="bg-[#1f1f1f] border border-white/10 rounded-md py-2 px-3 text-sm focus:border-accent focus:outline-none flex items-center justify-between gap-2 min-w-[140px] hover:bg-white/5 transition-colors"
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className={`input flex min-w-[150px] items-center justify-between gap-2 text-left ${selected.length ? 'border-accent/45 bg-accent/[0.08] text-white' : 'text-ink-2'}`}
       >
-        <span className="truncate max-w-[120px]">
-          {selected.length === 0 ? `Select ${label}` : `${selected.length} ${label}s`}
+        <span className="max-w-[140px] truncate">
+          {selected.length === 0 ? `Any ${label}` : selected.length === 1 ? selected[0] : `${selected.length} ${label}s`}
         </span>
-        <ChevronDown size={14} className="text-muted" />
+        <ChevronDown size={15} className={`shrink-0 text-ink-3 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
-      
+
       {open && (
-        <div className="absolute top-full mt-2 left-0 w-[600px] bg-[#222222] border border-white/10 shadow-2xl rounded-lg z-50 py-3 px-2">
-          <div className="grid grid-cols-4 gap-y-1 gap-x-2 max-h-[400px] overflow-y-auto custom-scrollbar">
-            {options.map(opt => (
-              <label key={opt} className="flex items-center gap-2 cursor-pointer hover:text-white text-white/80 transition-colors text-sm py-1.5 px-3 rounded hover:bg-white/5">
-                <input 
-                  type="checkbox" 
-                  className="hidden" 
-                  checked={selected.includes(opt)} 
-                  onChange={() => toggle(opt)} 
-                />
-                {selected.includes(opt) ? <CheckSquare size={16} className="text-white flex-shrink-0" /> : <Square size={16} className="text-white/30 flex-shrink-0" />}
-                <span className="truncate">{opt}</span>
-              </label>
-            ))}
+        <div className="glass absolute left-0 top-full z-50 mt-2 w-[620px] rounded-2xl p-3 shadow-pop">
+          <div className="mb-2 flex items-center justify-between px-2">
+            <span className="eyebrow">Genres &amp; tags</span>
+            {selected.length > 0 && (
+              <button type="button" onClick={() => onChange([])} className="text-xs font-semibold text-ink-3 transition hover:text-white">
+                Clear
+              </button>
+            )}
+          </div>
+          <div className="thin-scrollbar grid max-h-[380px] grid-cols-4 gap-1 overflow-y-auto">
+            {options.map(opt => {
+              const on = selected.includes(opt);
+              return (
+                <button
+                  type="button"
+                  key={opt}
+                  onClick={() => toggle(opt)}
+                  className={`flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition ${on ? 'bg-accent/15 text-white' : 'text-ink-2 hover:bg-white/[0.06] hover:text-white'}`}
+                >
+                  <span className={`grid h-4 w-4 shrink-0 place-items-center rounded-[5px] border transition ${on ? 'border-transparent bg-accent-gradient text-white' : 'border-white/20'}`}>
+                    {on && <Check size={11} strokeWidth={3} />}
+                  </span>
+                  <span className="truncate">{opt}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
       )}
     </div>
   );
 }
+
+const FORMAT_LABELS: Record<string, string> = { TV: 'TV', TV_SHORT: 'TV Short', MOVIE: 'Movie', OVA: 'OVA', ONA: 'ONA', SPECIAL: 'Special', MUSIC: 'Music' };
+const capitalize = (s: string) => s.charAt(0) + s.slice(1).toLowerCase();
 
 export default function Filter() {
   const [params, setParams] = useSearchParams();
@@ -294,78 +314,160 @@ export default function Filter() {
 
   const effectiveLastPage = Math.max(lastPage, page + (hasNextPage ? 1 : 0));
 
+  const resultsRef = useRef<HTMLDivElement>(null);
+  const goTo = (n: number) => {
+    setPage(n);
+    fetchResults(n);
+    resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  // The filters in the URL, as removable chips.
+  const applied: { key: string; value?: string; label: string }[] = [];
+  const appliedQuery = params.get('q');
+  if (appliedQuery) applied.push({ key: 'q', label: `"${appliedQuery}"` });
+  (params.get('genre') ?? '').split(',').filter(Boolean).forEach(g => applied.push({ key: 'genre', value: g, label: g }));
+  const appliedSeason = params.get('season');
+  if (appliedSeason) applied.push({ key: 'season', label: capitalize(appliedSeason) });
+  const appliedYear = params.get('year');
+  if (appliedYear) applied.push({ key: 'year', label: appliedYear });
+  const appliedType = params.get('type');
+  if (appliedType) applied.push({ key: 'type', label: FORMAT_LABELS[appliedType] ?? appliedType });
+  const appliedStatus = params.get('status');
+  if (appliedStatus) applied.push({ key: 'status', label: animeStatusLabel(appliedStatus) });
+  const appliedSource = params.get('source');
+  if (appliedSource) applied.push({ key: 'source', label: SOURCES.find(x => x.id === appliedSource)?.label ?? appliedSource });
+  const appliedEpisodes = params.get('episodes');
+  if (appliedEpisodes) applied.push({ key: 'episodes', label: `${EPISODE_RANGES.find(x => x.id === appliedEpisodes)?.label ?? appliedEpisodes} eps` });
+  const appliedSort = SORTS.find(x => x.id === params.get('sort'))?.label;
+
+  const removeApplied = (key: string, value?: string) => {
+    const p = new URLSearchParams(params);
+    if (key === 'genre' && value) {
+      const rest = (p.get('genre') ?? '').split(',').filter(g => g && g !== value);
+      if (rest.length) p.set('genre', rest.join(','));
+      else p.delete('genre');
+    } else {
+      p.delete(key);
+    }
+    setParams(p);
+  };
+
+  const pageButton = 'flex h-9 w-9 items-center justify-center rounded-xl text-ink-3 transition hover:bg-white/[0.07] hover:text-white disabled:pointer-events-none disabled:opacity-30';
+
   return (
-    <div className="p-8 flex gap-8">
-      <div className="flex-1">
-        <h1 className="text-3xl font-bold mb-6">Filter</h1>
-        
-        <form onSubmit={handleFilter} className="flex flex-wrap gap-4 mb-8 bg-[#1b1b1b] p-4 rounded-xl border border-white/5">
-          <div className="relative flex-1 min-w-[200px]">
-            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
-            <input 
-              value={query}
-              onChange={e => setQuery(e.target.value)}
-              placeholder="Search..." 
-              className="w-full bg-[#1f1f1f] border border-white/10 rounded-md py-2 pl-9 pr-4 text-sm focus:border-accent focus:outline-none"
-            />
-          </div>
-          
-          <MultiSelectDropdown label="genre" options={COMBINED_GENRES} selected={genre} onChange={setGenre} />
+    <div className="mx-auto flex max-w-[1680px] gap-8 px-8 py-8">
+      <div className="min-w-0 flex-1">
+        <PageHeader icon={Search} title="Search" subtitle="Find any anime by name, genre, season, format and more" />
 
-          <select value={season} onChange={e => setSeason(e.target.value)} className="bg-[#1f1f1f] border border-white/10 rounded-md py-2 px-3 text-sm focus:border-accent focus:outline-none">
-            <option value="">Select season</option>
-            {SEASONS.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
-
-          <select value={year} onChange={e => setYear(e.target.value)} className="bg-[#1f1f1f] border border-white/10 rounded-md py-2 px-3 text-sm focus:border-accent focus:outline-none">
-            <option value="">Select year</option>
-            {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
-          </select>
-
-          <select value={type} onChange={e => setType(e.target.value)} className="bg-[#1f1f1f] border border-white/10 rounded-md py-2 px-3 text-sm focus:border-accent focus:outline-none">
-            <option value="">Select type</option>
-            {TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-          </select>
-
-          <select value={status} onChange={e => setStatus(e.target.value)} className="bg-[#1f1f1f] border border-white/10 rounded-md py-2 px-3 text-sm focus:border-accent focus:outline-none">
-            <option value="">Select status</option>
-            {STATUSES.map(s => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}
-          </select>
-
-          <select value={source} onChange={e => setSource(e.target.value)} className="bg-[#1f1f1f] border border-white/10 rounded-md py-2 px-3 text-sm focus:border-accent focus:outline-none">
-            <option value="">Select source</option>
-            {SOURCES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
-          </select>
-
-          <select value={episodeRange} onChange={e => setEpisodeRange(e.target.value)} className="bg-[#1f1f1f] border border-white/10 rounded-md py-2 px-3 text-sm focus:border-accent focus:outline-none">
-            <option value="">Episode range</option>
-            {EPISODE_RANGES.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
-          </select>
-
-          <select value={sort} onChange={e => setSort(e.target.value)} className="bg-[#1f1f1f] border border-white/10 rounded-md py-2 px-3 text-sm focus:border-accent focus:outline-none">
-            <option value="">Default sort</option>
-            {SORTS.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
-          </select>
-
-          <button type="submit" className="bg-accent hover:bg-accent/80 text-white py-2 px-6 rounded-md text-sm font-semibold transition-colors flex items-center gap-2">
-            <FilterIcon size={16} /> Filter
-          </button>
-        </form>
-
-        {loading ? (
-          <div className="text-center py-20 text-muted">Loading...</div>
-        ) : error ? (
-          <div className="text-center py-20">
-            <div className="text-red-400 mb-4">{error}</div>
-            <button
-              onClick={() => fetchResults(page)}
-              className="bg-accent hover:bg-accent/80 text-white py-2 px-6 rounded-md text-sm font-semibold transition-colors"
-            >
-              Retry
+        <form onSubmit={handleFilter} className="panel relative z-20 mb-10 p-4">
+          <div className="flex gap-3">
+            <div className="relative flex-1">
+              <Search size={18} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-ink-3" />
+              <input
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                placeholder="Search titles…"
+                className="input h-12 rounded-2xl pl-11 text-[15px]"
+              />
+            </div>
+            <button type="submit" className="btn btn-primary h-12 rounded-2xl px-6">
+              <SlidersHorizontal size={17} /> Apply
             </button>
           </div>
+
+          <div className="mt-3 flex flex-wrap gap-2.5">
+            <MultiSelectDropdown label="genre" options={COMBINED_GENRES} selected={genre} onChange={setGenre} />
+            <SelectField value={season} onChange={setSeason} className="w-[150px]">
+              <option value="">Any season</option>
+              {SEASONS.map(s => <option key={s} value={s}>{capitalize(s)}</option>)}
+            </SelectField>
+            <SelectField value={year} onChange={setYear} className="w-[130px]">
+              <option value="">Any year</option>
+              {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+            </SelectField>
+            <SelectField value={type} onChange={setType} className="w-[150px]">
+              <option value="">Any format</option>
+              {TYPES.map(t => <option key={t} value={t}>{FORMAT_LABELS[t] ?? t}</option>)}
+            </SelectField>
+            <SelectField value={status} onChange={setStatus} className="w-[150px]">
+              <option value="">Any status</option>
+              {STATUSES.map(s => <option key={s} value={s}>{animeStatusLabel(s)}</option>)}
+            </SelectField>
+            <SelectField value={source} onChange={setSource} className="w-[170px]">
+              <option value="">Any source</option>
+              {SOURCES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+            </SelectField>
+            <SelectField value={episodeRange} onChange={setEpisodeRange} className="w-[150px]">
+              <option value="">Any length</option>
+              {EPISODE_RANGES.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
+            </SelectField>
+            <SelectField value={sort} onChange={setSort} className="w-[190px]">
+              <option value="">Default sort</option>
+              {SORTS.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+            </SelectField>
+          </div>
+
+          {applied.length > 0 && (
+            <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-white/[0.06] pt-4">
+              <span className="mr-1 text-[11px] font-bold uppercase tracking-[0.16em] text-ink-3">Active</span>
+              {applied.map(a => (
+                <button
+                  type="button"
+                  key={`${a.key}:${a.value ?? ''}`}
+                  onClick={() => removeApplied(a.key, a.value)}
+                  className="chip chip-active group"
+                  title="Remove this filter"
+                >
+                  {a.label}
+                  <X size={12} className="text-white/60 transition group-hover:text-white" />
+                </button>
+              ))}
+              <button type="button" onClick={() => setParams(new URLSearchParams())} className="btn btn-ghost btn-sm ml-1">
+                Clear all
+              </button>
+            </div>
+          )}
+        </form>
+
+        <div ref={resultsRef} className="scroll-mt-6">
+          <SectionHeader
+            icon={LayoutGrid}
+            title={appliedQuery ? `Results for "${appliedQuery}"` : 'Results'}
+            subtitle={`${appliedSort ? `Sorted by ${appliedSort} · ` : ''}Page ${page}`}
+          />
+        </div>
+
+        {loading ? (
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-6">
+            {Array.from({ length: 18 }, (_, i) => (
+              <div key={i} className="skeleton aspect-[2/3] rounded-2xl" />
+            ))}
+          </div>
+        ) : error ? (
+          <EmptyState
+            icon={TriangleAlert}
+            tone="danger"
+            title="Search failed"
+            action={
+              <button onClick={() => fetchResults(page)} className="btn btn-primary">
+                <RotateCcw size={16} /> Retry
+              </button>
+            }
+          >
+            {error}
+          </EmptyState>
         ) : results.length === 0 ? (
-          <div className="text-center py-20 text-muted">No results found matching your criteria.</div>
+          <EmptyState
+            icon={SearchX}
+            title="Nothing matches"
+            action={applied.length > 0 && (
+              <button onClick={() => setParams(new URLSearchParams())} className="btn btn-secondary">
+                Clear filters
+              </button>
+            )}
+          >
+            Try fewer filters or a different spelling.
+          </EmptyState>
         ) : (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-6">
             {results.map(anime => (
@@ -373,105 +475,87 @@ export default function Filter() {
             ))}
           </div>
         )}
-        
-          <div className="mt-10 mb-6 flex items-center justify-center gap-1.5">
-            {/* First Page */}
-            <button
-              onClick={() => {
-                setPage(1);
-                fetchResults(1);
-                const gridEl = document.querySelector('.grid');
-                if (gridEl) gridEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
-              }}
-              disabled={page === 1 || loading}
-              className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-[#1f1f1f] text-white/50 hover:bg-white/10 hover:text-white disabled:opacity-30 disabled:pointer-events-none transition"
-              title="First Page"
-            >
+
+        {(page > 1 || hasNextPage) && !error && (
+          <div className="mb-6 mt-10 flex items-center justify-center gap-1.5">
+            <button onClick={() => goTo(1)} disabled={page === 1 || loading} className={pageButton} title="First page">
               <ChevronsLeft size={15} />
             </button>
-
-            {/* Previous Page */}
-            <button
-              onClick={() => {
-                const prev = page - 1;
-                setPage(prev);
-                fetchResults(prev);
-                const gridEl = document.querySelector('.grid');
-                if (gridEl) gridEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
-              }}
-              disabled={page === 1 || loading}
-              className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-[#1f1f1f] text-white/50 hover:bg-white/10 hover:text-white disabled:opacity-30 disabled:pointer-events-none transition"
-              title="Previous Page"
-            >
+            <button onClick={() => goTo(page - 1)} disabled={page === 1 || loading} className={pageButton} title="Previous page">
               <ChevronLeft size={15} />
             </button>
-
-            {/* Current Page */}
-            <span className="flex h-9 min-w-[2.25rem] items-center justify-center rounded-lg px-3 text-sm font-semibold bg-white text-black border border-white/20">
-              {page}
+            <span className="flex h-9 min-w-[5.5rem] items-center justify-center rounded-xl bg-accent-gradient px-3 text-xs font-semibold text-white shadow-glow">
+              Page {page}
             </span>
-
-            {/* Next Page */}
-            <button
-              onClick={() => {
-                const next = page + 1;
-                setPage(next);
-                fetchResults(next);
-                const gridEl = document.querySelector('.grid');
-                if (gridEl) gridEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
-              }}
-              disabled={!hasNextPage || loading}
-              className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-[#1f1f1f] text-white/50 hover:bg-white/10 hover:text-white disabled:opacity-30 disabled:pointer-events-none transition"
-              title="Next Page"
-            >
+            <button onClick={() => goTo(page + 1)} disabled={!hasNextPage || loading} className={pageButton} title="Next page">
               <ChevronRight size={15} />
             </button>
-
-            {/* Last Page */}
             {lastPage < 138 && (
               <button
-                onClick={() => {
-                  setPage(effectiveLastPage);
-                  fetchResults(effectiveLastPage);
-                  const gridEl = document.querySelector('.grid');
-                  if (gridEl) gridEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                }}
+                onClick={() => goTo(effectiveLastPage)}
                 disabled={page === effectiveLastPage || !hasNextPage || loading}
-                className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-[#1f1f1f] text-white/50 hover:bg-white/10 hover:text-white disabled:opacity-30 disabled:pointer-events-none transition"
-                title="Last Page"
+                className={pageButton}
+                title="Last page"
               >
                 <ChevronsRight size={15} />
               </button>
             )}
           </div>
-
-      </div>
-
-      <div className="w-[300px] shrink-0">
-        <h2 className="text-xl font-bold mb-4">Top rated anime</h2>
-        {loadingTop ? (
-          <div className="text-muted text-sm">Loading...</div>
-        ) : (
-          <div className="flex flex-col gap-3">
-            {topRated.map(anime => (
-              <Link to={`/anime/${anime.id}`} state={{ anime }} key={anime.id} className="flex gap-3 bg-[#1b1b1b] border border-white/5 p-2 rounded-lg hover:bg-white/5 transition-colors">
-                {anime.coverImage ? (
-                  <img src={anime.coverImage} loading="lazy" className="w-14 h-20 object-cover rounded shadow-sm" alt="" />
-                ) : (
-                  <div className="w-14 h-20 bg-white/5 rounded" />
-                )}
-                <div className="flex-1 flex flex-col justify-center">
-                  <div className="text-sm font-bold line-clamp-2 leading-tight mb-1">{anime.title}</div>
-                  <div className="flex gap-2 items-center text-xs">
-                    {anime.averageScore && <span className="text-green-400 font-bold">★ {(anime.averageScore / 10).toFixed(1)}</span>}
-                    {anime.duration && <span className="text-muted">{anime.duration} min</span>}
-                  </div>
-                </div>
-              </Link>
-            ))}
-          </div>
         )}
       </div>
+
+      <aside className="hidden w-[300px] shrink-0 xl:block">
+        <div className="panel sticky top-6 p-4">
+          <div className="mb-3 flex items-center gap-3">
+            <span className="icon-tile h-8 w-8 rounded-lg">
+              <Trophy size={16} strokeWidth={2.2} />
+            </span>
+            <h2 className="text-lg font-bold tracking-tight">Top rated</h2>
+          </div>
+          {loadingTop ? (
+            <div className="flex flex-col gap-2">
+              {Array.from({ length: 8 }, (_, i) => (
+                <div key={i} className="skeleton h-[68px] rounded-xl" />
+              ))}
+            </div>
+          ) : topRated.length === 0 ? (
+            <div className="py-8 text-center text-sm text-ink-3">Couldn't load rankings.</div>
+          ) : (
+            <div className="flex flex-col">
+              {topRated.map((anime, i) => (
+                <Link
+                  to={`/anime/${anime.id}`}
+                  state={{ anime }}
+                  key={anime.id}
+                  className="group flex items-center gap-3 rounded-xl px-1.5 py-2 transition-colors hover:bg-white/[0.04]"
+                >
+                  <span className={`w-6 shrink-0 text-center text-lg font-black tabular-nums ${i < 3 ? 'bg-accent-gradient bg-clip-text text-transparent' : 'text-white/20'}`}>
+                    {i + 1}
+                  </span>
+                  {anime.coverImage ? (
+                    <img src={anime.coverImage} loading="lazy" className="h-16 w-11 shrink-0 rounded-lg object-cover shadow-md ring-1 ring-white/10 transition group-hover:ring-accent/50" alt="" />
+                  ) : (
+                    <div className="h-16 w-11 shrink-0 rounded-lg bg-white/5" />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="line-clamp-2 text-sm font-semibold leading-tight text-white/90 group-hover:text-white">{anime.title}</div>
+                    <div className="mt-1 flex items-center gap-2 text-[11px] font-semibold">
+                      {anime.averageScore != null && (
+                        <span className="flex items-center gap-0.5 text-amber-300">
+                          <Star size={10} fill="currentColor" /> {(anime.averageScore / 10).toFixed(1)}
+                        </span>
+                      )}
+                      <span className="truncate text-ink-3">
+                        {[anime.format ? FORMAT_LABELS[anime.format] ?? anime.format : null, anime.year].filter(Boolean).join(' · ')}
+                      </span>
+                    </div>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          )}
+        </div>
+      </aside>
     </div>
   );
 }

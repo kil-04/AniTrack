@@ -78,6 +78,19 @@ The still-compiled Capacitor compatibility bridge is similarly divided into
 These modules exist only to keep old installations buildable; new Android
 product work belongs in the native Kotlin application.
 
+## Manga connector boundaries
+
+Desktop manga connectors live in `apps/desktop/main/services/manga/`; the native
+counterparts live in `apps/android/app/src/main/java/com/sanjay/anitrack/next/data/manga/`.
+Both registries explicitly offer MangaDot, MangaBall and Comix while preserving
+existing preferences. Readers consume normalized chapters/pages, not website UI.
+
+Comix's reviewed browser transport is currently shared from
+`apps/android/app/src/main/assets/comix_transport.js`. Android packages it as an
+asset; electron-builder includes that exact asset and its image-format notices.
+Its executable contents are locally reviewed/released. Do not substitute a
+downloaded connector through signed data-only remote configuration.
+
 ## Repository policy
 
 Keep shippable applications in `apps/`, reusable contracts in `packages/`, and

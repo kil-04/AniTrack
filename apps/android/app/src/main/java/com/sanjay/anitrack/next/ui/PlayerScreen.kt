@@ -1,6 +1,11 @@
 package com.sanjay.anitrack.next.ui
 
 import androidx.compose.material.icons.rounded.SkipNext
+import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.SwapHoriz
 import android.app.Activity
 import android.app.PictureInPictureParams
 import android.content.pm.ActivityInfo
@@ -39,6 +44,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -57,13 +63,16 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-private val Accent = Color(0xFFE50914)
+private val Accent: Color get() = AniColors.Accent
 @OptIn(UnstableApi::class)
 @Composable
 fun PlayerScreen(
     onBack: () -> Unit,
     onHome: () -> Unit = onBack,
     onOpenDetail: (Int) -> Unit = {},
+    /** Debug provider diagnostics use the real screen without touching watch/account data. */
+    saveWatchProgress: Boolean = true,
+    initialVariantId: String? = null,
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
@@ -75,7 +84,7 @@ fun PlayerScreen(
     var switching by remember { mutableStateOf(false) }
     var switchError by remember { mutableStateOf<String?>(null) }
     var streamVariants by remember { mutableStateOf<List<ProviderStreamVariant>>(emptyList()) }
-    var selectedVariantId by remember { mutableStateOf<String?>(null) }
+    var selectedVariantId by remember { mutableStateOf(initialVariantId) }
     var variantsLoading by remember { mutableStateOf(false) }
     var retry by remember { mutableStateOf(0) }
     var pendingSwitchPositionMs by remember { mutableStateOf<Long?>(null) }
@@ -105,6 +114,14 @@ fun PlayerScreen(
     var capColor by remember { mutableStateOf(capPrefs.getInt("cap_color", android.graphics.Color.WHITE)) }
     var autoplay by remember { mutableStateOf(capPrefs.getBoolean("autoplay", true)) }
     var autoNext by remember { mutableStateOf(capPrefs.getBoolean("auto_next", true)) }
+    var autoSkip by remember { mutableStateOf(capPrefs.getBoolean("auto_skip", false)) }
+    // Sleep timer: 0 off, -1 stop after this episode, else minutes (sleepAt is when to pause).
+    var sleepMode by remember { mutableIntStateOf(0) }
+    var sleepAt by remember { mutableStateOf<Long?>(null) }
+    var notice by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(notice) { if (notice != null) { delay(5000); notice = null } }
+    // Cancelling the up-next card stops auto-next for this episode.
+    var upNextDismissed by remember { mutableStateOf(false) }
     var settingsMenu by remember { mutableStateOf<String?>(null) }  // null|main|speed|quality|subtitles
     // Manual quality: available video heights in the stream; 0 = highest.
     var videoHeights by remember { mutableStateOf<List<Int>>(emptyList()) }
@@ -112,6 +129,8 @@ fun PlayerScreen(
     // Transient native-player error recovery (Anikoto/local playback).
     var errorRetries by remember { mutableStateOf(0) }
     var lastErrorAt by remember { mutableStateOf(0L) }
+    // Native player buffering (start-up, seek, stall): drives the loading spinner.
+    var buffering by remember { mutableStateOf(false) }
     // Some connector streams need hls.js/MSE rather than Media3. The backend
     // is selected by resolved connector metadata, not by a provider name.
     val webCtl = remember { WebController() }
@@ -131,7 +150,7 @@ fun PlayerScreen(
     val wide = LocalConfiguration.current.screenWidthDp >= 820
     var watchedMap by remember { mutableStateOf<Map<Float, Int>>(emptyMap()) }
     LaunchedEffect(index) {
-        runCatching { watchedMap = com.sanjay.anitrack.next.data.Db.positionsFor(PlaySession.animeId) }
+        if (saveWatchProgress) runCatching { watchedMap = com.sanjay.anitrack.next.data.Db.positionsFor(PlaySession.animeId) }
     }
 
     // Borrow the app-wide player — it survives navigation so the floating
@@ -147,6 +166,13 @@ fun PlayerScreen(
     // Unified controls that dispatch to the active backend (ExoPlayer / WebView).
     fun curPos(): Long = if (useWeb) webCtl.positionMs.value else player.currentPosition
     fun doSeek(ms: Long) { positionMs = ms; if (useWeb) webCtl.seekTo(ms) else player.seekTo(ms) }
+    /** End of an episode: the sleep timer may stop here; otherwise auto-next unless cancelled. */
+    fun onEpisodeEnded() {
+        when {
+            sleepMode == -1 -> { sleepMode = 0; notice = "Sleep timer stopped after this episode" }
+            autoNext && !upNextDismissed && index + 1 < PlaySession.count -> index += 1
+        }
+    }
     fun doTogglePlay() {
         if (useWeb) {
             if (webCtl.paused.value) webCtl.play() else webCtl.pause()
@@ -164,6 +190,14 @@ fun PlayerScreen(
         var stallBufferedAt = 0L
         var stallRecoveries = 0
         while (isActive) {
+            sleepAt?.let { at ->
+                if (System.currentTimeMillis() >= at) {
+                    sleepAt = null
+                    sleepMode = 0
+                    if (useWeb) webCtl.pause() else player.pause()
+                    notice = "Sleep timer paused playback"
+                }
+            }
             // AnimePahe WebView — mirror hls.js state instead of ExoPlayer.
             if (useWeb) {
                 if (!isSeeking) positionMs = webCtl.positionMs.value
@@ -171,6 +205,7 @@ fun PlayerScreen(
                 bufferedMs = webCtl.bufferedMs.value
                 isPlaying = !webCtl.paused.value
                 webCtl.error.value?.let { if (error != it) error = it }
+                if (buffering) buffering = false
                 delay(300)
                 continue
             }
@@ -181,6 +216,8 @@ fun PlayerScreen(
             // icon doesn't flip to ▶ every time a seek re-buffers.
             isPlaying = player.playWhenReady
             val st = player.playbackState
+            val nowBuffering = st == Player.STATE_BUFFERING
+            if (buffering != nowBuffering) buffering = nowBuffering
             if (st == Player.STATE_BUFFERING && player.playWhenReady) {
                 if (player.bufferedPosition > stallBufferedAt + 500) {
                     stallBufferedAt = player.bufferedPosition
@@ -213,6 +250,8 @@ fun PlayerScreen(
     }
     DisposableEffect(Unit) {
         PlaySession.playerActive = true
+        // An episode takes over from any theme song.
+        com.sanjay.anitrack.next.data.ThemePlayer.pause()
         // Immersive: hide the Android status + navigation bars for the whole
         // player so nothing (clock, taskbar) sits over the video or controls.
         val window = activity?.window
@@ -246,7 +285,7 @@ fun PlayerScreen(
     DisposableEffect(player, useWeb) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
-                if (!useWeb && state == Player.STATE_ENDED && autoNext && index + 1 < PlaySession.count) index += 1
+                if (!useWeb && state == Player.STATE_ENDED) onEpisodeEnded()
             }
             override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
                 // Collect the stream's video renditions for the Quality menu.
@@ -276,6 +315,14 @@ fun PlayerScreen(
                     }
                     error = if (httpCode != null) "Stream request failed (HTTP $httpCode). No automatic retry."
                         else "Native playback stopped (${e.errorCodeName}). Choose another server or retry manually."
+                    return
+                }
+                // A refusal (403, 404, 410…) answers the same on every re-prepare of
+                // the same URL; retrying in place only kept the screen black for
+                // half a minute. Say so at once and offer Retry / another provider.
+                if (httpCode != null && httpCode in REFUSED_HTTP_CODES) {
+                    val name = providerDescriptors.firstOrNull { it.id == PlaySession.provider }?.name ?: "This server"
+                    error = "$name refused this stream (HTTP $httpCode). Retry, or try another provider."
                     return
                 }
                 // Transient network/seek stalls (Cronet re-requests after a seek)
@@ -309,20 +356,32 @@ fun PlayerScreen(
     val variantGeneration = remember { java.util.concurrent.atomic.AtomicLong(0) }
 
     // Discover provider-native choices without resolving any third-party embed pages.
-    LaunchedEffect(index, provider, subType) {
+    // An explicit retry/reconnect must also refresh a previously failed server
+    // list. Retaining its selected ID prevents any silent mirror substitution.
+    LaunchedEffect(index, provider, subType, retry) {
         val generation = variantGeneration.incrementAndGet()
         val requestProvider = provider
         val requestIndex = index
         streamVariants = emptyList()
         variantsLoading = true
-        val variants = runCatching { PlaySession.streamVariants(index) }.getOrDefault(emptyList())
+        val variants = try { PlaySession.streamVariants(index) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) {
+            if (generation == variantGeneration.get()) {
+                variantsLoading = false
+                switchError = "Could not load this episode's servers. Reconnect or retry manually."
+            }
+            return@LaunchedEffect
+        }
         if (generation == variantGeneration.get() &&
             requestProvider == PlaySession.provider &&
             requestIndex == PlaySession.index
         ) {
             streamVariants = variants
             if (selectedVariantId != null && variants.none { it.id == selectedVariantId }) {
-                selectedVariantId = null
+                // Retain explicit identity: clearing it would silently resolve
+                // a default mirror, including after a security rejection.
+                switchError = "The selected server is no longer available. Choose another server manually."
             }
             variantsLoading = false
         }
@@ -340,10 +399,15 @@ fun PlayerScreen(
         // server switch matches the episode you STARTED on, not the one
         // you're watching (the "came back to ep 58" bug).
         PlaySession.index = index
+        upNextDismissed = false
         val epNum = PlaySession.episodeNumber(index)
         // Already loaded (returning from the mini player)? Don't restart it.
         val holder = com.sanjay.anitrack.next.data.PlayerHolder
-        if (pendingSwitchPositionMs == null && holder.loadedKey == holder.keyFor(index) && player.mediaItemCount > 0) {
+        // A stream that failed after leaving the screen (in the mini player) is resolved
+        // again rather than reused: reusing it showed a black screen with no error.
+        if (player.playerError == null &&
+            canReusePlayerStream(retry, pendingSwitchPositionMs, holder.loadedKey, holder.keyFor(index), player.mediaItemCount)
+        ) {
             if (generation != resolveGeneration.get() ||
                 requestProvider != PlaySession.provider ||
                 requestVariantId != selectedVariantId
@@ -356,7 +420,7 @@ fun PlayerScreen(
             return@LaunchedEffect
         }
         // Save the outgoing episode's position before switching.
-        lastPlayedIndex?.takeIf { it != index }?.let {
+        lastPlayedIndex?.takeIf { saveWatchProgress && it != index }?.let {
             if (lastPlayedWithWeb) saveWebProgress(it, webCtl.positionMs.value, durationMs)
             else saveProgress(player, it)
         }
@@ -377,7 +441,7 @@ fun PlayerScreen(
             stream = s
             val resolvedUsesWeb = s.backend == PlaybackBackend.WEB_HLS
             lastPlayedWithWeb = resolvedUsesWeb
-            val storedResumeMs = (com.sanjay.anitrack.next.data.Db.resumeFor(PlaySession.animeId, epNum) ?: 0.0) * 1000
+            val storedResumeMs = if (saveWatchProgress) (com.sanjay.anitrack.next.data.Db.resumeFor(PlaySession.animeId, epNum) ?: 0.0) * 1000 else 0.0
             // A server switch is the same episode on a different source. Keep
             // the live clock instead of jumping to an older persisted resume.
             val resumeMs = pendingSwitchPositionMs ?: storedResumeMs.toLong()
@@ -423,16 +487,21 @@ fun PlayerScreen(
     // watch progress every ~10s while playing.
     LaunchedEffect(stream, useWeb) {
         var sinceSave = 0
+        // Auto-skip each window once per stream, so seeking back into it is respected.
+        var introSkipped = false
+        var outroSkipped = false
         while (isActive) {
             val s = stream
             val pos = curPos() / 1000
             val si = s?.introEnd != null && pos >= (s.introStart ?: 0) && pos < s.introEnd!!
             val so = s?.outroEnd != null && pos >= (s.outroStart ?: 0) && pos < s.outroEnd!!
+            if (autoSkip && si && !introSkipped) { introSkipped = true; doSeek(s!!.introEnd!! * 1000) }
+            if (autoSkip && so && !outroSkipped) { outroSkipped = true; doSeek(s!!.outroEnd!! * 1000) }
             if (si != showSkipIntro) showSkipIntro = si
             if (so != showSkipOutro) showSkipOutro = so
             sinceSave += 1
             val playing = if (useWeb) !webCtl.paused.value else player.isPlaying
-            if (sinceSave >= 20 && playing) { // 20 * 500ms = 10s
+            if (saveWatchProgress && sinceSave >= 20 && playing) { // 20 * 500ms = 10s
                 sinceSave = 0
                 if (useWeb) saveWebProgress(index, curPos(), durationMs) else saveProgress(player, index)
             }
@@ -447,6 +516,11 @@ fun PlayerScreen(
     DisposableEffect(Unit) {
         onDispose {
             val holder = com.sanjay.anitrack.next.data.PlayerHolder
+            val savedIndex = latestIndex.value
+            // Native playback saves only when the player holds this episode (not the
+            // previous one) and didn't fail on it. Read before release(), which
+            // forgets the loaded key.
+            val holdsEpisode = holder.loadedKey == holder.keyFor(savedIndex) && player.playerError == null
             if (player.mediaItemCount > 0 && player.playbackState != Player.STATE_IDLE) {
                 holder.miniActive.value = true   // keep playing in the overlay
             } else {
@@ -455,8 +529,7 @@ fun PlayerScreen(
             val webWasActive = latestUseWeb.value
             val dur = if (webWasActive) latestDurationMs.value else player.duration
             val posMs = if (webWasActive) webCtl.positionMs.value else player.currentPosition
-            val savedIndex = latestIndex.value
-            if (savedIndex < PlaySession.count && dur > 0) {
+            if (saveWatchProgress && savedIndex < PlaySession.count && dur > 0 && (webWasActive || holdsEpisode)) {
                 val epNum = PlaySession.episodeNumber(savedIndex)
                 val key = PlaySession.resumeKey()
                 // Fire-and-forget on a background thread; the composable is gone.
@@ -468,6 +541,8 @@ fun PlayerScreen(
                             PlaySession.animeTitle, PlaySession.animeCover, key,
                             providerId = PlaySession.provider, updatedAt = now,
                         )
+                        // With the progress saved: clear what's watched, fetch what's next.
+                        com.sanjay.anitrack.next.data.SmartDownloads.kick(context, force = true)
                         com.sanjay.anitrack.next.data.GistSync.pushProgress(
                             com.sanjay.anitrack.next.data.Db.CwRow(
                                 PlaySession.animeId, epNum, posMs / 1000.0, dur / 1000.0,
@@ -571,7 +646,7 @@ fun PlayerScreen(
         }
 
         val switchStreamVariant: (String) -> Unit = { target ->
-            if (target != selectedVariantId && !switching) {
+            if (target != (selectedVariantId ?: stream?.variantId) && !switching) {
                 pendingSwitchPositionMs = curPos().coerceAtLeast(0L)
                 pendingSwitchPlayWhenReady = if (useWeb) !webCtl.paused.value else player.playWhenReady
                 switchError = null
@@ -586,7 +661,8 @@ fun PlayerScreen(
                 provider = provider,
                 providers = providerDescriptors,
                 streamVariants = streamVariants,
-                selectedVariantId = selectedVariantId,
+                // The server picked by hand, else the one the provider chose by default.
+                selectedVariantId = selectedVariantId ?: stream?.variantId,
                 variantsLoading = variantsLoading,
                 subType = subType,
                 current = index,
@@ -618,7 +694,7 @@ fun PlayerScreen(
                         playWhenReady = webPlayWhenReady,
                         reloadToken = retry,
                         modifier = Modifier.fillMaxSize(),
-                        onEnded = { if (autoNext && index + 1 < PlaySession.count) index += 1 },
+                        onEnded = { onEpisodeEnded() },
                     )
                 }
             } else AndroidView(
@@ -747,12 +823,70 @@ fun PlayerScreen(
                         capColor = capColor, onCapColor = { capColor = it; capPrefs.edit().putInt("cap_color", it).apply() },
                         autoplay = autoplay, onAutoplay = { autoplay = it; capPrefs.edit().putBoolean("autoplay", it).apply() },
                         autoNext = autoNext, onAutoNext = { autoNext = it; capPrefs.edit().putBoolean("auto_next", it).apply() },
+                        autoSkip = autoSkip, onAutoSkip = { autoSkip = it; capPrefs.edit().putBoolean("auto_skip", it).apply() },
+                        sleepMode = sleepMode,
+                        sleepMinutesLeft = sleepAt?.let { at -> ((at - System.currentTimeMillis() + 59_999) / 60_000).toInt().coerceAtLeast(1) },
+                        onSleep = { minutes ->
+                            sleepMode = minutes
+                            sleepAt = if (minutes > 0) System.currentTimeMillis() + minutes * 60_000L else null
+                            if (minutes != 0) notice = if (minutes == -1) "Stopping after this episode" else "Pausing in $minutes min"
+                        },
                     )
                 }
             }
 
+            // Up next: in the last seconds, or once the ending credits start.
+            val remainingMs = (durationMs - positionMs).coerceAtLeast(0L)
+            val outroStartMs = stream?.outroStart?.let { it * 1000 }
+            val showUpNext = autoNext && sleepMode != -1 && !upNextDismissed && index + 1 < PlaySession.count &&
+                durationMs > 60_000 && error == null && status.isEmpty() && !inPipMode &&
+                (remainingMs in 1..15_000 || (outroStartMs != null && positionMs >= outroStartMs && remainingMs > 0))
+            if (showUpNext) {
+                val next = PlaySession.episodeNumber(index + 1)
+                Row(
+                    Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 96.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color.Black.copy(alpha = 0.8f))
+                        .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
+                        .padding(start = 16.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column {
+                        Text("Up next", color = Color.White.copy(alpha = 0.6f), style = MaterialTheme.typography.labelSmall)
+                        Text(
+                            "Episode ${if (next % 1f == 0f) next.toInt() else next}",
+                            color = Color.White,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        if (remainingMs <= 15_000) {
+                            Text(
+                                "Starts in ${(remainingMs + 999) / 1000}s",
+                                color = Color.White.copy(alpha = 0.6f),
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.width(14.dp))
+                    PillButton("Play now", { index += 1 }, icon = Icons.Rounded.PlayArrow, style = PillStyle.Light, compact = true)
+                    IconButton(onClick = { upNextDismissed = true }) {
+                        Icon(Icons.Rounded.Close, "Don't play the next episode", tint = Color.White.copy(alpha = 0.8f))
+                    }
+                }
+            }
+            notice?.let { text ->
+                Text(
+                    text,
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 20.dp)
+                        .clip(RoundedCornerShape(50)).background(Color.Black.copy(alpha = 0.75f))
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }
+
             // Skip intro / outro
-            if (showSkipIntro || showSkipOutro) {
+            if ((showSkipIntro || showSkipOutro) && !showUpNext) {
                 Button(
                     onClick = {
                         val s = stream ?: return@Button
@@ -769,20 +903,61 @@ fun PlayerScreen(
             }
 
             when {
-                error != null -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(error!!, color = Color(0xFFFF6B6B), style = MaterialTheme.typography.bodyMedium)
+                error != null -> Column(
+                    Modifier
+                        .padding(24.dp)
+                        .widthIn(max = 440.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(Color.Black.copy(alpha = 0.72f))
+                        .padding(horizontal = 22.dp, vertical = 20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Icon(Icons.Rounded.ErrorOutline, null, tint = Color(0xFFFF6B6B), modifier = Modifier.size(34.dp))
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        error!!,
+                        color = Color.White.copy(alpha = 0.9f),
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center,
+                    )
                     ProviderAccessControls(Providers.registry.enabled(provider, com.sanjay.anitrack.next.data.RemoteConfig.current())) {
                         pendingSwitchPositionMs = curPos().coerceAtLeast(0L)
                         retry++
                     }
-                    Spacer(Modifier.height(8.dp))
-                    Button(onClick = { retry += 1 }, colors = ButtonDefaults.buttonColors(containerColor = Accent)) { Text("Retry") }
+                    Spacer(Modifier.height(12.dp))
+                    // The next enabled provider, offered as a one-tap way out of a refused stream.
+                    val nextProvider = providerDescriptors.takeIf { PlaySession.canSwitchServer }
+                        ?.let { list -> list.drop(list.indexOfFirst { it.id == provider } + 1) + list }
+                        ?.firstOrNull { it.id != provider }
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        PillButton(
+                            "Retry",
+                            onClick = {
+                                pendingSwitchPositionMs = curPos().coerceAtLeast(0L)
+                                pendingSwitchPlayWhenReady = if (useWeb) !webCtl.paused.value else player.playWhenReady
+                                retry += 1
+                            },
+                            icon = Icons.Rounded.Refresh,
+                            style = PillStyle.Primary,
+                        )
+                        if (nextProvider != null) PillButton(
+                            "Try ${nextProvider.name}",
+                            onClick = { switchTo(nextProvider.id) },
+                            icon = Icons.Rounded.SwapHoriz,
+                            loading = switching,
+                        )
+                    }
                 }
                 status.isNotEmpty() -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CircularProgressIndicator(color = Accent)
                     Spacer(Modifier.height(10.dp))
                     Text(status, color = Color.White.copy(alpha = 0.6f), style = MaterialTheme.typography.labelMedium)
                 }
+                buffering && !useWeb && !inPipMode -> CircularProgressIndicator(
+                    color = Color.White,
+                    strokeWidth = 3.dp,
+                    modifier = Modifier.size(44.dp),
+                )
             }
         } // video Box
         } // videoArea lambda
@@ -803,3 +978,6 @@ fun PlayerScreen(
         }
     }
 }
+
+/** HTTP answers a re-prepare of the same stream URL cannot change (refused, gone, blocked). */
+private val REFUSED_HTTP_CODES = setOf(401, 403, 404, 410, 451)

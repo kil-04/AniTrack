@@ -1,14 +1,23 @@
 # Miruro integration status
 
-Status: **Android diagnostic native playback/seek verified; debug-only normal UI/session integration under test**.
-Last investigation: 2026-09-06. No release or remote enablement was performed.
+Status: **Desktop v1 diagnostic verified; Android ANIKOTO/HD-1 single-server playback verified, KAA/Vid rejected with HTTP 403; release-disabled**.
+Last investigation: 2026-10-07. No release or remote enablement was performed.
+
+The current desktop connector uses `/api/v1/` with a locally implemented public
+wire decoder. Cowboy Bebop episode 1 passed video/audio progression beyond 65
+seconds, caption loading, forward/backward seeks and a selected server switch
+with position preservation. Android's active adapter now uses the same current
+v1 catalogue and local decoder. Its build and JVM tests passed, and the connected
+tablet passed one ANIKOTO/HD-1 soft-sub normal-player test. Android KAA/Vid and
+position-preserving server switching remain unresolved. See the latest sections below;
+earlier sections are dated investigation history, not the current API contract.
 
 Selected address: **https://www.miruro.ru/**, explicitly confirmed working by
 the user and listed by the [official domain directory](https://www.miruro.com/).
 There is no automatic mirror rotation. The request protocol was initially
 inspected on `.to`; `.ru` references the same frontend asset filenames.
 
-## Confirmed from the current public frontend
+## September frontend protocol (historical)
 
 The site at <https://www.miruro.to/> identifies anime by AniList ID. Its public
 frontend sends read operations through `/api/secure/pipe?e=...`. The `e` value is
@@ -95,7 +104,7 @@ API security blocks remain unresolved. The browser was not used as an API proxy
 and no expiring stream URLs were copied into AniTrack. The app provider remains
 unregistered and disabled pending a supported, verified integration path.
 
-## Remaining before integration can be enabled
+## September integration gates (historical)
 
 1. Obtain normal, successful current-site responses for configuration, search,
    episodes and one selected source. Redact expiring URLs and secrets before
@@ -401,6 +410,10 @@ not. Device retesting after rebuild is still required.
 
 ## API replaced upstream (2026-10-02)
 
+This checkpoint was superseded by the readable public frontend inspected on
+2026-10-06. Its earlier decoder and episode-coordinate conclusions below are
+not the current implementation contract.
+
 Miruro (`www.miruro.ru`) no longer serves the reads this connector was built on.
 Observed from a user-operated session page in the desktop test app:
 
@@ -432,3 +445,276 @@ It is registered but off unless signed configuration enables it, and its
 transport targets the retired routes. The desktop client now distinguishes
 security-check and rate-limit cooldowns; requests queued behind a block still
 stop.
+
+## Desktop v1 migration and native verification (2026-10-06)
+
+The current public [catalogue bundle](https://www.miruro.ru/assets/fa6-DizsrLyD.js)
+exposes a readable binary codec: XOR bytes with the repeating UTF-8 public string
+`miruro/catalog`, gzip-decompress, then parse JSON. AniTrack reimplements this
+locally with bounded input/output and strict UTF-8; it does not invoke downloaded
+decoder or resolver modules. This supersedes the 2 October conclusion that no
+readable decoder was available. The user approved isolated site-module execution,
+but this migration does not need that additional mechanism.
+
+The [watch component](https://www.miruro.ru/assets/WatchRoute-C46TqFqs.js) and
+successful current responses establish these exact catalogue reads:
+
+| Operation | Current request |
+| --- | --- |
+| AniList lookup | `/api/v1/anime?anilist_id_in=ID&limit=100` |
+| Episode list | `/api/v1/anime/SHOW_ID/episodes?limit=10000` |
+| Playback choices | `/api/v1/anime/SHOW_ID/episodes/NUMBER/play` |
+
+`SHOW_ID` is the returned opaque ID. `NUMBER` is the numeric episode number,
+not an opaque episode ID, and may be fractional. Lookup requires an exact
+`external_ids.anilist` match; incomplete or ambiguous results fail. The tested
+Cowboy Bebop catalogue has 26 correctly ordered episodes, beginning with
+"Session #1: Asteroid Blues".
+
+`/play` groups track → provider → server → direct streams, with server headers
+and provider subtitles. The tested episode exposed 11 accepted direct choices,
+not 11 verified players. Embed-only choices are excluded. Soft sub, hard sub and
+dub retain separate coordinates; disappearing choices do not silently resolve
+another server. Each playback resolution reads fresh media. Only bounded show
+and episode metadata is cached, never signed playback URLs.
+
+The default transport uses the existing app-owned, sandboxed Miruro page session
+with locally authored isolated-world same-origin GETs. Binary bodies cross that
+boundary as base64, not lossy UTF-8 text. It has no AniTrack/account bridge and
+exports no cookies. Redirects, declared/chunked size overruns and security/rate
+responses stop the attempt. Any website check remains user-operated; the failed
+request is not automatically retried. A security rejection offers reconnection;
+rate rejection retains a one-minute backoff and queued requests stop.
+
+Only validated public Referer/Origin headers are accepted. HLS traversal
+authorizes observed media directories, and captions/direct MP4 use exact URLs.
+The Miruro-only rendition allowance accommodates separate audio plus multiple
+video qualities; other providers retain their existing bound. Downloads remain
+unsupported. Background next-episode discovery is disabled because `/play`
+already resolves media and may disturb the current session.
+
+Live desktop verification used the actual default connector and registry in the
+separate `anitrack-provider-smoke` profile, with local hls.js/native video:
+
+- KICKASSANIME / Vid / soft sub: more than 65 seconds of advancing decoded
+  video and audio; resolution up to 1920×1432; 215 WebVTT cues loaded.
+- Forward seek resumed at approximately 819.75 seconds; backward seek resumed
+  at 19.11 seconds, with advancing video and audio after each.
+- Explicit switch to ANIKOTO / HD-1 / soft sub resumed from the saved 19.11-second
+  position and advanced to 23.15 seconds; 217 cues loaded on the new stream.
+- The expanded check completed in 120 seconds, with 67 HTTP 200 responses and
+  no fatal media errors or rejected media requests. No fallback was needed.
+
+All 176 Node regressions passed. Desktop typecheck and production build are
+recorded in `playback-verification.md`. This is not a whole-episode soak, all-server
+validation, caption translation/timing assessment or the production React-player
+UI test. Both release configurations stay disabled. Android migration, device
+playback/captions/switching, normal UI/session recovery and progress synchronization
+remain required before enablement. No installer, APK, signed rollout or MAL write
+was produced by this check.
+
+## Android v1 migration implemented; verification pending (2026-10-06)
+
+The active `MiruroAndroidProvider` now supplies the user-approved page session
+to the migrated `MiruroProvider`. It no longer uses the retired secure-pipe
+routes for matching, episodes or playback. The legacy protocol/catalogue helpers
+remain for historical synthetic fixtures and diagnostics; their older successful
+device results above do not validate the new v1 adapter.
+
+`MiruroV1Protocol.kt` builds the same three exact reads verified on desktop:
+AniList lookup with `limit=100`, episodes with `limit=10000`, and `/play` with the
+numeric episode number, including fractional episodes. `MiruroV1Catalogue.kt`
+requires a unique matching `external_ids.anilist` identity, complete catalogue
+pages, numeric episode identities and distinct track/provider/server coordinates.
+Incomplete, ambiguous or conflicting data fails rather than silently selecting
+another show or episode.
+
+The binary response decoder is locally implemented Kotlin: the public repeating
+`miruro/catalog` XOR mask, bounded gzip decompression, strict UTF-8 and JSON.
+Both incoming and decompressed data are limited to 2 MiB, with bounded nesting.
+`MiruroStrictJson.kt` checks JSON grammar before Android's permissive JSON parser.
+No downloaded catalogue decoder or resolver is evaluated in the native runtime.
+
+`MiruroWebSessionTransport` retains the existing restricted, activity-owned
+homepage session after the user's explicit **Continue to AniTrack** action.
+Its fixed locally authored same-origin GET now returns base64 bytes and the
+response Content-Type instead of prematurely decoding binary data as UTF-8.
+Requests remain serialized, bounded and time-limited, with redirects forbidden,
+no cookie export and no app/account bridge. Polling checks local completion only;
+it does not repeat a request or automate website verification.
+
+Server choice identities are stable
+`track:provider:server:occurrence` values, independent of show and episode. The
+episode resolver captures its own numeric coordinate, so the same selected
+server can remain selected when changing episodes without losing episode
+identity. Variant discovery reads `/play` only for the requested active episode;
+it retains labels/identities, not its expiring media URLs. Every playback
+resolution reads `/play` again and requires the exact requested server/track.
+A removed selection fails instead of using an array-index or different-server
+fallback. No embed is loaded, server fan-out performed or next-episode media
+prefetched by this connector.
+
+The fresh `ResolvedMedia` handoff preserves validated public Referer/Origin,
+accepted caption URLs/MIME/language/default metadata, and intro/outro ranges.
+Playback stays in AniTrack's normal native Media3 path with conservative network
+behavior: no ambient browser-cookie import, playlist rewriting, automatic load
+retry or source fallback. HLS uses the existing public-header-only `PUBLIC_HLS`
+scope for recognized HTTPS media paths; MP4 remains exact-URL scoped and offered
+captions are authorized as exact additional URLs. Downloads remain unsupported.
+
+Security/rate-limit responses stop the failed request and queued reads. Android
+retains the user's no-timed-cooldown policy: a new manual attempt is allowed, but
+an API access rejection closes the catalogue session and requires explicit
+user-approved reconnection. Media-server rejection does not close that catalogue
+session, permitting a manual server switch. The separate 30-minute idle session
+expiry and session-generation checks remain; no automatic challenge bypass,
+identity rotation or retry is introduced.
+
+Local validation at this checkpoint:
+
+- All **194 Node regressions** passed in the final combined suite, including twelve actual extracted-session
+  script tests. Android bridge checks cover arbitrary binary bytes, Unicode/plain
+  JSON, retained legacy obfuscation text/markers, chunk boundaries, declared/raw
+  byte caps, empty bodies, scoped browser credentials, no Cookie/User-Agent
+  overrides or cookie export, and
+  one-request 403/429 stopping before body reads. Desktop typecheck also passed.
+- New Android JVM fixtures/regressions cover current request routes, strict and
+  bounded decoding, show/episode identity, fresh exact-server choices, separate
+  sub/dub tracks, captions/headers/skips, cancellation and user-operated access
+  policy. All **187 Android JVM tests** passed, as did the debug app and test APK
+  builds, including the final server-list retry refresh and DASH dependency.
+- **Connected-tablet playback is pending** for the new v1 adapter and ordinary
+  player: video/audio progression, visible captions, seeking, selected server
+  switching with position preservation, session recovery and progress behavior
+  still need current device evidence.
+
+The debug app and instrumentation APK were installed for Android user 0 on the
+connected SM-T735, preserving the signed release and existing app data. The
+first ordinary-player probe stopped at **manual connection not completed**;
+catalogue/server/media requests never began, so no playback pass is claimed.
+The probe did not retry automatically. Its player disables watch/history/account
+saving and uses the normal app-owned connection screen and native player.
+
+Release availability and signed remote configuration remain unchanged/disabled.
+This migration has not produced a release, remote enablement or replacement of
+the signed installed app. Build success and narrow synthetic tests alone will
+not establish that every Miruro server/title works.
+
+## Current normal-player tablet attempt — 7 October
+
+The user completed the ordinary Miruro homepage connection in the separate
+debug app. The current v1 adapter then returned Cowboy Bebop's 26 episodes and
+six direct server/track choices. The explicitly selected KICKASSANIME/Vid soft-
+sub attempt reached the normal player but stopped before its first frame with
+`ERROR_CODE_IO_BAD_HTTP_STATUS`, HTTP 403. No automatic retry or server rotation
+followed. The original diagnostic did not record whether that rejected request
+was the manifest, a segment or a caption; do not claim a specific resource cause.
+
+This first attempt proves the listed catalogue/choice path on the tablet, not
+KAA native playback. The user separately approved one test of the offered
+ANIKOTO/HD-1 soft-sub choice. That subsequent test passed as recorded below;
+the failed KAA choice remains unresolved.
+
+The debug-only probe now supports an explicit single-server/no-switch run and
+reports fixed resource categories plus header names on HTTP failure, without
+exporting URLs, signed query fields or header values. Those names are from the
+Media3 `DataSpec`, not every final wire header; the factory-configured User-Agent
+is not included in that list. It requests Play when
+media is ready without changing saved autoplay, samples offered captions after
+a forward seek as well as the opening, and distinguishes the whole-run watchdog
+from HTTP failure. Its outer bound is 720 seconds to contain the independently
+bounded human connection and playback/seek/switch stages. Production networking
+policy, retries and release configuration are unchanged.
+
+### Authorized ANIKOTO/HD-1 single-server result
+
+After the user explicitly completed the new ordinary connection and confirmed
+visible video and sound, the normal `PlayerScreen`/`PlayerHolder` diagnostic
+completed with `passed=true`:
+
+- Cowboy Bebop episode 1: 26 episodes and six offered server/track choices.
+- 65,139 ms of advancing decoded video, 1448 x 1080, with audio output.
+- Offered captions rendered a nonempty cue (`caption_events=1`), including
+  sampling after the forward seek rather than relying only on the opening.
+- Forward-seek position 811,182 ms; backward-seek position 31,740 ms.
+- `server_switch_tested=false`: the user approved this one server only, so the
+  probe deliberately did not click another server or retry KAA.
+
+The two new diagnostic-classifier JVM regressions also passed. The complete
+Android JVM suite passed **191 tests**, and the debug app/test APK builds passed.
+Both updated APKs were installed only to the separate debug packages for user 0;
+the signed installed release was not replaced and no app data was cleared.
+
+This is one native episode/server playback check, not every title/server, a
+whole-episode soak, subtitle translation accuracy, session recovery or MAL/watch
+progress synchronization. Saving history/account data was disabled in the probe.
+KAA's first-frame HTTP 403 and Android position-preserving server switching
+remain open, as does live MKissa playback. No release or remote enablement was
+performed.
+
+### Resumed tablet checks — 7 October
+
+One fresh, explicitly selected KICKASSANIME/Vid soft-sub attempt again stopped
+at the first-frame stage with HTTP 403. Its safe report identified only
+`request_kind=unknown` and the DataSpec header name `Referer`; this does not
+establish a missing wire User-Agent or which resource was rejected. No retry or
+automatic alternate server followed. The user reported that the app closed
+after Continue. Instrumentation reported the handled failure and deliberately
+finished its diagnostic activity. The retained crash buffer contained no new
+Miruro crash from this attempt; the closure is not a proven production crash.
+
+The updated separate debug APKs were then installed for user 0. A catalogue-only
+check passed with 26 episodes and six choices, without initializing playback.
+The bounded diagnostic allowlist recognized ANIWAVES/Vidplay sub,
+KICKASSANIME/Vid soft sub, and ANIKOTO/HD-1 soft sub. Three other choices were
+deliberately not exported; do not infer their identities or availability.
+
+Debug-only server selection now uses the ordinary player's exact server chip,
+bounded scrolling and normal fullscreen exit. Missing, ambiguous, disabled or
+foreign-window choices stop without fallback. Failure reports can additionally
+use media-engine load context for extensionless URLs; they still do not export
+request URLs or header values. All **201 JVM tests** and both debug APK builds
+passed at this checkpoint. Neither production Android behavior nor the signed
+installed release changed in this diagnostic phase.
+
+A single ANIWAVES-to-ANIKOTO native switch check was offered to the user and
+awaits explicit approval. The earlier ANIKOTO/HD-1 playback/seek pass remains
+valid only for its recorded episode and attempt. KAA and actual Android
+position-preserving switching remain unresolved.
+
+The user subsequently continued the proposed ANIWAVES/Vidplay-to-ANIKOTO/HD-1
+check and confirmed video and sound. ANIWAVES passed the normal-player
+65-second decoded video/audio assertions and both seek stages (805,248 ms
+forward; 31,840 ms backward, captured in fixed diagnostic logs). The test then
+stopped at its server-control step with `IllegalStateException`, without a
+reported HTTP rejection. Its final bundle did not retain earlier stage metrics;
+the fixed progress logs establish those narrower successes. No switch/full-pass
+result, exact control-failure cause or production switching defect is claimed.
+The screen closed through handled diagnostic cleanup. There was no automatic
+rerun, rejected KAA retry or release change.
+
+The diagnostic now retains partial success metrics plus fixed server-control
+outcomes. It also matches the actual panel heading when staged Miruro is absent
+from enabled descriptors (`STREAM SERVERS` rather than assumed `MIRURO SERVERS`).
+That expectation mismatch is covered offline; it does not establish the exact
+cause of the earlier live control failure. Final validation passed all **207 JVM
+tests**, both debug APK builds and installation to the separate user-0 debug
+packages, preserving release/debug data. No additional media attempt followed.
+
+### Continued tablet checks — 8 October
+
+Two later user-authorized ANIWAVES/Vidplay-to-ANIKOTO/HD-1 checks did not reach
+the server control. The first stopped with `IllegalStateException` at sustained
+playback, without enough retained metrics to identify its failed assertion.
+The second stopped before the first frame with
+`ERROR_CODE_IO_NETWORK_CONNECTION_FAILED`; no HTTP 403/429 was reported. Neither
+run establishes a successful switch or a production control defect.
+
+The separate debug probe now records bounded playback/video/audio counters
+throughout the sustained-playback stage and separates video-frame and audio-output
+assertions. A listener's completed failure is preserved instead of generating a
+secondary generic assertion. The updated debug build and all **207 JVM tests**
+passed; the debug APK was reinstalled without clearing data. Signed release
+8.0.0/data inode 186674 and debug data inode 539632 were rechecked unchanged.
+The later network failure was not automatically retried or routed to another
+server. Live position-preserving switching remains unverified.

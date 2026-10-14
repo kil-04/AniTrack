@@ -11,6 +11,7 @@ import com.sanjay.anitrack.next.data.manga.MangaSource
 import com.sanjay.anitrack.next.data.manga.MangaSourceException
 import com.sanjay.anitrack.next.data.manga.MangaTitles
 import com.sanjay.anitrack.next.data.manga.MangaVerificationRequired
+import com.sanjay.anitrack.next.data.manga.SourceLatest
 import com.sanjay.anitrack.next.data.manga.SourceTitle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -22,7 +23,8 @@ import java.net.URLEncoder
  * MangaDot (mangadot.net): a large catalogue with a plain JSON API behind
  * Cloudflare. Like AnimePahe, the user passes Cloudflare's check themselves on
  * [MangaDotConnectActivity]; the API is then called with that WebView session's
- * own cookies and genuine user agent. Page images are served without a session.
+ * own cookies and genuine user agent. Since Oct 2026 the page images sit behind
+ * the same check, so [resolvePage] sends that session with every image request.
  * Titles match only through MangaDot's own AniList/MAL link, or an exact name
  * with the same year and country when it has none.
  */
@@ -81,22 +83,20 @@ object MangaDotSource : MangaSource {
     private fun prefs() = appContext?.getSharedPreferences("anitrack_next", Context.MODE_PRIVATE)
 
     /** A MangaDot match confirmed earlier (kept across restarts so titles open without a search). */
-    fun knownTitle(anilistId: Int): SourceTitle? {
+    override fun knownTitle(anilistId: Int): SourceTitle? {
         val saved = prefs()?.getString("mangadot_match_$anilistId", null) ?: return null
         val id = saved.substringBefore('\t').toIntOrNull()?.takeIf { it > 0 } ?: return null
         return SourceTitle(this.id, id.toString(), saved.substringAfter('\t', ""))
     }
 
-    data class Latest(val chapter: Float?, val at: Long?)
-
     /** Newest chapter of a matched title (one small API request). */
-    suspend fun latest(title: SourceTitle): Latest? {
+    override suspend fun latest(title: SourceTitle): SourceLatest? {
         require(title.sourceId == id)
         val mangaId = title.id.toIntOrNull()?.takeIf { it > 0 } ?: return null
         ensureUserAgent()
         val body = http.get("$ORIGIN/api/manga/$mangaId", "application/json", 1024 * 1024)
         val detail = parse { MangaDotParser.detail(JSONObject(body)) } ?: return null
-        return Latest(detail.latestChapter, detail.lastChapterAt)
+        return SourceLatest(detail.latestChapter, detail.lastChapterAt)
     }
 
     override suspend fun find(manga: Manga): SourceTitle? {
@@ -146,6 +146,23 @@ object MangaDotSource : MangaSource {
         val chapters = parse { MangaDotParser.chapters(JSONArray(body)) }
         if (chapters.isNotEmpty()) synchronized(chapterCache) { chapterCache[title.id] = System.currentTimeMillis() to chapters }
         return chapters
+    }
+
+    /**
+     * Page images answer Cloudflare's challenge without a session, so each one is
+     * requested with the user-verified session's cookies and the WebView's own user
+     * agent (the clearance is tied to it). Downloaded pages (file://) pass through.
+     */
+    override suspend fun resolvePage(page: MangaPage): MangaPage {
+        if (!page.url.startsWith("$ORIGIN/")) return page
+        ensureUserAgent()
+        val cookies = sessionCookies().takeIf { it.isNotEmpty() } ?: throw MangaVerificationRequired(label)
+        return page.copy(
+            headers = page.headers + cookies + mapOf(
+                "User-Agent" to (webUserAgent ?: MangaHttp.USER_AGENT),
+                "Referer" to "$ORIGIN/",
+            ),
+        )
     }
 
     override suspend fun pages(title: SourceTitle, chapter: MangaChapter): List<MangaPage> {

@@ -1,9 +1,14 @@
 import { createDecipheriv } from "node:crypto";
 import type { StreamData } from "./types";
+import { prepareAnikotoHlsAuthorization } from "./anikoto-hls";
+import { assertByseAccess, byseApiUrl, byseMedia } from "./mkissa-byse";
+import { authorizeResolvedStream } from "./stream-authorization";
+import { MkissaApiCookies } from "./mkissa-api-cookies";
 import {
   buildAaRequest,
   decodeMkissaSourceUrl,
   decryptProtectedPayload,
+  MkissaPayloadAuthenticationError,
   sha256Hex,
 } from "./mkissa-crypto";
 import { MkissaKeyManager, type MkissaKeyManagerOptions } from "./mkissa-key-manager";
@@ -11,9 +16,11 @@ import {
   classifyMkissaFailure,
   errorMessages,
   MkissaProviderError,
+  mkissaResponseFailure,
   normalizeHeaders,
   positiveNumber,
   publicHttpsUrl,
+  responseErrorText,
   responseText,
   safeRedirectFetch,
   safeText,
@@ -112,7 +119,7 @@ export interface MkissaSource {
 export interface MkissaClientApi {
   search(query: string): Promise<MkissaShow[]>;
   getSeries(showId: string): Promise<MkissaSeries>;
-  getEpisodeSources(showId: string, episode: string, audio: MkissaAudio): Promise<MkissaSource[]>;
+  getEpisodeSources(showId: string, episode: string, audio: MkissaAudio, options?: { fresh?: boolean }): Promise<MkissaSource[]>;
   resolveSource(source: MkissaSource): Promise<StreamData>;
   resolveSourceChoices(sources: MkissaSource[], selectedIndex: number): Promise<StreamData>;
   normalizePoster(value: string | undefined): string;
@@ -143,22 +150,27 @@ export class MkissaClient implements MkissaClientApi {
   private readonly keyManager: MkissaKeyManager;
   private readonly sourceCache = new Map<string, CachedSources>();
   private readonly sourcePending = new Map<string, Promise<MkissaSource[]>>();
+  private sourceQueue: Promise<unknown> = Promise.resolve();
   private blockedUntil = 0;
   private blockedCode: "CAPTCHA_REQUIRED" | "RATE_LIMITED" = "RATE_LIMITED";
 
   constructor(options: MkissaClientOptions = {}) {
-    this.fetcher = options.fetch ?? fetch;
     this.siteOrigin = originOnly(options.siteOrigin ?? MKISSA_SITE_ORIGIN);
     this.apiOrigin = originOnly(options.apiOrigin ?? MKISSA_API_ORIGIN);
     this.playerOrigin = MKISSA_PLAYER_ORIGIN;
     this.userAgent = options.userAgent ?? DEFAULT_USER_AGENT;
     this.now = options.now ?? Date.now;
+    const apiCookies = options.apiCookies ?? new MkissaApiCookies(this.apiOrigin, this.now);
+    apiCookies.assertOrigin(this.apiOrigin);
+    const fetcher = options.fetch ?? fetch;
+    this.fetcher = apiCookies.fetch(fetcher);
     this.timeoutMs = boundedPositive(options.requestTimeoutMs, 10_000, 1_000, 60_000);
     this.challengeCooldownMs = boundedPositive(options.challengeCooldownMs, 10 * 60 * 1000, 60_000, 60 * 60 * 1000);
     this.sourceCacheTtlMs = boundedPositive(options.sourceCacheTtlMs, 10 * 60 * 1000, 30_000, 60 * 60 * 1000);
     this.keyManager = options.keyManager ?? new MkissaKeyManager({
       ...options,
-      fetch: this.fetcher,
+      fetch: fetcher,
+      apiCookies,
       siteOrigin: this.siteOrigin,
       apiOrigin: this.apiOrigin,
       userAgent: this.userAgent,
@@ -195,28 +207,26 @@ export class MkissaClient implements MkissaClientApi {
     const show = objectAt(data, "show");
     if (!show) throw new MkissaProviderError("MKissa series was not found", "INVALID_RESPONSE");
     const returnedId = validateOpaqueId(typeof show._id === "string" ? show._id : id, "show");
+    if (returnedId !== id) throw new MkissaProviderError("MKissa returned another show's catalogue", "INVALID_RESPONSE");
     const detail = episodeDetail(show.availableEpisodesDetail);
     return { id: returnedId, ...detail };
   }
 
-  async getEpisodeSources(showId: string, episode: string, audio: MkissaAudio): Promise<MkissaSource[]> {
+  async getEpisodeSources(showId: string, episode: string, audio: MkissaAudio, options: { fresh?: boolean } = {}): Promise<MkissaSource[]> {
     const id = validateOpaqueId(showId, "show");
     const episodeString = validateEpisodeString(episode);
     if (audio !== "sub" && audio !== "dub") {
       throw new MkissaProviderError("Invalid MKissa audio mode", "INVALID_RESPONSE");
     }
     const cacheKey = `${id}:${audio}:${episodeString}`;
+    this.checkAccess();
     const cached = this.sourceCache.get(cacheKey);
-    if (cached && this.now() < cached.expiresAt) return cached.sources;
+    if (!options.fresh && cached && this.now() < cached.expiresAt) return cached.sources;
     if (this.sourcePending.has(cacheKey)) return this.sourcePending.get(cacheKey)!;
-    if (this.now() < this.blockedUntil) {
-      throw new MkissaProviderError(
-        "MKissa streaming is cooling down after a security or rate-limit response.",
-        this.blockedCode,
-      );
-    }
-
-    const pending = this.fetchProtectedSources(id, episodeString, audio)
+    const pending = this.sourceQueue.then(() => {
+      this.checkAccess();
+      return this.fetchProtectedSources(id, episodeString, audio);
+    })
       .then((sources) => {
         boundedMapSet(this.sourceCache, cacheKey, { sources, expiresAt: this.now() + this.sourceCacheTtlMs }, 200);
         return sources;
@@ -230,7 +240,8 @@ export class MkissaClient implements MkissaClientApi {
         throw error;
       });
     this.sourcePending.set(cacheKey, pending);
-    pending.finally(() => this.sourcePending.delete(cacheKey)).catch(() => {});
+    this.sourceQueue = pending.catch(() => {});
+    pending.finally(() => { if (this.sourcePending.get(cacheKey) === pending) this.sourcePending.delete(cacheKey); }).catch(() => {});
     return pending;
   }
 
@@ -274,7 +285,7 @@ export class MkissaClient implements MkissaClientApi {
   reset(): void {
     this.sourceCache.clear();
     this.sourcePending.clear();
-    this.blockedUntil = 0;
+    // A config refresh is not permission to reset an upstream access rejection.
     this.keyManager.invalidateBuild();
   }
 
@@ -290,6 +301,7 @@ export class MkissaClient implements MkissaClientApi {
       body: JSON.stringify({ query, variables }),
     }, true);
     const body = await responseText(response, 5 * 1024 * 1024, "MKissa catalogue");
+    this.rejectAccess(mkissaResponseFailure(response.status, body));
     const payload = parseObject(body, "MKissa catalogue");
     const messages = errorMessages(payload);
     const classified = classifyMkissaFailure(messages, response.status);
@@ -341,12 +353,7 @@ export class MkissaClient implements MkissaClientApi {
         },
       }, true);
       const body = await responseText(response, 5 * 1024 * 1024, "MKissa stream source");
-      const payload = parseObject(body, "MKissa stream source");
-      const messages = errorMessages(payload);
-      const classified = classifyMkissaFailure(messages, response.status)
-        ?? (response.status === 403
-          ? new MkissaProviderError("MKissa client keys are stale", "CRYPTO_STALE", 403)
-          : null);
+      const classified = mkissaResponseFailure(response.status, body);
       if (classified?.code === "CAPTCHA_REQUIRED" || classified?.code === "RATE_LIMITED") {
         this.blockedCode = classified.code;
         this.blockedUntil = this.now() + this.challengeCooldownMs;
@@ -357,6 +364,8 @@ export class MkissaClient implements MkissaClientApi {
         if (attempt === 0) continue;
         throw classified;
       }
+      const payload = parseObject(body, "MKissa stream source");
+      const messages = errorMessages(payload);
       if (classified || !response.ok || messages.length > 0) {
         throw classified ?? new MkissaProviderError(
           messages[0] || `MKissa stream source failed (${response.status})`,
@@ -368,10 +377,21 @@ export class MkissaClient implements MkissaClientApi {
       try {
         const data = objectAt(payload, "data") ?? {};
         const encrypted = typeof data.tobeparsed === "string" ? data.tobeparsed : null;
-        const decoded = encrypted
-          ? parseObject(decryptProtectedPayload(encrypted, material.key), "MKissa protected stream source")
-          : data;
+        let decoded = data;
+        if (encrypted) {
+          let plaintext: string;
+          try { plaintext = decryptProtectedPayload(encrypted, material.key); }
+          catch (error) {
+            if (error instanceof MkissaPayloadAuthenticationError) {
+              throw new MkissaProviderError("MKissa protected source keys are stale", "CRYPTO_STALE");
+            }
+            throw new MkissaProviderError("MKissa protected stream response was malformed", "INVALID_RESPONSE");
+          }
+          decoded = parseObject(plaintext, "MKissa protected stream source");
+        }
         const episode = objectAt(decoded, "episode") ?? objectAt(objectAt(decoded, "data") ?? {}, "episode");
+        const returnedShow = objectAt(episode ?? {}, "show")?._id;
+        if (returnedShow != null && returnedShow !== showId) throw new MkissaProviderError("MKissa returned another show's episode", "INVALID_RESPONSE");
         const sourceUrls = episode?.sourceUrls;
         if (!Array.isArray(sourceUrls)) {
           throw new MkissaProviderError("MKissa returned no stream servers", "INVALID_RESPONSE");
@@ -385,7 +405,7 @@ export class MkissaClient implements MkissaClientApi {
         }
         return sources;
       } catch (error) {
-        if (attempt === 0 && !(error instanceof MkissaProviderError && error.code === "UNSAFE_URL")) {
+        if (attempt === 0 && error instanceof MkissaProviderError && error.code === "CRYPTO_STALE") {
           this.keyManager.invalidateBuild();
           continue;
         }
@@ -403,21 +423,27 @@ export class MkissaClient implements MkissaClientApi {
     const host = url.hostname.toLowerCase().replace(/^www\./, "");
     const path = url.pathname.toLowerCase();
 
-    if (source.type.toLowerCase() === "player") {
-      return streamData(url, `${this.playerOrigin}/`, this.userAgent, path.endsWith(".m3u8"));
-    }
-    if (/\.(?:m3u8|mp4|webm|mkv)$/.test(path)) {
-      return streamData(url, `${this.siteOrigin}/`, this.userAgent, path.endsWith(".m3u8"));
-    }
-    if (host === "allanime.day" && /\/apivtwo\/clock(?:\.json)?$/.test(path)) {
+    // Provider type describes the site's player, not whether its URL is already media.
+    // Resolve known JSON/embed routes before interpreting direct-format metadata.
+    if (host === new URL(this.playerOrigin).hostname && /\/apivtwo\/clock(?:\.json)?$/.test(path)) {
       return this.resolveClock(url.toString());
     }
     if (host === "mp4upload.com") return this.resolveMp4Upload(url);
     if (host === "ok.ru") return this.resolveOkRu(url);
     if (host === "uns.bio" || host.endsWith(".uns.bio")) return this.resolveUns(url);
+    if (host === "streamlare.com" || host.endsWith(".streamlare.com")) {
+      throw new MkissaProviderError("MKissa Sl-mp4 uses an unsupported Streamlare player. Choose another advertised server.", "UNSUPPORTED_SOURCE");
+    }
     if (host === "bysekoze.com" || host.endsWith(".bysekoze.com")
       || host === "streamsb.net" || host.endsWith(".streamsb.net")) {
       return this.resolvePackedEmbed(url);
+    }
+    const player = source.type.toLowerCase() === "player";
+    const declaredHls = player && /hls/i.test(source.sourceName);
+    const declaredMp4 = player && /mp4/i.test(source.sourceName);
+    if (/\.(?:m3u8|mp4|webm|mkv)$/.test(path) || declaredHls || declaredMp4) {
+      return streamData(url, `${player ? this.playerOrigin : this.siteOrigin}/`, this.userAgent,
+        path.endsWith(".m3u8") || (!/\.(?:mp4|webm|mkv)$/.test(path) && declaredHls));
     }
     throw new MkissaProviderError(
       `MKissa server “${safeText(source.sourceName, 60) || "unknown"}” is not supported yet`,
@@ -468,6 +494,8 @@ export class MkissaClient implements MkissaClientApi {
     const response = await this.request(embedUrl, { headers: { Accept: "text/html", Referer: referer } });
     if (!response.ok) throw new MkissaProviderError("MP4Upload did not respond", "UNSUPPORTED_SOURCE");
     const html = await responseText(response, 3 * 1024 * 1024, "MP4Upload");
+    this.rejectAccess(mkissaResponseFailure(response.status, html));
+    if (/^File was deleted\s*$/i.test(html.trim())) throw new MkissaProviderError("This MKissa server's video file was deleted. Choose another server.", "UNSUPPORTED_SOURCE");
     const encoded = /player\.src\s*\(\s*\{[^}]*\bsrc\s*:\s*["']([^"']+)/i.exec(html)?.[1]
       ?? /["']file["']\s*:\s*["'](https?:\\?\/\\?\/[^"']+)/i.exec(html)?.[1]
       ?? /\bsrc\s*:\s*["'](https?:\\?\/\\?\/[^"']+\.mp4[^"']*)/i.exec(html)?.[1];
@@ -481,6 +509,7 @@ export class MkissaClient implements MkissaClientApi {
     const response = await this.request(embedUrl, { headers: { Accept: "text/html", Referer: referer } });
     if (!response.ok) throw new MkissaProviderError("OK video did not respond", "UNSUPPORTED_SOURCE");
     const html = await responseText(response, 5 * 1024 * 1024, "OK video");
+    this.rejectAccess(mkissaResponseFailure(response.status, html));
     const encoded = /ondemandHls(?:\\&quot;|&quot;|")\s*:\s*(?:\\&quot;|&quot;|")([^"<]+?)(?:\\&quot;|&quot;|")/i.exec(html)?.[1];
     if (!encoded) throw new MkissaProviderError("OK video media was not found", "UNSUPPORTED_SOURCE");
     const media = publicHttpsUrl(encoded
@@ -503,7 +532,7 @@ export class MkissaClient implements MkissaClientApi {
     const response = await this.request(endpoint, {
       headers: { Accept: "text/plain", Origin: embedUrl.origin, Referer: embedUrl.toString() },
     });
-    if (!response.ok) throw new MkissaProviderError("MKissa MP4 server did not respond", "UNSUPPORTED_SOURCE");
+    if (!response.ok) throw new MkissaProviderError(`MKissa MP4 server failed (HTTP ${response.status})`, "UNSUPPORTED_SOURCE", response.status);
     const encrypted = (await responseText(response, 2 * 1024 * 1024, "MKissa MP4 server")).trim();
     if (!encrypted || encrypted.length % 32 !== 0 || !/^[a-f0-9]+$/i.test(encrypted)) {
       throw new MkissaProviderError("MKissa MP4 server response was invalid", "UNSUPPORTED_SOURCE");
@@ -534,6 +563,11 @@ export class MkissaClient implements MkissaClientApi {
       throw new MkissaProviderError("MKissa HLS server did not respond", "UNSUPPORTED_SOURCE");
     }
     const html = await responseText(response, 3 * 1024 * 1024, "MKissa HLS server");
+    this.rejectAccess(mkissaResponseFailure(response.status, html));
+    if ((embedUrl.hostname === "bysekoze.com" || embedUrl.hostname.endsWith(".bysekoze.com"))
+      && /<title[^>]*>\s*Byse Frontend\s*<\/title>/i.test(html)) {
+      return this.resolveByseFrontend(embedUrl);
+    }
     const media = extractEmbedMediaUrl(html)
       ?? packedBodies(html).map(extractEmbedMediaUrl).find((value): value is URL => value !== null)
       ?? null;
@@ -549,11 +583,45 @@ export class MkissaClient implements MkissaClientApi {
     );
   }
 
-  private async request(url: URL, init: RequestInit, apiOnly = false): Promise<Response> {
+  private async resolveByseFrontend(embedUrl: URL): Promise<StreamData> {
+    const read = async (operation: "settings" | "playback") => {
+      const response = await this.request(byseApiUrl(embedUrl, operation), { headers: {
+        Accept: "application/json", Referer: embedUrl.toString(), Origin: embedUrl.origin,
+        "X-Embed-Origin": new URL(this.siteOrigin).hostname, "X-Embed-Referer": `${this.siteOrigin}/`,
+      } }, false, embedUrl.origin);
+      const body = await responseText(response, 2 * 1024 * 1024, "MKissa HLS server API");
+      this.rejectAccess(mkissaResponseFailure(response.status, body));
+      const payload = parseObject(body, "MKissa HLS server API");
+      try { assertByseAccess(payload); }
+      catch (error) { if (error instanceof MkissaProviderError) this.rejectAccess(error); throw error; }
+      if (!response.ok) throw new MkissaProviderError(`MKissa HLS server failed (HTTP ${response.status})`, "UNSUPPORTED_SOURCE", response.status);
+      return payload;
+    };
+    // A settings gate must stop before asking for playback or contacting media.
+    await read("settings");
+    const payload = await read("playback");
+    let media: ReturnType<typeof byseMedia>;
+    try { media = byseMedia(payload); }
+    catch (error) { if (error instanceof MkissaProviderError) this.rejectAccess(error); throw error; }
+    const stream = streamData(media.url, embedUrl.toString(), this.userAgent, media.hls, embedUrl.origin);
+    if (media.hls) {
+      stream.url = await prepareAnikotoHlsAuthorization(stream.url, stream.referer!,
+        (url, init) => this.request(publicHttpsUrl(url), init ?? {}),
+        { label: "MKissa Fm-Hls", requestHeaders: stream.requestHeaders });
+    }
+    for (const subtitle of media.subtitles) authorizeResolvedStream({
+      url: subtitle.file, referer: stream.referer, requestHeaders: stream.requestHeaders, authorizationScope: "exact", cors: true,
+    });
+    return { ...stream, subtitles: media.subtitles, ...(media.intro ? { intro: media.intro } : {}) };
+  }
+
+  private async request(url: URL, init: RequestInit, apiOnly = false, requiredOrigin?: string): Promise<Response> {
+    this.checkAccess();
     const parsed = publicHttpsUrl(url.toString());
     if (apiOnly && parsed.origin !== this.apiOrigin) {
       throw new MkissaProviderError("MKissa API request changed host", "UNSAFE_URL");
     }
+    if (requiredOrigin && parsed.origin !== requiredOrigin) throw new MkissaProviderError("MKissa server API changed origin", "UNSAFE_URL");
     const headers = normalizeHeaders(init.headers);
     if (!headers.has("User-Agent")) headers.set("User-Agent", this.userAgent);
     if (!headers.has("Accept-Language")) headers.set("Accept-Language", "en-US,en;q=0.9");
@@ -568,6 +636,7 @@ export class MkissaClient implements MkissaClientApi {
           if (apiOnly && candidate.origin !== this.apiOrigin) {
             throw new MkissaProviderError("MKissa API redirected to another host", "UNSAFE_URL");
           }
+          if (requiredOrigin && candidate.origin !== requiredOrigin) throw new MkissaProviderError("MKissa server API redirected to another origin", "UNSAFE_URL");
         },
       );
       if (response.url) {
@@ -575,11 +644,40 @@ export class MkissaClient implements MkissaClientApi {
         if (apiOnly && finalUrl.origin !== this.apiOrigin) {
           throw new MkissaProviderError("MKissa API redirected to another host", "UNSAFE_URL");
         }
+        if (requiredOrigin && finalUrl.origin !== requiredOrigin) throw new MkissaProviderError("MKissa server API redirected to another origin", "UNSAFE_URL");
+      }
+      if (response.status === 429 || (!apiOnly && response.status === 403)) {
+        await response.body?.cancel().catch(() => {});
+        this.rejectAccess(mkissaResponseFailure(response.status, ""));
+      }
+      if (!response.ok) {
+        let body: string;
+        try { body = await responseErrorText(response, "MKissa server error"); }
+        catch (error) {
+          if (error instanceof MkissaProviderError) this.rejectAccess(error);
+          throw error;
+        }
+        const failure = mkissaResponseFailure(response.status, body);
+        if (failure?.code === "CAPTCHA_REQUIRED" || failure?.code === "RATE_LIMITED") this.rejectAccess(failure);
+        return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
       }
       return response;
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  private checkAccess(): void {
+    if (this.now() < this.blockedUntil) throw new MkissaProviderError("MKissa is cooling down after an access rejection. Try another provider.", this.blockedCode);
+  }
+
+  private rejectAccess(failure: MkissaProviderError | null): void {
+    if (!failure) return;
+    if (failure.code === "CAPTCHA_REQUIRED" || failure.code === "RATE_LIMITED") {
+      this.blockedCode = failure.code;
+      this.blockedUntil = this.now() + this.challengeCooldownMs;
+    }
+    throw failure;
   }
 }
 

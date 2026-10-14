@@ -7,6 +7,10 @@ interface HlsOptions {
   label?: string;
   deadlineMillis?: number;
   authorize?: (stream: StreamData) => void;
+  /** Validated connector-supplied headers for this playlist and observed children. */
+  requestHeaders?: Record<string, string>;
+  /** Some providers advertise multiple audio tracks alongside video qualities. */
+  maxRenditions?: number;
 }
 
 interface VerifiedPlaylist {
@@ -33,6 +37,8 @@ export async function prepareAnikotoHlsAuthorization(
   options: HlsOptions = {},
 ): Promise<string> {
   const label = options.label ?? "Anikoto";
+  const maxRenditions = options.maxRenditions ?? MAX_VARIANTS;
+  if (!Number.isInteger(maxRenditions) || maxRenditions < 1 || maxRenditions > 16) throw new Error(`${label} rendition limit is invalid`);
   const rootUrl = assertAnikotoMediaUrl(initialUrl);
   const safeReferer = assertAnikotoMediaUrl(referer);
   const controller = new AbortController();
@@ -58,7 +64,7 @@ export async function prepareAnikotoHlsAuthorization(
     if (!authorizations.has(directory)) {
       if (authorizations.size >= MAX_DIRECTORIES) throw new Error(`${label} playlist references too many media directories`);
       authorizations.set(directory, {
-        url, referer: safeReferer, authorizationScope: "directory", cors: true,
+        url, referer: safeReferer, requestHeaders: options.requestHeaders, authorizationScope: "directory", cors: true,
       });
     }
     return url;
@@ -107,7 +113,7 @@ export async function prepareAnikotoHlsAuthorization(
     visited.add(url);
     const childAncestors = new Set(ancestors).add(url);
     const response = await Promise.race([fetcher(url, {
-      headers: { Referer: safeReferer, Origin: new URL(safeReferer).origin }, signal: controller.signal,
+      headers: { Referer: safeReferer, Origin: new URL(safeReferer).origin, ...options.requestHeaders }, signal: controller.signal,
     }), deadline]);
     controller.signal.throwIfAborted();
     if (!response.ok) {
@@ -118,7 +124,8 @@ export async function prepareAnikotoHlsAuthorization(
         verifiedPlaylists.set(url, missing);
         return missing;
       }
-      throw new Error(`${label} playlist request failed (HTTP ${response.status})`);
+      const marker = response.status === 403 || response.status === 429 ? "PROVIDER_ACCESS_DENIED: " : "";
+      throw new Error(`${marker}${label} playlist request failed (HTTP ${response.status})`);
     }
     const base = remember(response.url || url);
     const playlist = await readPlaylist(response);
@@ -156,7 +163,7 @@ export async function prepareAnikotoHlsAuthorization(
       nextVariant = null;
     }
     if (nextVariant !== null) throw new Error(`${label} playlist is missing a rendition URL`);
-    if (children.size > MAX_VARIANTS) throw new Error(`${label} playlist has too many renditions to verify`);
+    if (children.size > maxRenditions) throw new Error(`${label} playlist has too many renditions to verify`);
     let complete = true;
     let best: { url: string; bandwidth: number } | null = null;
     for (const [child, metadata] of children) {

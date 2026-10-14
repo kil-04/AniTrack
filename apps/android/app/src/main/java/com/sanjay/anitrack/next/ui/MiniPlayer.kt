@@ -12,6 +12,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -47,11 +48,14 @@ fun MiniPlayer(onExpand: () -> Unit, onClose: () -> Unit) {
     val scope = rememberCoroutineScope()
     var playing by remember { mutableStateOf(player.isPlaying) }
     var controls by remember { mutableStateOf(true) }
+    // The stream failed after the full player was left (e.g. the server refused it).
+    var failed by remember { mutableStateOf(player.playerError != null) }
 
     LaunchedEffect(Unit) {
         var ticks = 0
         while (isActive) {
             playing = player.isPlaying
+            failed = player.playerError != null
             // Keep Continue Watching fresh while playing in the mini (every ~10s).
             if (playing && ++ticks % 25 == 0) {
                 runCatching { saveProgress(player, PlaySession.index) }
@@ -83,7 +87,8 @@ fun MiniPlayer(onExpand: () -> Unit, onClose: () -> Unit) {
             .aspectRatio(16f / 9f)
             .clip(RoundedCornerShape(12.dp))
             .background(Color.Black)
-            .clickable { controls = !controls },
+            // A failed stream opens the full player, which resolves it again.
+            .clickable { if (failed) onExpand() else controls = !controls },
     ) {
         AndroidView(
             factory = { ctx ->
@@ -95,7 +100,20 @@ fun MiniPlayer(onExpand: () -> Unit, onClose: () -> Unit) {
             update = { it.player = player },
             modifier = Modifier.fillMaxSize(),
         )
-        if (controls) {
+        if (failed) {
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.6f)))
+            Column(
+                Modifier.align(Alignment.Center).padding(horizontal = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Icon(Icons.Rounded.ErrorOutline, null, tint = Color(0xFFFF6B6B), modifier = Modifier.size(26.dp))
+                Spacer(Modifier.height(6.dp))
+                Text("Playback stopped · tap to open", style = MaterialTheme.typography.labelMedium, color = Color.White)
+            }
+            IconButton(onClick = onClose, modifier = Modifier.align(Alignment.TopEnd)) {
+                Icon(Icons.Filled.Close, "Close", tint = Color.White, modifier = Modifier.size(20.dp))
+            }
+        } else if (controls) {
             // Scrim + controls (desktop mini layout).
             Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.25f)))
             IconButton(onClick = onExpand, modifier = Modifier.align(Alignment.TopStart)) {

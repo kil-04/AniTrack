@@ -13,24 +13,24 @@ const Row = React.memo(function Row({ title, children }: Props) {
     ref.current.scrollBy({ left: dir * ref.current.clientWidth * 0.8, behavior: "smooth" });
   };
   return (
-    <section className="group/row mb-8">
-      <h2 className="mb-3 px-8 text-lg font-semibold">{title}</h2>
+    <section className="group/row mb-10">
+      <h2 className="section-title mb-3 px-8">{title}</h2>
       <div className="relative">
         <button
           onClick={() => scroll(-1)}
-          className="absolute left-0 top-0 z-10 hidden h-full w-12 items-center justify-center bg-gradient-to-r from-bg to-transparent opacity-0 transition group-hover/row:flex group-hover/row:opacity-100"
+          className="absolute left-2 top-1/2 z-10 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full glass shadow-pop transition hover:scale-105 group-hover/row:flex"
         >
           <ChevronLeft />
         </button>
         <button
           onClick={() => scroll(1)}
-          className="absolute right-0 top-0 z-10 hidden h-full w-12 items-center justify-center bg-gradient-to-l from-bg to-transparent opacity-0 transition group-hover/row:flex group-hover/row:opacity-100"
+          className="absolute right-2 top-1/2 z-10 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full glass shadow-pop transition hover:scale-105 group-hover/row:flex"
         >
           <ChevronRight />
         </button>
         <div
           ref={ref}
-          className="no-scrollbar flex gap-4 overflow-x-auto scroll-smooth px-8 pb-2"
+          className="no-scrollbar flex gap-4 overflow-x-auto scroll-smooth px-8 pb-4 pt-2"
         >
           {children}
         </div>

@@ -85,6 +85,17 @@ test("duplicate, invalid, unknown and disabled connectors fail clearly", () => {
   assert.throws(() => registry.get("disabled"), /temporarily disabled/);
 });
 
+test("every resolver handoff receives a distinct opaque media receipt even for the same URL", async () => {
+  const providerResult = { url: "https://cdn.example/reused.mp4", mediaAccessId: "untrusted-provider-receipt" };
+  const registry = new ProviderRegistry([connector("mockstream", { async resolveStream() { return providerResult; } })]);
+  const first = await registry.resolveStream("mockstream", "same");
+  const second = await registry.resolveStream("mockstream", "same");
+  assert.match(first.mediaAccessId, /^[0-9a-f-]{36}$/);
+  assert.notEqual(first.mediaAccessId, second.mediaAccessId);
+  assert.equal(providerResult.mediaAccessId, "untrusted-provider-receipt", "provider result was not mutated");
+  assert.equal(first.url, second.url);
+});
+
 test("prefetch falls back to background resolve when a connector has no hook", async () => {
   let resolved = 0;
   let customPrefetched = 0;
@@ -105,6 +116,18 @@ test("prefetch falls back to background resolve when a connector has no hook", a
 
   assert.equal(resolved, 1);
   assert.equal(customPrefetched, 1);
+});
+
+test("explicitly forbidden prefetch never resolves media or calls a background hook", async () => {
+  let calls = 0;
+  const registry = new ProviderRegistry([connector("restricted", {
+    capabilities: { prefetch: false },
+    async resolveStream() { calls++; throw Error("must not run"); },
+    async prefetch() { calls++; },
+  })]);
+  registry.prefetch("restricted", "link");
+  await new Promise(setImmediate);
+  assert.equal(calls, 0);
 });
 
 test("base URL management works while streaming is disabled", () => {

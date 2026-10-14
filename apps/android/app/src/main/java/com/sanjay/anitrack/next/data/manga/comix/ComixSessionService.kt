@@ -15,18 +15,31 @@ class ComixSessionService : Service() {
     private val active = mutableMapOf<Int, Job>()
     private val messenger = Messenger(object : Handler(Looper.getMainLooper()) {
         override fun handleMessage(message: Message) {
+            if (message.what == CLOSE_HOST) {
+                message.data.getString(ComixCatalogueActivity.LEASE)?.takeIf { it.length == 36 }
+                    ?.let(ComixCatalogueActivity::close)
+                return
+            }
             if (message.what == CANCEL) { active.remove(message.arg1)?.cancel(); return }
             if (message.what != READ || message.replyTo == null || active.size >= 2) return
             val id = message.arg1
             val reply = message.replyTo
             val path = message.data.getString("path").orEmpty()
             val raw = message.data.getString("params").orEmpty()
-            if (path.length > 100 || raw.length > 2000) return
+            val lease = message.data.getString(ComixCatalogueActivity.LEASE).orEmpty()
+            if (path.length > 100 || raw.length > 2000 || !Regex("[a-f0-9-]{36}").matches(lease)) return
             val job = scope.launch(start = CoroutineStart.LAZY) {
                 val body = try {
                     require(Build.VERSION.SDK_INT >= 28) { "Comix needs Android 9 or newer for its separate website profile." }
-                    val value = lock.withLock { ComixSessionEngine.get(this@ComixSessionService).read(path, JSONObject(raw)) }
+                    val value = lock.withLock {
+                        val engine = ComixSessionEngine.get(this@ComixSessionService)
+                        if (!engine.ready) throw ComixConnectionRequired()
+                        ComixCatalogueActivity.awaitAttached(lease)
+                        engine.read(path, JSONObject(raw), lease)
+                    }
                     JSONObject().put("ok", true).put("value", value).toString()
+                } catch (_: ComixConnectionRequired) {
+                    JSONObject().put("ok", false).put("verify", true).put("error", "Connect Comix to load its catalogue.").toString()
                 } catch (_: TimeoutCancellationException) {
                     JSONObject().put("ok", false).put("error", "Comix catalogue timed out. Retry manually.").toString()
                 } catch (e: CancellationException) {
@@ -47,9 +60,10 @@ class ComixSessionService : Service() {
     override fun onBind(intent: Intent): IBinder = messenger.binder
     override fun onDestroy() {
         scope.cancel()
+        ComixCatalogueActivity.closeActive()
         ComixSessionEngine.close()
         super.onDestroy()
     }
 
-    companion object { internal const val READ = 1; internal const val CANCEL = 2 }
+    companion object { internal const val READ = 1; internal const val CANCEL = 2; internal const val CLOSE_HOST = 3 }
 }

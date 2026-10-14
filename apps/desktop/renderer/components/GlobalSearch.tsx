@@ -76,23 +76,23 @@ export default function GlobalSearch() {
   }
 
   return (
-    <div ref={containerRef} className="titlebar-no-drag relative flex w-72 items-center">
+    <div ref={containerRef} className="titlebar-no-drag relative flex w-full items-center">
       <div className="relative w-full flex items-center">
-        <Search size={16} className="pointer-events-none absolute left-3 text-muted" />
+        <Search size={16} className="pointer-events-none absolute left-3.5 text-ink-3" />
         <input
           ref={inputRef}
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onFocus={() => setFocused(true)}
           onKeyDown={handleKeyDown}
-          placeholder="Search anime... (Ctrl+K)"
-          className="w-full rounded-full border border-white/10 bg-bg-card/80 py-1.5 pl-9 pr-16 text-sm text-white placeholder:text-muted focus:border-accent focus:outline-none transition-colors"
+          placeholder="Search anime"
+          className="h-10 w-full rounded-xl border border-white/[0.08] bg-white/[0.05] pl-10 pr-24 text-sm text-white outline-none transition placeholder:text-ink-3 hover:bg-white/[0.07] focus:border-accent/50 focus:bg-surface-2 focus:ring-4 focus:ring-accent/15"
         />
         {q && (
           <button 
             type="button"
             onClick={() => setQ('')}
-            className="absolute right-9 text-muted hover:text-white transition-colors p-1"
+            className="absolute right-[4.25rem] rounded-md p-1 text-ink-3 transition-colors hover:text-white"
           >
             <X size={14} />
           </button>
@@ -100,46 +100,47 @@ export default function GlobalSearch() {
         <button
           type="button"
           onClick={() => navigate('/filter' + (q ? '?q=' + encodeURIComponent(q) : ''))}
-          className="absolute right-2 text-muted hover:text-white transition-colors p-1 flex items-center gap-1"
+          className="absolute right-2 flex items-center gap-1.5 rounded-lg p-1 text-ink-3 transition-colors hover:text-white"
           title="Advanced Filter"
         >
+          {!q && <span className="kbd">Ctrl K</span>}
           <Filter size={14} />
         </button>
       </div>
 
       {focused && q.trim().length > 0 && (
-        <div className="absolute top-full mt-2 w-full left-0 bg-[#1b1b1b] border border-white/10 rounded-xl shadow-2xl overflow-hidden z-[9999] animate-in fade-in zoom-in-95 duration-150">
+        <div className="absolute top-full left-0 z-[9999] mt-2 w-full overflow-hidden rounded-2xl border border-white/10 bg-surface-1/95 shadow-pop backdrop-blur-xl animate-in fade-in zoom-in-95 duration-150">
           {loading && results.length === 0 ? (
             <div className="p-4 text-center text-sm text-muted">Searching...</div>
           ) : results.length > 0 ? (
-            <div className="flex flex-col py-2">
+            <div className="flex flex-col p-1.5">
               {results.map((anime, idx) => (
                 <Link
                   key={anime.id}
                   to={'/anime/' + anime.id}
                   state={{ anime }}
                   onClick={() => setFocused(false)}
-                  className={`flex items-center gap-3 px-4 py-2 hover:bg-white/5 transition-colors ${selectedIndex === idx ? 'bg-white/10' : ''}`}
+                  className={`flex items-center gap-3 rounded-xl px-2.5 py-2 transition-colors hover:bg-white/[0.06] ${selectedIndex === idx ? 'bg-accent/[0.12] ring-1 ring-inset ring-accent/25' : ''}`}
                 >
                   {anime.coverImage ? (
-                    <img src={anime.coverImage} className="w-10 h-14 object-cover rounded shadow-sm" alt="" loading="lazy" decoding="async" />
+                    <img src={anime.coverImage} className="h-14 w-10 rounded-lg object-cover shadow-md ring-1 ring-white/10" alt="" loading="lazy" decoding="async" />
                   ) : (
-                    <div className="w-10 h-14 bg-white/5 rounded flex items-center justify-center text-xs text-muted">N/A</div>
+                    <div className="flex h-14 w-10 items-center justify-center rounded-lg bg-white/5 text-xs text-muted">N/A</div>
                   )}
                   <div className="flex-1 min-w-0 flex flex-col justify-center gap-1">
                     <div className="text-sm font-semibold truncate text-white">{anime.title}</div>
                     <div className="flex items-center gap-2 text-[10px] font-bold text-muted uppercase tracking-wider">
-                      {anime.year && <span className="bg-white/10 px-1.5 py-0.5 rounded">{anime.year}</span>}
-                      {anime.averageScore && <span className="text-green-400">★ {(anime.averageScore / 10).toFixed(1)}</span>}
+                      {anime.year && <span className="rounded-md bg-white/[0.08] px-1.5 py-0.5">{anime.year}</span>}
+                      {anime.averageScore && <span className="text-amber-300">★ {(anime.averageScore / 10).toFixed(1)}</span>}
                       {anime.status && <span>{anime.status.replace('_', ' ')}</span>}
                     </div>
                   </div>
                 </Link>
               ))}
-              <div className="mt-1 border-t border-white/5 pt-1 px-2">
+              <div className="mt-1 border-t border-white/[0.06] pt-1.5">
                 <button
                   onClick={() => { navigate('/filter?q=' + encodeURIComponent(q)); setFocused(false); }}
-                  className="w-full text-left px-3 py-2 text-xs font-semibold text-white hover:bg-white/5 rounded transition-colors flex justify-between items-center"
+                  className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-xs font-semibold text-accent transition-colors hover:bg-accent/10"
                 >
                   <span>View all results for "{q}"</span>
                   <span>→</span>
@@ -150,12 +151,12 @@ export default function GlobalSearch() {
             <div className="p-4 text-center text-sm text-muted">No results found for "{q}"</div>
           )}
           
-          <div className="bg-black/40 border-t border-white/10 px-4 py-2 flex items-center justify-between text-[10px] text-muted">
+          <div className="flex items-center justify-between border-t border-white/[0.06] bg-black/30 px-4 py-2 text-[10px] text-ink-3">
             <div className="flex gap-3">
-              <span className="flex items-center gap-1"><kbd className="bg-white/10 px-1 rounded font-sans">↑</kbd><kbd className="bg-white/10 px-1 rounded font-sans">↓</kbd> to navigate</span>
-              <span className="flex items-center gap-1"><kbd className="bg-white/10 px-1 rounded font-sans">↵</kbd> to select</span>
+              <span className="flex items-center gap-1"><kbd className="kbd">↑</kbd><kbd className="kbd">↓</kbd> to navigate</span>
+              <span className="flex items-center gap-1"><kbd className="kbd">↵</kbd> to select</span>
             </div>
-            <span className="flex items-center gap-1"><kbd className="bg-white/10 px-1 rounded font-sans">esc</kbd> to exit</span>
+            <span className="flex items-center gap-1"><kbd className="kbd">esc</kbd> to exit</span>
           </div>
         </div>
       )}

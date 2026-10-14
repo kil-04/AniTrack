@@ -1,5 +1,5 @@
 import { app } from "electron";
-import { autoUpdater } from "electron-updater";
+import type { AppUpdater } from "electron-updater";
 import type { DesktopUpdateState } from "../../../../packages/shared/types";
 
 type Broadcast = (channel: string, payload?: unknown) => void;
@@ -13,6 +13,8 @@ let broadcast: Broadcast = () => {};
 let checkTimer: NodeJS.Timeout | null = null;
 let retryIndex = 0;
 let initialized = false;
+let updater: AppUpdater | null = null;
+let loading: Promise<AppUpdater> | null = null;
 
 function setState(next: DesktopUpdateState, legacyChannel?: string, legacyPayload?: unknown) {
   state = next;
@@ -32,16 +34,20 @@ function scheduleRetry() {
   schedule(delay);
 }
 
-export function initDesktopUpdater(send: Broadcast) {
-  if (initialized) return;
-  initialized = true;
-  broadcast = send;
+/**
+ * electron-updater (with semver, js-yaml, fs-extra and the rest) was the largest
+ * part of loading the main process, so it loads right before the first check.
+ */
+function loadUpdater(): Promise<AppUpdater> {
+  loading ??= import("electron-updater").then(({ autoUpdater }) => {
+    setUpUpdater(autoUpdater);
+    updater = autoUpdater;
+    return autoUpdater;
+  });
+  return loading;
+}
 
-  if (!app.isPackaged) {
-    setState({ phase: "disabled", message: "Updates are available only in packaged builds." });
-    return;
-  }
-
+function setUpUpdater(autoUpdater: AppUpdater) {
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
 
@@ -88,7 +94,17 @@ export function initDesktopUpdater(send: Broadcast) {
     );
     scheduleRetry();
   });
+}
 
+export function initDesktopUpdater(send: Broadcast) {
+  if (initialized) return;
+  initialized = true;
+  broadcast = send;
+
+  if (!app.isPackaged) {
+    setState({ phase: "disabled", message: "Updates are available only in packaged builds." });
+    return;
+  }
   schedule(STARTUP_DELAY_MS);
 }
 
@@ -102,7 +118,7 @@ export async function checkForDesktopUpdates(manual = true): Promise<{
   }
   try {
     if (manual) setState({ phase: "checking", checkedAt: Date.now() });
-    const result = await autoUpdater.checkForUpdates();
+    const result = await (await loadUpdater()).checkForUpdates();
     return { ok: true, version: result?.updateInfo?.version ?? null };
   } catch (error) {
     const reason = (error as Error).message || "Update check failed";
@@ -121,8 +137,8 @@ export function getDesktopUpdateState(): DesktopUpdateState {
 }
 
 export function installDesktopUpdate(): boolean {
-  if (!app.isPackaged || state.phase !== "ready") return false;
-  autoUpdater.quitAndInstall(false, true);
+  if (!app.isPackaged || state.phase !== "ready" || !updater) return false;
+  updater.quitAndInstall(false, true);
   return true;
 }
 

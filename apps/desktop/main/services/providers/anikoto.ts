@@ -95,6 +95,8 @@ export class AnikotoProvider implements StreamProvider {
     top: true,
     externalIds: true,
     downloads: true,
+    // Only getStreamLinks' lightweight metadata is warmed by the player.
+    prefetch: true,
     streamVariants: "subtitle-type" as const,
     episodePageSize: 10_000,
   };

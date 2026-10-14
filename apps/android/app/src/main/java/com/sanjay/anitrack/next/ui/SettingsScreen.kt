@@ -34,6 +34,9 @@ fun SettingsScreen(onMalProfileChanged: (connected: Boolean, username: String?) 
             Spacer(Modifier.height(4.dp))
             MalCard(onProfileChanged = onMalProfileChanged)
             SyncCard()
+            NotificationsCard()
+            SmartDownloadsCard()
+            BackupCard()
             AutomationCard()
             AboutCard()
         }
@@ -178,7 +181,7 @@ private fun AniWordmarkText() {
             pushStyle(androidx.compose.ui.text.SpanStyle(color = AniColors.Text))
             append("Ani")
             pop()
-            pushStyle(androidx.compose.ui.text.SpanStyle(color = AniColors.Accent))
+            pushStyle(androidx.compose.ui.text.SpanStyle(brush = AniColors.BrandGradient))
             append("Track")
             pop()
         },

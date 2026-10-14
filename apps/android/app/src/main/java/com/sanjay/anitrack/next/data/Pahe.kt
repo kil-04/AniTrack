@@ -123,6 +123,17 @@ object Pahe {
             .firstOrNull { it.startsWith("cf_clearance=") || it.startsWith("__ddg5_") }
     }
 
+    /**
+     * The 1x1 helper WebViews stay attached to the window, so a page that focuses
+     * an input (AnimePahe's search box) raised the keyboard over the player. While
+     * hidden they can't take focus; the visible check screen can.
+     */
+    private fun WebView.inputEnabled(enabled: Boolean) {
+        isFocusable = enabled
+        isFocusableInTouchMode = enabled
+        if (!enabled) clearFocus()
+    }
+
     private fun ensureCfWebView(forceSolve: Boolean = false, interactive: Boolean = true): Deferred<Unit> {
         if (!forceSolve && cfReady && cfWebView != null) return CompletableDeferred(Unit)
         if (!forceSolve && hasValidCookies()) { cfReady = true; return CompletableDeferred(Unit) }
@@ -168,6 +179,7 @@ object Pahe {
                 (wv.parent as? android.view.ViewGroup)?.removeView(wv)
                 cfOverlay?.let { (it.parent as? android.view.ViewGroup)?.removeView(it) }; cfOverlay = null
                 // Keep the WebView alive 1x1 so in-page/play fetches can use it.
+                wv.inputEnabled(false)
                 wv.layoutParams = android.view.ViewGroup.LayoutParams(1, 1)
                 try { root?.addView(wv) } catch (e: Exception) { /* ignore */ }
             }
@@ -198,6 +210,7 @@ object Pahe {
                 root?.addView(container, android.view.ViewGroup.LayoutParams(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT))
                 cfOverlay = container
             } else {
+                wv.inputEnabled(false)
                 wv.layoutParams = android.view.ViewGroup.LayoutParams(1, 1)
                 try { root?.addView(wv) } catch (e: Exception) { /* ignore */ }
             }
@@ -247,6 +260,7 @@ object Pahe {
                 CookieManager.getInstance().setAcceptCookie(true)
                 CookieManager.getInstance().setAcceptThirdPartyCookies(wv, true)
                 wv.settings.apply { javaScriptEnabled = true; domStorageEnabled = true; userAgentString = MOBILE_UA }
+                wv.inputEnabled(false)
                 cfWebView = wv
 
                 // Starts hidden; expands only if Cloudflare challenges this page.
@@ -273,6 +287,7 @@ object Pahe {
                 var done = false
                 fun finish(html: String?) {
                     if (done) return; done = true
+                    wv.inputEnabled(false)
                     (wv.parent as? android.view.ViewGroup)?.removeView(wv)
                     cfOverlay?.let { (it.parent as? android.view.ViewGroup)?.removeView(it) }; cfOverlay = null
                     wv.layoutParams = android.view.ViewGroup.LayoutParams(1, 1)
@@ -282,6 +297,7 @@ object Pahe {
                 }
                 fun expand() {
                     cfUserCancelled = false
+                    wv.inputEnabled(true)
                     container.layoutParams = android.view.ViewGroup.LayoutParams(
                         android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                         android.view.ViewGroup.LayoutParams.MATCH_PARENT,

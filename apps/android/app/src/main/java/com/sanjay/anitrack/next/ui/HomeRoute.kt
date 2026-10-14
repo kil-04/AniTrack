@@ -159,7 +159,12 @@ private fun AnimeHome(
             }
         }
         if (cw.isNotEmpty()) {
-            item { SectionHeader("Continue Watching", onClick = onOpenContinue) }
+            item {
+                SectionHeader("Continue Watching", onClick = onOpenContinue, trailing = {
+                    ThemeRadioButton()
+                    Spacer(Modifier.width(4.dp))
+                })
+            }
             item {
                 LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     items(cw.size) { i ->

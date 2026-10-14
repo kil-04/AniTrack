@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
+import { Link } from "react-router-dom";
+import { motion } from "framer-motion";
+import { Bookmark, BookmarkPlus, Settings as SettingsIcon } from "lucide-react";
 import Card from "../components/Card";
+import PageHeader from "../components/PageHeader";
+import EmptyState from "../components/EmptyState";
 import { useAppStore } from "../store/useAppStore";
 import type { WatchStatus } from "../../../../packages/shared/types";
 
@@ -42,25 +47,41 @@ export default function Library() {
     [counts],
   );
 
+  const total = countFor("all");
+
   return (
-    <div className="px-8 py-8">
-      <h1 className="mb-6 text-3xl font-bold">My list</h1>
-      <div className="mb-6 flex gap-2 border-b border-white/10">
+    <div className="mx-auto max-w-[1680px] px-8 py-8">
+      <PageHeader
+        icon={Bookmark}
+        title="My List"
+        subtitle={total > 0 ? `${total} title${total === 1 ? "" : "s"} tracked` : "Everything you track, by status"}
+      />
+      <div className="mb-8 inline-flex flex-wrap gap-1 rounded-2xl border border-white/[0.07] bg-surface-1/70 p-1">
         {TABS.map((t) => {
           const count = countFor(t.key);
+          const on = tab === t.key;
           return (
             <button
               key={t.key}
               onClick={() => setTab(t.key)}
-              className={`flex items-center gap-1.5 px-4 py-2 text-sm transition ${
-                tab === t.key
-                  ? "border-b-2 border-accent text-white"
-                  : "text-muted hover:text-white"
+              className={`relative flex h-9 items-center gap-2 rounded-xl px-4 text-sm font-semibold transition-colors ${
+                on ? "text-white" : "text-ink-3 hover:text-white"
               }`}
             >
-              {t.label}
+              {on && (
+                <motion.span
+                  layoutId="library-tab"
+                  className="absolute inset-0 rounded-xl bg-accent-gradient shadow-glow"
+                  transition={{ type: "spring", stiffness: 500, damping: 38 }}
+                />
+              )}
+              <span className="relative">{t.label}</span>
               {count > 0 && (
-                <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-xs leading-none">
+                <span
+                  className={`relative rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none tabular-nums ${
+                    on ? "bg-white/25 text-white" : "bg-white/[0.08] text-ink-2"
+                  }`}
+                >
                   {count}
                 </span>
               )}
@@ -69,13 +90,32 @@ export default function Library() {
         })}
       </div>
       {filtered.length === 0 ? (
-        <div className="py-20 text-center text-muted">
-          Nothing here yet. Try connecting MyAnimeList in Settings, or add a show from the home page.
-        </div>
+        <EmptyState
+          icon={BookmarkPlus}
+          title={tab === "all" ? "Your list is empty" : `Nothing in ${TABS.find((t) => t.key === tab)?.label ?? "this list"}`}
+          action={
+            <>
+              <Link to="/" className="btn btn-primary">Browse anime</Link>
+              <Link to="/settings" className="btn btn-secondary">
+                <SettingsIcon size={16} /> Connect MyAnimeList
+              </Link>
+            </>
+          }
+        >
+          Connect MyAnimeList in Settings, or add a show from its page.
+        </EmptyState>
       ) : (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-6">
           {filtered.map((x) => (
-            <Card key={x.entry.animeId} anime={x.anime!} />
+            <Card
+              key={x.entry.animeId}
+              anime={x.anime!}
+              progressPercent={
+                x.entry.status !== "completed" && x.entry.episodesWatched > 0 && x.anime!.episodes
+                  ? (x.entry.episodesWatched / x.anime!.episodes) * 100
+                  : undefined
+              }
+            />
           ))}
         </div>
       )}

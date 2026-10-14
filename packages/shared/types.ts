@@ -40,6 +40,14 @@ export interface AdvancedSearchFilters {
   episodesLesser?: number;  // episodes <= this
   sort?: string;
   page?: number;
+  /** Titles that started in this year, seasonless OVAs and films included (Time Machine). */
+  startYear?: number;
+}
+
+/** An anime and the year it premiered (Time Machine's "On this day"). */
+export interface PremieredAnime {
+  anime: AnimeMeta;
+  year: number;
 }
 
 export interface PaginatedAnime {
@@ -176,6 +184,7 @@ export const IPC = {
   ANILIST_AIRING: "anilist:airing",
   ANILIST_RECENT: "anilist:recent",
   ANILIST_RECOMMENDATIONS: "anilist:recommendations",
+  ANILIST_PREMIERED_ON: "anilist:premiered-on",
   // Local state
   LIST_GET_ALL: "list:get-all",
   LIST_SET: "list:set",
@@ -186,6 +195,8 @@ export const IPC = {
   CW_DISMISS: "cw:dismiss",
   // Provider-neutral streaming API (legacy PAHE_* channels remain during migration)
   PROVIDERS_LIST: "providers:list",
+  PROVIDERS_MEDIA_ACCESS_STATUS: "providers:media-access-status",
+  PROVIDERS_MEDIA_ACCESS_REJECTED: "providers:media-access-rejected",
   PROVIDERS_EXTERNAL_IDS: "providers:external-ids",
   PROVIDERS_FIND_BY_EXTERNAL_ID: "providers:find-by-external-id",
   PROVIDERS_FEED: "providers:feed",
@@ -209,6 +220,9 @@ export const IPC = {
   AL_SET_CLIENT_ID: "al:set-client-id",
   // Extra
   ANILIST_RELATIONS: "anilist:relations",
+  ANILIST_STORY: "anilist:story",
+  THEMES_FOR_ANIME: "themes:for-anime",
+  THEMES_RADIO: "themes:radio",
   PROGRESS_GET_FOR_ANIME: "progress:get-for-anime",
   // Updater
   UPDATE_CHECK: "update:check",

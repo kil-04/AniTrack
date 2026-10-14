@@ -62,7 +62,7 @@ export function runInTransaction<T>(fn: () => T): T {
 
 // Bump CURRENT_SCHEMA_VERSION whenever you add a new migration below.
 // Each migration runs exactly once per user and is idempotent.
-const CURRENT_SCHEMA_VERSION = 5;
+const CURRENT_SCHEMA_VERSION = 6;
 
 const MIGRATIONS: Array<(d: Database) => void> = [
   // v1 — initial schema
@@ -134,6 +134,37 @@ const MIGRATIONS: Array<(d: Database) => void> = [
   // v5 — identify the connector that owns the legacy session value.
   (d) => {
     try { d.run(`ALTER TABLE playback ADD COLUMN provider_id TEXT`); } catch {}
+  },
+  // v6 — manga mode: reading progress, the manga list and confirmed source matches.
+  (d) => {
+    d.run(`CREATE TABLE IF NOT EXISTS manga_reading (
+      manga_id INTEGER NOT NULL,
+      chapter REAL NOT NULL,
+      chapter_id TEXT NOT NULL,
+      page INTEGER NOT NULL,
+      page_count INTEGER NOT NULL,
+      title TEXT,
+      cover TEXT,
+      source_id TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (manga_id, chapter)
+    )`);
+    d.run(`CREATE INDEX IF NOT EXISTS idx_manga_reading_updated ON manga_reading(updated_at DESC)`);
+    d.run(`CREATE TABLE IF NOT EXISTS manga_list (
+      manga_id INTEGER PRIMARY KEY,
+      status TEXT NOT NULL,
+      title TEXT,
+      cover TEXT,
+      updated_at INTEGER NOT NULL
+    )`);
+    d.run(`CREATE TABLE IF NOT EXISTS manga_match (
+      manga_id INTEGER NOT NULL,
+      source_id TEXT NOT NULL,
+      title_id TEXT NOT NULL,
+      title TEXT,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (manga_id, source_id)
+    )`);
   },
 ];
 

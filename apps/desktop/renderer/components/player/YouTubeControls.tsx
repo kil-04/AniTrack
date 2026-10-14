@@ -154,7 +154,7 @@ export function YouTubeControls(props: YouTubeControlsProps) {
 
           {/* Subtitles quick toggle */}
           {availableSubtitles.length > 0 && (
-            <button onClick={onToggleSubtitles} className={`ctl ${subtitlesEnabled ? "text-[#e50914]" : ""}`} title="Subtitles (c)">
+            <button onClick={onToggleSubtitles} className={`ctl ${subtitlesEnabled ? "text-accent" : ""}`} title="Subtitles (c)">
               <Captions size={18} />
             </button>
           )}
@@ -198,7 +198,7 @@ export function YouTubeControls(props: YouTubeControlsProps) {
           </div>
 
           {/* PiP */}
-          <button onClick={onTogglePiP} className={`ctl ${isPiP ? "text-[#e50914]" : ""}`} title="Picture-in-picture (i)">
+          <button onClick={onTogglePiP} className={`ctl ${isPiP ? "text-accent" : ""}`} title="Picture-in-picture (i)">
             <PictureInPicture2 size={18} />
           </button>
 

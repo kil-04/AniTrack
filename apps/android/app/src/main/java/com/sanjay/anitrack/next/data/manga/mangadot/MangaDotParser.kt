@@ -127,7 +127,7 @@ internal object MangaDotParser {
     fun imagesPath(source: String, id: Long): String =
         if (source == "user") "/api/uploads/$id/images" else "/api/chapters/$id/images"
 
-    /** `…/images` → same-origin page images (served without a session). */
+    /** `…/images` → same-origin page images (requested with the session; see MangaDotSource.resolvePage). */
     fun pages(json: JSONObject): List<MangaPage> {
         val images = json.optJSONArray("images") ?: return emptyList()
         return (0 until minOf(images.length(), MAX_PAGES)).mapNotNull { i ->

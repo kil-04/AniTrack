@@ -32,8 +32,8 @@ android {
         applicationId = "com.sanjay.anitrack.next"
         minSdk = 26
         targetSdk = 36
-        versionCode = 11
-        versionName = "8.0.0"
+        versionCode = 12
+        versionName = "9.0.0"
 
         // Explicitly opted-in, bounded on-device connector diagnostics; no live
         // requests are made by the ordinary JVM regression suite.
@@ -109,9 +109,10 @@ dependencies {
     // Images
     implementation("io.coil-kt:coil-compose:2.7.0")
 
-    // Native video: ExoPlayer via media3 (HLS + UI + PiP-ready)
+    // Native video: ExoPlayer via media3 (HLS/DASH + UI + PiP-ready)
     implementation("androidx.media3:media3-exoplayer:1.6.1")
     implementation("androidx.media3:media3-exoplayer-hls:1.6.1")
+    implementation("androidx.media3:media3-exoplayer-dash:1.6.1")
     implementation("androidx.media3:media3-ui:1.6.1")
     // Cronet = Chromium's network stack. The pahe CDN TLS-fingerprints
     // clients (browser stacks pass, Java/OkHttp get 403) — stream through

@@ -74,7 +74,7 @@ const Card = React.memo(function Card({ anime, progressPercent, episode, size }:
 
   const tooltipPortal = isHovered && rect ? createPortal(
     <div 
-      className="fixed z-[9999] w-72 bg-[#1f1f1f] rounded-xl border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.8)] p-5 flex flex-col pointer-events-none animate-in fade-in zoom-in-95 duration-200"
+      className="pointer-events-none fixed z-[9999] flex w-72 flex-col rounded-2xl border border-white/10 bg-surface-1/95 p-5 shadow-pop backdrop-blur-xl animate-in fade-in zoom-in-95 duration-200"
       style={{
         left: rect.right + 15 + 288 > window.innerWidth ? rect.left - 288 - 15 : rect.right + 15,
         top: Math.max(10, Math.min(window.innerHeight - 320, rect.top + rect.height / 2 - 160)),
@@ -82,14 +82,14 @@ const Card = React.memo(function Card({ anime, progressPercent, episode, size }:
     >
       <h3 className="font-bold text-white text-lg leading-tight mb-2">{displayAnime.title}</h3>
       {displayAnime.averageScore && (
-        <div className="text-sm font-bold text-green-400 mb-3">★ {(displayAnime.averageScore / 10).toFixed(1)} / 10</div>
+        <div className="mb-3 text-sm font-bold text-amber-300">★ {(displayAnime.averageScore / 10).toFixed(1)} / 10</div>
       )}
       {(displayAnime.year || displayAnime.status || displayAnime.episodes || displayAnime.duration) && (
         <div className="flex flex-wrap gap-2 mb-3">
-          {displayAnime.year && <span className="px-1.5 py-0.5 rounded bg-white/10 text-[10px] font-bold">{displayAnime.year}</span>}
-          {displayAnime.status && <span className="px-1.5 py-0.5 rounded bg-white/10 text-[10px] font-bold">{displayAnime.status}</span>}
-          {displayAnime.episodes && <span className="px-1.5 py-0.5 rounded bg-white/10 text-[10px] font-bold">{displayAnime.episodes} EPS</span>}
-          {displayAnime.duration && <span className="px-1.5 py-0.5 rounded bg-white/10 text-[10px] font-bold">{displayAnime.duration}m</span>}
+          {displayAnime.year && <span className="rounded-md bg-white/[0.08] px-1.5 py-0.5 text-[10px] font-bold text-ink-2">{displayAnime.year}</span>}
+          {displayAnime.status && <span className="rounded-md bg-white/[0.08] px-1.5 py-0.5 text-[10px] font-bold text-ink-2">{displayAnime.status}</span>}
+          {displayAnime.episodes && <span className="rounded-md bg-white/[0.08] px-1.5 py-0.5 text-[10px] font-bold text-ink-2">{displayAnime.episodes} EPS</span>}
+          {displayAnime.duration && <span className="rounded-md bg-white/[0.08] px-1.5 py-0.5 text-[10px] font-bold text-ink-2">{displayAnime.duration}m</span>}
         </div>
       )}
       {displayAnime.genres && displayAnime.genres.length > 0 && (
@@ -122,28 +122,28 @@ const Card = React.memo(function Card({ anime, progressPercent, episode, size }:
           onMouseLeave={() => setIsHovered(false)}
           className={`group block w-full h-full ${fixed ? "" : sizing} outline-none`}
         >
-          <div className="relative h-full w-full overflow-hidden rounded-xl bg-[#1b1b1b] transition-all duration-300 ease-out hover:z-10 hover:scale-110 hover:shadow-[0_12px_40px_rgb(0,0,0,0.8)] hover:shadow-[#e50914]/30 hover:ring-2 hover:ring-white/30">
+          <div className="relative h-full w-full overflow-hidden rounded-2xl bg-surface-1 shadow-card ring-1 ring-white/[0.06] transition-all duration-300 ease-out group-hover:z-10 group-hover:-translate-y-1.5 group-hover:shadow-glow-lg group-hover:ring-2 group-hover:ring-accent/70">
             {anime.coverImage ? (
-              <img src={anime.coverImage} alt={anime.title} className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105" loading="lazy" />
+              <img src={anime.coverImage} alt={anime.title} className="h-full w-full object-cover transition-transform duration-700 ease-out group-hover:scale-[1.07]" loading="lazy" />
             ) : (
-              <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-[#1b1b1b] to-[#222222] text-3xl font-bold text-white/20">{anime.title.slice(0,2).toUpperCase()}</div>
+              <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-surface-1 to-surface-2 text-3xl font-bold text-white/20">{anime.title.slice(0,2).toUpperCase()}</div>
             )}
             
             {/* Anikoto-style corner badges */}
             {anime.averageScore != null && (
-              <div className="absolute top-2 right-2 z-[2] flex items-center gap-0.5 rounded-md bg-black/75 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">
+              <div className="badge badge-glass absolute right-2 top-2 z-[2] gap-0.5 text-amber-300">
                 <Star size={9} fill="currentColor" />
                 {(anime.averageScore / 10).toFixed(1)}
               </div>
             )}
             <div className="absolute top-2 left-2 z-[2] flex flex-col items-start gap-1">
               {formatLabel(anime.format) && (
-                <span className="rounded-md bg-black/75 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white/90">
+                <span className="badge badge-glass text-white/90">
                   {formatLabel(anime.format)}
                 </span>
               )}
               {anime.episodes != null && anime.episodes > 0 && (
-                <span className="flex items-center gap-1 rounded-md bg-emerald-500/90 px-1.5 py-0.5 text-[10px] font-bold text-black shadow-sm">
+                <span className="badge gap-1 bg-emerald-400/90 text-[#04150d] shadow-sm">
                   <Captions size={11} />
                   {anime.episodes}
                 </span>
@@ -151,7 +151,7 @@ const Card = React.memo(function Card({ anime, progressPercent, episode, size }:
             </div>
 
             {/* Permanent bottom gradient */}
-            <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent opacity-90 transition-opacity duration-300 group-hover:opacity-100" />
+            <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/25 to-transparent opacity-90 transition-opacity duration-300 group-hover:opacity-100" />
             
             {/* Title and Info (Always visible, moves up slightly on hover) */}
             <div className="absolute bottom-0 left-0 right-0 p-3 flex flex-col justify-end translate-y-1 transition-transform duration-300 group-hover:translate-y-0">
@@ -168,14 +168,14 @@ const Card = React.memo(function Card({ anime, progressPercent, episode, size }:
             
             {/* Play Icon Center Hover */}
             <div className="absolute inset-0 flex items-center justify-center opacity-0 scale-90 transition-all duration-300 group-hover:opacity-100 group-hover:scale-100">
-              <div className="rounded-full bg-white/25 p-3 text-white border border-white/20 shadow-xl">
+              <div className="rounded-full bg-accent-gradient p-3 text-white shadow-glow-lg ring-1 ring-white/30">
                 <Play size={24} fill="currentColor" className="ml-1" />
               </div>
             </div>
 
             {progressPercent != null && (
-              <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-white/20">
-                <div className="h-full bg-[#e50914] shadow-[0_0_10px_rgba(229, 9, 20,0.8)]" style={{ width: `${Math.min(100, progressPercent)}%` }} />
+              <div className="absolute bottom-0 left-0 right-0 h-1 bg-white/15">
+                <div className="h-full rounded-r-full bg-accent-gradient shadow-[0_0_12px_rgb(var(--accent)/0.85)]" style={{ width: `${Math.min(100, progressPercent)}%` }} />
               </div>
             )}
           </div>

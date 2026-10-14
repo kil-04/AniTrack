@@ -17,3 +17,15 @@ export function truncate(s: string | null | undefined, n: number): string {
   if (!s) return "";
   return s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s;
 }
+
+/** AniList's media status as a short label: RELEASING → "Airing". */
+export function animeStatusLabel(status?: string | null): string {
+  switch (status) {
+    case "RELEASING": return "Airing";
+    case "FINISHED": return "Finished";
+    case "NOT_YET_RELEASED": return "Upcoming";
+    case "HIATUS": return "On hiatus";
+    case "CANCELLED": return "Cancelled";
+    default: return status ? status.charAt(0) + status.slice(1).toLowerCase().replace(/_/g, " ") : "Airing";
+  }
+}

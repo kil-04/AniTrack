@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Play, ChevronLeft, ChevronRight, Loader2, Captions, Mic, Download, Check, Trash2 } from "lucide-react";
+import { Play, ChevronLeft, ChevronRight, Loader2, Captions, Mic, Download, Check, Trash2, ListVideo } from "lucide-react";
 import type { PlaybackProgress } from "../../../../packages/shared/types";
 import type { ProviderDescriptor } from "../../../../packages/shared/provider-types";
 import { orderProviderIds, providerClient, providerName } from "../lib/provider-api";
@@ -254,24 +254,25 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
     return (
       <div>
         <div className="mb-4 flex flex-wrap items-center gap-2">
-          <h2 className="text-lg font-semibold">Episodes</h2>
+          <span className="icon-tile h-8 w-8 rounded-lg"><ListVideo size={16} strokeWidth={2.2} /></span>
+          <h2 className="section-title">Episodes</h2>
           {selected && selected.title !== animeTitle && (
-            <span className="ml-1 text-sm text-white/40">— {selected.title}</span>
+            <span className="ml-1 text-sm text-ink-3">· {selected.title}</span>
           )}
           {/* Real per-provider availability (from the search the panel already ran — no extra request). */}
           {selected && (selected.subCount != null || selected.dubCount != null || selected.episodes != null) && (
             <div className="ml-1 flex items-center gap-1.5">
               {selected.subCount != null ? (
-                <span className="flex items-center gap-1 rounded-md bg-emerald-500/90 px-1.5 py-0.5 text-[11px] font-bold text-black">
+                <span className="badge gap-1 bg-emerald-400/90 px-2 py-1 text-[11px] text-[#04150d]">
                   <Captions size={12} /> SUB {selected.subCount}
                 </span>
               ) : selected.episodes != null ? (
-                <span className="flex items-center gap-1 rounded-md bg-emerald-500/90 px-1.5 py-0.5 text-[11px] font-bold text-black">
+                <span className="badge gap-1 bg-emerald-400/90 px-2 py-1 text-[11px] text-[#04150d]">
                   <Captions size={12} /> {selected.episodes} eps
                 </span>
               ) : null}
               {selected.dubCount != null && selected.dubCount > 0 && (
-                <span className="flex items-center gap-1 rounded-md bg-sky-500/90 px-1.5 py-0.5 text-[11px] font-bold text-black">
+                <span className="badge gap-1 bg-sky-400/90 px-2 py-1 text-[11px] text-[#03111c]">
                   <Mic size={12} /> DUB {selected.dubCount}
                 </span>
               )}
@@ -280,7 +281,7 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
         </div>
 
         {error && (
-          <div className="mb-4 rounded-lg bg-red-500/10 px-4 py-3 text-sm text-red-400">
+          <div className="mb-4 rounded-xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">
             {error}
           </div>
         )}
@@ -304,11 +305,11 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
                 onChange={(e) => setManualQuery(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && doManualSearch()}
                 placeholder={animeTitle}
-                className="flex-1 rounded-md border border-white/10 bg-bg-elev px-3 py-1.5 text-sm focus:border-accent focus:outline-none"
+                className="input flex-1"
               />
               <button
                 onClick={doManualSearch}
-                className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium hover:bg-accent-hover"
+                className="btn btn-primary"
               >
                 Search
               </button>
@@ -335,9 +336,7 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
                           const chosen = results.find((r: any) => (r.providerId ?? "animepahe") === pid);
                           if (chosen) setSelected(chosen);
                         }}
-                        className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${
-                          isActive ? "bg-[#e50914] text-white" : "bg-white/5 text-white/70 hover:bg-white/15 hover:text-white"
-                        }`}
+                        className={`chip ${isActive ? "chip-active" : ""}`}
                       >
                         {name}
                       </button>
@@ -349,7 +348,7 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
             <div className="mb-4 flex flex-wrap items-center gap-2">
               <button
                 onClick={() => openStreamPlayer()}
-                className="flex items-center gap-2 rounded-lg bg-white px-5 py-2.5 text-sm font-semibold text-black hover:bg-white/80 transition"
+                className="btn btn-primary"
               >
                 <Play size={14} fill="currentColor" /> Open Player
               </button>
@@ -358,7 +357,7 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
                   <button
                     onClick={() => runBatch(resumeEpisode ?? 1, Number.MAX_SAFE_INTEGER)}
                     disabled={batchBusy}
-                    className="flex items-center gap-2 rounded-lg bg-white/10 px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/20 disabled:opacity-50 transition"
+                    className="btn btn-secondary"
                     title="Download the next 100 episodes from your resume point"
                   >
                     {batchBusy ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
@@ -367,7 +366,7 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
                   <button
                     onClick={() => setRangeOpen((o) => !o)}
                     disabled={batchBusy}
-                    className="flex items-center gap-2 rounded-lg bg-white/10 px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/20 disabled:opacity-50 transition"
+                    className="btn btn-secondary"
                     title="Download a specific episode range"
                   >
                     <Download size={14} /> Range
@@ -386,7 +385,7 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
                   value={rangeFrom}
                   onChange={(e) => setRangeFrom(e.target.value)}
                   placeholder="from"
-                  className="w-20 rounded-md border border-white/10 bg-white/5 px-2 py-1.5 text-sm text-white placeholder-white/30 focus:border-accent focus:outline-none"
+                  className="input h-9 w-24"
                 />
                 <span className="text-white/40">–</span>
                 <input
@@ -395,7 +394,7 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
                   value={rangeTo}
                   onChange={(e) => setRangeTo(e.target.value)}
                   placeholder="to"
-                  className="w-20 rounded-md border border-white/10 bg-white/5 px-2 py-1.5 text-sm text-white placeholder-white/30 focus:border-accent focus:outline-none"
+                  className="input h-9 w-24"
                 />
                 <button
                   onClick={() => {
@@ -404,7 +403,7 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
                     if (f && t) runBatch(f, t);
                   }}
                   disabled={batchBusy || !rangeFrom || !rangeTo}
-                  className="flex items-center gap-2 rounded-md bg-[#e50914] px-4 py-1.5 text-sm font-semibold text-white hover:bg-[#f6121d] disabled:opacity-50 transition"
+                  className="btn btn-primary btn-sm"
                 >
                   {batchBusy ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} Download range
                 </button>
@@ -418,7 +417,7 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
               </div>
             ) : (
               <>
-                <div className="flex flex-col divide-y divide-white/5 overflow-hidden rounded-lg border border-white/10">
+                <div className="panel flex flex-col divide-y divide-white/[0.05] overflow-hidden">
                   {episodes.map((ep) => {
                     const epNum = ep.episodeNumber ?? ep.episode;
                     const pct = watchedEps.get(epNum) ?? 0;
@@ -427,9 +426,9 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
                     const dl = canDownload && animeId ? getDownloads().get(`${animeId}:${epNum}`) : undefined;
                     const st = dl?.status;
                     return (
-                      <div key={ep.id ?? ep.session} className="group flex items-center gap-3 bg-white/[0.02] px-3 py-2 transition hover:bg-white/5">
-                        <button onClick={() => openStreamPlayer(ep)} className="flex min-w-0 flex-1 items-center gap-3 text-left">
-                          <div className="relative h-12 w-20 shrink-0 overflow-hidden rounded bg-white/5">
+                      <div key={ep.id ?? ep.session} className="group flex items-center gap-4 px-4 py-2.5 transition hover:bg-white/[0.04]">
+                        <button onClick={() => openStreamPlayer(ep)} className="flex min-w-0 flex-1 items-center gap-4 text-left">
+                          <div className="relative h-14 w-24 shrink-0 overflow-hidden rounded-lg bg-white/5 ring-1 ring-white/10 transition group-hover:ring-accent/50">
                             {ep.snapshot && (
                               <img
                                 src={ep.snapshot}
@@ -439,22 +438,22 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
                                 onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
                               />
                             )}
-                            <div className="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 transition group-hover:opacity-100">
-                              <Play size={16} className="text-white" fill="currentColor" />
+                            <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition group-hover:opacity-100">
+                              <span className="grid h-8 w-8 place-items-center rounded-full bg-accent-gradient shadow-glow"><Play size={14} className="ml-0.5 text-white" fill="currentColor" /></span>
                             </div>
                             {inProgress && (
-                              <div className="absolute bottom-0 left-0 h-0.5 bg-[#e50914]" style={{ width: `${pct}%` }} />
+                              <div className="absolute bottom-0 left-0 h-1 bg-accent-gradient" style={{ width: `${pct}%` }} />
                             )}
                           </div>
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2">
-                              <span className={`text-sm font-medium ${watched ? "text-green-400" : "text-white"}`}>Episode {epNum}</span>
+                              <span className={`text-sm font-semibold ${watched ? "text-ink-3" : "text-white"}`}>Episode {epNum}</span>
                               {ep.filler ? (
                                 <span className="rounded bg-yellow-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-yellow-400/90">Filler</span>
                               ) : null}
-                              {watched ? <Check size={13} className="text-green-400" /> : null}
+                              {watched ? <Check size={14} className="text-emerald-400" /> : null}
                             </div>
-                            <div className="text-xs text-white/40">
+                            <div className="text-xs text-ink-3">
                               {watched ? "Watched" : inProgress ? `${Math.round(pct)}% watched` : "Not watched"}
                             </div>
                           </div>
@@ -471,10 +470,10 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
                                 : st === "failed" ? "Failed — tap to retry"
                                 : "Download episode"
                               }
-                              className={`flex h-8 items-center gap-1.5 rounded-md px-3 text-xs font-medium transition ${
-                                st === "done" ? "text-green-400"
-                                : st === "failed" ? "bg-red-500/10 text-red-400 hover:bg-red-500/20"
-                                : "bg-white/5 text-white/70 hover:bg-white/15 hover:text-white"
+                              className={`flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold transition ${
+                                st === "done" ? "bg-emerald-400/10 text-emerald-300"
+                                : st === "failed" ? "border border-red-400/20 bg-red-500/10 text-red-300 hover:bg-red-500/20"
+                                : "border border-white/[0.08] bg-white/[0.05] text-ink-2 hover:bg-white/[0.1] hover:text-white"
                               }`}
                             >
                               {st === "done" ? <><Check size={13} /> Saved</>
@@ -487,7 +486,7 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
                               <button
                                 onClick={(e) => { e.stopPropagation(); removeDownload(`${animeId}:${epNum}`); }}
                                 title="Delete download"
-                                className="flex h-8 w-8 items-center justify-center rounded-md text-white/40 hover:bg-white/10 hover:text-red-400 transition"
+                                className="flex h-8 w-8 items-center justify-center rounded-lg text-ink-3 transition hover:bg-red-500/10 hover:text-red-300"
                               >
                                 <Trash2 size={14} />
                               </button>
@@ -500,19 +499,19 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
                 </div>
 
                 {lastPage > 1 && (
-                  <div className="mt-4 flex items-center gap-2">
+                  <div className="mt-4 flex items-center justify-center gap-1.5">
                     <button
                       onClick={() => setPage((p) => Math.max(1, p - 1))}
                       disabled={page === 1}
-                      className="flex items-center gap-1 rounded px-2 py-1 text-xs text-white/50 hover:bg-white/10 hover:text-white disabled:opacity-30 transition"
+                      className="btn btn-ghost btn-sm disabled:opacity-30"
                     >
                       <ChevronLeft size={13} /> Prev
                     </button>
-                    <span className="text-xs text-white/40">Page {page} / {lastPage}</span>
+                    <span className="flex h-8 items-center rounded-lg bg-white/[0.06] px-3 text-xs font-semibold tabular-nums text-ink-2">Page {page} / {lastPage}</span>
                     <button
                       onClick={() => setPage((p) => Math.min(lastPage, p + 1))}
                       disabled={page === lastPage}
-                      className="flex items-center gap-1 rounded px-2 py-1 text-xs text-white/50 hover:bg-white/10 hover:text-white disabled:opacity-30 transition"
+                      className="btn btn-ghost btn-sm disabled:opacity-30"
                     >
                       Next <ChevronRight size={13} />
                     </button>
@@ -527,8 +526,8 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
   }
 
   return (
-    <div className="rounded-lg border border-white/10 bg-bg-card p-4">
-      <div className="mb-3 flex items-center gap-2">
+    <div className="panel p-4">
+      <div className="mb-3 flex items-center gap-2.5">
         {(selected?.providerId ?? "") === "animepahe" && (
           <img
             src={`${paheBaseUrl}/favicon.ico`}
@@ -537,7 +536,7 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
             onError={(e) => (e.currentTarget.style.display = "none")}
           />
         )}
-        <span className="text-sm font-semibold">
+        <span className="text-sm font-bold">
           Stream via {selected
             ? getProviderName(selected.providerId ?? "animepahe")
             : (providerDescriptors.map((provider) => provider.name).join("/") || "streaming providers")}
@@ -545,32 +544,32 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
       </div>
 
       {error && (
-        <div className="mb-3 rounded bg-red-500/10 px-3 py-2 text-xs text-red-400">{error}</div>
+        <div className="mb-3 rounded-xl border border-red-400/20 bg-red-500/10 px-3 py-2 text-xs text-red-300">{error}</div>
       )}
 
       {!selected && (
         <div>
           {searching ? (
-            <div className="flex items-center gap-2 text-xs text-muted">
-              <Loader2 size={12} className="animate-spin" /> Searching providers...
+            <div className="flex items-center gap-2 text-xs text-ink-3">
+              <Loader2 size={12} className="animate-spin text-accent" /> Searching providers...
             </div>
           ) : results.length === 0 ? (
-            <div className="text-xs text-muted">No results found on the available providers.</div>
+            <div className="text-xs text-ink-3">No results found on the available providers.</div>
           ) : (
             <div className="space-y-1">
-              <div className="mb-1 text-xs text-muted">Select the correct title:</div>
+              <div className="mb-2 text-xs font-semibold text-ink-2">Select the correct title:</div>
               {results.map((r) => (
                 <button
                   key={r.id ?? r.session}
                   onClick={() => setSelected(r)}
-                  className="flex w-full items-center gap-2 rounded-md bg-bg-elev px-3 py-2 text-left text-sm hover:bg-white/10"
+                  className="flex w-full items-center gap-3 rounded-xl border border-white/[0.06] bg-white/[0.03] px-3 py-2 text-left text-sm transition hover:border-accent/30 hover:bg-white/[0.07]"
                 >
                   {r.poster && (
-                    <img src={r.poster} className="h-8 w-6 rounded object-cover" alt="" loading="lazy" decoding="async" />
+                    <img src={r.poster} className="h-10 w-7 rounded-md object-cover ring-1 ring-white/10" alt="" loading="lazy" decoding="async" />
                   )}
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-xs font-medium">{r.title}</div>
-                    <div className="text-xs text-muted">{getProviderName(r.providerId ?? "animepahe")} · {r.year || '?'} · {r.episodes || '?'} eps</div>
+                    <div className="truncate text-xs font-semibold">{r.title}</div>
+                    <div className="text-xs text-ink-3">{getProviderName(r.providerId ?? "animepahe")} · {r.year || '?'} · {r.episodes || '?'} eps</div>
                   </div>
                 </button>
               ))}
@@ -583,20 +582,20 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
         <div>
           {selected.title !== animeTitle && (
             <div className="mb-2 flex items-center justify-between">
-              <span className="text-xs text-muted truncate">{selected.title}</span>
-              <button onClick={() => { setSelected(null); setEpisodes([]); }} className="text-xs text-muted hover:text-white">Change</button>
+              <span className="truncate text-xs text-ink-2">{selected.title}</span>
+              <button onClick={() => { setSelected(null); setEpisodes([]); }} className="btn btn-ghost btn-sm">Change</button>
             </div>
           )}
           {results.some(r => (r.providerId ?? "animepahe") !== (selected.providerId ?? "animepahe")) && (
             <div className="mb-2 flex items-center justify-between">
-              <span className="text-xs text-muted">Source:</span>
+              <span className="text-xs text-ink-3">Source</span>
               <select 
                 value={selected.providerId ?? "animepahe"}
                 onChange={e => {
                   const chosen = results.find(r => (r.providerId ?? "animepahe") === e.target.value);
                   if (chosen) setSelected(chosen);
                 }}
-                className="bg-bg-elev text-xs text-muted border border-white/10 rounded px-2 py-1 outline-none"
+                className="input h-8 w-auto cursor-pointer rounded-lg px-2.5 text-xs [&>option]:bg-surface-2"
               >
                 {getResultProviderIds().map(pid => (
                   <option key={pid} value={pid}>
@@ -608,14 +607,14 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
           )}
 
           {loadingEps ? (
-            <div className="flex items-center gap-2 text-xs text-muted py-2">
-              <Loader2 size={12} className="animate-spin" /> Loading episodes...
+            <div className="flex items-center gap-2 py-2 text-xs text-ink-3">
+              <Loader2 size={12} className="animate-spin text-accent" /> Loading episodes...
             </div>
           ) : (
             <>
               <button
                 onClick={() => openStreamPlayer()}
-                className="mb-2 flex w-full items-center justify-center gap-2 rounded-md bg-white px-3 py-2 text-sm font-semibold text-black hover:bg-white/80 transition"
+                className="btn btn-primary mb-3 w-full"
               >
                 <Play size={14} fill="currentColor" /> Open Player
               </button>
@@ -624,7 +623,7 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
                   <button
                     key={ep.id ?? ep.session}
                     onClick={() => openStreamPlayer(ep)}
-                    className="flex h-10 items-center justify-center rounded bg-bg-elev text-xs font-medium hover:bg-[#e50914]/30 hover:text-white transition"
+                    className="flex h-10 items-center justify-center rounded-lg border border-white/[0.06] bg-white/[0.04] text-xs font-semibold tabular-nums text-ink-2 transition hover:border-accent/40 hover:bg-accent/15 hover:text-white"
                   >
                     <Play size={9} className="mr-0.5 opacity-50" fill="currentColor" />
                     {ep.episodeNumber ?? ep.episode}
@@ -637,14 +636,14 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
                   <button
                     onClick={() => setPage((p) => Math.max(1, p - 1))}
                     disabled={page === 1}
-                    className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted hover:text-white disabled:opacity-30"
+                    className="btn btn-ghost btn-sm disabled:opacity-30"
                   >
                     <ChevronLeft size={12} /> Prev
                   </button>
                   <button
                     onClick={() => setPage((p) => Math.min(lastPage, p + 1))}
                     disabled={page === lastPage}
-                    className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted hover:text-white disabled:opacity-30"
+                    className="btn btn-ghost btn-sm disabled:opacity-30"
                   >
                     Next <ChevronRight size={12} />
                   </button>

@@ -12,6 +12,7 @@ import androidx.compose.material.icons.rounded.DownloadForOffline
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -177,6 +178,7 @@ internal fun DownloadItemRow(
     actionIcon: androidx.compose.ui.graphics.vector.ImageVector,
     onAction: () -> Unit,
     onDelete: () -> Unit,
+    onRetry: (() -> Unit)? = null,
 ) {
     Row(
         Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
@@ -217,7 +219,7 @@ internal fun DownloadItemRow(
                 progress = { progress.coerceIn(0f, 1f) },
                 modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = AniColors.Accent, trackColor = AniColors.SurfaceHighest,
             )
-            ItemState.Failed -> {}
+            ItemState.Failed -> if (onRetry != null) PillButton("Retry", onRetry, icon = Icons.Rounded.Refresh, compact = true)
         }
         IconButton(onClick = onDelete) {
             Icon(Icons.Rounded.DeleteOutline, "Delete", tint = AniColors.TextTertiary, modifier = Modifier.size(20.dp))

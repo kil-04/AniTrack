@@ -54,6 +54,7 @@ export class MkissaProvider implements StreamProvider {
   readonly capabilities = {
     externalIds: true,
     downloads: false,
+    prefetch: false,
     streamVariants: "server" as const,
     episodePageSize: EPISODE_PAGE_SIZE,
   };
@@ -150,11 +151,11 @@ export class MkissaProvider implements StreamProvider {
 
   async resolveStream(linkId: string): Promise<StreamData> {
     const token = decodeLinkToken(linkId);
-    const sources = await this.client.getEpisodeSources(token.showId, token.episode, token.audio);
+    const sources = await this.client.getEpisodeSources(token.showId, token.episode, token.audio, { fresh: true });
     const matchingIndex = sources
       .map((source, index) => ({ source, index }))
       .filter(({ source }) => serverKey(source) === token.server)[token.occurrence]?.index ?? -1;
-    const selectedIndex = matchingIndex >= 0 ? matchingIndex : Math.min(token.index, sources.length - 1);
+    const selectedIndex = matchingIndex;
     if (selectedIndex < 0) {
       throw new MkissaProviderError("MKissa server is no longer available", "INVALID_RESPONSE");
     }
