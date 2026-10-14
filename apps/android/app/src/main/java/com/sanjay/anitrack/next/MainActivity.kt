@@ -251,7 +251,7 @@ fun AppShell() {
                         com.sanjay.anitrack.next.ui.NavSearchBox(
                             modifier = Modifier.widthIn(max = 340.dp).fillMaxWidth(),
                             onOpen = openDetail,
-                            onViewAll = { q -> if (manga) go("manga-search?q=${android.net.Uri.encode(q)}") else go("search") },
+                            onViewAll = { q -> go("${if (manga) "manga-search" else "search"}?q=${android.net.Uri.encode(q)}") },
                             manga = manga,
                             onOpenManga = openManga,
                         )
@@ -329,7 +329,11 @@ fun AppShell() {
                     composable("reader") {
                         com.sanjay.anitrack.next.ui.MangaReaderScreen(onBack = { nav.popBackStack() })
                     }
-                    composable("search") { com.sanjay.anitrack.next.ui.SearchScreen(openDetail) }
+                    composable("search?q={q}", arguments = listOf(navArgument("q") { defaultValue = "" })) { entry ->
+                        // "View all results" from the top bar: a fresh search for that text.
+                        val q = entry.arguments?.getString("q").orEmpty()
+                        androidx.compose.runtime.key(q) { com.sanjay.anitrack.next.ui.SearchScreen(openDetail, initialQuery = q) }
+                    }
                     composable("time-machine") {
                         com.sanjay.anitrack.next.ui.TimeMachineScreen(
                             openDetail,

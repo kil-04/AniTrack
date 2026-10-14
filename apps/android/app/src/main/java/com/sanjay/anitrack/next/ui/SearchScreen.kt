@@ -41,8 +41,8 @@ private val SOURCES = mapOf("Select source" to null, "Original" to "ORIGINAL", "
 private val EP_RANGES = mapOf("Episode range" to null, "1–12" to (1 to 12), "13–26" to (13 to 26), "27–52" to (27 to 52), "53+" to (53 to null))
 
 @Composable
-fun SearchScreen(onOpen: (Anime) -> Unit) {
-    var query by remember { mutableStateOf("") }
+fun SearchScreen(onOpen: (Anime) -> Unit, initialQuery: String = "") {
+    var query by remember { mutableStateOf(initialQuery) }
     var genre by remember { mutableStateOf<String?>(null) }
     var year by remember { mutableStateOf<Int?>(null) }
     var season by remember { mutableStateOf<String?>(null) }
@@ -63,8 +63,11 @@ fun SearchScreen(onOpen: (Anime) -> Unit) {
     LaunchedEffect(reload, page) {
         searching = true
         runCatching {
+            // A typed title ranks by match, as in the top-bar dropdown; "Trending" first
+            // could bury the show itself. A sort picked by hand still applies.
+            val ranking = if (query.isNotBlank() && sort == "TRENDING_DESC") "SEARCH_MATCH" else sort
             val (r, hn) = AniList.advancedSearch(
-                query, genre, year, season, format, status, sort, page,
+                query, genre, year, season, format, status, ranking, page,
                 source = source, epMin = epRange?.first, epMax = epRange?.second,
             )
             results = r; hasNext = hn

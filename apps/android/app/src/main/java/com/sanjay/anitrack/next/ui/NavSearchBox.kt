@@ -108,6 +108,13 @@ fun NavSearchBox(
                 )
             },
             singleLine = true,
+            // The keyboard's Search key shows all results, like "View all results" (which
+            // sits below the previews and can be hidden by the mini player).
+            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
+            keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = {
+                val q = query.trim()
+                if (q.isNotEmpty()) { leave(); onViewAll(q) }
+            }),
             shape = RoundedCornerShape(50),   // pill, like the desktop header
             leadingIcon = { Icon(Icons.Rounded.Search, null, tint = AniColors.TextTertiary) },
             // No trailing slot while empty, so the placeholder gets the full width.
