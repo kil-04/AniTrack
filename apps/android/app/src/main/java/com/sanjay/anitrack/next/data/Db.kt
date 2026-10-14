@@ -14,7 +14,7 @@ object Db {
 
     fun init(ctx: Context) {
         if (::helper.isInitialized) return
-        helper = object : SQLiteOpenHelper(ctx.applicationContext, "anitrack_next.db", null, 8) {
+        helper = object : SQLiteOpenHelper(ctx.applicationContext, "anitrack_next.db", null, 9) {
             override fun onCreate(db: SQLiteDatabase) {
                 db.execSQL(
                     """CREATE TABLE IF NOT EXISTS playback(
@@ -34,6 +34,7 @@ object Db {
                 createMalOutbox(db)
                 createReadingTable(db)
                 createMangaListTable(db)
+                createMalProgress(db)
             }
             override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) {
                 if (old < 2) createListTable(db)
@@ -49,6 +50,7 @@ object Db {
                 }
                 if (old < 7) createReadingTable(db)
                 if (old < 8) createMangaListTable(db)
+                if (old < 9) createMalProgress(db)
             }
         }
     }
@@ -95,6 +97,20 @@ object Db {
                 source_id   TEXT    NOT NULL,
                 updated_at  INTEGER NOT NULL,
                 PRIMARY KEY(manga_id, chapter)
+            )""",
+        )
+    }
+
+    /** Furthest episode watched per show, waiting to raise MAL's count (MAL is checked first; never lowered). */
+    private fun createMalProgress(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS mal_progress(
+                anime_id   INTEGER PRIMARY KEY,
+                mal_id     INTEGER NOT NULL,
+                episode    INTEGER NOT NULL,
+                title      TEXT,
+                cover      TEXT,
+                created_at INTEGER NOT NULL
             )""",
         )
     }
@@ -362,7 +378,59 @@ object Db {
     }
 
     fun clearMalOutbox() {
-        if (::helper.isInitialized) helper.writableDatabase.delete("mal_outbox", null, null)
+        if (!::helper.isInitialized) return
+        helper.writableDatabase.delete("mal_outbox", null, null)
+        helper.writableDatabase.delete("mal_progress", null, null)
+    }
+
+    data class MalProgress(val animeId: Int, val malId: Int, val episode: Int, val title: String, val cover: String?)
+
+    /** Queues [episode] for MAL, keeping the furthest one already queued for this show. */
+    suspend fun queueMalProgress(animeId: Int, malId: Int, episode: Int, title: String, cover: String?) = withContext(Dispatchers.IO) {
+        // No UPSERT: minSdk 26 ships SQLite 3.18.
+        val db = helper.writableDatabase
+        db.beginTransaction()
+        try {
+            val queued = db.rawQuery("SELECT episode FROM mal_progress WHERE anime_id=?", arrayOf(animeId.toString()))
+                .use { c -> if (c.moveToFirst()) c.getInt(0) else null }
+            val values = ContentValues().apply {
+                put("anime_id", animeId); put("mal_id", malId); put("episode", maxOf(episode, queued ?: 0))
+                put("title", title); put("cover", cover); put("created_at", System.currentTimeMillis())
+            }
+            db.insertWithOnConflict("mal_progress", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    suspend fun pendingMalProgress(): List<MalProgress> = withContext(Dispatchers.IO) {
+        val out = mutableListOf<MalProgress>()
+        helper.readableDatabase.rawQuery(
+            "SELECT anime_id, mal_id, episode, title, cover FROM mal_progress ORDER BY created_at", null,
+        ).use { c ->
+            while (c.moveToNext()) out += MalProgress(c.getInt(0), c.getInt(1), c.getInt(2), c.getString(3) ?: "Unknown", c.getString(4))
+        }
+        out
+    }
+
+    /** Done with [episode]; a later, further episode queued meanwhile stays. */
+    suspend fun ackMalProgress(animeId: Int, episode: Int) = withContext(Dispatchers.IO) {
+        helper.writableDatabase.delete("mal_progress", "anime_id=? AND episode=?", arrayOf(animeId.toString(), episode.toString()))
+    }
+
+    /** The show's MAL id from the list, when known. */
+    suspend fun malIdOf(animeId: Int): Int? = withContext(Dispatchers.IO) {
+        helper.readableDatabase.rawQuery("SELECT mal_id FROM list_entry WHERE anime_id=?", arrayOf(animeId.toString()))
+            .use { c -> if (c.moveToFirst() && !c.isNull(0)) c.getInt(0) else null }
+    }
+
+    /** How far through [episode] the saved position is (0..1), or null when never played. */
+    suspend fun watchedFraction(animeId: Int, episode: Float): Double? = withContext(Dispatchers.IO) {
+        helper.readableDatabase.rawQuery(
+            "SELECT position_sec, duration_sec FROM playback WHERE anime_id=? AND episode=?",
+            arrayOf(animeId.toString(), episode.toString()),
+        ).use { c -> if (c.moveToFirst() && c.getDouble(1) > 0) c.getDouble(0) / c.getDouble(1) else null }
     }
 
     suspend fun listStatusOf(animeId: Int): String? = withContext(Dispatchers.IO) {

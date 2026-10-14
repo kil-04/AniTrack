@@ -3,6 +3,7 @@ package com.sanjay.anitrack.next.ui
 import androidx.media3.exoplayer.ExoPlayer
 import com.sanjay.anitrack.next.data.Db
 import com.sanjay.anitrack.next.data.GistSync
+import com.sanjay.anitrack.next.data.Mal
 import com.sanjay.anitrack.next.data.PlaySession
 
 internal fun formatPlayerTime(milliseconds: Long): String {
@@ -35,6 +36,8 @@ private suspend fun savePlayerProgress(index: Int, positionMs: Long, durationMs:
     val resumeKey = PlaySession.resumeKey()
     val positionSeconds = positionMs / 1000.0
     val durationSeconds = durationMs / 1000.0
+    // Read before saving, to spot the first time this episode passes "watched".
+    val before = Db.watchedFraction(PlaySession.animeId, episode) ?: 0.0
 
     Db.save(
         PlaySession.animeId,
@@ -60,4 +63,12 @@ private suspend fun savePlayerProgress(index: Int, positionMs: Long, durationMs:
             updatedAt,
         ),
     )
+    // Watched through (85%, as on desktop): raise MAL's episode count. Mal decides
+    // against MAL's own entry, so a completed show or a further count is left alone.
+    if (before < WATCHED_FRACTION && positionSeconds / durationSeconds >= WATCHED_FRACTION) {
+        Mal.episodeWatched(PlaySession.animeId, PlaySession.anime?.malId, episode, PlaySession.animeTitle, PlaySession.animeCover)
+    }
 }
+
+/** Watched through, as on desktop. */
+internal const val WATCHED_FRACTION = 0.85

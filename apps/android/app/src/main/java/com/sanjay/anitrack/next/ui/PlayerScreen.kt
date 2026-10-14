@@ -536,11 +536,18 @@ fun PlayerScreen(
                 Thread {
                     kotlinx.coroutines.runBlocking {
                         val now = System.currentTimeMillis()
+                        val before = com.sanjay.anitrack.next.data.Db.watchedFraction(PlaySession.animeId, epNum) ?: 0.0
                         com.sanjay.anitrack.next.data.Db.save(
                             PlaySession.animeId, epNum, posMs / 1000.0, dur / 1000.0,
                             PlaySession.animeTitle, PlaySession.animeCover, key,
                             providerId = PlaySession.provider, updatedAt = now,
                         )
+                        // Left right after passing "watched": the periodic save may not have seen it.
+                        if (before < WATCHED_FRACTION && posMs.toDouble() / dur >= WATCHED_FRACTION) {
+                            com.sanjay.anitrack.next.data.Mal.episodeWatched(
+                                PlaySession.animeId, PlaySession.anime?.malId, epNum, PlaySession.animeTitle, PlaySession.animeCover,
+                            )
+                        }
                         // With the progress saved: clear what's watched, fetch what's next.
                         com.sanjay.anitrack.next.data.SmartDownloads.kick(context, force = true)
                         com.sanjay.anitrack.next.data.GistSync.pushProgress(

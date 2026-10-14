@@ -148,6 +148,11 @@ internal fun EpisodesSection(
             )
             watched = com.sanjay.anitrack.next.data.Db.positionsFor(anime.id)
             lastWatched = com.sanjay.anitrack.next.data.Db.lastWatchedEpisode(anime.id)
+            // Marked watched by hand: MAL's count may rise to the furthest one. Marking
+            // unwatched never lowers it.
+            if (isWatched) episodes.maxOrNull()?.let { furthest ->
+                com.sanjay.anitrack.next.data.Mal.episodeWatched(anime.id, anime.malId, furthest, anime.title, anime.cover)
+            }
         }
     }
 

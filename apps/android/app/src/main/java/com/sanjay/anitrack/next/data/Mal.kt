@@ -247,7 +247,60 @@ object Mal {
             if (!delivered) return@withLock false
             Db.ackMalOp(op.animeId, op.opId)
         }
+        // Watched episodes go after explicit status changes, each decided against
+        // MAL's entry as it is now: the count never drops, completed stays completed.
+        for (progress in Db.pendingMalProgress()) {
+            if (Db.listStatusOf(progress.animeId) != "completed") {
+                val remote = myListStatus(progress.malId) ?: return@withLock false
+                val current = remote.status?.let { WatchProgress.Entry(it, remote.episodesWatched) }
+                val next = WatchProgress.after(current, progress.episode, remote.totalEpisodes)
+                if (next != null && (next.status != remote.status || next.episodesWatched != remote.episodesWatched)) {
+                    if (!pushStatus(progress.malId, next.status, next.episodesWatched)) return@withLock false
+                    if (next.status != Db.listStatusOf(progress.animeId)) {
+                        Db.setListStatus(progress.animeId, next.status, progress.title, progress.cover, malId = progress.malId)
+                    }
+                }
+            }
+            Db.ackMalProgress(progress.animeId, progress.episode)
+        }
         true
+    }
+
+    private data class MyListStatus(val status: String?, val episodesWatched: Int, val totalEpisodes: Int?)
+
+    /** This account's MAL entry for [malId] (status null: not on the list), or null when MAL could not be read. */
+    private suspend fun myListStatus(malId: Int): MyListStatus? {
+        val token = accessToken() ?: return null
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                http.newCall(
+                    Request.Builder().url("$API_BASE/anime/$malId?fields=num_episodes,my_list_status")
+                        .header("Authorization", "Bearer $token").build(),
+                ).execute().use { res ->
+                    if (!res.isSuccessful) return@use null
+                    val json = JSONObject(res.body?.string() ?: return@use null)
+                    val list = json.optJSONObject("my_list_status")
+                    MyListStatus(
+                        list?.optString("status")?.takeIf { it in Db.STATUSES },
+                        list?.optInt("num_episodes_watched", 0) ?: 0,
+                        json.optInt("num_episodes", 0).takeIf { it > 0 },
+                    )
+                }
+            }.getOrNull()
+        }
+    }
+
+    /**
+     * An episode was watched through: queue it so MAL's episode count can rise.
+     * Nothing is sent for a completed show (rewatching keeps it completed), and
+     * an earlier episode never lowers the count; MAL is checked before each upload.
+     */
+    suspend fun episodeWatched(animeId: Int, malId: Int?, episode: Float, title: String, cover: String?) {
+        if (!isConnected || episode < 1f || episode % 1f != 0f) return // MAL counts whole episodes.
+        val id = (malId ?: Db.malIdOf(animeId))?.takeIf { it > 0 } ?: return
+        if (Db.listStatusOf(animeId) == "completed") return
+        Db.queueMalProgress(animeId, id, episode.toInt(), title, cover)
+        requestFlush()
     }
 
     fun requestFlush() {
