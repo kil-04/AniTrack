@@ -9,6 +9,7 @@ import { BrowserWindow } from "electron";
 import { SimpleStore } from "./store";
 import { getListEntry, runInTransaction, setListEntry, upsertAnime } from "./db";
 import type { WatchStatus } from "../../../../packages/shared/types";
+import { entryAfterEpisode } from "../../../../packages/shared/watch-progress";
 
 const AUTH_BASE    = "https://anilist.co/api/v2/oauth";
 const REDIRECT_URI = "http://localhost";
@@ -260,16 +261,18 @@ export async function pullList(onProgress?: (n: number) => void): Promise<{ impo
 export async function alMarkEpisodeWatched(anilistId: number, episode: number): Promise<void> {
   if (!getToken() || anilistId <= 0 || anilistId >= 1_000_000_000) return;
   try {
-    // Don't override a "dropped" status — user explicitly stopped watching.
+    // Don't override a "dropped" status (the user explicitly stopped watching), and
+    // leave a completed show completed while it is rewatched: nothing is sent.
     const existing = getListEntry(anilistId);
-    if (existing?.status === "dropped") return;
-    // We push "watching" with the episode count. AniList figures out
-    // completion automatically when progress === total episodes.
+    const next = entryAfterEpisode(existing, episode, null);
+    if (!next || next.status === "dropped") return;
+    // We push "watching" with the furthest episode, never a lower one. AniList
+    // figures out completion automatically when progress === total episodes.
     // Only send the start date on the FIRST episode — otherwise every mark would
     // overwrite AniList's "started" date with today's.
     const isStart = !existing || (existing.episodesWatched ?? 0) === 0;
     const today = new Date().toISOString().slice(0, 10);
-    await pushEntry(anilistId, "watching", episode, undefined, isStart ? today : undefined);
+    await pushEntry(anilistId, "watching", next.episodesWatched, undefined, isStart ? today : undefined);
   } catch (e) {
     console.warn("[al] markEpisodeWatched failed", e);
   }

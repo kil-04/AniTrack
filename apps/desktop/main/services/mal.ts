@@ -20,6 +20,7 @@ import {
 import { getByMalId } from "./anilist";
 import { getRuntimeConfig } from "./remote-config";
 import type { MalAuthState, WatchStatus } from "../../../../packages/shared/types";
+import { entryAfterEpisode } from "../../../../packages/shared/watch-progress";
 
 // Default public MAL client (no secret needed — registered as "other" app type).
 // Users can override with their own via Settings if this one is rate-limited or revoked.
@@ -405,14 +406,11 @@ export async function markEpisodeWatched(animeId: number, episode: number) {
   const anime = getAnime(animeId);
   if (!anime) return;
   const existing = getListEntry(animeId);
-  const totalEps = anime.episodes ?? Infinity;
-  const newEps = Math.max(episode, existing?.episodesWatched ?? 0);
-  // Compute new status, but respect explicit user choices:
-  // - "dropped" stays dropped (user explicitly stopped — don't reactivate)
-  // - completed series stays completed
-  const computed: WatchStatus = newEps >= totalEps ? "completed" : "watching";
-  const status: WatchStatus =
-    existing?.status === "dropped" ? "dropped" : computed;
+  // Respects explicit choices: a completed show stays completed while you rewatch
+  // it (nothing changes or is sent), and a dropped one stays dropped.
+  const next = entryAfterEpisode(existing, episode, anime.episodes);
+  if (!next) return;
+  const { status, episodesWatched: newEps } = next;
 
   // Detect start / finish transitions so we can send dates to MAL.
   const wasUnstarted = !existing || existing.status === "plan_to_watch";
