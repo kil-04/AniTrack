@@ -2,7 +2,6 @@ import React, { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { Play } from "lucide-react";
-import { motion } from "framer-motion";
 import type { RecentEpisode } from "../../../../packages/shared/types";
 import { rejectOversizedImage, safeImageSrc } from "../lib/image-guard";
 
@@ -13,7 +12,8 @@ function airedLabel(airingAt: number): string {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-const LatestEpCard = React.memo(function LatestEpCard({ ep }: { ep: RecentEpisode }) {
+/** A recently aired episode: banner, EP badge, title and air date. [className] sizes it (rows give it a fixed width). */
+const LatestEpCard = React.memo(function LatestEpCard({ ep, className = "w-full" }: { ep: RecentEpisode; className?: string }) {
   const anime = ep.anime;
   const image = safeImageSrc(anime.bannerImage, anime.coverImage);
   const [isHovered, setIsHovered] = useState(false);
@@ -52,12 +52,7 @@ const LatestEpCard = React.memo(function LatestEpCard({ ep }: { ep: RecentEpisod
 
   return (
     <>
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95, y: 10 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        transition={{ duration: 0.4, ease: "easeOut" }}
-        className="w-full h-full"
-      >
+      <div className={className}>
         <Link
           to={`/anime/${anime.id}`}
           ref={cardRef}
@@ -82,7 +77,7 @@ const LatestEpCard = React.memo(function LatestEpCard({ ep }: { ep: RecentEpisod
             </div>
           </div>
         </Link>
-      </motion.div>
+      </div>
       {tooltipPortal}
     </>
   );

@@ -36,6 +36,13 @@ interface AppState {
 let latestRequestId = 0;
 let recommendationRequestId = 0;
 
+let markHomeFeedSettled: () => void = () => {};
+/**
+ * Settles once Home's own rows (trending hero, Latest Episodes) have loaded or
+ * failed: the slower discover rows wait for it so they never queue ahead.
+ */
+export const homeFeedSettled = new Promise<void>((resolve) => { markHomeFeedSettled = resolve; });
+
 type LocalListItem = { entry: ListEntry; anime: AnimeMeta | null };
 type HomeSnapshot = {
   savedAt: number;
@@ -161,6 +168,7 @@ export const useAppStore = create<AppState>((set) => ({
       persistHomeSnapshot();
     });
     const latestPromise = loadLatest(set, 1);
+    void Promise.allSettled([trendingPromise, latestPromise]).then(() => markHomeFeedSettled());
     // Two-way gist sync runs in the BACKGROUND — the UI paints from local data
     // immediately instead of waiting on a GitHub round-trip. If the pull
     // brought anything new, Continue Watching refreshes itself afterwards.

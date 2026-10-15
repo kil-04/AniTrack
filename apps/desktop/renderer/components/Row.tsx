@@ -2,7 +2,8 @@ import React, { useRef } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
 interface Props {
-  title: string;
+  /** Omitted when the caller puts its own header above the row. */
+  title?: string;
   children: React.ReactNode;
 }
 
@@ -14,7 +15,7 @@ const Row = React.memo(function Row({ title, children }: Props) {
   };
   return (
     <section className="group/row mb-10">
-      <h2 className="section-title mb-3 px-8">{title}</h2>
+      {title && <h2 className="section-title mb-3 px-8">{title}</h2>}
       <div className="relative">
         <button
           onClick={() => scroll(-1)}

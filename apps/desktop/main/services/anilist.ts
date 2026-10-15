@@ -140,6 +140,20 @@ function rankByRelevance(query: string, media: MediaNode[]): MediaNode[] {
 const gqlHigh: Array<() => Promise<void>> = [];
 const gqlLow: Array<() => Promise<void>> = [];
 const gqlPending = new Map<string, Promise<unknown>>();
+/** Low-lane jobs not started yet, by request key (see promote()). */
+const gqlQueuedLow = new Map<string, () => Promise<void>>();
+
+/** A user now wants a request that is waiting in the low lane: move it to the front lane. */
+function promote(key: string) {
+  const job = gqlQueuedLow.get(key);
+  if (!job) return;
+  gqlQueuedLow.delete(key);
+  const index = gqlLow.indexOf(job);
+  if (index >= 0) {
+    gqlLow.splice(index, 1);
+    gqlHigh.push(job);
+  }
+}
 let gqlPumping = false;
 let isStartup = true;
 setTimeout(() => { isStartup = false; }, 6000); // 6 seconds for initial app bootup
@@ -169,10 +183,14 @@ export async function gql<T>(
 ): Promise<T> {
   const key = JSON.stringify({ query, variables });
   const pending = gqlPending.get(key);
-  if (pending) return pending as Promise<T>;
+  if (pending) {
+    if (priority === "high") promote(key);
+    return pending as Promise<T>;
+  }
 
   const request = new Promise<T>((resolve, reject) => {
     const job = async () => {
+      gqlQueuedLow.delete(key);
       try {
         const result = await _doGql<T>(query, variables);
         resolve(result);
@@ -180,7 +198,12 @@ export async function gql<T>(
         reject(err);
       }
     };
-    (priority === "high" ? gqlHigh : gqlLow).push(job);
+    if (priority === "high") {
+      gqlHigh.push(job);
+    } else {
+      gqlLow.push(job);
+      gqlQueuedLow.set(key, job);
+    }
     void gqlPump();
   });
   gqlPending.set(key, request);
@@ -314,11 +337,14 @@ export async function getAiringFor(
 
 /** Recently aired episodes. This intentionally mirrors the native Android
  * home/latest feed so both apps show the same titles in the same order. */
-export async function recentEpisodes(page = 1): Promise<RecentEpisodesPage> {
+export async function recentEpisodes(page = 1, priority: "high" | "low" = "high"): Promise<RecentEpisodesPage> {
   const safePage = Number.isInteger(page) && page > 0 ? page : 1;
   const key = `recent:${safePage}`;
   const hit = cacheGet<RecentEpisodesPage>(key);
-  if (hit) return hit;
+  if (hit) {
+    if (priority === "high") warmNextRecent(hit);
+    return hit;
+  }
 
   const data = await gql<{
     Page: {
@@ -340,8 +366,12 @@ export async function recentEpisodes(page = 1): Promise<RecentEpisodesPage> {
         }
       }
     }`,
-    { to: Math.floor(Date.now() / 1000), page: safePage },
-    "low",
+    // Whole minutes: a page asked for again (Next after the background warm-up)
+    // is then the same request, so it joins or jumps ahead of the queued one.
+    { to: Math.floor(Date.now() / 60_000) * 60, page: safePage },
+    // Home's Latest row and the Latest page are what the user is looking at:
+    // they go ahead of the background rows (AniList is serial and often slow).
+    priority,
   );
 
   const seen = new Set<number>();
@@ -360,7 +390,14 @@ export async function recentEpisodes(page = 1): Promise<RecentEpisodesPage> {
     hasNextPage: data.Page.pageInfo.hasNextPage,
   };
   cacheSet(key, result);
+  if (priority === "high") warmNextRecent(result);
   return result;
+}
+
+/** Fetches the page after [shown] in the background, so paging on is instant. */
+function warmNextRecent(shown: RecentEpisodesPage) {
+  if (!shown.hasNextPage || cacheGet(`recent:${shown.page + 1}`)) return;
+  void recentEpisodes(shown.page + 1, "low").catch(() => {});
 }
 
 /** Personalized collaborative recommendations from AniList's recommendation
@@ -596,7 +633,8 @@ export async function trending(): Promise<AnimeMeta[]> {
       }
     }`,
     {},
-    "low",
+    // The Home hero: first thing on screen.
+    "high",
   );
   const result = data.Page.media.map(toAnime);
   cacheSet("trending", result);

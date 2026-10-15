@@ -4,7 +4,7 @@ import { useAppStore } from "../store/useAppStore";
 import Row from "../components/Row";
 import Card from "../components/Card";
 import { Link } from "react-router-dom";
-import { Play, RefreshCw, Clock, X, ChevronLeft, ChevronRight, ChevronsLeft, Flame, Info, Star, Sparkles } from "lucide-react";
+import { Play, RefreshCw, Clock, X, ChevronLeft, ChevronRight, Flame, Info, Star, Sparkles } from "lucide-react";
 import SectionHeader from "../components/SectionHeader";
 import { animeStatusLabel, secondsToTimestamp } from "../lib/format";
 import LatestEpCard from "../components/LatestEpCard";
@@ -21,8 +21,6 @@ export default function Home() {
   const recommendations = useAppStore((s) => s.recommendations);
   const latestEpisodes = useAppStore((s) => s.latestEpisodes);
   const latestLoading = useAppStore((s) => s.latestLoading);
-  const latestPage = useAppStore((s) => s.latestPage);
-  const latestHasNextPage = useAppStore((s) => s.latestHasNextPage);
   const refreshLatest = useAppStore((s) => s.refreshLatest);
   const refreshContinue = useAppStore((s) => s.refreshContinue);
   const refreshAll = useAppStore((s) => s.refreshAll);
@@ -228,8 +226,8 @@ export default function Home() {
   );
 
   const latestCards = useMemo(
-    () => latestEpisodes.map((ep: any) => (
-      <LatestEpCard key={ep.id} ep={ep} />
+    () => latestEpisodes.map((ep) => (
+      <LatestEpCard key={`${ep.anime.id}:${ep.episode}`} ep={ep} className="w-[264px] shrink-0" />
     )),
     [latestEpisodes]
   );
@@ -403,69 +401,37 @@ export default function Home() {
         </section>
       )}
 
-      {/* Latest Episodes */}
-      <section className="mb-12 px-8">
-        <SectionHeader icon={Sparkles} title="Latest Episodes" subtitle="Fresh from the last few days">
+      {/* Latest Episodes: one row, as on the tablet; the full list is on /latest. */}
+      <section>
+        <SectionHeader icon={Sparkles} title="Latest Episodes" subtitle="Fresh from the last few days" to="/latest" className="px-8">
           <button
-            onClick={() => refreshLatest(latestPage)}
+            onClick={() => refreshLatest(1)}
             disabled={latestLoading}
             className="btn btn-ghost btn-sm"
           >
             <RefreshCw size={13} className={latestLoading ? "animate-spin" : ""} />
             Refresh
           </button>
+          <Link to="/latest" className="btn btn-ghost btn-sm">
+            View all
+            <ChevronRight size={13} />
+          </Link>
         </SectionHeader>
 
         {latestLoading && latestEpisodes.length === 0 ? (
-          <div className="grid grid-cols-6 gap-4 xl:grid-cols-6 lg:grid-cols-5 md:grid-cols-4">
-            {Array.from({ length: 12 }, (_, i) => (
-              <div key={i} className="skeleton aspect-video rounded-2xl" />
+          <div className="mb-10 flex gap-4 overflow-hidden px-8 pb-4 pt-2">
+            {Array.from({ length: 6 }, (_, i) => (
+              <div key={i} className="skeleton aspect-video w-[264px] shrink-0 rounded-2xl" />
             ))}
           </div>
         ) : latestEpisodes.length === 0 ? (
-          <div className="panel flex h-32 items-center justify-center gap-2 text-sm text-ink-3">
+          <div className="panel mx-8 mb-10 flex h-32 items-center justify-center gap-2 text-sm text-ink-3">
             No episodes loaded. Try Refresh.
           </div>
         ) : (
-          <>
-            <div className={`grid grid-cols-6 gap-4 xl:grid-cols-6 lg:grid-cols-5 md:grid-cols-4 transition-opacity ${latestLoading ? "opacity-40 pointer-events-none" : ""}`}>
-              {latestCards}
-            </div>
-
-            {(latestPage > 1 || latestHasNextPage) && (
-              <div className="mt-6 flex items-center justify-center gap-1.5">
-                <button
-                  onClick={() => refreshLatest(1)}
-                  disabled={latestPage === 1 || latestLoading}
-                  className="flex h-9 w-9 items-center justify-center rounded-xl text-ink-3 transition hover:bg-white/[0.07] hover:text-white disabled:opacity-30"
-                  title="First page"
-                >
-                  <ChevronsLeft size={14} />
-                </button>
-                <button
-                  onClick={() => refreshLatest(latestPage - 1)}
-                  disabled={latestPage === 1 || latestLoading}
-                  className="flex h-9 w-9 items-center justify-center rounded-xl text-ink-3 transition hover:bg-white/[0.07] hover:text-white disabled:opacity-30"
-                  title="Previous page"
-                >
-                  <ChevronLeft size={14} />
-                </button>
-
-                <span className="flex h-9 min-w-[5.5rem] items-center justify-center rounded-xl bg-accent-gradient px-3 text-xs font-semibold text-white shadow-glow">
-                  Page {latestPage}
-                </span>
-
-                <button
-                  onClick={() => refreshLatest(latestPage + 1)}
-                  disabled={!latestHasNextPage || latestLoading}
-                  className="flex h-9 w-9 items-center justify-center rounded-xl text-ink-3 transition hover:bg-white/[0.07] hover:text-white disabled:opacity-30"
-                  title="Next page"
-                >
-                  <ChevronRight size={14} />
-                </button>
-              </div>
-            )}
-          </>
+          <div className={`transition-opacity ${latestLoading ? "opacity-60" : ""}`}>
+            <Row>{latestCards}</Row>
+          </div>
         )}
       </section>
 
