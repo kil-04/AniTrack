@@ -207,11 +207,8 @@ fun AppShell() {
     // Tablet (or landscape phone) gets the top tab bar; portrait phone a bottom bar.
     val widthDp = LocalConfiguration.current.screenWidthDp
     val wideLayout = widthDp >= 820
-    // Medium widths keep the bar on one line by showing labels only on the current tab
-    // (sooner while the background-music controls are showing, so the search keeps its room).
-    val musicControls = com.sanjay.anitrack.next.data.BackgroundMusic.enabled.value &&
-        com.sanjay.anitrack.next.data.BackgroundMusic.tracks.value.isNotEmpty()
-    val tabLabels = widthDp >= if (musicControls) 1500 else 1100
+    // Medium widths keep the bar on one line by showing labels only on the current tab.
+    val tabLabels = widthDp >= 1100
     val hideChrome = current == "player" || current == "reader"
 
     val go: (String) -> Unit = { r -> nav.navigate(r) { launchSingleTop = true; popUpTo("home") } }
@@ -271,8 +268,6 @@ fun AppShell() {
                             onOpenManga = openManga,
                         )
                     }
-                    com.sanjay.anitrack.next.ui.BackgroundMusicBar(compact = false, onOpenSettings = { go("settings") })
-                    Spacer(Modifier.width(10.dp))
                     MalProfileButton(
                         connected = malConnected,
                         username = malUsername,
@@ -309,8 +304,6 @@ fun AppShell() {
                             maxLines = 1,
                         )
                     }
-                    Spacer(Modifier.width(10.dp))
-                    com.sanjay.anitrack.next.ui.BackgroundMusicBar(compact = true, onOpenSettings = { go("settings") })
                     Spacer(Modifier.width(10.dp))
                     MalProfileButton(
                         connected = malConnected,
@@ -448,6 +441,15 @@ fun AppShell() {
                             onClose = { com.sanjay.anitrack.next.data.PlayerHolder.release() },
                         )
                     }
+                }
+                // Background music floats just under the top bar, beneath the profile button:
+                // the mirror of Home's Anime | Manga switch, so the tabs and search keep their room.
+                if (!hideChrome) {
+                    com.sanjay.anitrack.next.ui.BackgroundMusicBar(
+                        compact = !wideLayout,
+                        onOpenSettings = { go("settings") },
+                        modifier = Modifier.align(Alignment.TopEnd).padding(if (wideLayout) 16.dp else 12.dp),
+                    )
                 }
             }
             // Phones: bottom nav bar (Settings lives behind the profile button).

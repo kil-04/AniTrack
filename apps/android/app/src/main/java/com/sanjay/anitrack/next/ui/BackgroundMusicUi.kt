@@ -288,12 +288,13 @@ internal fun BackgroundMusicCard() {
 }
 
 /**
- * The top bar's music controls: on/off (long-press for Settings), then Previous,
- * Play/Pause, Next and Repeat while it is on. [compact] drops Repeat.
+ * The music controls floating under the top bar, styled like Home's Anime | Manga
+ * switch: a Music segment (on/off; long-press for Settings), then Previous,
+ * Play/Pause, Next and Repeat while it is on. [compact] (phones) drops the label and Repeat.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun BackgroundMusicBar(compact: Boolean, onOpenSettings: () -> Unit) {
+fun BackgroundMusicBar(compact: Boolean, onOpenSettings: () -> Unit, modifier: Modifier = Modifier) {
     val tracks by BackgroundMusic.tracks
     val enabled by BackgroundMusic.enabled
     val paused by BackgroundMusic.paused
@@ -301,33 +302,59 @@ fun BackgroundMusicBar(compact: Boolean, onOpenSettings: () -> Unit) {
     val playing by BackgroundMusic.isPlaying
     if (tracks.isEmpty()) return
     val status = musicStatus()
+    val on = enabled && !paused
+    val shape = RoundedCornerShape(50)
+    val labelColor = if (enabled) Color.White else Color.White.copy(alpha = 0.7f)
     Row(
-        Modifier.height(40.dp).clip(RoundedCornerShape(50))
-            .background(if (enabled) AniColors.AccentSoft else AniColors.SurfaceHigh)
-            .border(1.dp, if (enabled) AniColors.Accent.copy(alpha = 0.35f) else AniColors.BorderSoft, RoundedCornerShape(50))
-            .padding(horizontal = 4.dp),
+        modifier
+            .clip(shape)
+            .background(Color.Black.copy(alpha = 0.62f))
+            .border(1.dp, Color.White.copy(alpha = 0.12f), shape)
+            .padding(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            Modifier.size(32.dp).clip(CircleShape)
-                .combinedClickable(role = Role.Switch, onLongClick = onOpenSettings) { BackgroundMusic.toggle() },
-            contentAlignment = Alignment.Center,
+        Row(
+            Modifier.clip(shape)
+                .then(if (enabled) Modifier.background(AniColors.BrandGradient) else Modifier)
+                .combinedClickable(role = Role.Switch, onLongClick = onOpenSettings) { BackgroundMusic.toggle() }
+                .padding(horizontal = if (compact) 10.dp else 14.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
-                if (enabled && !paused && playing) Icons.Rounded.GraphicEq else Icons.Rounded.MusicNote,
+                if (on && playing) Icons.Rounded.GraphicEq else Icons.Rounded.MusicNote,
                 contentDescription = if (enabled) "Background music on: $status. Tap to turn off." else "Turn background music on",
-                tint = if (enabled) AniColors.Accent else AniColors.TextTertiary,
-                modifier = Modifier.size(18.dp),
+                tint = labelColor,
+                modifier = Modifier.size(17.dp),
             )
-        }
-        if (enabled) {
-            if (compact) {
-                Spacer(Modifier.width(2.dp))
-                Transport(small = true)
-            } else {
-                Transport(small = true)
-                RoundIcon(modeIcon(mode), "Playback order: ${modeLabel(mode)}", 32.dp) { BackgroundMusic.cycleMode() }
+            if (!compact) {
+                Spacer(Modifier.width(7.dp))
+                Text(
+                    "Music",
+                    color = labelColor,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = if (enabled) FontWeight.Bold else FontWeight.Medium,
+                )
             }
         }
+        if (enabled) {
+            Spacer(Modifier.width(2.dp))
+            PillIcon(Icons.Rounded.SkipPrevious, "Previous track") { BackgroundMusic.previous() }
+            PillIcon(if (on) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (on) "Pause music" else "Play music") {
+                BackgroundMusic.togglePlay()
+            }
+            PillIcon(Icons.Rounded.SkipNext, "Next track") { BackgroundMusic.next() }
+            if (!compact) PillIcon(modeIcon(mode), "Playback order: ${modeLabel(mode)}") { BackgroundMusic.cycleMode() }
+        }
+    }
+}
+
+/** A white icon button the height of the Music segment. */
+@Composable
+private fun PillIcon(icon: ImageVector, description: String, onClick: () -> Unit) {
+    Box(
+        Modifier.size(34.dp).clip(CircleShape).clickable(role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, description, tint = Color.White.copy(alpha = 0.9f), modifier = Modifier.size(20.dp))
     }
 }
