@@ -387,10 +387,17 @@ export function getDirtyEntries(): ListEntry[] {
   }));
 }
 
-export function clearDirty(animeId: number) {
-  getDb().run(`UPDATE list_entry SET mal_dirty = 0 WHERE anime_id = ?`, [
-    animeId,
-  ]);
+/**
+ * A dirty entry was sent to MAL, which now has [sent]: the flag clears and the
+ * local copy catches up with MAL. An entry changed while it was being sent keeps
+ * its newer change, still dirty, for the next flush.
+ */
+export function settleDirty(entry: ListEntry, sent: { status: WatchStatus; episodesWatched: number }) {
+  getDb().run(
+    `UPDATE list_entry SET status = ?, episodes_watched = ?, mal_dirty = 0
+     WHERE anime_id = ? AND updated_at = ? AND mal_dirty = 1`,
+    [sent.status, sent.episodesWatched, entry.animeId, entry.updatedAt],
+  );
 }
 
 /** Remove a list entry — used to clean up stub entries after stub→real-id migration. */

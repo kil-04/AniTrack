@@ -9,7 +9,6 @@ import { BrowserWindow } from "electron";
 import crypto from "node:crypto";
 import { SimpleStore } from "./store";
 import {
-  clearDirty,
   getAnime,
   getAnimeByMalId,
   getDirtyEntries,
@@ -17,12 +16,13 @@ import {
   isListEntryDirty,
   realAnimeIdForMal,
   setListEntry,
+  settleDirty,
   upsertAnime,
 } from "./db";
 import { getByMalIds } from "./anilist";
 import { getRuntimeConfig } from "./remote-config";
 import type { MalAuthState, WatchStatus } from "../../../../packages/shared/types";
-import { entryAfterEpisode } from "../../../../packages/shared/watch-progress";
+import { entryAfterEpisode, entryForMal, type WatchedEntry } from "../../../../packages/shared/watch-progress";
 
 // Default public MAL client (no secret needed — registered as "other" app type).
 // Users can override with their own via Settings if this one is rate-limited or revoked.
@@ -394,25 +394,39 @@ export async function pullList(
   return { imported: count };
 }
 
-// Push one entry to MAL.
+// MAL's entry for a show as it is now, or null when it isn't on the list.
+async function malEntry(malId: number): Promise<WatchedEntry | null> {
+  const res = await apiFetch(`/anime/${malId}?fields=my_list_status`);
+  if (!res.ok)
+    throw new Error(`MAL read failed: ${res.status} ${await res.text()}`);
+  const ls = ((await res.json()) as any).my_list_status;
+  if (!ls?.status) return null;
+  return { status: MAL_STATUS_MAP[ls.status] ?? "plan_to_watch", episodesWatched: ls.num_episodes_watched ?? 0 };
+}
+
+// Push one entry to MAL, checked against MAL's entry first (entryForMal): a
+// stale local copy never moves MAL backwards. Returns what MAL now has.
 // startDate / finishDate are ISO date strings ("YYYY-MM-DD"). MAL only stores
 // the date (not time) and accepts them as optional fields — sending them on
 // the "first watched" and "completed" transitions keeps the timeline accurate.
 async function pushOne(
   malId: number,
-  status: WatchStatus,
-  episodes: number,
+  local: WatchedEntry,
   score?: number | null,
   startDate?: string,
   finishDate?: string,
-) {
+): Promise<WatchedEntry> {
+  const next = entryForMal(local, await malEntry(malId));
   const body = new URLSearchParams({
-    status: TO_MAL_STATUS[status],
-    num_watched_episodes: String(episodes),
+    status: TO_MAL_STATUS[next.status],
+    num_watched_episodes: String(next.episodesWatched),
   });
   if (score != null) body.set("score", String(Math.round(score)));
-  if (startDate)  body.set("start_date",  startDate);
-  if (finishDate) body.set("finish_date", finishDate);
+  // When MAL keeps its own status, its dates stay too.
+  if (next.status === local.status) {
+    if (startDate)  body.set("start_date",  startDate);
+    if (finishDate) body.set("finish_date", finishDate);
+  }
   const res = await apiFetch(`/anime/${malId}/my_list_status`, {
     method: "PATCH",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -420,6 +434,7 @@ async function pushOne(
   });
   if (!res.ok)
     throw new Error(`MAL push failed: ${res.status} ${await res.text()}`);
+  return next;
 }
 
 // Drain all dirty entries to MAL. Called debounced from main process.
@@ -440,8 +455,7 @@ export async function flushDirty(): Promise<{ pushed: number; errors: number }> 
       continue;
     }
     try {
-      await pushOne(row.malId, e.status, e.episodesWatched, e.score);
-      clearDirty(e.animeId);
+      settleDirty(e, await pushOne(row.malId, e, e.score));
       pushed++;
     } catch (err) {
       console.warn("MAL push error", err);
@@ -489,8 +503,7 @@ export async function markEpisodeWatched(animeId: number, episode: number) {
     const today = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
     pushOne(
       anime.malId,
-      status,
-      newEps,
+      next,
       existing?.score ?? null,
       isStarting   ? today : undefined,
       isCompleting ? today : undefined,

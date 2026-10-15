@@ -24,3 +24,17 @@ export function entryAfterEpisode(
   const total = totalEpisodes ?? Infinity;
   return { status: episodesWatched >= total ? "completed" : "watching", episodesWatched };
 }
+
+/**
+ * What to send MyAnimeList for a local entry, given MAL's entry as it is now (null:
+ * not on the list). The local copy can be behind MAL, which the other app updates
+ * too: a show MAL has as completed is never sent back to watching, and the episode
+ * count never goes below MAL's.
+ */
+export function entryForMal(local: WatchedEntry, mal: WatchedEntry | null): WatchedEntry {
+  if (!mal) return local;
+  return {
+    status: mal.status === "completed" && local.status === "watching" ? "completed" : local.status,
+    episodesWatched: Math.max(local.episodesWatched, mal.episodesWatched),
+  };
+}
