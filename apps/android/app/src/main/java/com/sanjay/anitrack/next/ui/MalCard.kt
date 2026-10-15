@@ -45,6 +45,7 @@ import kotlinx.coroutines.launch
 fun MalCard(onProfileChanged: (connected: Boolean, username: String?) -> Unit = { _, _ -> }) {
     var connected by remember { mutableStateOf(Mal.isConnected) }
     var username by remember { mutableStateOf(Mal.username) }
+    val signedOut by Mal.needsReconnect
     var authOpen by remember { mutableStateOf(false) }
     var syncMsg by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -56,7 +57,7 @@ fun MalCard(onProfileChanged: (connected: Boolean, username: String?) -> Unit = 
         "MyAnimeList",
         "Two-way sync with your MAL list: import your anime list and push status changes automatically.",
     ) {
-        if (connected) {
+        if (connected && !signedOut) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     Modifier.size(40.dp).clip(CircleShape).background(AniColors.BrandGradient),
@@ -104,7 +105,16 @@ fun MalCard(onProfileChanged: (connected: Boolean, username: String?) -> Unit = 
                 )
             }
         } else {
-            PillButton("Connect MyAnimeList", { authOpen = true }, icon = Icons.AutoMirrored.Rounded.Login, style = PillStyle.Primary)
+            if (signedOut) {
+                StatusLine("MyAnimeList signed AniTrack out, so list changes are waiting here. Reconnect to send them.", false)
+                Spacer(Modifier.height(10.dp))
+            }
+            PillButton(
+                if (signedOut) "Reconnect MyAnimeList" else "Connect MyAnimeList",
+                { authOpen = true },
+                icon = Icons.AutoMirrored.Rounded.Login,
+                style = PillStyle.Primary,
+            )
         }
         syncMsg?.let {
             Spacer(Modifier.height(10.dp))

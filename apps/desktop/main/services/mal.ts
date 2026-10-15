@@ -40,11 +40,21 @@ interface MalTokens {
 
 interface StoreShape {
   malTokens?: MalTokens;
+  malNeedsReconnect?: boolean; // MAL ended the sign-in: Settings asks to reconnect
   pkceVerifier?: string;
   clientId?: string;
 }
 
 const store = new SimpleStore<StoreShape>("anitrack-auth");
+
+// The renderer is told when MAL ends the sign-in in the background.
+let onStateChange: (state: MalAuthState) => void = () => {};
+export function onMalStateChange(listener: (state: MalAuthState) => void) {
+  onStateChange = listener;
+}
+
+/** MAL refused the sign-in itself, not just one request. */
+class MalAuthError extends Error {}
 
 function getClientId(): string {
   const custom = store.get("clientId");
@@ -176,6 +186,7 @@ function handleRedirect(
       } catch { /* swallow */ }
 
       store.set("malTokens", tokens);
+      store.delete("malNeedsReconnect");
       mainWindow.webContents.send("mal:auth-complete", getState());
     } catch (e) {
       console.error("MAL token exchange error", e);
@@ -191,6 +202,7 @@ export async function handleCallback(_url: string): Promise<void> {
 
 export function disconnect() {
   store.delete("malTokens");
+  store.delete("malNeedsReconnect");
 }
 
 export function getState(): MalAuthState {
@@ -199,7 +211,19 @@ export function getState(): MalAuthState {
     connected: !!t,
     username: t?.username ?? null,
     expiresAt: t?.expires_at ?? null,
+    needsReconnect: !t && !!store.get("malNeedsReconnect"),
   };
+}
+
+// MAL refused the sign-in: drop the tokens so a dead one isn't sent on every
+// flush, and tell the renderer so Settings and the sidebar ask to reconnect.
+// Unsent changes stay dirty and go out after reconnecting. A newer sign-in is
+// left alone.
+function endSignIn(refusedAccessToken: string) {
+  if (store.get("malTokens")?.access_token !== refusedAccessToken) return;
+  store.delete("malTokens");
+  store.set("malNeedsReconnect", true);
+  onStateChange(getState());
 }
 
 // Single-flight guard: the 30s flush timer and user-initiated calls can both
@@ -208,17 +232,26 @@ export function getState(): MalAuthState {
 // gets logged out. Share one in-flight refresh instead.
 let _refreshing: Promise<string | null> | null = null;
 
+function refreshOnce(t: MalTokens): Promise<string | null> {
+  if (!_refreshing) _refreshing = doRefresh(t).finally(() => { _refreshing = null; });
+  return _refreshing;
+}
+
 async function refreshIfNeeded(): Promise<string | null> {
   const t = store.get("malTokens");
   if (!t) return null;
   if (Date.now() < t.expires_at - 60_000) return t.access_token;
+  return refreshOnce(t);
+}
+
+// MAL refused this token before its recorded expiry (revoked, or replaced by a
+// sign-in elsewhere). Refresh it, unless another request already did.
+async function replaceRefused(refused: string): Promise<string | null> {
   if (_refreshing) return _refreshing;
-  _refreshing = doRefresh(t);
-  try {
-    return await _refreshing;
-  } finally {
-    _refreshing = null;
-  }
+  const t = store.get("malTokens");
+  if (!t) return null;
+  if (t.access_token !== refused) return t.access_token;
+  return refreshOnce(t);
 }
 
 async function doRefresh(t: MalTokens): Promise<string | null> {
@@ -244,9 +277,7 @@ async function doRefresh(t: MalTokens): Promise<string | null> {
     console.error("MAL refresh failed", res.status, errBody);
     // 400/401 = refresh token invalid — clear so the user re-auths instead of
     // looping forever on a broken token.
-    if (res.status === 400 || res.status === 401) {
-      store.delete("malTokens");
-    }
+    if (res.status === 400 || res.status === 401) endSignIn(t.access_token);
     return null;
   }
   const j = await res.json() as any;
@@ -262,7 +293,23 @@ async function doRefresh(t: MalTokens): Promise<string | null> {
 
 async function apiFetch(path: string, init: RequestInit = {}) {
   const token = await refreshIfNeeded();
-  if (!token) throw new Error("Not authenticated with MAL");
+  if (!token) throw new MalAuthError("Not authenticated with MAL");
+  const res = await send(path, init, token);
+  if (res.status !== 401) return res;
+  await res.body?.cancel();
+  // The expiry timer alone would keep sending a refused token on every flush:
+  // refresh once and send once more.
+  const fresh = await replaceRefused(token);
+  if (!fresh) throw new MalAuthError("MAL refused the access token and it could not be refreshed");
+  const retried = await send(path, init, fresh);
+  if (retried.status !== 401) return retried;
+  await retried.body?.cancel();
+  // Refused straight after MAL issued it: only a new sign-in can fix that.
+  endSignIn(fresh);
+  throw new MalAuthError("MAL refused a just-refreshed access token");
+}
+
+function send(path: string, init: RequestInit, token: string) {
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${token}`);
   return fetch(`${API_BASE}${path}`, { ...init, headers });
@@ -399,6 +446,8 @@ export async function flushDirty(): Promise<{ pushed: number; errors: number }> 
     } catch (err) {
       console.warn("MAL push error", err);
       errors++;
+      // The rest would be refused the same way; they stay dirty for the next flush.
+      if (err instanceof MalAuthError) break;
     }
   }
   return { pushed, errors };

@@ -101,6 +101,7 @@ export interface MalAuthState {
   connected: boolean;
   username?: string | null;
   expiresAt?: number | null;
+  needsReconnect?: boolean; // MAL ended the sign-in in the background
 }
 
 export interface AniListAuthState {

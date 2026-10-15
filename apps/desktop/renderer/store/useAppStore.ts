@@ -30,6 +30,7 @@ interface AppState {
   refreshLatest: (page?: number) => Promise<void>;
   refreshContinue: () => Promise<void>;
   refreshList: () => Promise<void>;
+  setMal: (mal: MalAuthState) => void;
   setScanStatus: (s: string | null) => void;
 }
 
@@ -224,5 +225,6 @@ export const useAppStore = create<AppState>((set) => ({
     await loadRecommendations(set, list);
   },
 
+  setMal: (mal) => set({ mal }),
   setScanStatus: (s) => set({ scanStatus: s }),
 }));

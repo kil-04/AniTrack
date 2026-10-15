@@ -2,6 +2,7 @@ package com.sanjay.anitrack.next.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.compose.runtime.mutableStateOf
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -14,6 +15,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import org.json.JSONObject
 import java.io.IOException
 import java.security.SecureRandom
@@ -32,14 +34,28 @@ object Mal {
 
     private lateinit var prefs: SharedPreferences
     private val http = OkHttpClient.Builder().callTimeout(30, TimeUnit.SECONDS).build()
-    private val refreshLock = Mutex()   // MAL rotates refresh tokens — never race two refreshes
     private val flushLock = Mutex()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var flushJob: Job? = null
 
+    private val session = MalSession(
+        object : MalSession.Tokens {
+            override val access: String? get() = prefs.getString("access_token", null)
+            override val refresh: String? get() = prefs.getString("refresh_token", null)
+            override val expiresAt: Long get() = prefs.getLong("expires_at", 0)
+            override fun save(access: String, refresh: String, expiresAt: Long) = saveTokens(access, refresh, expiresAt)
+            override fun signOut() = invalidateTokens()
+        },
+        ::refreshTokens,
+    )
+
+    /** MAL ended the sign-in in the background: the profile chip and Settings ask to reconnect. */
+    val needsReconnect = mutableStateOf(false)
+
     fun init(ctx: Context) {
         if (::prefs.isInitialized) return
         prefs = ctx.applicationContext.getSharedPreferences("anitrack_mal", Context.MODE_PRIVATE)
+        needsReconnect.value = prefs.getBoolean("needs_reconnect", false)
         requestFlush()
     }
 
@@ -48,16 +64,20 @@ object Mal {
 
     fun disconnect() {
         prefs.edit().clear().apply()
+        needsReconnect.value = false
         Db.clearMalOutbox()
     }
 
+    /** MAL refused the sign-in. Unsent changes stay queued for after reconnecting. */
     private fun invalidateTokens() {
         prefs.edit()
             .remove("access_token")
             .remove("refresh_token")
             .remove("expires_at")
             .remove("username")
+            .putBoolean("needs_reconnect", true)
             .apply()
+        needsReconnect.value = true
     }
 
     /** PKCE plain verifier: 64 chars from the allowed set. */
@@ -87,7 +107,7 @@ object Mal {
         res.use {
             if (!it.isSuccessful) return@withContext false
             val j = JSONObject(it.body!!.string())
-            saveTokens(j)
+            saveTokens(j.getString("access_token"), j.getString("refresh_token"), System.currentTimeMillis() + j.optLong("expires_in", 3600) * 1000)
         }
         // Grab the display name (non-fatal).
         runCatching {
@@ -97,48 +117,48 @@ object Mal {
         true
     }
 
-    private fun saveTokens(j: JSONObject) {
+    private fun saveTokens(access: String, refresh: String, expiresAt: Long) {
         prefs.edit()
-            .putString("access_token", j.getString("access_token"))
-            .putString("refresh_token", j.getString("refresh_token"))
-            .putLong("expires_at", System.currentTimeMillis() + j.optLong("expires_in", 3600) * 1000)
+            .putString("access_token", access)
+            .putString("refresh_token", refresh)
+            .putLong("expires_at", expiresAt)
+            .remove("needs_reconnect")
             .apply()
+        needsReconnect.value = false
     }
 
-    private suspend fun accessToken(): String? = refreshLock.withLock {
-        val access = prefs.getString("access_token", null) ?: return null
-        if (System.currentTimeMillis() < prefs.getLong("expires_at", 0) - 60_000) return access
-        val refresh = prefs.getString("refresh_token", null) ?: return null
-        return withContext(Dispatchers.IO) {
-            val body = FormBody.Builder()
-                .add("client_id", CLIENT_ID)
-                .add("grant_type", "refresh_token")
-                .add("refresh_token", refresh)
-                .build()
-            val res = http.newCall(Request.Builder().url("$AUTH_BASE/token").post(body).build()).execute()
-            res.use {
-                if (!it.isSuccessful) {
+    private suspend fun refreshTokens(refreshToken: String): MalSession.Refresh = withContext(Dispatchers.IO) {
+        val body = FormBody.Builder()
+            .add("client_id", CLIENT_ID)
+            .add("grant_type", "refresh_token")
+            .add("refresh_token", refreshToken)
+            .build()
+        try {
+            http.newCall(Request.Builder().url("$AUTH_BASE/token").post(body).build()).execute().use {
+                when {
+                    it.isSuccessful -> JSONObject(it.body!!.string()).let { j ->
+                        MalSession.Refresh.Granted(j.getString("access_token"), j.getString("refresh_token"), j.optLong("expires_in", 3600))
+                    }
                     // Revoked → force reconnect (same as desktop).
-                    if (it.code == 400 || it.code == 401) invalidateTokens()
-                    return@withContext null
+                    it.code == 400 || it.code == 401 -> MalSession.Refresh.Refused
+                    else -> MalSession.Refresh.Failed
                 }
-                val j = JSONObject(it.body!!.string())
-                saveTokens(j)
-                j.getString("access_token")
             }
+        } catch (_: IOException) {
+            MalSession.Refresh.Failed
         }
     }
 
-    private suspend fun api(path: String): JSONObject? {
-        val token = accessToken() ?: return null
-        return withContext(Dispatchers.IO) {
-            val res = http.newCall(
-                Request.Builder().url(if (path.startsWith("http")) path else API_BASE + path)
-                    .header("Authorization", "Bearer $token").build(),
-            ).execute()
-            res.use { if (it.isSuccessful) JSONObject(it.body!!.string()) else null }
-        }
+    /** One MAL API request with the sign-in's access token; null when there is no usable sign-in. */
+    private suspend fun <T> authorized(request: Request.Builder, read: (Response) -> T): T? = withContext(Dispatchers.IO) {
+        session.send { token -> http.newCall(request.header("Authorization", "Bearer $token").build()).execute() }
+            ?.use(read)
     }
+
+    private suspend fun api(path: String): JSONObject? =
+        authorized(Request.Builder().url(if (path.startsWith("http")) path else API_BASE + path)) {
+            if (it.isSuccessful) JSONObject(it.body!!.string()) else null
+        }
 
     data class Entry(
         val malId: Int,
@@ -208,31 +228,17 @@ object Mal {
 
     /** Push one status change (fire-and-forget from the status dropdown). */
     suspend fun pushStatus(malId: Int, status: String, episodes: Int? = null): Boolean {
-        val token = accessToken() ?: return false
-        return withContext(Dispatchers.IO) {
-            val form = FormBody.Builder().add("status", status)
-            episodes?.let { form.add("num_watched_episodes", "$it") }
-            val res = http.newCall(
-                Request.Builder().url("$API_BASE/anime/$malId/my_list_status")
-                    .header("Authorization", "Bearer $token")
-                    .patch(form.build()).build(),
-            ).execute()
-            res.use { it.isSuccessful }
-        }
+        val form = FormBody.Builder().add("status", status)
+        episodes?.let { form.add("num_watched_episodes", "$it") }
+        return authorized(Request.Builder().url("$API_BASE/anime/$malId/my_list_status").patch(form.build())) {
+            it.isSuccessful
+        } ?: false
     }
 
-    private suspend fun deleteStatus(malId: Int): Boolean {
-        val token = accessToken() ?: return false
-        return withContext(Dispatchers.IO) {
-            val response = http.newCall(
-                Request.Builder().url("$API_BASE/anime/$malId/my_list_status")
-                    .header("Authorization", "Bearer $token")
-                    .delete()
-                    .build(),
-            ).execute()
-            response.use { it.isSuccessful || it.code == 404 }
-        }
-    }
+    private suspend fun deleteStatus(malId: Int): Boolean =
+        authorized(Request.Builder().url("$API_BASE/anime/$malId/my_list_status").delete()) {
+            it.isSuccessful || it.code == 404
+        } ?: false
 
     /** Drain the durable SQLite outbox. An acknowledgement includes the op id,
      *  so an older in-flight PATCH cannot erase a newer DELETE/re-add. */
@@ -269,26 +275,18 @@ object Mal {
     private data class MyListStatus(val status: String?, val episodesWatched: Int, val totalEpisodes: Int?)
 
     /** This account's MAL entry for [malId] (status null: not on the list), or null when MAL could not be read. */
-    private suspend fun myListStatus(malId: Int): MyListStatus? {
-        val token = accessToken() ?: return null
-        return withContext(Dispatchers.IO) {
-            runCatching {
-                http.newCall(
-                    Request.Builder().url("$API_BASE/anime/$malId?fields=num_episodes,my_list_status")
-                        .header("Authorization", "Bearer $token").build(),
-                ).execute().use { res ->
-                    if (!res.isSuccessful) return@use null
-                    val json = JSONObject(res.body?.string() ?: return@use null)
-                    val list = json.optJSONObject("my_list_status")
-                    MyListStatus(
-                        list?.optString("status")?.takeIf { it in Db.STATUSES },
-                        list?.optInt("num_episodes_watched", 0) ?: 0,
-                        json.optInt("num_episodes", 0).takeIf { it > 0 },
-                    )
-                }
-            }.getOrNull()
+    private suspend fun myListStatus(malId: Int): MyListStatus? = runCatching {
+        authorized(Request.Builder().url("$API_BASE/anime/$malId?fields=num_episodes,my_list_status")) { res ->
+            if (!res.isSuccessful) return@authorized null
+            val json = JSONObject(res.body?.string() ?: return@authorized null)
+            val list = json.optJSONObject("my_list_status")
+            MyListStatus(
+                list?.optString("status")?.takeIf { it in Db.STATUSES },
+                list?.optInt("num_episodes_watched", 0) ?: 0,
+                json.optInt("num_episodes", 0).takeIf { it > 0 },
+            )
         }
-    }
+    }.getOrNull()
 
     /**
      * An episode was watched through: queue it so MAL's episode count can rise.

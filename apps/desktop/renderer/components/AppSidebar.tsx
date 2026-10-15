@@ -154,8 +154,8 @@ export default function AppSidebar() {
             <span className="min-w-0 flex-1">
               <span className="block truncate text-[13px] font-semibold text-white">{signedIn ? mal.username : "Sign in"}</span>
               <span className="flex items-center gap-1.5 truncate text-[11px] text-ink-3">
-                <span className={`h-1.5 w-1.5 rounded-full ${signedIn ? "bg-emerald-400" : "bg-white/25"}`} />
-                {signedIn ? "MyAnimeList synced" : "Connect MyAnimeList"}
+                <span className={`h-1.5 w-1.5 rounded-full ${signedIn ? "bg-emerald-400" : mal.needsReconnect ? "bg-amber-400" : "bg-white/25"}`} />
+                {signedIn ? "MyAnimeList synced" : mal.needsReconnect ? "Reconnect MyAnimeList" : "Connect MyAnimeList"}
               </span>
             </span>
           )}

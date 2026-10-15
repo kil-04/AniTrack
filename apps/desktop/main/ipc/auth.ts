@@ -6,6 +6,7 @@ import {
   flushDirty,
   getState,
   getMalClientInfo,
+  onMalStateChange,
   pullList,
   setMalClientId,
 } from "../services/mal";
@@ -29,6 +30,11 @@ export function registerAuthIpc(getMainWindow: () => BrowserWindow | null) {
     return beginAuth(mainWindow);
   });
   ipcMain.handle(IPC.MAL_STATE, () => getState());
+  // MAL can end the sign-in in the background: Settings and the sidebar repaint.
+  onMalStateChange((state) => {
+    const mainWindow = getMainWindow();
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("mal:state-changed", state);
+  });
   ipcMain.handle(IPC.MAL_DISCONNECT, () => {
     malDisconnect();
     return getState();

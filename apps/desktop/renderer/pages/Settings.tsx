@@ -287,12 +287,17 @@ export default function Settings() {
           </div>
         ) : (
           <div className="space-y-3">
+            {mal.needsReconnect && !awaitingAuth && (
+              <div className="text-sm text-amber-300">
+                MyAnimeList signed AniTrack out, so list changes are waiting here. Reconnect to send them.
+              </div>
+            )}
             <button
               onClick={connectMal}
               disabled={awaitingAuth}
               className="btn btn-primary"
             >
-              {awaitingAuth ? "Waiting for browser…" : "Connect MyAnimeList"}
+              {awaitingAuth ? "Waiting for browser…" : mal.needsReconnect ? "Reconnect MyAnimeList" : "Connect MyAnimeList"}
             </button>
             {awaitingAuth && (
               <div className="text-sm text-muted">

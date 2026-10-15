@@ -204,6 +204,11 @@ fun AppShell() {
     val current = backStack?.destination?.route
     var malConnected by remember { mutableStateOf(com.sanjay.anitrack.next.data.Mal.isConnected) }
     var malUsername by remember { mutableStateOf(com.sanjay.anitrack.next.data.Mal.username) }
+    // MAL can end the sign-in in the background: the chip stops showing it as connected.
+    val malSignedOut by com.sanjay.anitrack.next.data.Mal.needsReconnect
+    LaunchedEffect(malSignedOut) {
+        if (malSignedOut) { malConnected = false; malUsername = null }
+    }
     // Tablet (or landscape phone) gets the top tab bar; portrait phone a bottom bar.
     val widthDp = LocalConfiguration.current.screenWidthDp
     val wideLayout = widthDp >= 820

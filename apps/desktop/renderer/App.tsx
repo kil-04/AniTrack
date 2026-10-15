@@ -15,6 +15,7 @@ import { subscribeDownloads } from "./lib/downloads";
 import { deleteAnimeProgress } from "./lib/supabase-sync";
 import { holdForPlayerRoute, startBgMusic } from "./store/useBgMusic";
 import { AnimatePresence, motion } from "framer-motion";
+import type { MalAuthState } from "../../../packages/shared/types";
 
 // Short and opacity-led: AnimatePresence waits for the exit before the next page
 // mounts, so 0.2 s each way made every navigation take ~0.4 s.
@@ -68,6 +69,7 @@ const TABLET_LANDSCAPE = "(min-width: 820px)";
 export default function App() {
   const refreshAll   = useAppStore((s) => s.refreshAll);
   const setScanStatus = useAppStore((s) => s.setScanStatus);
+  const setMal        = useAppStore((s) => s.setMal);
   const location      = useLocation();
   const isTablet      = useMediaQuery(TABLET_LANDSCAPE);
 
@@ -106,6 +108,8 @@ export default function App() {
     refreshAll();
 
     const offMalAuth = window.api.on("mal:auth-complete", () => { refreshAll(); });
+    // MAL ended the sign-in in the background: Settings and the sidebar ask to reconnect.
+    const offMalState = window.api.on("mal:state-changed", (mal) => { setMal(mal as MalAuthState); });
     const offMalPull = window.api.on("mal:pull-progress", (n: any) => {
       setScanStatus(`MAL sync: ${n} entries`);
     });
@@ -118,8 +122,8 @@ export default function App() {
       }
       refreshAll();
     });
-    return () => { offMalAuth(); offMalPull(); offRepaired(); };
-  }, [refreshAll, setScanStatus]);
+    return () => { offMalAuth(); offMalState(); offMalPull(); offRepaired(); };
+  }, [refreshAll, setMal, setScanStatus]);
 
   // Auto-sync on return: when the window regains focus (desktop) or the app
   // resumes from background (tablet), two-way sync progress with the gist so
