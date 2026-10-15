@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { Capacitor } from "@capacitor/core";
 import { useAppStore } from "../store/useAppStore";
-import { BookMarked, Cloud, DownloadCloud, Globe, Info, Library, Music2, RefreshCcw, ShieldCheck, type LucideIcon } from "lucide-react";
+import { BookMarked, Cloud, DownloadCloud, Github, Globe, Info, Library, Music2, RefreshCcw, ShieldCheck, type LucideIcon } from "lucide-react";
 import BrandMark from "../components/BrandMark";
 import { BackgroundMusicSettings } from "../components/BackgroundMusic";
 import type { AniListAuthState } from "../../../../packages/shared/types";
@@ -639,14 +639,24 @@ export default function Settings() {
 
       <section id="about" className="panel scroll-mt-6 p-6">
         <SettingsHead icon={Info} title="About" />
-        <p className="mb-4 text-sm leading-relaxed text-ink-2">
-          AniTrack is a personal anime tracker with a Netflix-style UI, MAL two-way sync, and a local file player.
-          It is not affiliated with MyAnimeList or any streaming service. For streaming, use a licensed provider
-          via the "Watch on" menu on each show.
+        <p className="mb-2 text-sm leading-relaxed text-ink-2">
+          AniTrack keeps your anime and manga in one place. Your MyAnimeList and AniList lists stay in sync,
+          episodes play and download right here, manga reads online or offline, and your progress follows you to
+          the Android app.
         </p>
-        <div className="chip h-8 text-sm">
-          <span className="text-muted">Version</span>
-          <span className="font-mono font-medium">{__APP_VERSION__}</span>
+        <p className="mb-4 text-xs leading-relaxed text-ink-3">
+          An unofficial personal project, not affiliated with MyAnimeList, AniList or any streaming or manga site.
+          AniTrack doesn't host any media: everything is loaded from the sites you use.
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="chip h-8 text-sm">
+            <span className="text-muted">Version</span>
+            <span className="font-mono font-medium">{__APP_VERSION__}</span>
+          </div>
+          <a href="https://github.com/kil-04/AniTrack" target="_blank" rel="noreferrer" className="chip h-8 text-sm">
+            <Github size={14} />
+            Source and releases
+          </a>
         </div>
       </section>
       </div>

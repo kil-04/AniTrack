@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.CloudSync
 import androidx.compose.material.icons.rounded.ErrorOutline
@@ -162,15 +163,25 @@ private fun AboutCard() {
         }
         Spacer(Modifier.height(12.dp))
         Text(
-            "A personal anime and manga tracker with MyAnimeList two-way sync, streaming, offline downloads and native playback.",
+            "Your anime and manga in one place: MyAnimeList sync, episodes to stream or download, a manga reader " +
+                "with saved chapters, release alerts, and progress that follows you to the desktop app.",
             style = MaterialTheme.typography.bodySmall,
             color = AniColors.TextSecondary,
         )
         Spacer(Modifier.height(4.dp))
         Text(
-            "AniTrack is not affiliated with MyAnimeList, AniList or any streaming service.",
+            "An unofficial personal project, not affiliated with MyAnimeList, AniList or any streaming or manga site. " +
+                "AniTrack doesn't host any media: everything is loaded from the sites you use.",
             style = MaterialTheme.typography.bodySmall,
             color = AniColors.TextTertiary,
+        )
+        Spacer(Modifier.height(12.dp))
+        val links = androidx.compose.ui.platform.LocalUriHandler.current
+        PillButton(
+            "Source and releases",
+            onClick = { runCatching { links.openUri("https://github.com/kil-04/AniTrack") } },
+            icon = Icons.AutoMirrored.Rounded.OpenInNew,
+            compact = true,
         )
     }
 }
