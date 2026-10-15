@@ -9,6 +9,7 @@ const {
   assertDraftRelease,
 } = require("./github-release-common");
 const { readAndroidMetadata } = require("./android-release-common");
+const { releaseNotesFor } = require("./release-notes");
 
 function assertCompleteAssetSet(release) {
   if (pkg.build?.win?.artifactName !== "AniTrack-Setup-${version}.${ext}") {
@@ -47,7 +48,15 @@ async function main() {
   assertDraftRelease(release);
   assertCompleteAssetSet(release);
   console.log(`Publishing verified draft ${tag} (release ${release.id})...`);
-  const body = Buffer.from(JSON.stringify({ draft: false }), "utf8");
+  // What changed, from the commit subjects since the last release. Notes are a
+  // nicety: a release without them still publishes.
+  let notes = null;
+  try {
+    notes = releaseNotesFor({ owner, repo, tag });
+  } catch (error) {
+    console.warn(`Release notes skipped: ${error.message || error}`);
+  }
+  const body = Buffer.from(JSON.stringify(notes ? { draft: false, body: notes } : { draft: false }), "utf8");
   const result = await request(
     "api.github.com",
     `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/releases/${release.id}`,
