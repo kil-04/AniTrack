@@ -28,7 +28,7 @@ object AnimePaheProvider : AnimeProvider {
         Pahe.matchFor(anime)?.let { series(it.source.session, it.episodes) }
 
     override suspend fun resume(key: String): ProviderSeries? =
-        runCatching { Pahe.episodesAll(key) }.getOrNull()
+        runCatching { Pahe.episodesIndex(key) }.getOrNull()
             ?.takeIf { it.isNotEmpty() }
             ?.let { series(key, it) }
 
@@ -37,7 +37,7 @@ object AnimePaheProvider : AnimeProvider {
         resumeKey = session,
         episodes = episodes.map { episode ->
             ProviderEpisode(episode.number, snapshot = episode.snapshot) {
-                val links = Pahe.links(session, episode.session)
+                val links = Pahe.links(session, Pahe.episodeSession(session, episode))
                 val best = links.maxByOrNull {
                     (it.quality.filter(Char::isDigit).toIntOrNull() ?: 0) * 10 +
                         if (!it.audio.lowercase().contains("eng")) 1 else 0

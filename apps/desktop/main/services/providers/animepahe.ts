@@ -31,7 +31,7 @@ import type {
 
 import { BrowserWindow } from "electron";
 import { getRuntimeConfig } from "../remote-config";
-import { PaheAccessError, PaheVerificationState, paheResponseError } from "./animepahe-session";
+import { PaheAccessError, PaheVerificationState, paheResponseError, retryAfterMs } from "./animepahe-session";
 import {
   prefetchKwik,
   resetKwikForBaseChange,
@@ -61,6 +61,7 @@ export { getPaheBaseUrl } from "./animepahe-config";
 
 export function setPaheBaseUrl(url: string): void {
   savePaheBaseUrl(url);
+  lastPaheApiAt = 0;
   // A user-selected origin requires a new homepage session next time it is used.
   if (_win && !_win.isDestroyed()) {
     _win.destroy();
@@ -250,7 +251,7 @@ const PAHE_REQUEST_WORLD = 1207;
 const PAHE_REQUEST_TIMEOUT_MS = 30_000;
 const MAX_PAHE_BODY_BYTES = 2 * 1024 * 1024;
 
-interface PaheSessionResponse { status: number; body: string | null }
+interface PaheSessionResponse { status: number; body: string | null; retryAfter?: string | null }
 
 /**
  * Cloudflare rejects browser-process Session.fetch requests even after the
@@ -276,6 +277,7 @@ async function paheSessionRequest(win: BrowserWindow, url: string, accept: strin
     if (request.xhr) headers["X-Requested-With"] = "XMLHttpRequest";
     const response = await fetch(request.path, { headers, credentials: "same-origin", cache: "no-store", signal: controller.signal });
     if (new URL(response.url).origin !== location.origin) return { status: 0, body: "" };
+    const retryAfter = response.headers.get("retry-after");
     const reader = response.body.getReader();
     const chunks = [];
     let size = 0;
@@ -283,10 +285,10 @@ async function paheSessionRequest(win: BrowserWindow, url: string, accept: strin
       const { done, value } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > request.limit) { await reader.cancel(); return { status: response.status, body: null }; }
+      if (size > request.limit) { await reader.cancel(); return { status: response.status, body: null, retryAfter }; }
       chunks.push(value);
     }
-    return { status: response.status, body: await new Blob(chunks).text() };
+    return { status: response.status, body: await new Blob(chunks).text(), retryAfter };
   } finally { clearTimeout(timer); }
 })(
 /* request */ ${JSON.stringify(request)}
@@ -300,7 +302,7 @@ async function paheSessionRequest(win: BrowserWindow, url: string, accept: strin
     if (!result || typeof result.status !== "number" || (result.body !== null && typeof result.body !== "string")) {
       throw new Error("malformed");
     }
-    return { status: result.status, body: result.body };
+    return { status: result.status, body: result.body, retryAfter: typeof result.retryAfter === "string" ? result.retryAfter : null };
   } catch (error) {
     const reason = error instanceof Error ? `${error.name}: ${error.message}` : "unknown";
     console.warn("[AnimePahe] Session request failed:", reason.replace(/https?:\/\/\S+/g, "[url]").slice(0, 160));
@@ -314,7 +316,7 @@ function readPaheResponse(win: BrowserWindow, response: PaheSessionResponse, lab
   if (response.body === null) throw new Error(`${label} response was unexpectedly large.`);
   const accessError = paheResponseError(response.status, response.body);
   if (accessError) {
-    _verification.reject(accessError);
+    _verification.reject(accessError, retryAfterMs(response.retryAfter));
     if (accessError.code === "PAHE_SECURITY_CHECK") showPaheVerification(win, true);
     throw accessError;
   }
@@ -322,9 +324,25 @@ function readPaheResponse(win: BrowserWindow, response: PaheSessionResponse, lab
   return response.body;
 }
 
+// AnimePahe answers bursts with HTTP 429 (a long show's episode pages fetched in
+// parallel did it), so API calls go out one at a time, spaced apart.
+const PAHE_API_SPACING_MS = 500;
+let paheApiQueue: Promise<unknown> = Promise.resolve();
+let lastPaheApiAt = 0;
+
+function spacedPaheApi<T>(run: () => Promise<T>): Promise<T> {
+  const next = paheApiQueue.then(async () => {
+    const wait = PAHE_API_SPACING_MS - (Date.now() - lastPaheApiAt);
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    try { return await run(); } finally { lastPaheApiAt = Date.now(); }
+  });
+  paheApiQueue = next.catch(() => undefined);
+  return next;
+}
+
 async function paheWindowFetchOnce(url: string): Promise<any> {
   const win = await getPaheWindow();
-  const response = await paheSessionRequest(win, url, "application/json, text/plain, */*", true);
+  const response = await spacedPaheApi(() => paheSessionRequest(win, url, "application/json, text/plain, */*", true));
   scheduleIdleClose();
   const body = readPaheResponse(win, response, "AnimePahe");
   try { return JSON.parse(body); } catch { throw new Error("AnimePahe returned an unexpected response. Retry or choose another provider."); }

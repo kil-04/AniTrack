@@ -49,9 +49,12 @@ export class PaheVerificationState {
     return true;
   }
 
-  reject(error: PaheAccessError): void {
-    if (error.code === "PAHE_RATE_LIMITED") this.rateLimitUntil = this.now() + 60_000;
-    else {
+  /** [retryAfterMs]: how long AnimePahe asked us to wait (Retry-After), when it said. */
+  reject(error: PaheAccessError, retryAfterMs?: number | null): void {
+    if (error.code === "PAHE_RATE_LIMITED") {
+      const wait = retryAfterMs != null && Number.isFinite(retryAfterMs) ? retryAfterMs : 60_000;
+      this.rateLimitUntil = this.now() + Math.min(120_000, Math.max(5_000, wait));
+    } else {
       this.ready = false;
       this.verificationRequired = true;
     }
@@ -61,6 +64,15 @@ export class PaheVerificationState {
     if (this.now() < this.rateLimitUntil) throw paheResponseError(429, "")!;
     if (this.verificationRequired) throw paheResponseError(403, "")!;
   }
+}
+
+/** A Retry-After header (seconds or an HTTP date) in milliseconds, or null. */
+export function retryAfterMs(value: string | null | undefined, now = Date.now()): number | null {
+  if (!value) return null;
+  const seconds = Number(value.trim());
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const at = Date.parse(value);
+  return Number.isFinite(at) ? Math.max(0, at - now) : null;
 }
 
 export interface PaheResolvedStream {

@@ -22,6 +22,8 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import okhttp3.Cookie
@@ -359,11 +361,22 @@ object Pahe {
         activity?.runOnUiThread { cfWebView?.destroy(); cfWebView = null }
     }
 
+    /** AnimePahe is limiting requests from this connection: waiting is the only fix. */
+    class RateLimited(message: String) : IOException(message)
+
+    // AnimePahe answers bursts with HTTP 429 (twelve back-to-back episode pages for
+    // One Piece did it), so API calls go out one at a time, spaced apart.
+    private val apiGate = Mutex()
+    private var lastApiCallAt = 0L
+    private const val API_SPACING_MS = 500L
+    private const val MAX_RETRY_AFTER_MS = 20_000L
+
     private suspend fun paheGet(
         path: String,
         retried: Boolean = false,
         interactive: Boolean = true,
         attemptedBases: Set<String> = emptySet(),
+        rateLimitWaited: Boolean = false,
     ): JSONObject {
         val currentBase = baseUrl()
         val attempted = attemptedBases + currentBase
@@ -376,11 +389,29 @@ object Pahe {
                 .header("Referer", currentBase + route("home"))
                 .header("User-Agent", MOBILE_UA)
                 .build()
-            val resp = withContext(Dispatchers.IO) { client.newCall(req).execute() }
+            val resp = apiGate.withLock {
+                val wait = API_SPACING_MS - (System.currentTimeMillis() - lastApiCallAt)
+                if (wait > 0) delay(wait)
+                try {
+                    withContext(Dispatchers.IO) { client.newCall(req).execute() }
+                } finally {
+                    lastApiCallAt = System.currentTimeMillis()
+                }
+            }
             if (!resp.isSuccessful) {
                 val code = resp.code
+                val retryAfter = resp.header("Retry-After")?.trim()?.toLongOrNull()
                 resp.close()
-                if (!retried && code in listOf(403, 503, 429)) {
+                if (code == 429) {
+                    // A rate limit, not a Cloudflare problem: wait as told (bounded), once.
+                    // Re-solving Cloudflare or trying another domain only adds requests.
+                    if (!rateLimitWaited) {
+                        delay(((retryAfter ?: 5L) * 1000L).coerceIn(1_000L, MAX_RETRY_AFTER_MS))
+                        return paheGet(path, retried, interactive, attemptedBases, rateLimitWaited = true)
+                    }
+                    throw RateLimited("AnimePahe is limiting requests right now (HTTP 429). Try again in a minute, or use Anikoto.")
+                }
+                if (!retried && code in listOf(403, 503)) {
                     resetCfSession()
                     return paheGet(path, retried = true, interactive = interactive, attemptedBases = attemptedBases)
                 }
@@ -388,6 +419,7 @@ object Pahe {
             }
             return JSONObject(resp.body!!.string())
         } catch (error: Exception) {
+            if (error is RateLimited) throw error
             if (!path.startsWith("http")) {
                 val fallback = configuredBases().firstOrNull { it !in attempted }
                 if (fallback != null) {
@@ -403,7 +435,8 @@ object Pahe {
     // ── Public API ────────────────────────────────────────────────────────────
 
     data class SearchResult(val session: String, val title: String, val year: Int?, val episodes: Int?, val poster: String?)
-    data class Episode(val session: String, val number: Float, val snapshot: String?)
+    /** [session] is blank for an episode of a long show whose page hasn't been read yet ([page]). */
+    data class Episode(val session: String, val number: Float, val snapshot: String?, val page: Int = 0)
     data class Link(val kwik: String, val quality: String, val audio: String)
     data class Stream(val url: String, val referer: String)
 
@@ -421,7 +454,7 @@ object Pahe {
         }
     }
 
-    /** All episodes, paginated 30/page — capped at 12 pages (360 eps) for now. */
+    /** All episodes, paginated 30/page — capped at 12 pages (360 eps). Prefer [episodesIndex]. */
     suspend fun episodesAll(session: String, maxPages: Int = 12): List<Episode> {
         val out = mutableListOf<Episode>()
         var page = 1
@@ -429,14 +462,62 @@ object Pahe {
         while (page <= minOf(lastPage, maxPages)) {
             val data = paheGet(route("episodes", mapOf("animeId" to session, "page" to page)))
             lastPage = data.optInt("last_page", 1)
-            val arr = data.optJSONArray("data") ?: JSONArray()
-            for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
-                out += Episode(o.optString("session"), o.optDouble("episode", 0.0).toFloat(), o.optString("snapshot"))
-            }
+            out += parseEpisodes(data)
             page++
         }
         return out
+    }
+
+    private fun parseEpisodes(data: JSONObject): List<Episode> {
+        val arr = data.optJSONArray("data") ?: JSONArray()
+        return (0 until arr.length()).map { i ->
+            val o = arr.getJSONObject(i)
+            Episode(o.optString("session"), o.optDouble("episode", 0.0).toFloat(), o.optString("snapshot"))
+        }
+    }
+
+    private val episodePages = object : LinkedHashMap<String, List<Episode>>(32, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<Episode>>?) = size > 64
+    }
+
+    private suspend fun episodePage(session: String, page: Int): List<Episode> {
+        val key = "$session:$page"
+        synchronized(episodePages) { episodePages[key] }?.let { return it }
+        val list = parseEpisodes(paheGet(route("episodes", mapOf("animeId" to session, "page" to page))))
+        synchronized(episodePages) { episodePages[key] = list }
+        return list
+    }
+
+    /**
+     * Every episode of [session] in as few requests as possible. Short shows read all
+     * their pages; a long one (One Piece: 40 pages) reads its first and last page and,
+     * when the numbering is contiguous, lists the episodes in between, whose pages are
+     * read when they are played ([episodeSession]).
+     */
+    suspend fun episodesIndex(session: String): List<Episode> {
+        val firstData = paheGet(route("episodes", mapOf("animeId" to session, "page" to 1)))
+        val lastPage = firstData.optInt("last_page", 1)
+        val first = parseEpisodes(firstData)
+        synchronized(episodePages) { episodePages["$session:1"] = first }
+        if (lastPage <= 1 || first.isEmpty()) return first
+        if (lastPage <= PaheEpisodePages.READ_ALL_PAGES) {
+            return first + (2..lastPage).flatMap { episodePage(session, it) }
+        }
+        val last = episodePage(session, lastPage)
+        val numbers = last.lastOrNull()?.let {
+            PaheEpisodePages.contiguousNumbers(first.first().number, it.number, firstData.optInt("total", 0))
+        } ?: return episodesAll(session)
+        val known = (first + last).associateBy { it.number.toInt() }
+        return numbers.map { n ->
+            known[n] ?: Episode("", n.toFloat(), null, PaheEpisodePages.pageOf(n, numbers.first(), first.size))
+        }
+    }
+
+    /** The playable session of [episode], reading its page first if it hasn't been yet. */
+    suspend fun episodeSession(animeSession: String, episode: Episode): String {
+        if (episode.session.isNotBlank()) return episode.session
+        return episodePage(animeSession, episode.page).firstOrNull { it.number == episode.number }?.session
+            ?: throw IOException("AnimePahe has no episode ${episode.number.toInt()} on page ${episode.page}.")
     }
 
     suspend fun links(animeSession: String, epSession: String): List<Link> {
@@ -588,7 +669,7 @@ object Pahe {
             }
             .filter { it.second >= 20 }
             .maxByOrNull { it.second }?.first ?: return null
-        val eps = runCatching { episodesAll(best.session) }
+        val eps = runCatching { episodesIndex(best.session) }
             .onFailure { Log.w("AniTrack/AnimePahe", "Episode lookup failed: ${it.message}") }
             .getOrElse { throw IOException("AnimePahe episode lookup failed: ${it.message}", it) }
         if (eps.isEmpty()) return null

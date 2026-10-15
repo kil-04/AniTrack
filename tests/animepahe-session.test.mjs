@@ -7,6 +7,7 @@ import {
   PaheResolvedStreamCache,
   PaheVerificationState,
   paheResponseError,
+  retryAfterMs,
 } from "../apps/desktop/main/services/providers/animepahe-session.ts";
 import { awaitKwikStage, extractKwikStreamUrls, readKwikHtml, unpackKwikJs } from "../apps/desktop/main/services/providers/animepahe-kwik-parser.ts";
 
@@ -52,7 +53,7 @@ class FakeBrowserWindow extends EventEmitter {
       this.isolatedWorlds = [...(this.isolatedWorlds ?? []), world];
       this.lastRequest = request;
       return this.webContents.session.fetch(new URL(request.path, this.url).toString())
-        .then(async (response) => ({ status: response.status, body: await response.text() }));
+        .then(async (response) => ({ status: response.status, body: await response.text(), retryAfter: response.headers.get("retry-after") }));
     };
     // The real reload shows the website check; the fixture keeps the page as-is.
     this.reloads = 0;
@@ -256,6 +257,36 @@ test("AnimePahe rate limit blocks requests briefly and stale windows cannot rest
   assert.throws(() => state.assertRequestAllowed(), /PAHE_RATE_LIMITED/, "closing a window cannot retry a rate limit");
   now += 60_000;
   assert.doesNotThrow(() => state.assertRequestAllowed());
+
+  // Retry-After decides the wait when AnimePahe gives one (within 5 s to 2 min).
+  state.reject(paheResponseError(429, ""), 20_000);
+  now += 19_000;
+  assert.throws(() => state.assertRequestAllowed(), /PAHE_RATE_LIMITED/);
+  now += 1_000;
+  assert.doesNotThrow(() => state.assertRequestAllowed());
+  state.reject(paheResponseError(429, ""), 3_600_000);
+  now += 120_000;
+  assert.doesNotThrow(() => state.assertRequestAllowed(), "a huge Retry-After is capped at two minutes");
+  assert.equal(retryAfterMs("30"), 30_000);
+  assert.equal(retryAfterMs("Thu, 15 Oct 2026 12:00:30 GMT", Date.parse("Thu, 15 Oct 2026 12:00:00 GMT")), 30_000);
+  assert.equal(retryAfterMs("soon"), null);
+  assert.equal(retryAfterMs(null), null);
+});
+
+test("AnimePahe API calls go out one at a time, spaced apart, and honour Retry-After", async () => {
+  resetFixture();
+  fixture.responses.push(Response.json({ data: [] }), Response.json({ data: [] }));
+  const provider = new AnimePaheProvider();
+  const started = Date.now();
+  await Promise.all([provider.search("Bebop"), provider.search("Trigun")]);
+  assert.equal(fixture.requests.length, 2);
+  assert.ok(Date.now() - started >= 450, "the second call waited for the first and a gap");
+
+  fixture.responses.push(new Response("", { status: 429, headers: { "Retry-After": "7" } }));
+  await assert.rejects(() => provider.search("Monster"), /PAHE_RATE_LIMITED/);
+  await assert.rejects(() => provider.search("Monster"), /PAHE_RATE_LIMITED/);
+  assert.equal(fixture.requests.length, 3, "a rate-limited provider sends nothing until the wait is over");
+  for (const win of fixture.windows) win.destroy();
 });
 
 test("AnimePahe detects challenge HTML even when the server returns HTTP 200", () => {
