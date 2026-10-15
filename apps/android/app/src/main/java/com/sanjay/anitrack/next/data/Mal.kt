@@ -303,13 +303,26 @@ object Mal {
 
     fun requestFlush() {
         flushJob?.cancel()
-        flushJob = scope.launch {
-            var waitMs = 0L
-            while (isConnected) {
-                if (waitMs > 0) delay(waitMs)
-                if (flushPending()) return@launch
-                waitMs = if (waitMs == 0L) 30_000L else (waitMs * 2).coerceAtMost(30 * 60_000L)
-            }
-        }
+        flushJob = scope.launch { flushUntilDelivered({ isConnected }, { flushPending() }) }
+    }
+}
+
+/**
+ * Sends the MAL outbox until it is delivered or the sign-in ends, waiting 30 s and
+ * then twice as long each time (up to 30 min) between attempts. Being offline is
+ * just another attempt to come: the outbox keeps every unsent change, and an
+ * exception escaping this background job would close the app.
+ */
+internal suspend fun flushUntilDelivered(
+    signedIn: () -> Boolean,
+    flush: suspend () -> Boolean,
+    wait: suspend (Long) -> Unit = { delay(it) },
+) {
+    var waitMs = 0L
+    while (signedIn()) {
+        if (waitMs > 0) wait(waitMs)
+        val delivered = try { flush() } catch (_: IOException) { false }
+        if (delivered) return
+        waitMs = if (waitMs == 0L) 30_000L else (waitMs * 2).coerceAtMost(30 * 60_000L)
     }
 }
