@@ -1,6 +1,6 @@
 {
   "name": "anitrack",
-  "version": "9.0.2",
+  "version": "9.0.3",
   "description": "Anime and manga tracker with MyAnimeList and AniList sync, streaming, offline downloads, a manga reader and cross-device progress",
   "main": "dist-electron/apps/desktop/main/main.js",
   "author": "Sanjay",
