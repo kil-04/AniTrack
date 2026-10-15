@@ -30,18 +30,6 @@ function bundledDir(): string {
     : path.join(app.getAppPath(), "apps", "android", "app", "src", "main", "assets", "music");
 }
 
-/** Built-in tracks the user removed (they stay in the app, just out of the list). */
-const HIDDEN_FILE = ".hidden-bundled.json";
-
-function hiddenBundled(): Set<string> {
-  try {
-    const value = JSON.parse(fs.readFileSync(path.join(musicDir(), HIDDEN_FILE), "utf8"));
-    return new Set(Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : []);
-  } catch {
-    return new Set();
-  }
-}
-
 function fileNames(dir: string): string[] {
   try {
     return fs.readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isFile()).map((entry) => entry.name);
@@ -55,10 +43,9 @@ export function listTracks(): BgTrack[] {
     .map((name) => trackFromFile(name))
     .filter((track): track is BgTrack => track != null);
   const ownIds = new Set(own.map((track) => track.id));
-  const hidden = hiddenBundled();
-  // An imported file with the same name stands in for the built-in one.
+  // Built-in tracks are always listed; an imported file with the same name stands in for one.
   const bundled = fileNames(bundledDir())
-    .filter((name) => !ownIds.has(name) && !hidden.has(name))
+    .filter((name) => !ownIds.has(name))
     .map((name) => trackFromFile(name))
     .filter((track): track is BgTrack => track != null)
     .map((track) => ({ ...track, bundled: true }));
@@ -80,7 +67,7 @@ function playableFile(id: unknown): string | null {
   if (fs.existsSync(own)) return own;
   const name = path.basename(own);
   const bundled = path.join(bundledDir(), name);
-  return fs.existsSync(bundled) && !hiddenBundled().has(name) ? bundled : null;
+  return fs.existsSync(bundled) ? bundled : null;
 }
 
 /** Copies audio files (or the audio inside .zip files) in; a name already there is left as it is. */
@@ -159,20 +146,10 @@ async function importZip(zip: string): Promise<{ added: number; skipped: number 
   return { added, skipped };
 }
 
+/** Deletes an imported track. Built-in tracks can't be removed. */
 export function removeTrack(id: unknown): void {
   const file = trackFile(id);
-  if (!file) return;
-  if (fs.existsSync(file)) {
-    fs.rmSync(file, { force: true });
-    return;
-  }
-  // A built-in track: hide it.
-  const name = path.basename(file);
-  if (fs.existsSync(path.join(bundledDir(), name))) {
-    const hidden = hiddenBundled();
-    hidden.add(name);
-    fs.writeFileSync(path.join(musicDir(), HIDDEN_FILE), JSON.stringify([...hidden]));
-  }
+  if (file && fs.existsSync(file)) fs.rmSync(file, { force: true });
 }
 
 const TYPES: Record<string, string> = {

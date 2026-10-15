@@ -276,8 +276,12 @@ internal fun BackgroundMusicCard() {
                                 36.dp,
                                 tint = if (isDefault) AniColors.Accent else AniColors.TextTertiary,
                             ) { BackgroundMusic.setDefault(if (isDefault) null else track.id) }
-                            RoundIcon(Icons.Rounded.DeleteOutline, "Remove ${track.title}", 36.dp, tint = AniColors.TextTertiary) {
-                                confirming = track.id
+                            if (track.bundled) {
+                                Spacer(Modifier.size(36.dp))
+                            } else {
+                                RoundIcon(Icons.Rounded.DeleteOutline, "Remove ${track.title}", 36.dp, tint = AniColors.TextTertiary) {
+                                    confirming = track.id
+                                }
                             }
                         }
                     }

@@ -241,13 +241,17 @@ export function BackgroundMusicSettings() {
                     >
                       <Star size={14} fill={isDefault ? "currentColor" : "none"} />
                     </button>
-                    <button
-                      onClick={() => setConfirming(track.id)}
-                      title="Remove from AniTrack"
-                      className="btn btn-ghost btn-icon h-7 w-7 rounded-md opacity-0 transition group-hover:opacity-100 focus:opacity-100"
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    {track.bundled ? (
+                      <span className="h-7 w-7 shrink-0" aria-hidden />
+                    ) : (
+                      <button
+                        onClick={() => setConfirming(track.id)}
+                        title="Remove from AniTrack"
+                        className="btn btn-ghost btn-icon h-7 w-7 rounded-md opacity-0 transition group-hover:opacity-100 focus:opacity-100"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
                   </>
                 )}
               </li>

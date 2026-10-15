@@ -87,16 +87,13 @@ internal object BackgroundMusic {
 
     private fun musicDir(ctx: Context) = File(ctx.filesDir, "music").apply { mkdirs() }
 
-    private fun hiddenBundled(): Set<String> = prefs?.getStringSet("bgm_hidden_bundled", null) ?: emptySet()
-
-    /** Imported tracks plus the built-in ones (an imported file with the same name stands in for it). */
+    /** Imported tracks plus the built-in ones, always listed (an imported file with the same name stands in for one). */
     private fun listTracks(): List<Track> {
         val ctx = appContext ?: return emptyList()
         val own = musicDir(ctx).listFiles().orEmpty().filter { it.isFile }.mapNotNull { BackgroundMusicRules.trackFromFile(it.name) }
         val ownIds = own.mapTo(HashSet()) { it.id }
-        val hidden = hiddenBundled()
         val bundled = runCatching { ctx.assets.list(ASSET_DIR) }.getOrNull().orEmpty()
-            .filter { it !in ownIds && it !in hidden }
+            .filter { it !in ownIds }
             .mapNotNull { BackgroundMusicRules.trackFromFile(it, bundled = true) }
         return BackgroundMusicRules.sortTracks(own + bundled)
     }
@@ -285,20 +282,17 @@ internal object BackgroundMusic {
         prefs?.edit()?.putString("bgm_default", id ?: "")?.apply()
     }
 
-    /** Deletes an imported track; a built-in one is only taken off the list. */
+    /** Deletes an imported track. Built-in tracks can't be removed. */
     fun remove(id: String) {
         val ctx = appContext ?: return
         val track = tracks.value.firstOrNull { it.id == id } ?: return
+        if (track.bundled) return
         if (loadedId == id) {
             player?.stop()
             player?.clearMediaItems()
             loadedId = null
         }
-        if (track.bundled) {
-            prefs?.edit()?.putStringSet("bgm_hidden_bundled", hiddenBundled() + id)?.apply()
-        } else {
-            File(musicDir(ctx), id).delete()
-        }
+        File(musicDir(ctx), id).delete()
         tracks.value = listTracks()
         if (trackId.value == id) trackId.value = null
         if (defaultId.value == id) setDefault(null)
