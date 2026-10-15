@@ -207,8 +207,11 @@ fun AppShell() {
     // Tablet (or landscape phone) gets the top tab bar; portrait phone a bottom bar.
     val widthDp = LocalConfiguration.current.screenWidthDp
     val wideLayout = widthDp >= 820
-    // Medium widths keep the bar on one line by showing labels only on the current tab.
-    val tabLabels = widthDp >= 1100
+    // Medium widths keep the bar on one line by showing labels only on the current tab
+    // (sooner while the background-music controls are showing, so the search keeps its room).
+    val musicControls = com.sanjay.anitrack.next.data.BackgroundMusic.enabled.value &&
+        com.sanjay.anitrack.next.data.BackgroundMusic.tracks.value.isNotEmpty()
+    val tabLabels = widthDp >= if (musicControls) 1500 else 1100
     val hideChrome = current == "player" || current == "reader"
 
     val go: (String) -> Unit = { r -> nav.navigate(r) { launchSingleTop = true; popUpTo("home") } }
