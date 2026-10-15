@@ -11,6 +11,7 @@ import {
 } from "electron";
 import path from "node:path";
 import fs from "node:fs";
+import { execFile } from "node:child_process";
 import { Readable } from "node:stream";
 import { IPC } from "../../../packages/shared/types";
 import { flushDirty } from "./services/mal";
@@ -60,6 +61,16 @@ const isDev = process.env.NODE_ENV === "development";
 // even with a fresh profile and without the GPU AppContainer. Renderer sandboxes,
 // including every provider window's, are unaffected by this switch.
 app.commandLine.appendSwitch("disable-gpu-sandbox");
+
+// The audio service failed the same way (9.0.2): its sandboxed process never
+// started, so Chromium saw no speakers, every <audio>/<video> with sound failed
+// with "audio render error", and episodes stopped with an HLS bufferAppendError.
+// The cause is the install folder's permissions (see grantSandboxReadAccess);
+// running the audio service unsandboxed keeps playback working even where that
+// repair can't be applied. It only plays decoded audio out.
+// Merge with any --disable-features already given: the last value would win.
+const disabledFeatures = app.commandLine.getSwitchValue("disable-features");
+app.commandLine.appendSwitch("disable-features", [disabledFeatures, "AudioServiceSandbox"].filter(Boolean).join(","));
 
 // Use the same Chromium identity for provider windows and network requests.
 // Do not claim a different Chrome version through hard-coded client hints.
@@ -260,7 +271,28 @@ function handleProtocolUrl(_url: string) {
   // the in-app BrowserWindow approach in mal.ts.
 }
 
+/**
+ * Chromium's sandboxed processes (provider windows, GPU, audio) run as
+ * app-container identities that must be able to read the app's files. Program
+ * Files grants that; the per-user install folder does not, and on some PCs every
+ * sandboxed process died at launch (no audio, no AnimePahe or MangaDot window).
+ * The installer grants it (build/installer.nsh); this repairs older installs,
+ * once per version, before any provider window opens.
+ */
+function grantSandboxReadAccess(): void {
+  if (process.platform !== "win32" || !app.isPackaged) return;
+  const marker = path.join(app.getPath("userData"), `sandbox-access-${app.getVersion()}`);
+  if (fs.existsSync(marker)) return;
+  const icacls = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "icacls.exe");
+  const args = [path.dirname(process.execPath), "/grant", "*S-1-15-2-1:(OI)(CI)(RX)", "*S-1-15-2-2:(OI)(CI)(RX)", "/T", "/C", "/Q"];
+  execFile(icacls, args, { windowsHide: true }, (error) => {
+    if (error) console.warn("[Sandbox] Could not let sandboxed processes read the app:", error.message);
+    else fs.writeFile(marker, "", () => {});
+  });
+}
+
 app.whenReady().then(async () => {
+  grantSandboxReadAccess();
   // Load a previously verified automation config first, then make one bounded
   // refresh attempt before providers and request interception are initialized.
   await initRuntimeConfig();

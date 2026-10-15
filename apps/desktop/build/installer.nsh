@@ -13,3 +13,15 @@
   # Give Windows a moment to release file locks.
   Sleep 800
 !macroend
+
+# Chromium runs its sandboxed processes (provider websites, the GPU process,
+# the audio service) as app-container identities, which must be able to read
+# the app's own files. Program Files grants them that; this per-user folder
+# (%LOCALAPPDATA%\Programs) does not, and on some PCs every sandboxed process
+# died at launch: no GPU (9.0.0), no audio and no provider windows (9.0.2).
+# Grant read and execute to ALL APPLICATION PACKAGES and ALL RESTRICTED
+# APPLICATION PACKAGES, by SID so it works in every Windows language.
+!macro customInstall
+  DetailPrint `Letting sandboxed processes read "${PRODUCT_NAME}"...`
+  nsExec::Exec `icacls "$INSTDIR" /grant *S-1-15-2-1:(OI)(CI)(RX) *S-1-15-2-2:(OI)(CI)(RX) /T /C /Q`
+!macroend
