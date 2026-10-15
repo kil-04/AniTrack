@@ -52,6 +52,14 @@ object ThemePlayer {
                     buffering.value = state == Player.STATE_BUFFERING
                 }
 
+                override fun onEvents(player: Player, events: Player.Events) {
+                    val state = player.playbackState
+                    BackgroundMusic.setHold(
+                        BackgroundMusic.Hold.THEME,
+                        player.playWhenReady && state != Player.STATE_ENDED && state != Player.STATE_IDLE,
+                    )
+                }
+
                 override fun onPlayerError(error: PlaybackException) {
                     // A missing file shouldn't end the queue: note it and move on.
                     problem.value = "Couldn't play ${current?.title ?: "that theme"}."
@@ -72,6 +80,8 @@ object ThemePlayer {
         val wanted = songs.getOrNull(start)?.key
         val startAt = playable.indexOfFirst { it.key == wanted }.coerceAtLeast(0)
         PlayerHolder.peek()?.pause() // One thing playing at a time.
+        // Before this player asks for audio focus, so the background music steps aside rather than losing it.
+        BackgroundMusic.setHold(BackgroundMusic.Hold.THEME, true)
         val exo = ensure(context)
         queue.clear()
         queue.addAll(playable)
@@ -107,6 +117,7 @@ object ThemePlayer {
             exo.pause()
         } else {
             PlayerHolder.peek()?.pause()
+            BackgroundMusic.setHold(BackgroundMusic.Hold.THEME, true)
             if (exo.playbackState == Player.STATE_ENDED) exo.seekTo(0, 0L)
             exo.play()
         }
@@ -135,6 +146,7 @@ object ThemePlayer {
     fun stop() {
         player?.release()
         player = null
+        BackgroundMusic.setHold(BackgroundMusic.Hold.THEME, false)
         queue.clear()
         index.intValue = -1
         isPlaying.value = false

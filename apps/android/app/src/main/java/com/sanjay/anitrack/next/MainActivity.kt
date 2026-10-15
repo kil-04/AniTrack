@@ -95,6 +95,7 @@ class MainActivity : ComponentActivity() {
         com.sanjay.anitrack.next.data.ReleaseAlerts.init(applicationContext)
         com.sanjay.anitrack.next.data.SmartDownloads.init(applicationContext)
         com.sanjay.anitrack.next.data.AnimeThemes.init(applicationContext)
+        com.sanjay.anitrack.next.data.BackgroundMusic.init(applicationContext)
         com.sanjay.anitrack.next.data.ReleaseAlerts.takeRoute(intent)
         com.sanjay.anitrack.next.data.providers.connectors.MiruroAndroidProvider.attach(this)
         com.sanjay.anitrack.next.data.manga.comix.ComixSource.attach(this)
@@ -133,6 +134,16 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         // Opening the app tops up smart downloads (at most every 20 minutes).
         com.sanjay.anitrack.next.data.SmartDownloads.kick(this)
+        com.sanjay.anitrack.next.data.BackgroundMusic.setHold(com.sanjay.anitrack.next.data.BackgroundMusic.Hold.BACKGROUND, false)
+    }
+
+    override fun onStop() {
+        // Background music is for browsing the app: it waits while AniTrack is out of sight
+        // (but not through a rotation, which stops and starts the activity straight away).
+        if (!isChangingConfigurations) {
+            com.sanjay.anitrack.next.data.BackgroundMusic.setHold(com.sanjay.anitrack.next.data.BackgroundMusic.Hold.BACKGROUND, true)
+        }
+        super.onStop()
     }
 
     override fun onNewIntent(intent: android.content.Intent) {
@@ -182,6 +193,7 @@ class MainActivity : ComponentActivity() {
         // The shared player outlives the player screen (mini player) — free it
         // when the whole activity goes away.
         if (isFinishing) com.sanjay.anitrack.next.data.PlayerHolder.release()
+        if (isFinishing) com.sanjay.anitrack.next.data.BackgroundMusic.release()
     }
 }
 
@@ -256,6 +268,8 @@ fun AppShell() {
                             onOpenManga = openManga,
                         )
                     }
+                    com.sanjay.anitrack.next.ui.BackgroundMusicBar(compact = false, onOpenSettings = { go("settings") })
+                    Spacer(Modifier.width(10.dp))
                     MalProfileButton(
                         connected = malConnected,
                         username = malUsername,
@@ -292,6 +306,8 @@ fun AppShell() {
                             maxLines = 1,
                         )
                     }
+                    Spacer(Modifier.width(10.dp))
+                    com.sanjay.anitrack.next.ui.BackgroundMusicBar(compact = true, onOpenSettings = { go("settings") })
                     Spacer(Modifier.width(10.dp))
                     MalProfileButton(
                         connected = malConnected,

@@ -250,8 +250,9 @@ fun PlayerScreen(
     }
     DisposableEffect(Unit) {
         PlaySession.playerActive = true
-        // An episode takes over from any theme song.
+        // An episode takes over from any theme song and the background music.
         com.sanjay.anitrack.next.data.ThemePlayer.pause()
+        com.sanjay.anitrack.next.data.BackgroundMusic.setHold(com.sanjay.anitrack.next.data.BackgroundMusic.Hold.PLAYER, true)
         // Immersive: hide the Android status + navigation bars for the whole
         // player so nothing (clock, taskbar) sits over the video or controls.
         val window = activity?.window
@@ -263,6 +264,7 @@ fun PlayerScreen(
         }
         onDispose {
             PlaySession.playerActive = false
+            com.sanjay.anitrack.next.data.BackgroundMusic.setHold(com.sanjay.anitrack.next.data.BackgroundMusic.Hold.PLAYER, false)
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             // Don't re-show system bars — the whole app runs immersive now.
         }

@@ -44,6 +44,13 @@ interface ApiBridge {
     forAnime(id: number): Promise<import("../../../packages/shared/anime-themes").ThemeSong[]>;
     radio(): Promise<import("../../../packages/shared/anime-themes").ThemeSong[]>;
   };
+  /** Background music: the user's own tracks (desktop only; absent in the legacy Android shell). */
+  music?: {
+    list(): Promise<import("../../../packages/shared/bg-music").BgTrack[]>;
+    import(): Promise<{ added: number; skipped: number; tracks: import("../../../packages/shared/bg-music").BgTrack[] }>;
+    remove(id: string): Promise<import("../../../packages/shared/bg-music").BgTrack[]>;
+    openFolder(): Promise<{ ok: boolean }>;
+  };
   list: {
     getAll(): Promise<{ entry: ListEntry; anime: AnimeMeta | null }[]>;
     set(entry: ListEntry): Promise<ListEntry[]>;

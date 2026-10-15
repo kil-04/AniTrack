@@ -55,6 +55,16 @@ object PlayerHolder {
         player ?: ExoPlayer.Builder(ctx.applicationContext).build()
             .apply {
                 playWhenReady = true
+                // An episode with its sound going (the mini player included) pauses the background music.
+                addListener(object : androidx.media3.common.Player.Listener {
+                    override fun onEvents(player: androidx.media3.common.Player, events: androidx.media3.common.Player.Events) {
+                        val state = player.playbackState
+                        BackgroundMusic.setHold(
+                            BackgroundMusic.Hold.EPISODE,
+                            player.playWhenReady && (state == androidx.media3.common.Player.STATE_READY || state == androidx.media3.common.Player.STATE_BUFFERING),
+                        )
+                    }
+                })
                 // Safe default until setMedia() applies the connector's
                 // resolved seek policy for the active stream.
                 setSeekParameters(androidx.media3.exoplayer.SeekParameters.CLOSEST_SYNC)
@@ -243,6 +253,7 @@ object PlayerHolder {
         loadedKey = null
         lastResolved = null
         miniActive.value = false
+        BackgroundMusic.setHold(BackgroundMusic.Hold.EPISODE, false)
     }
 
     private val BLOCKED_REQUEST_HEADERS = setOf(

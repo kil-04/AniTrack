@@ -168,7 +168,11 @@ internal fun ThemeVideoDialog(song: ThemeSong, onClose: () -> Unit) {
     DisposableEffect(exo) {
         ThemePlayer.pause()
         PlayerHolder.peek()?.pause()
-        onDispose { exo.release() }
+        com.sanjay.anitrack.next.data.BackgroundMusic.setHold(com.sanjay.anitrack.next.data.BackgroundMusic.Hold.VIDEO, true)
+        onDispose {
+            exo.release()
+            com.sanjay.anitrack.next.data.BackgroundMusic.setHold(com.sanjay.anitrack.next.data.BackgroundMusic.Hold.VIDEO, false)
+        }
     }
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {

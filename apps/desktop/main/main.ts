@@ -15,6 +15,8 @@ import { Readable } from "node:stream";
 import { IPC } from "../../../packages/shared/types";
 import { flushDirty } from "./services/mal";
 import { repairAndNotify } from "./services/list-repair";
+import { serveTrack } from "./services/music";
+import { registerMusicIpc } from "./ipc/music";
 import {
   getPaheBaseUrl,
   getAuthorizedPaheRequestHeaders,
@@ -173,6 +175,8 @@ protocol.registerSchemesAsPrivileged([
   },
   // Manga page images, fetched by the main process with each source's headers.
   { scheme: "anitrack-manga", privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
+  // Background music the user imported (userData/music).
+  { scheme: "anitrack-music", privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
 ]);
 
 function createWindow() {
@@ -308,6 +312,7 @@ app.whenReady().then(async () => {
   });
 
   registerMangaProtocol();
+  protocol.handle("anitrack-music", serveTrack);
 
   registerIpc();
   createWindow();
@@ -413,6 +418,7 @@ function registerIpc() {
   registerProviderIpc(registerWebRequestHandlers);
   registerDownloadsIpc(getMainWindow);
   registerMangaIpc(getMainWindow);
+  registerMusicIpc(getMainWindow);
 
   ipcMain.handle(IPC.PROVIDERS_MEDIA_ACCESS_STATUS, (event, mediaAccessId: string) => {
     if (event.sender !== mainWindow?.webContents) throw new Error("Media access status is only available to AniTrack's player.");

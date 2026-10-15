@@ -74,6 +74,12 @@ contextBridge.exposeInMainWorld("api", {
     forAnime: (id: number) => ipcRenderer.invoke(IPC.THEMES_FOR_ANIME, id),
     radio: () => ipcRenderer.invoke(IPC.THEMES_RADIO),
   },
+  music: {
+    list: () => ipcRenderer.invoke(IPC.MUSIC_LIST),
+    import: () => ipcRenderer.invoke(IPC.MUSIC_IMPORT),
+    remove: (id: string) => ipcRenderer.invoke(IPC.MUSIC_REMOVE, id),
+    openFolder: () => ipcRenderer.invoke(IPC.MUSIC_OPEN_FOLDER),
+  },
   list: {
     getAll: () => ipcRenderer.invoke(IPC.LIST_GET_ALL),
     set: (entry: unknown) => ipcRenderer.invoke(IPC.LIST_SET, entry),

@@ -2,6 +2,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
 import { useAppStore } from "../store/useAppStore";
 import GlobalSearch from "./GlobalSearch";
+import { BackgroundMusicButton } from "./BackgroundMusic";
 import { MangaSearchBox } from "./manga/MangaCards";
 import { isMangaPath } from "../lib/manga-api";
 
@@ -37,6 +38,7 @@ export default function TopBar() {
             {scanStatus}
           </span>
         )}
+        <BackgroundMusicButton />
       </div>
     </header>
   );

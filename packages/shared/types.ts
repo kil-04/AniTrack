@@ -231,6 +231,11 @@ export const IPC = {
   // Signed automation config
   AUTOMATION_STATUS: "automation:status",
   AUTOMATION_REFRESH: "automation:refresh",
+  // Background music (desktop): the user's own imported tracks
+  MUSIC_LIST: "music:list",
+  MUSIC_IMPORT: "music:import",
+  MUSIC_REMOVE: "music:remove",
+  MUSIC_OPEN_FOLDER: "music:open-folder",
   // Offline downloads (desktop)
   DOWNLOAD_START: "download:start",
   DOWNLOAD_LIST: "download:list",

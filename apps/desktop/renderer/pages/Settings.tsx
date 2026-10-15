@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { Capacitor } from "@capacitor/core";
 import { useAppStore } from "../store/useAppStore";
-import { BookMarked, Cloud, DownloadCloud, Globe, Info, Library, RefreshCcw, ShieldCheck, type LucideIcon } from "lucide-react";
+import { BookMarked, Cloud, DownloadCloud, Globe, Info, Library, Music2, RefreshCcw, ShieldCheck, type LucideIcon } from "lucide-react";
 import BrandMark from "../components/BrandMark";
+import { BackgroundMusicSettings } from "../components/BackgroundMusic";
 import type { AniListAuthState } from "../../../../packages/shared/types";
 import type { RuntimeConfigStatus } from "../../../../packages/shared/runtime-config";
 import { getSyncConfig, setSyncConfig, clearSyncConfig, pullAndMerge, pushAllProgress } from "../lib/supabase-sync";
@@ -15,6 +17,7 @@ const SECTIONS: { id: string; label: string; icon: LucideIcon }[] = [
   { id: "updates", label: "Updates", icon: DownloadCloud },
   { id: "providers", label: "Provider fixes", icon: ShieldCheck },
   { id: "sync", label: "Cross-device Sync", icon: Cloud },
+  { id: "music", label: "Background music", icon: Music2 },
   { id: "about", label: "About", icon: Info },
 ];
 
@@ -34,6 +37,14 @@ export default function Settings() {
   const setScanStatus = useAppStore((s) => s.setScanStatus);
   const [authError, setAuthError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // "/settings#music" (the top bar's music button) opens at that section.
+  const { hash } = useLocation();
+  useEffect(() => {
+    const id = hash.slice(1);
+    if (!id) return;
+    const timer = setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }), 120);
+    return () => clearTimeout(timer);
+  }, [hash]);
   const [awaitingAuth, setAwaitingAuth] = useState(false);
 
   // AnimePahe URL
@@ -221,7 +232,7 @@ export default function Settings() {
     <div className="mx-auto flex max-w-[1240px] gap-10 px-8 py-8">
       <nav className="sticky top-6 hidden h-fit w-56 shrink-0 lg:block">
         <div className="mb-3 px-3 text-[10px] font-bold uppercase tracking-[0.2em] text-ink-3">On this page</div>
-        {SECTIONS.filter((x) => x.id !== "providers" || (window.api.automation && automationStatus)).map((x) => (
+        {SECTIONS.filter((x) => (x.id !== "providers" || (window.api.automation && automationStatus)) && (x.id !== "music" || window.api.music)).map((x) => (
           <button
             key={x.id}
             onClick={() => document.getElementById(x.id)?.scrollIntoView({ behavior: "smooth", block: "start" })}
@@ -237,7 +248,7 @@ export default function Settings() {
         <BrandMark size={52} />
         <div>
           <h1 className="text-[32px] font-extrabold leading-tight tracking-tight">Settings</h1>
-          <p className="text-sm text-ink-3">Accounts, sync, providers and updates</p>
+          <p className="text-sm text-ink-3">Accounts, sync, providers, music and updates</p>
         </div>
       </header>
 
@@ -618,6 +629,13 @@ export default function Settings() {
           {supaError  && <p className="text-sm text-red-300">{supaError}</p>}
         </div>
       </section>
+
+      {window.api.music && (
+        <section id="music" className="panel scroll-mt-6 p-6">
+          <SettingsHead icon={Music2} title="Background music" />
+          <BackgroundMusicSettings />
+        </section>
+      )}
 
       <section id="about" className="panel scroll-mt-6 p-6">
         <SettingsHead icon={Info} title="About" />

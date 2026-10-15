@@ -13,6 +13,7 @@ import { hasMangaMode, isMangaPath, lastModeWasManga, rememberMode } from "./lib
 import { isCapacitor } from "./lib/platform";
 import { subscribeDownloads } from "./lib/downloads";
 import { deleteAnimeProgress } from "./lib/supabase-sync";
+import { holdForPlayerRoute, startBgMusic } from "./store/useBgMusic";
 import { AnimatePresence, motion } from "framer-motion";
 
 // Short and opacity-led: AnimatePresence waits for the exit before the next page
@@ -38,6 +39,7 @@ const Filter           = lazy(() => import("./pages/Filter"));
 const ContinueWatching = lazy(() => import("./pages/ContinueWatching"));
 const Library          = lazy(() => import("./pages/Library"));
 const Schedule         = lazy(() => import("./pages/Schedule"));
+const LatestEpisodes   = lazy(() => import("./pages/LatestEpisodes"));
 const Downloads        = lazy(() => import("./pages/Downloads"));
 const TimeMachine      = lazy(() => import("./pages/TimeMachine"));
 const TasteGenome      = lazy(() => import("./pages/TasteGenome"));
@@ -95,6 +97,10 @@ export default function App() {
   useEffect(() => {
     if (isPlayerRoute) usePlayerStore.getState().open(location.search);
   }, [isPlayerRoute, location.search]);
+
+  // Background music (the user's own tracks) steps aside while the player is open.
+  useEffect(() => startBgMusic(), []);
+  useEffect(() => holdForPlayerRoute(isPlayerRoute), [isPlayerRoute]);
 
   useEffect(() => {
     refreshAll();
@@ -231,6 +237,7 @@ export default function App() {
               <Route path="/settings"           element={<PageTransition><Settings /></PageTransition>} />
               <Route path="/continue-watching"  element={<PageTransition><ContinueWatching /></PageTransition>} />
               <Route path="/schedule"           element={<PageTransition><Schedule /></PageTransition>} />
+              <Route path="/latest"             element={<PageTransition><LatestEpisodes /></PageTransition>} />
               <Route path="/downloads"          element={<PageTransition><Downloads /></PageTransition>} />
               <Route path="/time-machine"       element={<PageTransition><TimeMachine /></PageTransition>} />
               <Route path="/taste-genome"       element={<PageTransition><TasteGenome /></PageTransition>} />
