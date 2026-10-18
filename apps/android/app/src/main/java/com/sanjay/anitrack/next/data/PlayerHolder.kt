@@ -240,7 +240,9 @@ object PlayerHolder {
         } else {
             // Subtitled streams go through DefaultMediaSourceFactory, which
             // transcodes sideloaded subs to media3 cues (the supported path).
-            val item = MediaItem.Builder().setUri(s.url).setSubtitleConfigurations(subtitleConfigs).build()
+            // The connector's mime type wins over the URL (shonen.to's playlists end in /m3u8?t=…).
+            val item = MediaItem.Builder().setUri(s.url).setMimeType(s.mimeType)
+                .setSubtitleConfigurations(subtitleConfigs).build()
             p.setMediaSource(DefaultMediaSourceFactory(streamFactory).createMediaSource(item))
         }
         p.prepare()

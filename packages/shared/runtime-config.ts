@@ -38,7 +38,7 @@ export const BUILTIN_RUNTIME_CONFIG: RuntimeConfig = {
   schemaVersion: 1,
   revision: 0,
   issuedAt: "2026-08-17T00:00:00.000Z",
-  providerOrder: ["anikoto", "animepahe"],
+  providerOrder: ["anikoto", "animepahe", "shonen"],
   providers: {
     anikoto: {
       enabled: true,
@@ -107,6 +107,19 @@ export const BUILTIN_RUNTIME_CONFIG: RuntimeConfig = {
         graphql: "/api",
         authConfigs: "/authconfigs",
         cryptoBootstrap: "/client-crypto/v1/bootstrap",
+      },
+      selectors: {},
+    },
+    shonen: {
+      // AniList-keyed plain-HTTP catalogue (packages/shared/shonen.ts); added 19 Oct 2026.
+      enabled: true,
+      baseUrls: ["https://shonen.to"],
+      streamHostFragments: ["vidcloud.sbs"],
+      mediaExtensions: [".m3u8", ".ts", ".vtt"],
+      routes: {
+        search: "/browse?q={query}",
+        anime: "/anime/{animeId}",
+        sources: "/sources/shonen?id={animeId}&episode={episode}&language={language}",
       },
       selectors: {},
     },

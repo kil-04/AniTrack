@@ -28,7 +28,9 @@ object AnikotoProvider : AnimeProvider {
     override fun isEnabled(config: AndroidRuntimeConfig): Boolean =
         config.anikoto.enabled && config.features.anikotoStreaming
 
-    override fun acceptsResumeKey(key: String): Boolean = !PAHE_UUID.matches(key)
+    // Other connectors' keys (shonen:<id>, miruro:sub:<id>) never reach Anikoto.
+    override fun acceptsResumeKey(key: String): Boolean =
+        !PAHE_UUID.matches(key) && !key.startsWith("shonen:") && !key.startsWith("miruro:")
 
     override suspend fun match(anime: Anime): ProviderSeries? =
         Anikoto.matchFor(anime)?.let { series(it.source.slug, it.list.episodes, it.verified, it.source) }

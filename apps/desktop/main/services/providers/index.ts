@@ -4,6 +4,7 @@ import { AnimePaheProvider } from "./animepahe";
 import { AnikotoProvider } from "./anikoto";
 import { MiruroProvider } from "./miruro";
 import { ProviderRegistry } from "./registry";
+import { ShonenProvider } from "./shonen";
 import type { StreamProvider } from "./types";
 
 // Compatibility map for the v1 signed configuration. New providers only need
@@ -25,7 +26,7 @@ function providerEnabled(provider: StreamProvider): boolean {
 
 export const providerManager = new ProviderRegistry(
   // MKissa was removed at the user's request (Oct 2026); its connector stays in mkissa.ts, unregistered.
-  [new AnimePaheProvider(), new AnikotoProvider(), new MiruroProvider()],
+  [new AnimePaheProvider(), new AnikotoProvider(), new MiruroProvider(), new ShonenProvider()],
   {
     order: () => getRuntimeConfig().providerOrder,
     isEnabled: providerEnabled,

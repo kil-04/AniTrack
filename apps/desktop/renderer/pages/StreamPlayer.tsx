@@ -835,7 +835,7 @@ export default function StreamPlayer({
     return -1;
   }
 
-  function attachStream(url: string, subtitles?: any[], startPos?: number, mediaAccessId?: string) {
+  function attachStream(url: string, subtitles?: any[], startPos?: number, mediaAccessId?: string, hls?: boolean) {
     const video = videoRef.current;
     if (!video) return;
     const request = playbackRequestsRef.current.current();
@@ -877,7 +877,8 @@ export default function StreamPlayer({
     };
 
     // Setup new video source first (so track injection happens after source binding and avoids resetting)
-    const isHls = url.includes(".m3u8");
+    // Connectors flag playlists whose URL doesn't say .m3u8 (shonen.to's proxy).
+    const isHls = hls ?? url.includes(".m3u8");
 
     if (isHls && Hls.isSupported()) {
       buildHls(url, video, { worker: !isCapacitor, startLevel: -1, attempt: 1, startPosition: startPos ?? -1, playOnReady });
@@ -1270,7 +1271,7 @@ export default function StreamPlayer({
         
         const activeSubs = streamVariant(fetchedLinks[bestIdx]) === "hard" ? [] : subtitles;
 
-        attachStream(url, activeSubs, undefined, resolved.mediaAccessId);
+        attachStream(url, activeSubs, undefined, resolved.mediaAccessId, resolved.hls);
 
         // Warm only the NEXT episode's lightweight links. Do not resolve its
         // stream while this episode is playing: Kwik may rotate the cookie that
@@ -1407,7 +1408,7 @@ export default function StreamPlayer({
     resetPlayer();
     pendingSeekRef.current = resumePosition;
     try {
-      const { url, subtitles, referer, mediaAccessId } = await providerClient.resolve(providerId, link.id ?? link.kwik);
+      const { url, subtitles, referer, mediaAccessId, hls } = await providerClient.resolve(providerId, link.id ?? link.kwik);
       if (!isCurrent()) return;
       refererRef.current = referer ?? null;
       if (!url) {
@@ -1419,7 +1420,7 @@ export default function StreamPlayer({
 
       const activeSubs = streamVariant(link) === "hard" ? [] : subtitles;
 
-      attachStream(url, activeSubs, undefined, mediaAccessId);
+      attachStream(url, activeSubs, undefined, mediaAccessId, hls);
     } catch (e: any) {
       if (!isCurrent()) return;
       if (requiresManualProviderRetry(e)) {

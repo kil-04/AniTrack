@@ -148,7 +148,7 @@ object RemoteConfig {
     private val defaults = AndroidRuntimeConfig(
         revision = 0,
         issuedAt = "2026-08-17T00:00:00.000Z",
-        providerOrder = listOf("anikoto", "animepahe"),
+        providerOrder = listOf("anikoto", "animepahe", "shonen"),
         providers = linkedMapOf(
             "anikoto" to defaultProvider,
             "animepahe" to ProviderRuntimeConfig(
@@ -179,6 +179,19 @@ object RemoteConfig {
                     "graphql" to "/api",
                     "authConfigs" to "/authconfigs",
                     "cryptoBootstrap" to "/client-crypto/v1/bootstrap",
+                ),
+                selectors = emptyMap(),
+            ),
+            // AniList-keyed plain-HTTP catalogue (connectors/shonen/Shonen.kt); added 19 Oct 2026.
+            "shonen" to ProviderRuntimeConfig(
+                enabled = true,
+                baseUrls = listOf("https://shonen.to"),
+                streamHostFragments = listOf("vidcloud.sbs"),
+                mediaExtensions = listOf(".m3u8", ".ts", ".vtt"),
+                routes = mapOf(
+                    "search" to "/browse?q={query}",
+                    "anime" to "/anime/{animeId}",
+                    "sources" to "/sources/shonen?id={animeId}&episode={episode}&language={language}",
                 ),
                 selectors = emptyMap(),
             ),

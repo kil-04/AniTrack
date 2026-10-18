@@ -71,6 +71,8 @@ export interface StreamData {
   authorizationScope?: "exact" | "directory";
   /** Allow the Electron renderer to consume this authorized media cross-origin. */
   cors?: boolean;
+  /** The URL is an HLS playlist even though it doesn't end in .m3u8 (e.g. a proxy's `/m3u8?t=…`). */
+  hls?: boolean;
 }
 
 export interface ExternalIds {
