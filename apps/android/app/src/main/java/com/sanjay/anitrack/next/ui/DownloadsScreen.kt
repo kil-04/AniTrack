@@ -134,6 +134,11 @@ internal fun DownloadGroupCard(
 ) {
     val rotation by animateFloatAsState(if (open) 180f else 0f, label = "chevron")
     AniCard(padding = PaddingValues(0.dp)) {
+      // Phones in portrait: the actions (Continue, Delete…) get their own line under the
+      // title; beside it they squeezed the title to one letter per line.
+      BoxWithConstraints {
+        val narrow = maxWidth < 520.dp
+        Column {
         Row(
             Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -157,9 +162,19 @@ internal fun DownloadGroupCard(
                     Text(summary, style = MaterialTheme.typography.labelMedium, color = AniColors.TextSecondary)
                 }
             }
-            trailing()
+            if (!narrow) trailing()
             Icon(Icons.Rounded.ExpandMore, if (open) "Collapse" else "Expand", tint = AniColors.TextSecondary, modifier = Modifier.rotate(rotation))
         }
+        if (narrow) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 72.dp, end = 8.dp, bottom = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.End,
+                content = trailing,
+            )
+        }
+        }
+      }
         if (open) {
             HorizontalDivider(color = AniColors.BorderSoft)
             Column(Modifier.padding(vertical = 4.dp), content = content)
