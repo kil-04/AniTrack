@@ -110,13 +110,13 @@ object AniList {
         diskCacheDir.listFiles().orEmpty().sortedByDescending { it.lastModified() }.drop(400).forEach { it.delete() }
     }
 
-    private suspend fun gql(query: String, variables: JSONObject): JSONObject = withContext(Dispatchers.IO) {
+    private suspend fun gql(query: String, variables: JSONObject, diskTtlMs: Long = DISK_TTL_MS): JSONObject = withContext(Dispatchers.IO) {
         val key = query + variables.toString()
         synchronized(cache) {
             cache[key]?.let { (at, v) -> if (System.currentTimeMillis() - at < CACHE_TTL_MS) return@withContext v }
         }
         // A recent response from disk answers without queueing behind other requests.
-        readDisk(key, DISK_TTL_MS)?.let { data ->
+        readDisk(key, diskTtlMs)?.let { data ->
             synchronized(cache) { cache[key] = System.currentTimeMillis() to data }
             return@withContext data
         }
@@ -612,6 +612,55 @@ object AniList {
             rememberAnime(m) to year
         }
     }
+
+    // ── Time Machine ────────────────────────────────────────────────────────
+    // The same lists as packages/shared/time-machine.ts. Past years barely change,
+    // so their answers are reused from disk for a week (12 hours for the last two years).
+
+    private val TIME_MACHINE_QUERY = """query(${'$'}started: String, ${'$'}page: Int, ${'$'}sort: [MediaSort], ${'$'}formats: [MediaFormat], ${'$'}minPopularity: Int) {
+        Page(page: ${'$'}page, perPage: 50) {
+            pageInfo { hasNextPage }
+            media(type: ANIME, startDate_like: ${'$'}started, status_not: NOT_YET_RELEASED, format_in: ${'$'}formats, sort: ${'$'}sort, popularity_greater: ${'$'}minPopularity) {
+                $MEDIA_FIELDS
+                startDate { year month }
+                relations { edges { relationType(version: 2) node { id type startDate { year month } } } }
+            }
+        }
+    }"""
+
+    private suspend fun timeMachinePage(year: Int, page: Int, sort: String, formats: List<String>, minPopularity: Int, fromGems: Boolean): List<TimeMachineCandidate> {
+        val vars = JSONObject().put("started", "$year%").put("page", page).put("sort", JSONArray().put(sort))
+            .put("formats", JSONArray(formats)).put("minPopularity", minPopularity)
+        val ttl = if (year <= java.time.Year.now().value - 2) 7 * 24 * 60 * 60 * 1000L else 12 * 60 * 60 * 1000L
+        val media = gql(TIME_MACHINE_QUERY, vars, ttl).getJSONObject("Page").getJSONArray("media")
+        return (0 until media.length()).map { i ->
+            val m = media.getJSONObject(i)
+            val edges = m.optJSONObject("relations")?.optJSONArray("edges")
+            val relations = buildList {
+                if (edges != null) for (j in 0 until edges.length()) {
+                    val edge = edges.optJSONObject(j) ?: continue
+                    val node = edge.optJSONObject("node") ?: continue
+                    if (node.optString("type") != "ANIME" || node.isNull("id")) continue
+                    val start = node.optJSONObject("startDate")
+                    val startYear = start?.takeUnless { it.isNull("year") }?.optInt("year")
+                    val startMonth = start?.takeUnless { it.isNull("month") }?.optInt("month")
+                    add(TimeMachineRelation(edge.optString("relationType"), node.getInt("id"), startYear, startMonth))
+                }
+            }
+            val month = m.optJSONObject("startDate")?.takeUnless { it.isNull("month") }?.optInt("month")
+            TimeMachineArchive.candidate(rememberAnime(m), year, month, relations, fromGems)
+        }
+    }
+
+    /** What premiered in [year]: the 100 most-followed titles and the 50 most-followed films. */
+    suspend fun timeMachineYear(year: Int): List<TimeMachineCandidate> =
+        timeMachinePage(year, 1, "POPULARITY_DESC", TimeMachineArchive.SAMPLE_FORMATS, 0, false) +
+            timeMachinePage(year, 2, "POPULARITY_DESC", TimeMachineArchive.SAMPLE_FORMATS, 0, false) +
+            timeMachinePage(year, 1, "POPULARITY_DESC", listOf("MOVIE"), 0, false)
+
+    /** [year]'s best-rated titles with more than [minPopularity] members, for its hidden gems. */
+    suspend fun timeMachineGems(year: Int, minPopularity: Int): List<TimeMachineCandidate> =
+        timeMachinePage(year, 1, "SCORE_DESC", TimeMachineArchive.GEM_FORMATS, minPopularity, true)
 
     /** Episodes of [ids] that aired after [from] and before [to] (epoch seconds), oldest first. */
     suspend fun airedBetween(ids: List<Int>, from: Long, to: Long): List<Airing> {

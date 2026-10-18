@@ -186,6 +186,7 @@ export const IPC = {
   ANILIST_RECENT: "anilist:recent",
   ANILIST_RECOMMENDATIONS: "anilist:recommendations",
   ANILIST_PREMIERED_ON: "anilist:premiered-on",
+  ANILIST_TIME_MACHINE: "anilist:time-machine",
   // Local state
   LIST_GET_ALL: "list:get-all",
   LIST_SET: "list:set",

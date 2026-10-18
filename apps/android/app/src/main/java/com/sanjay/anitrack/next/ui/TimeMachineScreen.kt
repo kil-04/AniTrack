@@ -17,6 +17,7 @@ import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Casino
 import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.Museum
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -27,6 +28,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -34,24 +36,35 @@ import com.sanjay.anitrack.next.data.AniList
 import com.sanjay.anitrack.next.data.Anime
 import com.sanjay.anitrack.next.data.Db
 import com.sanjay.anitrack.next.data.TimeMachineArchive
+import com.sanjay.anitrack.next.data.TimeMachineCandidate
+import com.sanjay.anitrack.next.data.TimeMachineYear
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.format.TextStyle
 import java.util.Locale
 import kotlin.random.Random
 
 private const val VISITED_KEY = "time_machine_visited"
+private const val YEAR_KEY = "time_machine_year"
 private val SEASONS = listOf("ALL" to "All year", "WINTER" to "Winter", "SPRING" to "Spring", "SUMMER" to "Summer", "FALL" to "Fall")
-private val SORTS = listOf("SCORE_DESC" to "Top rated", "POPULARITY_DESC" to "Most popular")
+/** Fewer titles than this and the year gets a note that AniList's record is thin. */
+private const val QUIET_YEAR = 12
+
+private fun prefs(context: Context) = context.getSharedPreferences("anitrack_next", Context.MODE_PRIVATE)
 
 private fun visitedYears(context: Context): Set<Int> =
-    context.getSharedPreferences("anitrack_next", Context.MODE_PRIVATE).getString(VISITED_KEY, null)
-        ?.split(',')?.mapNotNull { it.toIntOrNull() }?.toSet().orEmpty()
+    prefs(context).getString(VISITED_KEY, null)?.split(',')?.mapNotNull { it.toIntOrNull() }?.toSet().orEmpty()
 
 private fun saveVisited(context: Context, years: Set<Int>) {
-    context.getSharedPreferences("anitrack_next", Context.MODE_PRIVATE).edit()
-        .putString(VISITED_KEY, years.sorted().joinToString(",")).apply()
+    prefs(context).edit().putString(VISITED_KEY, years.sorted().joinToString(",")).apply()
+}
+
+private fun titleCount(count: Int, singular: String) = "$count $singular${if (count == 1) "" else "s"}"
+
+private fun membersLabel(count: Int?): String = when {
+    count == null || count <= 0 -> ""
+    count >= 1000 -> "${(count / 1000.0).let { kotlin.math.round(it).toInt() }}k members"
+    else -> "$count members"
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -62,17 +75,15 @@ fun TimeMachineScreen(
     onOpenMuseum: (Anime) -> Unit = {},
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val lastYear = remember { java.time.Year.now().value.coerceAtMost(2029) }
-    var year by remember { mutableIntStateOf(1988) }
-    var requestedYear by remember { mutableIntStateOf(1988) }
+    // Reopens on the last year visited.
+    val firstYear = remember { prefs(context).getInt(YEAR_KEY, 1988).takeIf { it in 1960..lastYear } ?: 1988 }
+    var year by remember { mutableIntStateOf(firstYear) }
+    var requestedYear by remember { mutableIntStateOf(firstYear) }
     var season by remember { mutableStateOf("ALL") }
-    var sort by remember { mutableStateOf("SCORE_DESC") }
-    var anime by remember { mutableStateOf<List<Anime>>(emptyList()) }
-    var page by remember { mutableIntStateOf(1) }
-    var hasMore by remember { mutableStateOf(false) }
-    var loadingMore by remember { mutableStateOf(false) }
-    var selectedGenre by remember { mutableStateOf<String?>(null) }
+    var titles by remember { mutableStateOf<List<TimeMachineCandidate>>(emptyList()) }
+    var gemTitles by remember { mutableStateOf<List<TimeMachineCandidate>>(emptyList()) }
+    var attempt by remember { mutableIntStateOf(0) }
     var loading by remember { mutableStateOf(true) }
     var failed by remember { mutableStateOf(false) }
     var visited by remember { mutableStateOf(visitedYears(context)) }
@@ -88,29 +99,35 @@ fun TimeMachineScreen(
         requestedYear = year
     }
 
-    suspend fun fetch(target: Int, pageNumber: Int): Pair<List<Anime>, Boolean> =
-        if (season == "ALL") AniList.advancedSearch(null, null, null, null, null, null, sort, pageNumber, startYear = target)
-        else AniList.advancedSearch(null, null, target, season, null, null, sort, pageNumber)
-
-    LaunchedEffect(requestedYear, season, sort) {
+    // The main lists first (what's on screen), then the gems.
+    LaunchedEffect(requestedYear, attempt) {
         loading = true
         failed = false
-        selectedGenre = null
-        page = 1
+        titles = emptyList()
+        gemTitles = emptyList()
         try {
-            val (list, more) = fetch(requestedYear, 1)
-            anime = list
-            hasMore = more
+            val found = AniList.timeMachineYear(requestedYear)
+            titles = found
+            loading = false
+            prefs(context).edit().putInt(YEAR_KEY, requestedYear).apply()
             if (requestedYear !in visited) {
                 visited = visited + requestedYear
                 saveVisited(context, visited)
+            }
+            val top = found.maxOfOrNull { it.anime.popularity ?: 0 } ?: 0
+            try {
+                gemTitles = AniList.timeMachineGems(requestedYear, TimeMachineArchive.gemPopularityFloor(top))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // The year just shows no gems.
             }
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
             failed = true
+            loading = false
         }
-        loading = false
     }
     LaunchedEffect(Unit) {
         runCatching {
@@ -125,34 +142,22 @@ fun TimeMachineScreen(
         runCatching { onThisDay = AniList.premieredOn(today.monthValue, today.dayOfMonth) }
     }
 
-    val formats = remember(anime) {
-        listOf(
-            "TV signals" to anime.count { it.format == "TV" || it.format == "TV_SHORT" },
-            "Films" to anime.count { it.format == "MOVIE" },
-            "OVA artifacts" to anime.count { it.format == "OVA" || it.format == "ONA" },
-        )
-    }
-    val genres = remember(anime) {
-        anime.flatMap { it.genres }.groupingBy { it }.eachCount().entries
-            .sortedByDescending { it.value }.take(6)
-    }
-    // The studios behind most of this year's list.
-    val topStudios = remember(anime) {
-        anime.flatMap { it.studios.take(1) }.groupingBy { it }.eachCount().entries
-            .sortedByDescending { it.value }.take(3).map { it.key to it.value }
-    }
+    val candidates = remember(titles, gemTitles) { titles + gemTitles }
+    val wholeYear = remember(candidates) { TimeMachineArchive.curate(candidates) }
+    val view = remember(candidates, season) { if (season == "ALL") wholeYear else TimeMachineArchive.curate(candidates, season) }
+    val seasonLabel = SEASONS.first { it.first == season }.second
+    val period = if (season == "ALL") "$requestedYear" else "$seasonLabel $requestedYear"
+    val listed = remember(history) { history.values.flatten().map { it.id }.toSet() }
+    val hero = wholeYear.headliners.firstOrNull() ?: wholeYear.newShows.firstOrNull() ?: wholeYear.films.firstOrNull()
+    val banner = (wholeYear.headliners + wholeYear.newShows + wholeYear.films).firstNotNullOfOrNull { it.banner }
     val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 820
-    val hero = anime.firstOrNull()
-    val visibleAnime = remember(anime, selectedGenre) {
-        selectedGenre?.let { selected -> anime.filter { selected in it.genres } } ?: anime
-    }
     val yours = history[requestedYear].orEmpty()
 
     LazyColumn(Modifier.fillMaxSize().background(Color.Black)) {
         // ── The year ────────────────────────────────────────────────────────
         item {
             Box(Modifier.fillMaxWidth().heightIn(min = 340.dp)) {
-                hero?.banner?.let {
+                banner?.let {
                     AsyncImage(
                         model = it,
                         contentDescription = null,
@@ -165,7 +170,7 @@ fun TimeMachineScreen(
                 Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black))))
                 Column(Modifier.align(Alignment.BottomStart).padding(24.dp)) {
                     Text(
-                        TimeMachineArchive.transmission(year).uppercase(),
+                        TimeMachineArchive.yearInDecade(year).uppercase(),
                         color = accent,
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
@@ -179,11 +184,21 @@ fun TimeMachineScreen(
                     Text(era.headline, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold)
                     Spacer(Modifier.height(6.dp))
                     Text(era.atmosphere, color = Color.White.copy(alpha = 0.62f), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.widthIn(max = 620.dp))
+                    if (!loading && wholeYear.headliners.isNotEmpty()) {
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            "The year of ${TimeMachineArchive.joinTitles(wholeYear.headliners.map { it.title })}.",
+                            color = Color.White.copy(alpha = 0.85f),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.widthIn(max = 720.dp),
+                        )
+                    }
                     Spacer(Modifier.height(18.dp))
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
-                            onClick = { visibleAnime.take(15).takeIf { it.isNotEmpty() }?.let { onOpen(it[Random.nextInt(it.size)]) } },
-                            enabled = visibleAnime.isNotEmpty(),
+                            onClick = { TimeMachineArchive.mysteryPick(view, listed, Random.Default)?.let(onOpen) },
+                            enabled = !loading && (view.newShows.isNotEmpty() || view.films.isNotEmpty()),
                             colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
                         ) {
                             Icon(Icons.Rounded.AutoAwesome, null, modifier = Modifier.size(18.dp))
@@ -219,7 +234,7 @@ fun TimeMachineScreen(
         item {
             Column(Modifier.padding(horizontal = 24.dp, vertical = 16.dp)) {
                 Text("Set the dial", fontWeight = FontWeight.Bold)
-                Text("Travel through the AniList archive", color = Color.White.copy(alpha = 0.4f), style = MaterialTheme.typography.labelSmall)
+                Text("Every year from 1960 to $lastYear", color = Color.White.copy(alpha = 0.4f), style = MaterialTheme.typography.labelSmall)
                 Spacer(Modifier.height(10.dp))
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     items(TimeMachineArchive.eras.filter { it.start <= lastYear }) { decade ->
@@ -257,7 +272,7 @@ fun TimeMachineScreen(
                 Passport(visited, history.keys, current = requestedYear, lastYear = lastYear, onTravel = ::travel, modifier = modifier)
             }
             val panel = @Composable { modifier: Modifier ->
-                YearPanel(season, { season = it }, sort, { sort = it }, formats, topStudios, accent, modifier)
+                YearPanel(season, { season = it }, view, period, loading, accent, onOpen, modifier)
             }
             if (wide) {
                 Row(Modifier.padding(horizontal = 24.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -272,68 +287,39 @@ fun TimeMachineScreen(
             }
         }
 
-        if (genres.isNotEmpty()) item {
-            Column(Modifier.padding(top = 16.dp)) {
-                Text("GENRE SIGNAL", modifier = Modifier.padding(horizontal = 24.dp), color = accent, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
-                Text("Tap a signal to view its titles", modifier = Modifier.padding(horizontal = 24.dp), color = Color.White.copy(alpha = 0.38f), style = MaterialTheme.typography.labelSmall)
-                Spacer(Modifier.height(10.dp))
-                LazyRow(contentPadding = PaddingValues(horizontal = 24.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    item(key = "all") { SignalChip("All · ${anime.size}", selectedGenre == null, accent) { selectedGenre = null } }
-                    items(genres.toList()) { genre ->
-                        val selected = selectedGenre == genre.key
-                        SignalChip("${genre.key} · ${genre.value}", selected, accent) { selectedGenre = if (selected) null else genre.key }
-                    }
+        // ── The year's titles ───────────────────────────────────────────────
+        when {
+            failed -> item {
+                Row(
+                    Modifier.padding(horizontal = 24.dp, vertical = 20.dp).fillMaxWidth().clip(RoundedCornerShape(14.dp))
+                        .background(Color(0x22FF5252)).padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("AniList didn't answer for $requestedYear.", color = Color(0xFFFF8A80), modifier = Modifier.weight(1f))
+                    PillButton("Try again", { attempt += 1 }, icon = Icons.Rounded.Refresh, compact = true)
                 }
             }
-        }
-
-        // ── The year's titles ───────────────────────────────────────────────
-        item {
-            Column(Modifier.padding(top = 24.dp)) {
-                val label = SEASONS.first { it.first == season }.second
-                Text(
-                    "RECOVERED FROM ${if (season == "ALL") "" else label.uppercase() + " "}$requestedYear",
-                    modifier = Modifier.padding(horizontal = 24.dp), color = accent,
-                    style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp,
-                )
-                Text(
-                    selectedGenre?.let { "$it transmission" } ?: if (sort == "SCORE_DESC") "The essential transmission" else "What everyone was watching",
-                    modifier = Modifier.padding(horizontal = 24.dp), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black,
-                )
-                selectedGenre?.let {
-                    Text("${visibleAnime.size} titles in this signal", modifier = Modifier.padding(horizontal = 24.dp), color = Color.White.copy(alpha = 0.4f), style = MaterialTheme.typography.labelSmall)
+            loading -> item {
+                LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 24.dp), color = accent)
+            }
+            else -> {
+                val nothingThisSeason = season != "ALL" && view.titleCount == 0
+                if (nothingThisSeason) item {
+                    Note("Nothing on AniList premiered in $period. Try another season, or All year.")
+                } else if (view.titleCount < QUIET_YEAR) item {
+                    Note("A quiet ${if (season == "ALL") "year" else "season"} in the archive: AniList lists only ${titleCount(view.titleCount, "title")} from $period.")
                 }
-                Spacer(Modifier.height(14.dp))
-                when {
-                    loading -> LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 24.dp), color = accent)
-                    failed -> Text("The archive did not answer. Move the dial and try again.", modifier = Modifier.padding(horizontal = 24.dp), color = Color(0xFFFF8A80))
-                    visibleAnime.isEmpty() -> Text(
-                        "Nothing recorded for this ${if (season == "ALL") "year" else "season"}. Try another season or year.",
-                        modifier = Modifier.padding(horizontal = 24.dp), color = Color.White.copy(alpha = 0.5f),
-                    )
-                    else -> LazyRow(contentPadding = PaddingValues(horizontal = 24.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                        items(visibleAnime, key = { it.id }) { item -> AnimeCard(item, onOpen, width = 142) }
-                        if (hasMore && selectedGenre == null) item(key = "more") {
-                            Box(Modifier.width(142.dp).aspectRatio(1f / POSTER_RATIO), contentAlignment = Alignment.Center) {
-                                PillButton(
-                                    "More from $requestedYear",
-                                    {
-                                        loadingMore = true
-                                        scope.launch {
-                                            runCatching { fetch(requestedYear, page + 1) }.onSuccess { (list, more) ->
-                                                page += 1
-                                                anime = (anime + list).distinctBy { it.id }
-                                                hasMore = more
-                                            }
-                                            loadingMore = false
-                                        }
-                                    },
-                                    loading = loadingMore,
-                                    compact = true,
-                                )
-                            }
-                        }
-                    }
+                if (view.newShows.isNotEmpty()) item {
+                    TitleRow("New in $period", "First seasons and brand-new shows, one per franchise", view.newShows, onOpen)
+                }
+                if (view.films.isNotEmpty()) item {
+                    TitleRow("On the big screen", "Films from $period, without recap movies", view.films, onOpen)
+                }
+                if (view.sequels.isNotEmpty()) item {
+                    TitleRow("Sequels and spin-offs", "New seasons and side stories of earlier shows", view.sequels, onOpen)
+                }
+                if (view.gems.size >= 3) item {
+                    TitleRow("Hidden gems", "Well-rated new titles that fewer people found", view.gems, onOpen)
                 }
             }
         }
@@ -343,7 +329,7 @@ fun TimeMachineScreen(
             Column(Modifier.padding(top = 28.dp)) {
                 Text("FROM YOUR HISTORY", modifier = Modifier.padding(horizontal = 24.dp), color = accent, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
                 Text(
-                    "You've watched ${yours.size} title${if (yours.size == 1) "" else "s"} from $requestedYear",
+                    "You've watched ${titleCount(yours.size, "title")} from $requestedYear",
                     modifier = Modifier.padding(horizontal = 24.dp), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black,
                 )
                 Spacer(Modifier.height(12.dp))
@@ -383,40 +369,93 @@ fun TimeMachineScreen(
     }
 }
 
-/** Seasons, order, the year's formats and its busiest studios. */
+/** A titled row of the year's titles; it scrolls through all of them. */
+@Composable
+private fun TitleRow(title: String, subtitle: String, items: List<Anime>, onOpen: (Anime) -> Unit) {
+    Column(Modifier.padding(top = 24.dp)) {
+        Text(title, modifier = Modifier.padding(horizontal = 24.dp), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
+        Text(
+            "$subtitle · ${titleCount(items.size, "title")}",
+            modifier = Modifier.padding(horizontal = 24.dp),
+            color = Color.White.copy(alpha = 0.4f),
+            style = MaterialTheme.typography.labelSmall,
+        )
+        Spacer(Modifier.height(12.dp))
+        LazyRow(contentPadding = PaddingValues(horizontal = 24.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            items(items, key = { it.id }) { item -> AnimeCard(item, onOpen, width = 142) }
+        }
+    }
+}
+
+@Composable
+private fun Note(text: String) {
+    Text(
+        text,
+        modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp).fillMaxWidth().clip(RoundedCornerShape(14.dp))
+            .background(Color.White.copy(alpha = 0.045f)).padding(16.dp),
+        color = Color.White.copy(alpha = 0.6f),
+        style = MaterialTheme.typography.bodyMedium,
+    )
+}
+
+/** Seasons, how many new shows, films and sequels, and the year's standouts. */
 @Composable
 private fun YearPanel(
     season: String,
     onSeason: (String) -> Unit,
-    sort: String,
-    onSort: (String) -> Unit,
-    formats: List<Pair<String, Int>>,
-    studios: List<Pair<String, Int>>,
+    view: TimeMachineYear,
+    period: String,
+    loading: Boolean,
     accent: Color,
+    onOpen: (Anime) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         PillTabs(SEASONS, season, onSeason, compact = true)
-        PillTabs(SORTS, sort, onSort, compact = true)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            formats.forEach { (label, count) ->
+            listOf("New shows" to view.newShows.size, "Films" to view.films.size, "Sequels" to view.sequels.size).forEach { (label, count) ->
                 Column(Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha = 0.045f)).padding(14.dp)) {
-                    Text(count.toString(), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+                    Text(if (loading) "–" else count.toString(), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
                     Text(label.uppercase(), fontSize = 9.sp, letterSpacing = 1.sp, color = Color.White.copy(alpha = 0.38f))
                 }
             }
         }
-        if (studios.isNotEmpty()) {
-            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha = 0.045f)).padding(14.dp)) {
-                Text("STUDIOS AT WORK", color = accent, fontSize = 9.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(6.dp))
-                studios.forEach { (name, count) ->
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
-                        Text(name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                        Text("$count title${if (count == 1) "" else "s"}", color = Color.White.copy(alpha = 0.45f), style = MaterialTheme.typography.labelMedium)
-                    }
+        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha = 0.045f)).padding(14.dp)) {
+            Text("${period.uppercase()} AT A GLANCE", color = accent, fontSize = 9.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(6.dp))
+            val stats = view.stats
+            when {
+                loading -> Text("Reading AniList…", color = Color.White.copy(alpha = 0.45f), style = MaterialTheme.typography.bodyMedium)
+                view.titleCount == 0 -> Text("Nothing on record for $period.", color = Color.White.copy(alpha = 0.45f), style = MaterialTheme.typography.bodyMedium)
+                else -> {
+                    stats.biggestDebut?.let { Fact("Biggest debut", it.title, membersLabel(it.popularity)) { onOpen(it) } }
+                    stats.bestRated?.let { Fact("Best rated", it.title, "${it.score}%") { onOpen(it) } }
+                    stats.busiestStudio?.let { (name, count) -> Fact("Busiest studio", name, titleCount(count, "title")) }
+                    if (stats.topGenres.isNotEmpty()) Fact("Leading genres", stats.topGenres.joinToString(", "), "")
                 }
             }
+        }
+        if (!loading) {
+            Text(
+                "Picked from ${titleCount(view.titleCount, "AniList title")} that premiered in $period, the most-followed first. Recaps and music videos are left out.",
+                color = Color.White.copy(alpha = 0.4f),
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
+    }
+}
+
+@Composable
+private fun Fact(label: String, value: String, detail: String, onClick: (() -> Unit)? = null) {
+    Row(
+        Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier).padding(vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, color = Color.White.copy(alpha = 0.45f), style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(112.dp))
+        Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        if (detail.isNotEmpty()) {
+            Spacer(Modifier.width(8.dp))
+            Text(detail, color = Color.White.copy(alpha = 0.45f), style = MaterialTheme.typography.labelMedium)
         }
     }
 }
@@ -429,20 +468,6 @@ private fun YearStep(icon: androidx.compose.ui.graphics.vector.ImageVector, labe
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) { Icon(icon, label, tint = Color.White.copy(alpha = if (enabled) 0.9f else 0.25f), modifier = Modifier.size(28.dp)) }
-}
-
-@Composable
-private fun SignalChip(text: String, selected: Boolean, accent: Color, onClick: () -> Unit) {
-    Text(
-        text,
-        Modifier.clip(RoundedCornerShape(50))
-            .background(if (selected) accent else Color.White.copy(alpha = 0.07f))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 13.dp, vertical = 8.dp),
-        color = if (selected) Color.Black else Color.White.copy(alpha = 0.65f),
-        style = MaterialTheme.typography.labelMedium,
-        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-    )
 }
 
 /**

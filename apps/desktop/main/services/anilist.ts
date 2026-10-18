@@ -1,6 +1,20 @@
+import { app } from "electron";
+import fs from "node:fs";
+import path from "node:path";
 import type { AnimeMeta, AnimeRecommendation, RecentEpisodesPage, RelatedAnime } from "../../../../packages/shared/types";
 import { classicEraBoost, classicEraLabel } from "../../../../packages/shared/recommendations";
 import { planStory, type PrintMeta, type StoryPlan } from "../../../../packages/shared/story-bridge";
+import {
+  TIME_MACHINE_RULES,
+  gemPopularityFloor,
+  timeMachineCandidate,
+  timeMachineQuery,
+  timeMachineVariables,
+  type TimeMachineCandidate,
+  type TimeMachineList,
+  type TimeMachinePart,
+  type TimeMachineRelationEdge,
+} from "../../../../packages/shared/time-machine";
 
 const ENDPOINT = "https://graphql.anilist.co";
 
@@ -621,6 +635,118 @@ export async function premieredOn(month: number, day: number): Promise<import(".
     .map((node) => ({ anime: toAnime(node), year: node.startDate!.year! }));
   cacheSet(key, result);
   return result;
+}
+
+// ── Time Machine ─────────────────────────────────────────────────────────────
+// A year's titles with their relations (see packages/shared/time-machine.ts). Past
+// years barely change, so answers are kept on disk: a week for older years, 12 hours
+// for the last two. A stale copy still answers when AniList doesn't.
+
+type TimeMachineNode = MediaNode & {
+  startDate?: { year?: number | null; month?: number | null } | null;
+  relations?: { edges?: TimeMachineRelationEdge[] } | null;
+};
+
+const timeMachineMemory = new Map<string, { at: number; value: TimeMachineCandidate[] }>();
+const timeMachineFolder = () => path.join(app.getPath("userData"), "anilist_cache");
+
+function timeMachineFreshFor(year: number): number {
+  return year <= new Date().getFullYear() - 2 ? 7 * 24 * 60 * 60 * 1000 : 12 * 60 * 60 * 1000;
+}
+
+async function readTimeMachineFile(name: string): Promise<{ at: number; value: TimeMachineCandidate[] } | null> {
+  try {
+    const saved = JSON.parse(await fs.promises.readFile(path.join(timeMachineFolder(), `${name}.json`), "utf-8"));
+    return typeof saved?.at === "number" && Array.isArray(saved.value) ? saved : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeTimeMachineFile(name: string, value: TimeMachineCandidate[]): Promise<void> {
+  try {
+    await fs.promises.mkdir(timeMachineFolder(), { recursive: true });
+    const file = path.join(timeMachineFolder(), `${name}.json`);
+    const temp = `${file}.${process.pid}.tmp`;
+    await fs.promises.writeFile(temp, JSON.stringify({ at: Date.now(), value }));
+    await fs.promises.rename(temp, file);
+    void pruneTimeMachineFiles();
+  } catch {
+    /* without the file the year just loads from AniList next time */
+  }
+}
+
+let timeMachinePruned = false;
+
+/** Once per run: drops years saved under older rules or untouched for a month. */
+async function pruneTimeMachineFiles(): Promise<void> {
+  if (timeMachinePruned) return;
+  timeMachinePruned = true;
+  const current = `time-machine-v${TIME_MACHINE_RULES}-`;
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const names = await fs.promises.readdir(timeMachineFolder()).catch(() => [] as string[]);
+  await Promise.all(names.filter((name) => name.startsWith("time-machine-")).map(async (name) => {
+    const file = path.join(timeMachineFolder(), name);
+    const touched = (await fs.promises.stat(file).catch(() => null))?.mtimeMs ?? 0;
+    if (!name.startsWith(current) || touched < cutoff) await fs.promises.rm(file, { force: true }).catch(() => {});
+  }));
+}
+
+async function timeMachineList(year: number, list: TimeMachineList, minPopularity = 0, priority: "high" | "low" = "high") {
+  const data = await gql<{ Page: { pageInfo: { hasNextPage: boolean }; media: TimeMachineNode[] } }>(
+    timeMachineQuery(MEDIA_FIELDS),
+    timeMachineVariables(year, list, minPopularity),
+    priority,
+  );
+  return data.Page;
+}
+
+function toTimeMachineCandidate(node: TimeMachineNode, year: number, source: "sample" | "gems"): TimeMachineCandidate {
+  const anime = toAnime(node);
+  // Hover cards only show the start of the synopsis; the full text stays on the title page.
+  if (anime.synopsis && anime.synopsis.length > 600) anime.synopsis = `${anime.synopsis.slice(0, 600).trimEnd()}…`;
+  return timeMachineCandidate({ anime, year, startMonth: node.startDate?.month, relations: node.relations?.edges, source });
+}
+
+/**
+ * The titles that premiered in [year]: "main" is the 100 most-followed plus the
+ * 50 most-followed films (what's on screen); "gems" is the best-rated above a
+ * popularity floor, asked for after the main lists in the low lane.
+ */
+export async function timeMachineYear(year: number, part: TimeMachinePart): Promise<TimeMachineCandidate[]> {
+  const name = `time-machine-v${TIME_MACHINE_RULES}-${year}-${part}`;
+  const fresh = timeMachineFreshFor(year);
+  const remembered = timeMachineMemory.get(name);
+  if (remembered && Date.now() - remembered.at < fresh) return remembered.value;
+  const saved = await readTimeMachineFile(name);
+  if (saved && Date.now() - saved.at < fresh) {
+    timeMachineMemory.set(name, saved);
+    return saved.value;
+  }
+  try {
+    let value: TimeMachineCandidate[];
+    if (part === "main") {
+      // Queued together, they run back to back in the high lane.
+      const [first, second, films] = await Promise.all([
+        timeMachineList(year, "popular"),
+        timeMachineList(year, "popular-2"),
+        timeMachineList(year, "films"),
+      ]);
+      value = [...first.media, ...second.media, ...films.media].map((node) => toTimeMachineCandidate(node, year, "sample"));
+    } else {
+      const sample = await timeMachineYear(year, "main");
+      const top = Math.max(0, ...sample.map((candidate) => candidate.anime.popularity ?? 0));
+      const gems = await timeMachineList(year, "gems", gemPopularityFloor(top), "low");
+      value = gems.media.map((node) => toTimeMachineCandidate(node, year, "gems"));
+    }
+    const entry = { at: Date.now(), value };
+    timeMachineMemory.set(name, entry);
+    void writeTimeMachineFile(name, value);
+    return value;
+  } catch (error) {
+    if (saved) return saved.value;
+    throw error;
+  }
 }
 
 export async function trending(): Promise<AnimeMeta[]> {

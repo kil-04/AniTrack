@@ -37,6 +37,8 @@ interface ApiBridge {
     relations(id: number): Promise<RelatedAnime[]>;
     story(id: number): Promise<import("../../../packages/shared/story-bridge").StoryPlan>;
     premieredOn(month: number, day: number): Promise<import("../../../packages/shared/types").PremieredAnime[]>;
+    /** A year's titles for the Time Machine: "main" first, then "gems". */
+    timeMachineYear(year: number, part: import("../../../packages/shared/time-machine").TimeMachinePart): Promise<import("../../../packages/shared/time-machine").TimeMachineCandidate[]>;
   };
   /** Manga mode (Electron only; the legacy Android shell has no manga sources). */
   manga?: import("./lib/manga-api").MangaApi;

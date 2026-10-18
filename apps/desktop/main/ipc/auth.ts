@@ -10,7 +10,7 @@ import {
   pullList,
   setMalClientId,
 } from "../services/mal";
-import { getById, getRelations, searchAnime, advancedSearchAnime, trending, getAiringFor, recentEpisodes, recommendations, premieredOn, getStory } from "../services/anilist";
+import { getById, getRelations, searchAnime, advancedSearchAnime, trending, getAiringFor, recentEpisodes, recommendations, premieredOn, getStory, timeMachineYear } from "../services/anilist";
 import { themeRadio, themesForAnime } from "../services/animethemes";
 import {
   beginAuth as alBeginAuth,
@@ -96,6 +96,12 @@ export function registerAuthIpc(getMainWindow: () => BrowserWindow | null) {
       throw new Error("Invalid date");
     }
     return premieredOn(m, d);
+  });
+  ipcMain.handle(IPC.ANILIST_TIME_MACHINE, (_e, year: unknown, part: unknown) => {
+    const y = Number(year);
+    if (!Number.isInteger(y) || y < 1900 || y > 2100) throw new Error("Invalid year");
+    if (part !== "main" && part !== "gems") throw new Error("Invalid Time Machine part");
+    return timeMachineYear(y, part);
   });
   ipcMain.handle(IPC.ANILIST_GET, async (_e, id: number) => {
     console.log(`[IPC.ANILIST_GET] Received id:`, id, `type:`, typeof id);

@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld("api", {
     relations: (id: number) => ipcRenderer.invoke(IPC.ANILIST_RELATIONS, id),
     story: (id: number) => ipcRenderer.invoke(IPC.ANILIST_STORY, id),
     premieredOn: (month: number, day: number) => ipcRenderer.invoke(IPC.ANILIST_PREMIERED_ON, month, day),
+    timeMachineYear: (year: number, part: "main" | "gems") => ipcRenderer.invoke(IPC.ANILIST_TIME_MACHINE, year, part),
   },
   manga: {
     feed: () => ipcRenderer.invoke(MANGA_IPC.FEED),

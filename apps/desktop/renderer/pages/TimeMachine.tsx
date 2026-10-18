@@ -1,21 +1,40 @@
-import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { CalendarDays, ChevronLeft, ChevronRight, Clock3, Dices, Landmark, Radio, Sparkles, Stamp } from "lucide-react";
+import { Fragment, useEffect, useMemo, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { CalendarDays, ChevronLeft, ChevronRight, Clapperboard, Clock3, Dices, Gem, History, Landmark, Layers, RefreshCw, Sparkles, Stamp, type LucideIcon } from "lucide-react";
 import Card from "../components/Card";
+import Row from "../components/Row";
+import SectionHeader from "../components/SectionHeader";
 import type { AnimeMeta, PremieredAnime } from "../../../../packages/shared/types";
-import { ANIME_ERAS, animeEraForYear, clampTimeMachineYear, yearTransmission } from "../../../../packages/shared/time-machine";
+import {
+  ANIME_ERAS,
+  TIME_MACHINE_ROW,
+  animeEraForYear,
+  clampTimeMachineYear,
+  curateTimeMachineYear,
+  mysteryPick,
+  yearInDecade,
+  type TimeMachineCandidate,
+  type TimeMachineSeason,
+} from "../../../../packages/shared/time-machine";
 import { rejectOversizedImage, safeImageSrc } from "../lib/image-guard";
 
 const VISITED_KEY = "anitrack.timeMachine.visited";
-const SEASONS = [["ALL", "All year"], ["WINTER", "Winter"], ["SPRING", "Spring"], ["SUMMER", "Summer"], ["FALL", "Fall"]] as const;
-const SORTS = [["SCORE_DESC", "Top rated"], ["POPULARITY_DESC", "Most popular"]] as const;
+const YEAR_KEY = "anitrack.timeMachine.year";
+const SEASONS: [TimeMachineSeason, string][] = [["ALL", "All year"], ["WINTER", "Winter"], ["SPRING", "Spring"], ["SUMMER", "Summer"], ["FALL", "Fall"]];
 const LAST_YEAR = Math.min(2029, new Date().getFullYear());
+/** Fewer titles than this and the year gets a note that AniList's record is thin. */
+const QUIET_YEAR = 12;
 
 function countLabel(value: number, singular: string): string {
   return `${value} ${value === 1 ? singular : `${singular}s`}`;
 }
 
-// The passport lives in this window's storage; unreadable storage just starts it empty.
+function membersLabel(count?: number | null): string {
+  if (!count) return "";
+  return count >= 1000 ? `${Math.round(count / 1000)}k members` : `${count} members`;
+}
+
+// The passport and the last year visited live in this window's storage; unreadable storage just starts fresh.
 function readVisited(): Set<number> {
   try {
     const raw = window.localStorage.getItem(VISITED_KEY);
@@ -33,6 +52,23 @@ function saveVisited(years: Set<number>) {
   }
 }
 
+function readLastYear(): number {
+  try {
+    const saved = Number(window.localStorage.getItem(YEAR_KEY));
+    return Number.isInteger(saved) && saved >= 1960 && saved <= LAST_YEAR ? saved : 1988;
+  } catch {
+    return 1988;
+  }
+}
+
+function saveLastYear(year: number) {
+  try {
+    window.localStorage.setItem(YEAR_KEY, String(year));
+  } catch {
+    // The dial just opens on 1988 next time.
+  }
+}
+
 function Pill({ selected, accent, onClick, children }: { selected: boolean; accent: string; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
@@ -47,16 +83,62 @@ function Pill({ selected, accent, onClick, children }: { selected: boolean; acce
   );
 }
 
+/** "Cowboy Bebop, Serial Experiments Lain and Perfect Blue", each a link to its page. */
+function TitleLinks({ items }: { items: AnimeMeta[] }) {
+  return (
+    <>
+      {items.map((item, i) => (
+        <Fragment key={item.id}>
+          {i > 0 && (i === items.length - 1 ? " and " : ", ")}
+          <Link to={`/anime/${item.id}`} state={{ anime: item }} className="text-white underline decoration-white/25 underline-offset-4 transition hover:decoration-white">{item.title}</Link>
+        </Fragment>
+      ))}
+    </>
+  );
+}
+
+function Fact({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-baseline justify-between gap-4 text-sm">
+      <span className="shrink-0 text-ink-3">{label}</span>
+      <span className="min-w-0 truncate text-right font-semibold">{children}</span>
+    </div>
+  );
+}
+
+/** A row of titles; [expandable] rows switch to a full grid beyond the first [TIME_MACHINE_ROW] until [period] changes. */
+function TitleRow({ icon, title, subtitle, items, period, expandable = false }: { icon: LucideIcon; title: string; subtitle: string; items: AnimeMeta[]; period: string; expandable?: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => setExpanded(false), [period]);
+  if (items.length === 0) return null;
+  const more = expandable && items.length > TIME_MACHINE_ROW;
+  return (
+    <section>
+      <SectionHeader icon={icon} title={title} subtitle={subtitle} className="px-8">
+        {more && (
+          <button type="button" onClick={() => setExpanded((value) => !value)} className="btn btn-ghost btn-sm">
+            {expanded ? "Show fewer" : `Show all ${items.length}`}
+          </button>
+        )}
+      </SectionHeader>
+      {expanded ? (
+        <div className="mb-10 grid grid-cols-2 gap-x-4 gap-y-8 px-8 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
+          {items.map((item) => <Card key={item.id} anime={item} />)}
+        </div>
+      ) : (
+        <Row>{items.slice(0, TIME_MACHINE_ROW).map((item) => <Card key={item.id} anime={item} size="md" />)}</Row>
+      )}
+    </section>
+  );
+}
+
 export default function TimeMachine() {
   const navigate = useNavigate();
-  const [year, setYear] = useState(1988);
-  const [season, setSeason] = useState<string>("ALL");
-  const [sort, setSort] = useState<string>("SCORE_DESC");
-  const [anime, setAnime] = useState<AnimeMeta[]>([]);
-  const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [selectedGenre, setSelectedGenre] = useState<string | null>(null);
+  const [year, setYear] = useState(readLastYear);
+  const [season, setSeason] = useState<TimeMachineSeason>("ALL");
+  const [titles, setTitles] = useState<TimeMachineCandidate[]>([]);
+  const [gemTitles, setGemTitles] = useState<TimeMachineCandidate[]>([]);
+  const [attempt, setAttempt] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [visited, setVisited] = useState<Set<number>>(() => readVisited());
@@ -65,37 +147,40 @@ export default function TimeMachine() {
   const era = animeEraForYear(year);
   const today = useMemo(() => new Date(), []);
 
-  const filtersFor = (pageNumber: number) => season === "ALL"
-    ? { startYear: year, sort, page: pageNumber }
-    : { year, season, sort, page: pageNumber };
-
+  // The year's titles: the main lists first (what's on screen), then the gems in the background.
   useEffect(() => {
     let active = true;
     const timer = window.setTimeout(() => {
       setLoading(true);
       setError(null);
-      setSelectedGenre(null);
-      setPage(1);
-      window.api.anilist.advancedSearch(filtersFor(1))
-        .then((result) => {
+      setTitles([]);
+      setGemTitles([]);
+      window.api.anilist.timeMachineYear(year, "main")
+        .then((found) => {
           if (!active) return;
-          setAnime(result.results);
-          setHasMore(result.hasNextPage);
+          setTitles(found);
+          setLoading(false);
+          saveLastYear(year);
           setVisited((previous) => {
             if (previous.has(year)) return previous;
             const next = new Set(previous).add(year);
             saveVisited(next);
             return next;
           });
+          window.api.anilist.timeMachineYear(year, "gems")
+            .then((gems) => { if (active) setGemTitles(gems); })
+            .catch(() => undefined);
         })
-        .catch(() => { if (active) setError(`The ${year} archive did not answer. Try the transmission again.`); })
-        .finally(() => { if (active) setLoading(false); });
+        .catch(() => {
+          if (!active) return;
+          setError(`AniList didn't answer for ${year}.`);
+          setLoading(false);
+        });
     }, 220);
     return () => { active = false; window.clearTimeout(timer); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [year, season, sort]);
+  }, [year, attempt]);
 
-  // Your own titles (list and Continue Watching), for "From your history" and the passport dots.
+  // Your own titles (list and Continue Watching), for "From your history", the passport dots and Mystery screening.
   useEffect(() => {
     let active = true;
     Promise.all([
@@ -115,62 +200,37 @@ export default function TimeMachine() {
   }, [today]);
 
   const travel = (to: number) => setYear(clampTimeMachineYear(to));
-  const loadMore = () => {
-    setLoadingMore(true);
-    window.api.anilist.advancedSearch(filtersFor(page + 1))
-      .then((result) => {
-        setPage((value) => value + 1);
-        setAnime((current) => [...current, ...result.results.filter((item) => !current.some((known) => known.id === item.id))]);
-        setHasMore(result.hasNextPage);
-      })
-      .catch(() => undefined)
-      .finally(() => setLoadingMore(false));
-  };
-
-  const hero = anime[0];
-  const formats = useMemo(() => ({
-    television: anime.filter((item) => item.format === "TV" || item.format === "TV_SHORT").length,
-    cinema: anime.filter((item) => item.format === "MOVIE").length,
-    ova: anime.filter((item) => item.format === "OVA" || item.format === "ONA").length,
-  }), [anime]);
-  const studios = useMemo(() => {
-    const counts = new Map<string, number>();
-    anime.forEach((item) => { const main = item.studios?.[0]; if (main) counts.set(main, (counts.get(main) ?? 0) + 1); });
-    return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
-  }, [anime]);
-  const genreSignal = useMemo(() => {
-    const counts = new Map<string, number>();
-    anime.flatMap((item) => item.genres ?? []).forEach((genre) => counts.set(genre, (counts.get(genre) ?? 0) + 1));
-    return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6);
-  }, [anime]);
-  const visibleAnime = useMemo(
-    () => selectedGenre ? anime.filter((item) => item.genres?.includes(selectedGenre)) : anime,
-    [anime, selectedGenre],
-  );
+  const candidates = useMemo(() => [...titles, ...gemTitles], [titles, gemTitles]);
+  const wholeYear = useMemo(() => curateTimeMachineYear(candidates), [candidates]);
+  const view = useMemo(() => season === "ALL" ? wholeYear : curateTimeMachineYear(candidates, season), [candidates, season, wholeYear]);
+  const seasonLabel = SEASONS.find(([key]) => key === season)?.[1] ?? "All year";
+  const period = season === "ALL" ? String(year) : `${seasonLabel} ${year}`;
+  const hero = wholeYear.headliners[0] ?? wholeYear.newShows[0] ?? wholeYear.films[0];
+  const banner = [...wholeYear.headliners, ...wholeYear.newShows, ...wholeYear.films].find((item) => safeImageSrc(item.bannerImage))?.bannerImage;
+  const listed = useMemo(() => new Set(history.map((item) => item.id)), [history]);
   const historyYears = useMemo(() => new Set(history.map((item) => item.year).filter((value): value is number => !!value)), [history]);
   const yours = useMemo(() => history.filter((item) => item.year === year), [history, year]);
   const explored = [...visited].filter((value) => value >= 1960 && value <= LAST_YEAR).length;
   const totalYears = LAST_YEAR - 1960 + 1;
-  const seasonLabel = SEASONS.find(([key]) => key === season)?.[1] ?? "All year";
+  const { biggestDebut, bestRated, busiestStudio, topGenres } = view.stats;
+  const nothingThisSeason = !loading && !error && season !== "ALL" && view.titleCount === 0;
 
   const surprise = () => {
-    const pool = visibleAnime.slice(0, 15);
-    if (pool.length === 0) return;
-    const pick = pool[Math.floor(Math.random() * pool.length)];
-    navigate(`/anime/${pick.id}`, { state: { anime: pick } });
+    const pick = mysteryPick(view, listed);
+    if (pick) navigate(`/anime/${pick.id}`, { state: { anime: pick } });
   };
 
   return (
     <div className="min-h-full pb-16">
       <section className="relative mx-8 mt-6 min-h-[390px] overflow-hidden rounded-[28px] bg-surface-1 shadow-pop ring-1 ring-white/[0.07]">
-        {safeImageSrc(hero?.bannerImage) && (
-          <img src={safeImageSrc(hero?.bannerImage)} alt="" className="absolute inset-0 h-full w-full object-cover opacity-40" onLoad={(event) => rejectOversizedImage(event)} />
+        {safeImageSrc(banner) && (
+          <img src={safeImageSrc(banner)} alt="" className="absolute inset-0 h-full w-full object-cover opacity-40" onLoad={(event) => rejectOversizedImage(event)} />
         )}
         <div className="absolute inset-0 bg-gradient-to-r from-bg via-bg/85 to-bg/20" />
         <div className="absolute inset-0 bg-gradient-to-t from-bg via-transparent to-bg/20" />
         <div className="relative flex flex-col justify-center px-10 py-12 xl:px-14">
           <div className="mb-4 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.3em]" style={{ color: era.accent }}>
-            <Radio size={15} className="animate-pulse" /> {yearTransmission(year)}
+            <History size={15} /> {yearInDecade(year)}
           </div>
           <div className="flex flex-wrap items-end gap-5">
             <div className="flex items-center gap-3">
@@ -183,8 +243,15 @@ export default function TimeMachine() {
               <p className="mt-3 max-w-lg text-sm leading-relaxed text-white/65 md:text-base">{era.atmosphere}</p>
             </div>
           </div>
-          <div className="mt-8 flex flex-wrap gap-3">
-            <button onClick={surprise} disabled={visibleAnime.length === 0} className="btn btn-primary btn-lg">
+          <div className="mt-7 min-h-7 max-w-4xl text-lg font-semibold leading-relaxed text-white/75">
+            {loading ? (
+              <span className="skeleton inline-block h-6 w-[min(32rem,80%)] rounded-lg align-middle" />
+            ) : wholeYear.headliners.length > 0 ? (
+              <>The year of <TitleLinks items={wholeYear.headliners} />.</>
+            ) : null}
+          </div>
+          <div className="mt-6 flex flex-wrap gap-3">
+            <button onClick={surprise} disabled={loading || (view.newShows.length === 0 && view.films.length === 0)} className="btn btn-primary btn-lg">
               <Sparkles size={17} /> Mystery screening
             </button>
             <button onClick={() => travel(1960 + Math.floor(Math.random() * totalYears))} className="btn btn-secondary btn-lg">
@@ -201,7 +268,7 @@ export default function TimeMachine() {
           <div className="flex flex-wrap items-center justify-between gap-5">
             <div className="flex items-center gap-3">
               <Clock3 size={20} style={{ color: era.accent }} />
-              <div><div className="font-bold">Set the dial</div><div className="text-xs text-ink-3">Travel through the AniList archive</div></div>
+              <div><div className="font-bold">Set the dial</div><div className="text-xs text-ink-3">Every year from 1960 to {LAST_YEAR}</div></div>
             </div>
             <div className="flex flex-wrap gap-2">
               {ANIME_ERAS.filter((decade) => decade.start <= LAST_YEAR).map((decade) => (
@@ -248,59 +315,68 @@ export default function TimeMachine() {
 
           <div className="space-y-4">
             <div className="flex flex-wrap gap-2">{SEASONS.map(([key, label]) => <Pill key={key} selected={season === key} accent={era.accent} onClick={() => setSeason(key)}>{label}</Pill>)}</div>
-            <div className="flex flex-wrap gap-2">{SORTS.map(([key, label]) => <Pill key={key} selected={sort === key} accent={era.accent} onClick={() => setSort(key)}>{label}</Pill>)}</div>
             <div className="grid gap-3 sm:grid-cols-3">
-              <div className="rounded-2xl border border-white/[0.07] bg-surface-1/80 p-4 shadow-card"><div className="text-2xl font-black">{formats.television}</div><div className="text-xs uppercase tracking-wider text-ink-3">TV signals found</div></div>
-              <div className="rounded-2xl border border-white/[0.07] bg-surface-1/80 p-4 shadow-card"><div className="text-2xl font-black">{formats.cinema}</div><div className="text-xs uppercase tracking-wider text-ink-3">Films recovered</div></div>
-              <div className="rounded-2xl border border-white/[0.07] bg-surface-1/80 p-4 shadow-card"><div className="text-2xl font-black">{formats.ova}</div><div className="text-xs uppercase tracking-wider text-ink-3">OVA artifacts</div></div>
-            </div>
-            {studios.length > 0 && (
-              <div className="rounded-2xl border border-white/[0.07] bg-surface-1/80 p-4 shadow-card">
-                <div className="text-[10px] font-bold uppercase tracking-widest" style={{ color: era.accent }}>Studios at work</div>
-                <div className="mt-2 space-y-1">{studios.map(([name, count]) => <div key={name} className="flex justify-between text-sm"><span className="font-semibold">{name}</span><span className="text-ink-3">{countLabel(count, "title")}</span></div>)}</div>
-              </div>
-            )}
-          </div>
-        </section>
-
-        {genreSignal.length > 0 && (
-          <section>
-            <div className="mb-3 flex items-center gap-2 text-sm font-bold"><Sparkles size={16} style={{ color: era.accent }} /> Genre signal <span className="text-xs font-normal text-ink-3">Choose a signal to view its titles</span></div>
-            <div className="flex flex-wrap gap-2">
-              <Pill selected={selectedGenre === null} accent={era.accent} onClick={() => setSelectedGenre(null)}>All · {countLabel(anime.length, "title")}</Pill>
-              {genreSignal.map(([genre, count]) => (
-                <Pill key={genre} selected={selectedGenre === genre} accent={era.accent} onClick={() => setSelectedGenre(selectedGenre === genre ? null : genre)}>{genre} · {countLabel(count, "title")}</Pill>
+              {([["New shows", view.newShows.length], ["Films", view.films.length], ["Sequels", view.sequels.length]] as const).map(([label, value]) => (
+                <div key={label} className="rounded-2xl border border-white/[0.07] bg-surface-1/80 p-4 shadow-card">
+                  {loading ? <div className="skeleton h-8 w-12 rounded-lg" /> : <div className="text-2xl font-black">{value}</div>}
+                  <div className="text-xs uppercase tracking-wider text-ink-3">{label}</div>
+                </div>
               ))}
             </div>
-          </section>
-        )}
-
-        <section>
-          <div className="mb-5 flex items-end justify-between gap-4">
-            <div>
-              <div className="text-xs font-bold uppercase tracking-[0.25em]" style={{ color: era.accent }}>Recovered from {season === "ALL" ? "" : `${seasonLabel} `}{year}</div>
-              <h2 className="mt-1 text-2xl font-black">{selectedGenre ? `${selectedGenre} transmission` : sort === "SCORE_DESC" ? "The essential transmission" : "What everyone was watching"}</h2>
-            </div>
-            <span className="text-xs text-ink-3">{selectedGenre ? `${countLabel(visibleAnime.length, "title")} in this signal` : sort === "SCORE_DESC" ? "Ranked by audience score" : "Ranked by popularity"}</span>
-          </div>
-          {loading ? (
-            <div className="grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
-              {Array.from({ length: 16 }, (_, i) => <div key={i} className="skeleton aspect-[2/3] rounded-2xl" />)}
-            </div>
-          ) : error ? <button onClick={() => setYear((value) => value === 1988 ? 1989 : 1988)} className="rounded-2xl border border-red-400/20 bg-red-500/10 p-5 text-left text-sm text-red-200 transition hover:bg-red-500/15">{error}</button> : visibleAnime.length === 0 ? (
-            <p className="panel p-5 text-sm text-ink-2">Nothing recorded for this {season === "ALL" ? "year" : "season"}. Try another season or year.</p>
-          ) : (
-            <>
-              <div className="grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">{visibleAnime.map((item) => <Card key={item.id} anime={item} />)}</div>
-              {hasMore && !selectedGenre && (
-                <div className="mt-8 flex justify-center">
-                  <button onClick={loadMore} disabled={loadingMore} className="btn btn-secondary px-6">{loadingMore ? "Recovering…" : `More from ${year}`}</button>
-                </div>
+            <div className="space-y-2 rounded-2xl border border-white/[0.07] bg-surface-1/80 p-4 shadow-card">
+              <div className="text-[10px] font-bold uppercase tracking-widest" style={{ color: era.accent }}>{period} at a glance</div>
+              {loading ? (
+                Array.from({ length: 4 }, (_, i) => <div key={i} className="skeleton h-5 rounded-md" />)
+              ) : view.titleCount === 0 ? (
+                <p className="text-sm text-ink-3">Nothing on record for {period}.</p>
+              ) : (
+                <>
+                  {biggestDebut && <Fact label="Biggest debut"><Link to={`/anime/${biggestDebut.id}`} state={{ anime: biggestDebut }} className="hover:underline">{biggestDebut.title}</Link> <span className="font-normal text-ink-3">· {membersLabel(biggestDebut.popularity)}</span></Fact>}
+                  {bestRated && <Fact label="Best rated"><Link to={`/anime/${bestRated.id}`} state={{ anime: bestRated }} className="hover:underline">{bestRated.title}</Link> <span className="font-normal text-ink-3">· {bestRated.averageScore}%</span></Fact>}
+                  {busiestStudio && <Fact label="Busiest studio">{busiestStudio.name} <span className="font-normal text-ink-3">· {countLabel(busiestStudio.count, "title")}</span></Fact>}
+                  {topGenres.length > 0 && <Fact label="Leading genres">{topGenres.join(", ")}</Fact>}
+                </>
               )}
-            </>
-          )}
+            </div>
+            <p className="text-xs text-ink-3">
+              {loading ? "Reading AniList…" : `Picked from ${countLabel(view.titleCount, "AniList title")} that premiered in ${period}, the most-followed first. Recaps and music videos are left out.`}
+            </p>
+          </div>
         </section>
+      </div>
 
+      {error ? (
+        <div className="mx-8 mb-10 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-red-400/20 bg-red-500/10 p-5 text-sm text-red-200">
+          <span>{error}</span>
+          <button type="button" onClick={() => setAttempt((value) => value + 1)} className="btn btn-danger btn-sm"><RefreshCw size={14} /> Try again</button>
+        </div>
+      ) : loading ? (
+        <div className="space-y-10 px-8 pb-10">
+          {Array.from({ length: 2 }, (_, row) => (
+            <div key={row}>
+              <div className="skeleton mb-4 h-7 w-56 rounded-lg" />
+              <div className="flex gap-4 overflow-hidden">{Array.from({ length: 8 }, (_, i) => <div key={i} className="skeleton h-64 w-44 shrink-0 rounded-2xl" />)}</div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <>
+          {!nothingThisSeason && view.titleCount < QUIET_YEAR && (
+            <p className="panel mx-8 mb-8 p-5 text-sm text-ink-2">
+              A quiet {season === "ALL" ? "year" : "season"} in the archive: AniList lists only {countLabel(view.titleCount, "title")} from {period}.
+            </p>
+          )}
+          {nothingThisSeason && (
+            <p className="panel mx-8 mb-8 p-5 text-sm text-ink-2">Nothing on AniList premiered in {period}. Try another season, or All year.</p>
+          )}
+          <TitleRow icon={Sparkles} title={`New in ${period}`} subtitle="First seasons and brand-new shows, one per franchise" items={view.newShows} period={period} expandable />
+          <TitleRow icon={Clapperboard} title="On the big screen" subtitle={`Films from ${period}, without recap movies`} items={view.films} period={period} expandable />
+          <TitleRow icon={Layers} title="Sequels and spin-offs" subtitle="New seasons and side stories of earlier shows" items={view.sequels} period={period} expandable />
+          {view.gems.length >= 3 && <TitleRow icon={Gem} title="Hidden gems" subtitle="Well-rated new titles that fewer people found" items={view.gems} period={period} />}
+        </>
+      )}
+
+      <div className="space-y-10 px-8">
         {yours.length > 0 && (
           <section>
             <div className="text-xs font-bold uppercase tracking-[0.25em]" style={{ color: era.accent }}>From your history</div>

@@ -13,6 +13,14 @@ import { ScreenOrientation } from "@capacitor/screen-orientation";
 import { classicEraBoost, classicEraLabel } from "../../../../packages/shared/recommendations";
 import { planStory } from "../../../../packages/shared/story-bridge";
 import { mixRadio, parseThemesResponse, themesUrl } from "../../../../packages/shared/anime-themes";
+import {
+  gemPopularityFloor,
+  timeMachineCandidate,
+  timeMachineQuery,
+  timeMachineVariables,
+  type TimeMachineList,
+  type TimeMachinePart,
+} from "../../../../packages/shared/time-machine";
 
 import {
   AniTrackDb,
@@ -227,6 +235,18 @@ export async function installCapacitorApiBridge() {
         return (data.Page?.media ?? [])
           .filter((m: any) => (m.startDate?.year ?? 0) > 1900)
           .map((m: any) => ({ anime: mapMedia(m), year: m.startDate.year as number }));
+      },
+      async timeMachineYear(year: number, part: TimeMachinePart) {
+        const list = async (name: TimeMachineList, minPopularity = 0, priority: "high" | "low" = "high") =>
+          (await alGql<any>(timeMachineQuery(MEDIA_FIELDS), timeMachineVariables(year, name, minPopularity), priority)).Page?.media ?? [];
+        const candidate = (m: any, source: "sample" | "gems") =>
+          timeMachineCandidate({ anime: mapMedia(m), year, startMonth: m.startDate?.month, relations: m.relations?.edges, source });
+        if (part === "main") {
+          const pages = await Promise.all([list("popular"), list("popular-2"), list("films")]);
+          return pages.flat().map((m: any) => candidate(m, "sample"));
+        }
+        const top = Math.max(0, ...(await list("popular")).map((m: any) => m.popularity ?? 0));
+        return (await list("gems", gemPopularityFloor(top), "low")).map((m: any) => candidate(m, "gems"));
       },
       async search(q: string) {
         const data = await alGql<any>(`
