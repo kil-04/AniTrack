@@ -292,15 +292,14 @@ fun AppShell() {
                     }
                     // Inline search with a live results dropdown (desktop-style).
                     Box(Modifier.weight(1f).padding(horizontal = 12.dp), contentAlignment = Alignment.CenterEnd) {
-                        if (novel) com.sanjay.anitrack.next.ui.NovelSearchPill(
-                            modifier = Modifier.widthIn(max = 340.dp).fillMaxWidth(),
-                            onClick = { go("novel-search") },
-                        ) else com.sanjay.anitrack.next.ui.NavSearchBox(
+                        com.sanjay.anitrack.next.ui.NavSearchBox(
                             modifier = Modifier.widthIn(max = 340.dp).fillMaxWidth(),
                             onOpen = openDetail,
-                            onViewAll = { q -> go("${if (manga) "manga-search" else "search"}?q=${android.net.Uri.encode(q)}") },
+                            onViewAll = { q -> go("${if (novel) "novel-search" else if (manga) "manga-search" else "search"}?q=${android.net.Uri.encode(q)}") },
                             manga = manga,
                             onOpenManga = openManga,
+                            novel = novel,
+                            onOpenNovel = openNovel,
                         )
                     }
                     MalProfileButton(
@@ -326,7 +325,7 @@ fun AppShell() {
                         Modifier.weight(1f).height(40.dp)
                             .clip(RoundedCornerShape(50)).background(com.sanjay.anitrack.next.ui.AniColors.SurfaceHigh)
                             .border(1.dp, com.sanjay.anitrack.next.ui.AniColors.BorderSoft, RoundedCornerShape(50))
-                            .clickable { if (novel) go("novel-search") else nav.navigate("quicksearch") { launchSingleTop = true } }
+                            .clickable { nav.navigate("quicksearch") { launchSingleTop = true } }
                             .padding(horizontal = 14.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -433,6 +432,8 @@ fun AppShell() {
                             onBack = { nav.popBackStack() },
                             manga = manga,
                             onOpenManga = openManga,
+                            novel = novel,
+                            onOpenNovel = openNovel,
                         )
                     }
                     composable("manga-search?q={q}", arguments = listOf(navArgument("q") { defaultValue = "" })) { entry ->

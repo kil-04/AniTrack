@@ -48,7 +48,7 @@ import kotlinx.coroutines.launch
 
 typealias OpenNovel = (NovelSourceId, String) -> Unit
 
-private fun statusLabel(status: String?) = when (status) { "ongoing" -> "Ongoing"; "completed" -> "Complete"; else -> null }
+internal fun novelStatusLabel(status: String?) = when (status) { "ongoing" -> "Ongoing"; "completed" -> "Complete"; else -> null }
 
 /** A source's message for a failure, or a general one. */
 internal fun Throwable.novelMessage() = (this as? com.sanjay.anitrack.next.data.manga.MangaSourceException)?.message
@@ -99,21 +99,6 @@ fun NovelCardView(novel: NovelCard, onOpen: OpenNovel, width: Int? = POSTER_WIDT
             Spacer(Modifier.height(2.dp))
             Text(meta, style = MaterialTheme.typography.labelSmall, color = AniColors.TextTertiary, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-    }
-}
-
-/** The top bar's search in novels mode: opens the Search tab (results come from the chosen source). */
-@Composable
-internal fun NovelSearchPill(modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Row(
-        modifier.height(40.dp).clip(RoundedCornerShape(50)).background(AniColors.SurfaceHigh)
-            .border(1.dp, AniColors.BorderSoft, RoundedCornerShape(50))
-            .clickable(onClick = onClick).padding(horizontal = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(Icons.Rounded.Search, null, tint = AniColors.TextTertiary, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(8.dp))
-        Text("Search novels…", color = AniColors.TextTertiary, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
     }
 }
 
@@ -272,7 +257,7 @@ private fun NovelHeroCarousel(
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             hero.rating?.let { ScoreBadge("%.1f".format(it)) }
                             Text(
-                                metaLine(statusLabel(hero.status), hero.chapters?.let { "%,d chapters".format(it) }, hero.genres.take(3).joinToString(" · ").ifBlank { null }),
+                                metaLine(novelStatusLabel(hero.status), hero.chapters?.let { "%,d chapters".format(it) }, hero.genres.take(3).joinToString(" · ").ifBlank { null }),
                                 style = MaterialTheme.typography.labelLarge, color = Color.White.copy(alpha = 0.72f), maxLines = 1, overflow = TextOverflow.Ellipsis,
                             )
                         }
@@ -313,11 +298,16 @@ private fun androidx.compose.foundation.lazy.LazyListScope.novelSection(title: S
 
 private val NOVEL_STATUSES = listOf("Any status" to null, "Ongoing" to "ongoing", "Completed" to "completed")
 
+/** The source the Search tab last used; the top bar's live results come from it too. */
+internal fun preferredNovelSource(context: android.content.Context): NovelSourceId =
+    NovelSourceId.of(context.getSharedPreferences("anitrack_next", android.content.Context.MODE_PRIVATE).getString("novel_source", null))
+        ?: NovelSourceId.NovelBuddy
+
 @Composable
 fun NovelSearchScreen(initialQuery: String = "", initialGenre: String? = null, onOpen: OpenNovel) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val prefs = remember { context.getSharedPreferences("anitrack_next", android.content.Context.MODE_PRIVATE) }
-    var source by remember { mutableStateOf(NovelSourceId.of(prefs.getString("novel_source", null)) ?: NovelSourceId.NovelBuddy) }
+    var source by remember { mutableStateOf(preferredNovelSource(context)) }
     var query by remember { mutableStateOf(initialQuery) }
     var genre by remember { mutableStateOf(initialGenre?.takeIf { it in NovelGenres.all }) }
     var status by remember { mutableStateOf<String?>(null) }
@@ -568,7 +558,7 @@ fun NovelDetailScreen(source: NovelSourceId, titleId: String, onRead: () -> Unit
                         Spacer(Modifier.height(10.dp))
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             d.card.rating?.let { ScoreBadge("%.1f".format(it)) }
-                            statusLabel(d.card.status)?.let { Tag(it) }
+                            novelStatusLabel(d.card.status)?.let { Tag(it) }
                             (list.size.takeIf { it > 0 } ?: d.card.chapters)?.let { Tag("%,d chapters".format(it)) }
                             if (d.card.mtl) Tag("MTL", tone = TagTone.Outline)
                         }

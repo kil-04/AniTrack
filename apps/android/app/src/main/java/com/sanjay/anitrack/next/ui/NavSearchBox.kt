@@ -25,15 +25,20 @@ import com.sanjay.anitrack.next.data.Anime
 import com.sanjay.anitrack.next.data.AniList
 import com.sanjay.anitrack.next.data.Manga
 import com.sanjay.anitrack.next.data.SearchHistory
+import com.sanjay.anitrack.next.data.novel.NovelCard
+import com.sanjay.anitrack.next.data.novel.NovelFilters
+import com.sanjay.anitrack.next.data.novel.NovelSources
 import kotlinx.coroutines.delay
 
-/** One search result row, for anime or manga. */
+/** One search result row, for anime, manga or a novel. */
 internal data class SearchHit(
     val title: String,
     val cover: String?,
     val year: Int?,
     val score: Int?,
     val status: String?,
+    /** Set for a novel: the row shows the source's rating, status and chapter count. */
+    val novel: NovelCard? = null,
     val open: () -> Unit,
 )
 
@@ -44,6 +49,15 @@ internal suspend fun searchHits(query: String, manga: Boolean, onOpen: (Anime) -
         AniList.search(query).map { a -> SearchHit(a.title, a.cover, a.year, a.score, a.status) { onOpen(a) } }
     }
 
+/** Novels from the source the Search tab last used, machine translations left out as there. */
+internal suspend fun novelSearchHits(context: android.content.Context, query: String, onOpenNovel: OpenNovel): List<SearchHit> =
+    NovelSources.search(preferredNovelSource(context), NovelFilters(query)).items.filter { !it.mtl }.map { n ->
+        SearchHit(n.title, n.cover, null, null, n.status, novel = n) { onOpenNovel(n.source, n.id) }
+    }
+
+/** Which recent-searches list a search box keeps. */
+internal fun searchHistoryMode(manga: Boolean, novel: Boolean) = if (novel) "novel" else if (manga) "manga" else "anime"
+
 // ── Nav search box with a live results dropdown (desktop header search) ───────
 
 @Composable
@@ -53,11 +67,14 @@ fun NavSearchBox(
     onViewAll: (String) -> Unit = {},
     manga: Boolean = false,
     onOpenManga: (Manga) -> Unit = {},
+    novel: Boolean = false,
+    onOpenNovel: OpenNovel = { _, _ -> },
 ) {
-    var query by remember(manga) { mutableStateOf("") }
+    val history = searchHistoryMode(manga, novel)
+    var query by remember(history) { mutableStateOf("") }
     val context = androidx.compose.ui.platform.LocalContext.current
-    var recent by remember(manga) { mutableStateOf(SearchHistory.recent(context, manga)) }
-    var results by remember(manga) { mutableStateOf<List<SearchHit>>(emptyList()) }
+    var recent by remember(history) { mutableStateOf(SearchHistory.recent(context, history)) }
+    var results by remember(history) { mutableStateOf<List<SearchHit>>(emptyList()) }
     var open by remember { mutableStateOf(false) }
     val focus = androidx.compose.ui.platform.LocalFocusManager.current
     val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
@@ -81,18 +98,20 @@ fun NavSearchBox(
     }
     // Leaving the search (a result or "view all") releases the field and closes the keyboard.
     fun leave() {
-        SearchHistory.remember(context, manga, query)
-        recent = SearchHistory.recent(context, manga)
+        SearchHistory.remember(context, history, query)
+        recent = SearchHistory.recent(context, history)
         open = false
         query = ""
         focus.clearFocus()
         keyboard?.hide()
     }
 
-    LaunchedEffect(query, manga) {
+    LaunchedEffect(query, history) {
         if (query.isBlank()) { results = emptyList(); open = false; return@LaunchedEffect }
         delay(350)
-        runCatching { results = searchHits(query.trim(), manga, onOpen, onOpenManga) }
+        runCatching {
+            results = if (novel) novelSearchHits(context, query.trim(), onOpenNovel) else searchHits(query.trim(), manga, onOpen, onOpenManga)
+        }
         open = results.isNotEmpty()
     }
 
@@ -101,7 +120,7 @@ fun NavSearchBox(
             value = query, onValueChange = { query = it },
             placeholder = {
                 Text(
-                    if (manga) "Search manga…" else "Search anime…",
+                    if (novel) "Search novels…" else if (manga) "Search manga…" else "Search anime…",
                     style = MaterialTheme.typography.bodyMedium,
                     color = AniColors.TextTertiary,
                     maxLines = 1,
@@ -188,7 +207,7 @@ fun NavSearchBox(
             }
             HorizontalDivider(color = AniColors.BorderSoft)
             DropdownMenuItem(
-                onClick = { SearchHistory.clear(context, manga); recent = emptyList() },
+                onClick = { SearchHistory.clear(context, history); recent = emptyList() },
                 text = { Text("Clear recent searches", color = AniColors.TextSecondary) },
             )
         }
@@ -199,15 +218,23 @@ fun NavSearchBox(
 @Composable
 internal fun SearchHitRow(hit: SearchHit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        PosterImage(hit.cover, hit.title, Modifier.width(40.dp).height(56.dp).clip(RoundedCornerShape(6.dp)))
+        val cover = Modifier.width(40.dp).height(56.dp).clip(RoundedCornerShape(6.dp))
+        if (hit.novel != null) NovelCover(hit.cover, "", cover) else PosterImage(hit.cover, hit.title, cover)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(hit.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(4.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                hit.year?.let { Tag("$it") }
-                ScoreBadge(aniScore(hit.score))
-                hit.status?.let { Text(airingLabel(it) ?: it, style = MaterialTheme.typography.labelSmall, color = AniColors.TextTertiary, maxLines = 1) }
+                val novel = hit.novel
+                if (novel != null) {
+                    ScoreBadge(novel.rating?.let { "%.1f".format(it) })
+                    val meta = listOfNotNull(novelStatusLabel(novel.status), novel.chapters?.let { "$it ch" }).joinToString(" · ")
+                    if (meta.isNotEmpty()) Text(meta, style = MaterialTheme.typography.labelSmall, color = AniColors.TextTertiary, maxLines = 1)
+                } else {
+                    hit.year?.let { Tag("$it") }
+                    ScoreBadge(aniScore(hit.score))
+                    hit.status?.let { Text(airingLabel(it) ?: it, style = MaterialTheme.typography.labelSmall, color = AniColors.TextTertiary, maxLines = 1) }
+                }
             }
         }
     }

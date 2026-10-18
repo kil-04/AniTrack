@@ -29,6 +29,8 @@ fun QuickSearchScreen(
     onBack: () -> Unit,
     manga: Boolean = false,
     onOpenManga: (com.sanjay.anitrack.next.data.Manga) -> Unit = {},
+    novel: Boolean = false,
+    onOpenNovel: OpenNovel = { _, _ -> },
 ) {
     var query by remember { mutableStateOf("") }
     var results by remember { mutableStateOf<List<SearchHit>>(emptyList()) }
@@ -36,14 +38,19 @@ fun QuickSearchScreen(
     var searched by remember { mutableStateOf(false) }
     val focus = remember { androidx.compose.ui.focus.FocusRequester() }
     val context = androidx.compose.ui.platform.LocalContext.current
-    var recent by remember(manga) { mutableStateOf(SearchHistory.recent(context, manga)) }
+    val history = searchHistoryMode(manga, novel)
+    var recent by remember(history) { mutableStateOf(SearchHistory.recent(context, history)) }
+    // Novels come from the source the Search tab last used; anime and manga from AniList.
+    val where = remember(novel) { if (novel) preferredNovelSource(context).label else "AniList" }
 
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     LaunchedEffect(query) {
         if (query.isBlank()) { results = emptyList(); searched = false; return@LaunchedEffect }
         delay(350)
         searching = true
-        runCatching { results = searchHits(query.trim(), manga, onOpen, onOpenManga) }
+        runCatching {
+            results = if (novel) novelSearchHits(context, query.trim(), onOpenNovel) else searchHits(query.trim(), manga, onOpen, onOpenManga)
+        }
         searching = false
         searched = true
     }
@@ -53,7 +60,7 @@ fun QuickSearchScreen(
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back", tint = AniColors.Text) }
             OutlinedTextField(
                 value = query, onValueChange = { query = it },
-                placeholder = { Text(if (manga) "Search manga…" else "Search anime…", color = AniColors.TextTertiary) },
+                placeholder = { Text(if (novel) "Search novels…" else if (manga) "Search manga…" else "Search anime…", color = AniColors.TextTertiary) },
                 singleLine = true,
                 shape = RoundedCornerShape(50),
                 leadingIcon = { Icon(Icons.Rounded.Search, null, tint = AniColors.TextTertiary) },
@@ -78,7 +85,7 @@ fun QuickSearchScreen(
             query.isBlank() && recent.isNotEmpty() -> Column {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("Recent searches", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                    TextButton(onClick = { SearchHistory.clear(context, manga); recent = emptyList() }) {
+                    TextButton(onClick = { SearchHistory.clear(context, history); recent = emptyList() }) {
                         Text("Clear", color = AniColors.TextSecondary)
                     }
                 }
@@ -96,13 +103,13 @@ fun QuickSearchScreen(
             }
             query.isBlank() -> EmptyState(
                 Icons.Rounded.Search,
-                if (manga) "Find a manga" else "Find an anime",
-                "Search AniList by title. Results appear as you type.",
+                if (novel) "Find a novel" else if (manga) "Find a manga" else "Find an anime",
+                "Search $where by title. Results appear as you type.",
             )
             searched && !searching && results.isEmpty() -> EmptyState(
                 Icons.Rounded.SearchOff,
                 "No matches",
-                "Nothing on AniList matches \"${query.trim()}\". Try another spelling or the romaji title.",
+                "Nothing on $where matches \"${query.trim()}\". " + if (novel) "Try another spelling." else "Try another spelling or the romaji title.",
             )
         }
         LazyColumn(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -110,7 +117,7 @@ fun QuickSearchScreen(
                 val hit = results[i]
                 Box(
                     Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-                        .clickable { SearchHistory.remember(context, manga, query); hit.open() }
+                        .clickable { SearchHistory.remember(context, history, query); hit.open() }
                         .padding(horizontal = 8.dp, vertical = 8.dp),
                 ) { SearchHitRow(hit) }
             }
