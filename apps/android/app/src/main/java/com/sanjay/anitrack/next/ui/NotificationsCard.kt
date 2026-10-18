@@ -71,7 +71,7 @@ internal fun NotificationsCard() {
         }
         SwitchRow(
             "New chapters",
-            "Manga you're reading, on the source you read them from.",
+            "Manga and novels you're reading, on the source you read them from.",
             chapters,
         ) {
             chapters = it
@@ -106,7 +106,7 @@ internal fun NotificationsCard() {
                                 summary.episodes.takeIf { it > 0 }?.let { "$it new episode${if (it == 1) "" else "s"}" },
                                 summary.chapters.takeIf { it > 0 }?.let { "$it new chapter${if (it == 1) "" else "s"}" },
                             )
-                            val missed = if (summary.skipped > 0) " (${summary.skipped} manga couldn't be checked — open them once to link a source.)" else ""
+                            val missed = if (summary.skipped > 0) " (${summary.skipped} couldn't be checked: a manga needs opening once to link a source, a novel's source may be down.)" else ""
                             (if (parts.isEmpty()) "Nothing new right now.$missed" else parts.joinToString(" · ") + ".$missed") to true
                         } catch (e: CancellationException) {
                             throw e

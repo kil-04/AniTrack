@@ -27,6 +27,10 @@ import com.sanjay.anitrack.next.MainActivity
 import com.sanjay.anitrack.next.R
 import com.sanjay.anitrack.next.data.manga.MangaChapters
 import com.sanjay.anitrack.next.data.manga.MangaSources
+import com.sanjay.anitrack.next.data.novel.NovelSourceId
+import com.sanjay.anitrack.next.data.novel.NovelSources
+import com.sanjay.anitrack.next.data.novel.NovelStore
+import com.sanjay.anitrack.next.data.novel.Novels
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.TimeUnit
@@ -35,7 +39,9 @@ import java.util.concurrent.TimeUnit
  * New-episode and new-chapter notifications. A periodic worker checks AniList's
  * airing schedule for the shows you watch (list "watching" / "plan to watch" and
  * Continue Watching) and, for the manga you follow, the newest chapter on the
- * source it reads from (only titles with a saved match: one small request each).
+ * source it reads from (only titles with a saved match: one small request each),
+ * and for the novels you're reading, the chapter count of the copy you read (one
+ * request each, on the novel sources' slow background lane; linked copies count once).
  * Every release notifies once; the first check only records where things stand.
  */
 object ReleaseAlerts {
@@ -45,14 +51,17 @@ object ReleaseAlerts {
     private const val KEY_CHAPTERS = "alerts_chapters"
     private const val KEY_AIRING_CHECK = "alerts_airing_check" // epoch seconds
     private const val CHAPTER_PREFIX = "alerts_chapter_" // newest chapter seen per manga
+    private const val NOVEL_PREFIX = "alerts_novel_" // chapter count seen per novel copy ("source:id")
     private const val CHANNEL_EPISODES = "new_episodes"
     private const val CHANNEL_CHAPTERS = "new_chapters"
     private const val WORK = "release-alerts"
     private const val MAX_ANIME = 150
     private const val MAX_MANGA = 40
+    private const val MAX_NOVELS = 30
     /** On the very first check, episodes from the last day still count as new. */
     private const val FIRST_LOOKBACK_S = 24 * 60 * 60L
     private val ROUTE = Regex("^(anime|manga)/\\d{1,9}$")
+    private val NOVEL_ROUTE = Regex("^novel/([a-z]+)/([A-Za-z0-9]{1,40})$")
 
     /** A detail page a notification asked to open; AppShell navigates and clears it. */
     val pendingRoute = mutableStateOf<String?>(null)
@@ -84,11 +93,26 @@ object ReleaseAlerts {
             (Build.VERSION.SDK_INT < 33 ||
                 ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
 
-    /** Reads a notification's route from [intent] into [pendingRoute] (validated: anime/N or manga/N). */
+    /** Reads a notification's route from [intent] into [pendingRoute] (validated: see [isRoute]). */
     fun takeRoute(intent: Intent?) {
         val route = intent?.getStringExtra(EXTRA_ROUTE) ?: return
         intent.removeExtra(EXTRA_ROUTE)
-        if (ROUTE.matches(route)) pendingRoute.value = route
+        if (isRoute(route)) pendingRoute.value = route
+    }
+
+    /** anime/N, manga/N, or novel/<source>/<id> with a known source and a valid id for it. */
+    fun isRoute(route: String): Boolean {
+        if (ROUTE.matches(route)) return true
+        val m = NOVEL_ROUTE.matchEntire(route) ?: return false
+        val source = NovelSourceId.of(m.groupValues[1]) ?: return false
+        return Novels.isTitleId(source, m.groupValues[2])
+    }
+
+    /** The notification line for [fresh] new chapters, the newest labelled [latest]. */
+    fun novelText(fresh: Int, latest: String?, source: String): String = when {
+        fresh == 1 && latest != null -> "$latest is out on $source — tap to read."
+        latest != null -> "$fresh new chapters on $source, up to $latest — tap to read."
+        else -> "$fresh new chapter${if (fresh == 1) "" else "s"} on $source — tap to read."
     }
 
     private fun schedule(context: Context) {
@@ -112,7 +136,7 @@ object ReleaseAlerts {
         )
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL_CHAPTERS, "New chapters", NotificationManager.IMPORTANCE_DEFAULT)
-                .apply { description = "A new chapter of a manga you read is out." },
+                .apply { description = "A new chapter of a manga or novel you read is out." },
         )
     }
 
@@ -126,8 +150,10 @@ object ReleaseAlerts {
         if (episodesOn(context)) episodes = checkEpisodes(context)
         if (chaptersOn(context)) {
             val (posted, missed) = checkChapters(context)
-            chapters = posted
-            skipped = missed
+            NovelSources.init(context)
+            val (novels, novelsMissed) = checkNovels(context)
+            chapters = posted + novels
+            skipped = missed + novelsMissed
         }
         return Summary(episodes, chapters, skipped)
     }
@@ -194,6 +220,45 @@ object ReleaseAlerts {
                 text = "Chapter ${MangaChapters.label(latest)} is out on ${source.label} — tap to read.",
                 cover = info.second,
                 route = "manga/$mangaId",
+            )
+            posted++
+        }
+        return posted to missed
+    }
+
+    /**
+     * New chapters of the novels being read: Continue Reading (one copy per novel, the
+     * one last read) plus "Reading" on My List. Returns (notified, novels that couldn't be checked).
+     */
+    private suspend fun checkNovels(context: Context): Pair<Int, Int> {
+        val prefs = prefs(context)
+        val followed = LinkedHashMap<String, Triple<NovelSourceId, String, String?>>() // novel key -> copy
+        NovelStore.continueReading(MAX_NOVELS).forEach {
+            followed.putIfAbsent(NovelStore.novelKey(it.source, it.titleId), Triple(it.source, it.titleId, it.title))
+        }
+        NovelStore.list().filter { it.status == "reading" }.forEach {
+            followed.putIfAbsent(NovelStore.novelKey(it.source, it.titleId), Triple(it.source, it.titleId, it.title))
+        }
+        var posted = 0
+        var missed = 0
+        for ((source, id, _) in followed.values.take(MAX_NOVELS)) {
+            val detail = try { NovelSources.title(source, id, NovelSources.Lane.Back) }
+            catch (e: CancellationException) { throw e }
+            catch (_: Exception) { null }
+            val latest = detail?.latest
+            if (detail == null || latest == null) { missed++; continue }
+            val key = "$NOVEL_PREFIX${source.key}:$id"
+            val seen = prefs.getInt(key, -1)
+            prefs.edit().putInt(key, latest.count).apply()
+            if (seen < 0 || latest.count <= seen) continue
+            notify(
+                context,
+                channel = CHANNEL_CHAPTERS,
+                id = "novel:${source.key}:$id".hashCode(),
+                title = detail.card.title,
+                text = novelText(latest.count - seen, latest.label, source.label),
+                cover = detail.card.cover,
+                route = "novel/${source.key}/$id",
             )
             posted++
         }

@@ -373,6 +373,9 @@ object NovelStore {
         }
     }
 
+    /** The key shared by a novel's linked copies (its own `source:id` when it has none). */
+    suspend fun novelKey(source: NovelSourceId, id: String): String = withContext(Dispatchers.IO) { keyOf(Db.readable(), source, id) }
+
     suspend fun list(): List<ListRow> = withContext(Dispatchers.IO) {
         val out = ArrayList<ListRow>()
         Db.readable().rawQuery("SELECT source_id, title_id, status, title, cover, updated_at FROM novel_list ORDER BY updated_at DESC", null).use { c ->
