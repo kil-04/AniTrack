@@ -359,6 +359,26 @@ if (typeof window !== "undefined") {
  * The sync gist for other files kept beside Continue Watching (manga reading):
  * found or created for this token, or null when sync is off or unavailable.
  */
+/**
+ * One file of the sync gist as text, or null when the gist has no such file yet
+ * (large files come from their raw URL). A failed read throws, so a reconcile
+ * never uploads over data it couldn't read.
+ */
+export async function readGistFile(token: string, gistId: string, name: string): Promise<string | null> {
+  const res = await fetch(`${GH}/gists/${gistId}`, { headers: ghHeaders(token), cache: "no-store" });
+  if (!res.ok) throw new Error(`Could not read the sync gist (GitHub returned ${res.status}).`);
+  const payload = await res.json() as { files?: Record<string, { content?: unknown; truncated?: unknown; raw_url?: unknown }> };
+  const file = payload?.files?.[name];
+  if (!file) return null;
+  if (file.truncated === true) {
+    if (typeof file.raw_url !== "string") throw new Error(`The truncated sync file ${name} has no download URL.`);
+    const raw = await fetch(file.raw_url, { headers: ghHeaders(token), cache: "no-store" });
+    if (!raw.ok) throw new Error(`Could not read the sync file ${name} (GitHub returned ${raw.status}).`);
+    return raw.text();
+  }
+  return typeof file.content === "string" ? file.content : null;
+}
+
 export async function syncGist(): Promise<{ token: string; gistId: string } | null> {
   if (!gistNetworkEnabled) return null;
   const cfg = getSyncConfig();

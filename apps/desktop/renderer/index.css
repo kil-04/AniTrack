@@ -47,6 +47,13 @@
   --accent-2: 46 44 158;
   --accent-alt: 30 58 138;
 }
+/* Novels: an ink indigo, between manga's royal blue and a violet. */
+[data-mode="novel"] {
+  --accent: 88 80 236;
+  --accent-hover: 116 108 245;
+  --accent-2: 67 56 202;
+  --accent-alt: 55 48 163;
+}
 
 
 html,

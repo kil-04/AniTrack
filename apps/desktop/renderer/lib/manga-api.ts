@@ -80,18 +80,38 @@ export function mangaApi(): MangaApi {
   return api;
 }
 
-// ── Anime / Manga mode, remembered between launches ───────────────────────────
+// ── Anime / Manga / Novels mode, remembered between launches ─────────────────
 
 const MODE_KEY = "anitrack.mode";
 
+export type AppMode = "anime" | "manga" | "novel";
+
 export const isMangaPath = (pathname: string) => pathname === "/manga" || pathname.startsWith("/manga/");
 
-export function rememberMode(manga: boolean) {
-  try { localStorage.setItem(MODE_KEY, manga ? "manga" : "anime"); } catch { /* storage unavailable */ }
+export const modeForPath = (pathname: string): AppMode =>
+  isMangaPath(pathname) ? "manga" : pathname === "/novels" || pathname.startsWith("/novels/") ? "novel" : "anime";
+
+export const modeHome = (mode: AppMode) => (mode === "manga" ? "/manga" : mode === "novel" ? "/novels" : "/");
+
+export function rememberMode(mode: AppMode) {
+  try {
+    localStorage.setItem(MODE_KEY, mode);
+    if (mode !== "anime") localStorage.setItem(`${MODE_KEY}.reading`, mode);
+  } catch { /* storage unavailable */ }
 }
 
-export function lastModeWasManga(): boolean {
-  try { return localStorage.getItem(MODE_KEY) === "manga"; } catch { return false; }
+/** Manga mode holds manga and novels; the Manga switch reopens whichever was read last. */
+export function lastReadingHome(): string {
+  try { return localStorage.getItem(`${MODE_KEY}.reading`) === "novel" ? "/novels" : "/manga"; } catch { return "/manga"; }
+}
+
+export function lastMode(): AppMode {
+  try {
+    const saved = localStorage.getItem(MODE_KEY);
+    return saved === "manga" || saved === "novel" ? saved : "anime";
+  } catch {
+    return "anime";
+  }
 }
 
 // ── Reader preferences (per viewer) ───────────────────────────────────────────

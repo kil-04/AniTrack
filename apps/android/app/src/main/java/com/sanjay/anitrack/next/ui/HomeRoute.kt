@@ -27,10 +27,16 @@ fun HomeScreen(
     /** App-wide Anime/Manga mode, owned by the app shell (search bar, tabs and pages follow it). */
     mode: HomeMode = HomeMode.Anime,
     onModeChange: (HomeMode) -> Unit = {},
+    onOpenNovel: (com.sanjay.anitrack.next.data.novel.NovelSourceId, String) -> Unit = { _, _ -> },
+    onReadNovel: () -> Unit = {},
+    onBrowseNovelGenre: (String) -> Unit = {},
 ) {
     val toggle: @Composable (Modifier) -> Unit = { modifier -> HomeModeToggle(mode, onModeChange, modifier) }
-    if (mode == HomeMode.Manga) MangaHomeScreen(onOpenManga, onOpenMangaId, toggle)
-    else AnimeHome(onOpen, onPlay, onOpenContinue, onOpenLatest, toggle)
+    when (mode) {
+        HomeMode.Manga -> MangaHomeScreen(onOpenManga, onOpenMangaId, toggle)
+        HomeMode.Novel -> NovelHomeScreen(onOpenNovel, onReadNovel, onBrowseNovelGenre, toggle)
+        HomeMode.Anime -> AnimeHome(onOpen, onPlay, onOpenContinue, onOpenLatest, toggle)
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)

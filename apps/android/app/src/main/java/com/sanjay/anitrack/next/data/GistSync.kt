@@ -436,4 +436,74 @@ object GistSync {
         if (changed) mangaListeners.forEach { runCatching { it() } }
         changed
     }
+
+    // ── Novels (progress, list, linked sources) ───────────────────────────
+    // Its own file in the same gist. Rules and wire format: NovelSyncMerge (twin of
+    // packages/shared/novel-sync.ts). The local tables are the source of truth; removals
+    // made here wait in novel_sync_removed until an upload carried them.
+
+    private var novelJob: Job? = null
+    private val novelListeners = java.util.concurrent.CopyOnWriteArraySet<() -> Unit>()
+
+    private fun scheduleNovelSync(delayMs: Long) {
+        if (!mangaSyncOn()) return
+        novelJob?.cancel()
+        novelJob = scope.launch { delay(delayMs); runCatching { syncNovelReading() } }
+    }
+
+    /** Progress, marks, the list or links changed here: upload shortly (batched). */
+    fun novelReadingChanged() = scheduleNovelSync(7000)
+
+    /** Something was removed here (Continue Reading, a read mark, the list): upload it now. */
+    fun novelRemoved() = scheduleNovelSync(0)
+
+    /** Runs [listener] after a reconcile changed local novel rows; returns the unsubscribe. */
+    fun onNovelSync(listener: () -> Unit): () -> Unit {
+        novelListeners += listener
+        return { novelListeners -= listener }
+    }
+
+    /** One file of the gist as text, or null when the gist has none yet. A failed read throws. */
+    private fun loadGistFile(id: String, name: String): String? {
+        http.newCall(req("$GH/gists/$id").build()).execute().use { res ->
+            if (!res.isSuccessful) throw java.io.IOException("Could not read the sync gist (${res.code})")
+            val file = JSONObject(res.body?.string() ?: throw java.io.IOException("Empty sync gist response"))
+                .optJSONObject("files")?.optJSONObject(name) ?: return null
+            if (!file.optBoolean("truncated", false)) return file.optString("content", "")
+            val raw = file.optString("raw_url", "").ifEmpty { throw java.io.IOException("Truncated sync file $name without raw URL") }
+            http.newCall(req(raw).build()).execute().use { r2 ->
+                if (!r2.isSuccessful) throw java.io.IOException("Could not read the sync file $name (${r2.code})")
+                return r2.body?.string() ?: throw java.io.IOException("Empty sync file $name")
+            }
+        }
+    }
+
+    /** Two-way reconcile now. Returns true when local novel rows changed. */
+    suspend fun syncNovelReading(): Boolean = withContext(Dispatchers.IO) {
+        if (!mangaSyncOn() || !RemoteConfig.current().features.gistSync) return@withContext false
+        val changed = lock.withLock {
+            val id = ensureGistId() ?: throw java.io.IOException("Could not find or create the sync gist")
+            val remote = com.sanjay.anitrack.next.data.novel.NovelSyncMerge.parse(loadGistFile(id, com.sanjay.anitrack.next.data.novel.NovelSyncMerge.FILE))
+            val (local, sent) = com.sanjay.anitrack.next.data.novel.NovelStore.syncSnapshot()
+            val plan = com.sanjay.anitrack.next.data.novel.NovelSyncMerge.plan(local, remote, sent, System.currentTimeMillis())
+            if (plan.touchesLocal) com.sanjay.anitrack.next.data.novel.NovelStore.applySync(plan)
+            if (plan.changed) {
+                val content = com.sanjay.anitrack.next.data.novel.NovelSyncMerge.serialize(plan.doc)
+                val body = JSONObject().put("files", JSONObject().put(com.sanjay.anitrack.next.data.novel.NovelSyncMerge.FILE, JSONObject().put("content", content)))
+                val ok = http.newCall(
+                    req("$GH/gists/$id").patch(body.toString().toRequestBody("application/json".toMediaType())).build(),
+                ).execute().use { it.isSuccessful }
+                if (!ok) throw java.io.IOException("GitHub rejected the novel sync update")
+            }
+            // The removals this upload carried are done (one made meanwhile stays pending), and the
+            // ones the gist holds are remembered so a later mark is never dated under one.
+            com.sanjay.anitrack.next.data.novel.NovelStore.ackSync(sent, plan.doc.deleted)
+            plan.touchesLocal
+        }
+        if (changed) {
+            com.sanjay.anitrack.next.data.novel.NovelSources.invalidateUpdates()
+            novelListeners.forEach { runCatching { it() } }
+        }
+        changed
+    }
 }

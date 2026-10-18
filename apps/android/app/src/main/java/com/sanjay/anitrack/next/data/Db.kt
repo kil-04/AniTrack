@@ -14,7 +14,7 @@ object Db {
 
     fun init(ctx: Context) {
         if (::helper.isInitialized) return
-        helper = object : SQLiteOpenHelper(ctx.applicationContext, "anitrack_next.db", null, 9) {
+        helper = object : SQLiteOpenHelper(ctx.applicationContext, "anitrack_next.db", null, 12) {
             override fun onCreate(db: SQLiteDatabase) {
                 db.execSQL(
                     """CREATE TABLE IF NOT EXISTS playback(
@@ -35,6 +35,9 @@ object Db {
                 createReadingTable(db)
                 createMangaListTable(db)
                 createMalProgress(db)
+                createNovelTables(db)
+                createNovelTitleTable(db)
+                createNovelSyncRemoved(db)
             }
             override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) {
                 if (old < 2) createListTable(db)
@@ -51,8 +54,88 @@ object Db {
                 if (old < 7) createReadingTable(db)
                 if (old < 8) createMangaListTable(db)
                 if (old < 9) createMalProgress(db)
+                if (old < 10) createNovelTables(db)
+                if (old < 11) createNovelTitleTable(db)
+                if (old < 12) {
+                    // A v11 table predates link_at; a fresh one (above) already has it.
+                    runCatching { db.execSQL("ALTER TABLE novel_title ADD COLUMN link_at INTEGER") }
+                    createNovelSyncRemoved(db)
+                }
             }
         }
+    }
+
+    /** For the novels store (data/novel/NovelStore.kt), which keeps its own queries. */
+    internal fun readable(): SQLiteDatabase = helper.readableDatabase
+    internal fun writable(): SQLiteDatabase = helper.writableDatabase
+
+    /** Novels mode: progress and the list, keyed by source + source title id (novels have no AniList id). */
+    private fun createNovelTables(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS novel_reading(
+                source_id       TEXT    NOT NULL,
+                title_id        TEXT    NOT NULL,
+                chapter_id      TEXT    NOT NULL,
+                chapter_order   INTEGER NOT NULL,
+                chapter_label   TEXT    NOT NULL,
+                paragraph       INTEGER NOT NULL,
+                paragraph_count INTEGER NOT NULL,
+                title           TEXT,
+                cover           TEXT,
+                updated_at      INTEGER NOT NULL,
+                PRIMARY KEY(source_id, title_id, chapter_id)
+            )""",
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_novel_reading_updated ON novel_reading(updated_at DESC)")
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS novel_list(
+                source_id  TEXT NOT NULL,
+                title_id   TEXT NOT NULL,
+                status     TEXT NOT NULL,
+                title      TEXT,
+                cover      TEXT,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY(source_id, title_id)
+            )""",
+        )
+    }
+
+    /**
+     * Each novel source copy a title page opened: which novel it belongs to
+     * (novel_key, the smallest "source:id" among its linked copies, so linked
+     * sources share progress), how many chapters it had when last looked at (for
+     * "N new"), and when it was last linked or unlinked (links sync by it).
+     */
+    private fun createNovelTitleTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS novel_title(
+                source_id  TEXT NOT NULL,
+                title_id   TEXT NOT NULL,
+                novel_key  TEXT NOT NULL,
+                title      TEXT NOT NULL,
+                author     TEXT,
+                alt_names  TEXT,
+                cover      TEXT,
+                seen_count INTEGER,
+                link_at    INTEGER,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY(source_id, title_id)
+            )""",
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_novel_title_key ON novel_title(novel_key)")
+    }
+
+    /** Novel removals made here that the sync gist hasn't received yet (sent = 0), or that it holds (sent = 1). */
+    private fun createNovelSyncRemoved(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS novel_sync_removed(
+                kind TEXT    NOT NULL,
+                key  TEXT    NOT NULL,
+                at   INTEGER NOT NULL,
+                sent INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(kind, key)
+            )""",
+        )
     }
 
     private fun createListTable(db: SQLiteDatabase) {
@@ -137,6 +220,9 @@ object Db {
         "list_entry" to listOf("anime_id"),
         "reading" to listOf("manga_id", "chapter"),
         "manga_list" to listOf("manga_id"),
+        "novel_reading" to listOf("source_id", "title_id", "chapter_id"),
+        "novel_list" to listOf("source_id", "title_id"),
+        "novel_title" to listOf("source_id", "title_id"),
     )
 
     /** Every row of the backed-up tables, column by column. */

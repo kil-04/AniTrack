@@ -52,7 +52,7 @@ const honestAgent = () => `AniTrack/${app.getVersion()} (Desktop)`;
  * spacing, bounded bodies and no retry loop. A challenge page stops the attempt
  * and asks for the source's connection instead of retrying.
  */
-class SourceHttp {
+export class SourceHttp {
   private queue: Promise<unknown> = Promise.resolve();
   private last = 0;
 

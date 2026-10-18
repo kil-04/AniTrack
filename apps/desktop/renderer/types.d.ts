@@ -40,6 +40,8 @@ interface ApiBridge {
   };
   /** Manga mode (Electron only; the legacy Android shell has no manga sources). */
   manga?: import("./lib/manga-api").MangaApi;
+  /** Novels mode (Electron only). */
+  novel?: import("./lib/novel-api").NovelApi;
   themes: {
     forAnime(id: number): Promise<import("../../../packages/shared/anime-themes").ThemeSong[]>;
     radio(): Promise<import("../../../packages/shared/anime-themes").ThemeSong[]>;

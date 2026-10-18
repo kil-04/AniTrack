@@ -3,7 +3,7 @@ import ReactDOM from "react-dom/client";
 import { HashRouter } from "react-router-dom";
 import App from "./App";
 import ErrorBoundary from "./components/ErrorBoundary";
-import { lastModeWasManga } from "./lib/manga-api";
+import { lastMode, modeHome } from "./lib/manga-api";
 import "./index.css";
 
 function renderApp() {
@@ -27,8 +27,10 @@ if ((window as any).Capacitor?.isNativePlatform?.()) {
     renderApp();
   });
 } else {
-  // Reopen in manga mode before the first render: redirecting afterwards mounted the
-  // anime Home, whose AniList requests then ran ahead of the manga feed.
-  if (window.api?.manga && lastModeWasManga() && /^#?\/?$/.test(window.location.hash)) window.location.replace("#/manga");
+  // Reopen in manga or novels mode before the first render: redirecting afterwards mounted
+  // the anime Home, whose AniList requests then ran ahead of that mode's feed.
+  const mode = lastMode();
+  const available = mode === "manga" ? !!window.api?.manga : mode === "novel" ? !!window.api?.novel : false;
+  if (available && /^#?\/?$/.test(window.location.hash)) window.location.replace(`#${modeHome(mode)}`);
   renderApp();
 }

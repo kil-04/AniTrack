@@ -81,6 +81,15 @@ private val mangaDestinations = listOf(
     Dest("settings", "Settings", Icons.Outlined.Settings, Icons.Rounded.Settings),
 )
 
+/** Tabs in novels mode (reached from Manga mode's Manga · Novels choice). */
+private val novelDestinations = listOf(
+    Dest("home", "Home", Icons.Outlined.Home, Icons.Rounded.Home),
+    Dest("novel-search", "Search", Icons.Rounded.Search),
+    Dest("novel-list", "My List", Icons.Outlined.Bookmarks, Icons.Rounded.Bookmarks),
+    Dest("novel-downloads", "Downloads", Icons.Outlined.DownloadForOffline, Icons.Rounded.DownloadForOffline),
+    Dest("settings", "Settings", Icons.Outlined.Settings, Icons.Rounded.Settings),
+)
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -96,6 +105,8 @@ class MainActivity : ComponentActivity() {
         com.sanjay.anitrack.next.data.SmartDownloads.init(applicationContext)
         com.sanjay.anitrack.next.data.AnimeThemes.init(applicationContext)
         com.sanjay.anitrack.next.data.BackgroundMusic.init(applicationContext)
+        com.sanjay.anitrack.next.data.novel.NovelSources.init(applicationContext)
+        com.sanjay.anitrack.next.data.novel.NovelDownloads.init(applicationContext)
         com.sanjay.anitrack.next.data.ReleaseAlerts.takeRoute(intent)
         com.sanjay.anitrack.next.data.providers.connectors.MiruroAndroidProvider.attach(this)
         com.sanjay.anitrack.next.data.manga.comix.ComixSource.attach(this)
@@ -107,9 +118,9 @@ class MainActivity : ComponentActivity() {
         hideSystemBars()
         // The first frame already needs the saved mode's accent: the shell's SideEffect only
         // syncs it after that frame, which left the top bar in anime blue on a manga launch.
+        val savedMode = getSharedPreferences("anitrack_next", android.content.Context.MODE_PRIVATE).getString("home_mode", null)
         com.sanjay.anitrack.next.ui.AniColors.mangaMode.value =
-            getSharedPreferences("anitrack_next", android.content.Context.MODE_PRIVATE)
-                .getString("home_mode", null) == com.sanjay.anitrack.next.ui.HomeMode.Manga.name
+            savedMode == com.sanjay.anitrack.next.ui.HomeMode.Manga.name || savedMode == com.sanjay.anitrack.next.ui.HomeMode.Novel.name
         setContent {
             com.sanjay.anitrack.next.ui.AniTrackTheme {
                 AppShell()
@@ -214,7 +225,7 @@ fun AppShell() {
     val wideLayout = widthDp >= 820
     // Medium widths keep the bar on one line by showing labels only on the current tab.
     val tabLabels = widthDp >= 1100
-    val hideChrome = current == "player" || current == "reader"
+    val hideChrome = current == "player" || current == "reader" || current == "novel-reader"
 
     val go: (String) -> Unit = { r -> nav.navigate(r) { launchSingleTop = true; popUpTo("home") } }
     val openDetail: (com.sanjay.anitrack.next.data.Anime) -> Unit = { a -> nav.navigate("anime/${a.id}") }
@@ -235,14 +246,30 @@ fun AppShell() {
                 .getOrDefault(com.sanjay.anitrack.next.ui.HomeMode.Anime),
         )
     }
-    val setMode: (com.sanjay.anitrack.next.ui.HomeMode) -> Unit = {
-        mode = it
-        modePrefs.edit().putString("home_mode", it.name).apply()
+    val setMode: (com.sanjay.anitrack.next.ui.HomeMode) -> Unit = { picked ->
+        // The main switch's "Manga" reopens whichever kind of reading was used last.
+        val next = if (picked == com.sanjay.anitrack.next.ui.HomeMode.Manga && mode == com.sanjay.anitrack.next.ui.HomeMode.Anime &&
+            modePrefs.getString("reading_mode", null) == com.sanjay.anitrack.next.ui.HomeMode.Novel.name
+        ) com.sanjay.anitrack.next.ui.HomeMode.Novel else picked
+        mode = next
+        modePrefs.edit().putString("home_mode", next.name)
+            .apply { if (next != com.sanjay.anitrack.next.ui.HomeMode.Anime) putString("reading_mode", next.name) }
+            .apply()
     }
     val manga = mode == com.sanjay.anitrack.next.ui.HomeMode.Manga
-    // Manga mode deepens the accent a shade, as on desktop.
-    androidx.compose.runtime.SideEffect { com.sanjay.anitrack.next.ui.AniColors.mangaMode.value = manga }
-    val tabs = if (manga) mangaDestinations else destinations
+    val novel = mode == com.sanjay.anitrack.next.ui.HomeMode.Novel
+    // Reading modes deepen the accent a shade, as on desktop.
+    androidx.compose.runtime.SideEffect { com.sanjay.anitrack.next.ui.AniColors.mangaMode.value = manga || novel }
+    val tabs = if (novel) novelDestinations else if (manga) mangaDestinations else destinations
+    val openNovel: (com.sanjay.anitrack.next.data.novel.NovelSourceId, String) -> Unit = { source, id ->
+        nav.navigate("novel/${source.key}/${android.net.Uri.encode(id)}")
+    }
+    // The same novel on another source replaces the page (Back still goes where it came from).
+    val switchNovel: (com.sanjay.anitrack.next.data.novel.NovelSourceId, String) -> Unit = { source, id ->
+        nav.navigate("novel/${source.key}/${android.net.Uri.encode(id)}") {
+            popUpTo("novel/{source}/{id}") { inclusive = true }
+        }
+    }
     val currentTab = current?.substringBefore('?')
 
     Surface(color = Bg, modifier = Modifier.fillMaxSize()) {
@@ -265,7 +292,10 @@ fun AppShell() {
                     }
                     // Inline search with a live results dropdown (desktop-style).
                     Box(Modifier.weight(1f).padding(horizontal = 12.dp), contentAlignment = Alignment.CenterEnd) {
-                        com.sanjay.anitrack.next.ui.NavSearchBox(
+                        if (novel) com.sanjay.anitrack.next.ui.NovelSearchPill(
+                            modifier = Modifier.widthIn(max = 340.dp).fillMaxWidth(),
+                            onClick = { go("novel-search") },
+                        ) else com.sanjay.anitrack.next.ui.NavSearchBox(
                             modifier = Modifier.widthIn(max = 340.dp).fillMaxWidth(),
                             onOpen = openDetail,
                             onViewAll = { q -> go("${if (manga) "manga-search" else "search"}?q=${android.net.Uri.encode(q)}") },
@@ -296,14 +326,14 @@ fun AppShell() {
                         Modifier.weight(1f).height(40.dp)
                             .clip(RoundedCornerShape(50)).background(com.sanjay.anitrack.next.ui.AniColors.SurfaceHigh)
                             .border(1.dp, com.sanjay.anitrack.next.ui.AniColors.BorderSoft, RoundedCornerShape(50))
-                            .clickable { nav.navigate("quicksearch") { launchSingleTop = true } }
+                            .clickable { if (novel) go("novel-search") else nav.navigate("quicksearch") { launchSingleTop = true } }
                             .padding(horizontal = 14.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Icon(Icons.Rounded.Search, null, tint = com.sanjay.anitrack.next.ui.AniColors.TextTertiary, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            if (manga) "Search manga…" else "Search anime…",
+                            if (novel) "Search novels…" else if (manga) "Search manga…" else "Search anime…",
                             color = com.sanjay.anitrack.next.ui.AniColors.TextTertiary,
                             style = MaterialTheme.typography.bodyMedium,
                             maxLines = 1,
@@ -333,7 +363,37 @@ fun AppShell() {
                             onOpenMangaId = { id -> nav.navigate("manga/$id") },
                             mode = mode,
                             onModeChange = setMode,
+                            onOpenNovel = openNovel,
+                            onReadNovel = { nav.navigate("novel-reader") },
+                            onBrowseNovelGenre = { genre -> go("novel-search?genre=${android.net.Uri.encode(genre)}") },
                         )
+                    }
+                    composable("novel/{source}/{id}") { entry ->
+                        val source = com.sanjay.anitrack.next.data.novel.NovelSourceId.of(entry.arguments?.getString("source"))
+                        val id = entry.arguments?.getString("id").orEmpty()
+                        if (source != null) {
+                            // A fresh page per copy, so switching sources never shows the old one's state.
+                            androidx.compose.runtime.key(source, id) {
+                                com.sanjay.anitrack.next.ui.NovelDetailScreen(source, id, onRead = { nav.navigate("novel-reader") }, onOpen = openNovel, onSwitch = switchNovel)
+                            }
+                        }
+                    }
+                    composable("novel-reader") {
+                        com.sanjay.anitrack.next.ui.NovelReaderScreen(onBack = { nav.popBackStack() })
+                    }
+                    composable(
+                        "novel-search?q={q}&genre={genre}",
+                        arguments = listOf(navArgument("q") { defaultValue = "" }, navArgument("genre") { defaultValue = "" }),
+                    ) { entry ->
+                        val q = entry.arguments?.getString("q").orEmpty()
+                        val genre = entry.arguments?.getString("genre").orEmpty().ifBlank { null }
+                        androidx.compose.runtime.key(q, genre) { com.sanjay.anitrack.next.ui.NovelSearchScreen(q, genre, openNovel) }
+                    }
+                    composable("novel-downloads") {
+                        com.sanjay.anitrack.next.ui.NovelDownloadsScreen(onOpen = openNovel, onBrowse = { go("novel-search") })
+                    }
+                    composable("novel-list") {
+                        com.sanjay.anitrack.next.ui.NovelListScreen(onOpen = openNovel, onBrowse = { go("novel-search") })
                     }
                     composable("manga/{id}") { entry ->
                         val id = entry.arguments?.getString("id")?.toIntOrNull() ?: 0

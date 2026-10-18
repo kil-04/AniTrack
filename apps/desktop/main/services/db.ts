@@ -63,7 +63,7 @@ export function runInTransaction<T>(fn: () => T): T {
 
 // Bump CURRENT_SCHEMA_VERSION whenever you add a new migration below.
 // Each migration runs exactly once per user and is idempotent.
-const CURRENT_SCHEMA_VERSION = 6;
+const CURRENT_SCHEMA_VERSION = 9;
 
 const MIGRATIONS: Array<(d: Database) => void> = [
   // v1 — initial schema
@@ -165,6 +165,62 @@ const MIGRATIONS: Array<(d: Database) => void> = [
       title TEXT,
       updated_at INTEGER NOT NULL,
       PRIMARY KEY (manga_id, source_id)
+    )`);
+  },
+  // v7 — novels mode: reading progress and the novel list, keyed by source + source title id.
+  (d) => {
+    d.run(`CREATE TABLE IF NOT EXISTS novel_reading (
+      source_id TEXT NOT NULL,
+      title_id TEXT NOT NULL,
+      chapter_id TEXT NOT NULL,
+      chapter_order INTEGER NOT NULL,
+      chapter_label TEXT NOT NULL,
+      paragraph INTEGER NOT NULL,
+      paragraph_count INTEGER NOT NULL,
+      title TEXT,
+      cover TEXT,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (source_id, title_id, chapter_id)
+    )`);
+    d.run(`CREATE INDEX IF NOT EXISTS idx_novel_reading_updated ON novel_reading(updated_at DESC)`);
+    d.run(`CREATE TABLE IF NOT EXISTS novel_list (
+      source_id TEXT NOT NULL,
+      title_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      title TEXT,
+      cover TEXT,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (source_id, title_id)
+    )`);
+  },
+  // v8 — novels: each source copy a title page opened, which novel it belongs to
+  // (novel_key, the first copy's "source:id", so linked sources share progress) and
+  // how many chapters it had when last looked at (for "N new").
+  (d) => {
+    d.run(`CREATE TABLE IF NOT EXISTS novel_title (
+      source_id TEXT NOT NULL,
+      title_id TEXT NOT NULL,
+      novel_key TEXT NOT NULL,
+      title TEXT NOT NULL,
+      author TEXT,
+      alt_names TEXT,
+      cover TEXT,
+      seen_count INTEGER,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (source_id, title_id)
+    )`);
+    d.run(`CREATE INDEX IF NOT EXISTS idx_novel_title_key ON novel_title(novel_key)`);
+  },
+  // v9 — novel sync: when a copy was last linked or unlinked (links merge by it across
+  // devices), and removals made here that the sync gist hasn't received yet.
+  (d) => {
+    try { d.run(`ALTER TABLE novel_title ADD COLUMN link_at INTEGER`); } catch {}
+    d.run(`CREATE TABLE IF NOT EXISTS novel_sync_removed (
+      kind TEXT NOT NULL,
+      key TEXT NOT NULL,
+      at INTEGER NOT NULL,
+      sent INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (kind, key)
     )`);
   },
 ];

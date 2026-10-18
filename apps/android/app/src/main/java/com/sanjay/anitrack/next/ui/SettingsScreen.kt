@@ -133,7 +133,7 @@ private fun SyncCard() {
                     busy = true
                     statusMessage = "Syncing…" to null
                     scope.launch {
-                        val result = runCatching { GistSync.pullAndMerge(); GistSync.syncMangaReading() }
+                        val result = runCatching { GistSync.pullAndMerge(); GistSync.syncMangaReading(); GistSync.syncNovelReading() }
                         statusMessage = if (result.isSuccess) "Synced" to true else "Sync failed. Check the token." to false
                         busy = false
                     }

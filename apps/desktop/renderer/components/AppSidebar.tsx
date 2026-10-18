@@ -2,11 +2,12 @@ import { useEffect, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
-  BellRing, Bookmark, BookOpen, CalendarDays, Download, History, House, MonitorPlay,
+  BellRing, Bookmark, BookOpen, BookText, CalendarDays, Download, History, House, MonitorPlay,
   PanelLeftClose, PanelLeftOpen, Search, Settings, Tv, UserRound, type LucideIcon,
 } from "lucide-react";
 import { useAppStore } from "../store/useAppStore";
-import { hasMangaMode, isMangaPath } from "../lib/manga-api";
+import { hasMangaMode, lastReadingHome, modeForPath, modeHome } from "../lib/manga-api";
+import { hasNovelMode } from "../lib/novel-api";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import BrandMark, { Wordmark } from "./BrandMark";
 
@@ -51,6 +52,23 @@ const MANGA: Group[] = [
   },
 ];
 
+const NOVEL: Group[] = [
+  {
+    title: "Browse",
+    items: [
+      { to: "/novels", label: "Home", icon: House, end: true },
+      { to: "/novels/search", label: "Search", icon: Search },
+    ],
+  },
+  {
+    title: "Library",
+    items: [
+      { to: "/novels/list", label: "My List", icon: Bookmark },
+      { to: "/novels/downloads", label: "Downloads", icon: Download },
+    ],
+  },
+];
+
 const PREF = "anitrack.sidebar";
 const isMac = typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
 
@@ -59,8 +77,8 @@ export default function AppSidebar() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const mal = useAppStore((s) => s.mal);
-  const manga = isMangaPath(pathname);
-  const groups = manga ? MANGA : ANIME;
+  const mode = modeForPath(pathname);
+  const groups = mode === "manga" ? MANGA : mode === "novel" ? NOVEL : ANIME;
   const narrow = useMediaQuery("(max-width: 1279px)");
   const [pref, setPref] = useState<"collapsed" | "expanded" | null>(() => {
     try { return (localStorage.getItem(PREF) as "collapsed" | "expanded" | null) ?? null; } catch { return null; }
@@ -79,7 +97,7 @@ export default function AppSidebar() {
       {/* Brand (doubles as the window drag area) */}
       <div className={`titlebar-drag flex h-16 shrink-0 items-center ${collapsed ? "justify-center" : "px-5"} ${isMac ? "mt-6" : ""}`}>
         <button
-          onClick={() => navigate(manga ? "/manga" : "/")}
+          onClick={() => navigate(modeHome(mode))}
           className="titlebar-no-drag flex items-center gap-2.5 rounded-xl"
           title="AniTrack"
         >
@@ -88,13 +106,13 @@ export default function AppSidebar() {
         </button>
       </div>
 
-      {/* Anime / Manga */}
+      {/* Anime / Manga, and in Manga mode the kind of reading: Manga · Novels */}
       {hasMangaMode() && (
         <div className={`titlebar-no-drag ${collapsed ? "px-3" : "px-4"} pb-2`}>
           <div className={`relative flex rounded-2xl border border-white/[0.07] bg-white/[0.04] p-1 ${collapsed ? "flex-col gap-1" : ""}`}>
             {[
-              { label: "Anime", to: "/", on: !manga, icon: Tv },
-              { label: "Manga", to: "/manga", on: manga, icon: BookOpen },
+              { label: "Anime", to: "/", on: mode === "anime", icon: Tv },
+              { label: "Manga", to: lastReadingHome(), on: mode !== "anime", icon: BookOpen },
             ].map((m) => (
               <button
                 key={m.label}
@@ -114,6 +132,24 @@ export default function AppSidebar() {
               </button>
             ))}
           </div>
+          {mode !== "anime" && hasNovelMode() && (
+            <div className={`mt-2 flex ${collapsed ? "flex-col items-center gap-1" : "gap-1 px-1"}`}>
+              {[
+                { label: "Manga", to: "/manga", on: mode === "manga", icon: BookOpen },
+                { label: "Novels", to: "/novels", on: mode === "novel", icon: BookText },
+              ].map((k) => (
+                <button
+                  key={k.label}
+                  onClick={() => { if (!k.on) navigate(k.to); }}
+                  title={k.label}
+                  className={`flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-colors ${collapsed ? "h-7 w-9 px-0" : "flex-1"} ${k.on ? "bg-white/[0.08] text-white" : "text-ink-3 hover:bg-white/[0.04] hover:text-white"}`}
+                >
+                  <k.icon size={13} strokeWidth={2.2} className={k.on ? "text-accent" : ""} />
+                  {!collapsed && k.label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

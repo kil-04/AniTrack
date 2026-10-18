@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import { IPC } from "../../../packages/shared/types";
 import { MANGA_IPC } from "../../../packages/shared/manga";
+import { NOVEL_IPC } from "../../../packages/shared/novel";
 import type { MediaAccessRejection, ProviderApi, ProviderFeed } from "../../../packages/shared/provider-types";
 
 // Thin, typed-ish bridge. Renderer never touches Node directly.
@@ -69,6 +70,43 @@ contextBridge.exposeInMainWorld("api", {
     },
     tracked: () => ipcRenderer.invoke(MANGA_IPC.TRACKED),
     latest: (mangaId: number, preferred: string | null, skip: string[]) => ipcRenderer.invoke(MANGA_IPC.LATEST, mangaId, preferred, skip),
+  },
+  novel: {
+    sources: () => ipcRenderer.invoke(NOVEL_IPC.SOURCES),
+    home: () => ipcRenderer.invoke(NOVEL_IPC.HOME),
+    search: (filters: unknown) => ipcRenderer.invoke(NOVEL_IPC.SEARCH, filters),
+    title: (sourceId: string, id: string) => ipcRenderer.invoke(NOVEL_IPC.TITLE, sourceId, id),
+    savedTitle: (sourceId: string, id: string) => ipcRenderer.invoke(NOVEL_IPC.TITLE_SAVED, sourceId, id),
+    chapters: (sourceId: string, id: string) => ipcRenderer.invoke(NOVEL_IPC.CHAPTERS, sourceId, id),
+    chapter: (sourceId: string, id: string, chapterId: string) => ipcRenderer.invoke(NOVEL_IPC.CHAPTER, sourceId, id, chapterId),
+    reading: (sourceId: string, id: string) => ipcRenderer.invoke(NOVEL_IPC.READING_GET, sourceId, id),
+    saveReading: (row: unknown) => ipcRenderer.invoke(NOVEL_IPC.READING_SAVE, row),
+    markRead: (sourceId: string, id: string, chapters: unknown, read: boolean, title: string, cover: string | null) =>
+      ipcRenderer.invoke(NOVEL_IPC.READING_MARK, sourceId, id, chapters, read, title, cover),
+    continueReading: () => ipcRenderer.invoke(NOVEL_IPC.CONTINUE),
+    forgetReading: (sourceId: string, id: string) => ipcRenderer.invoke(NOVEL_IPC.READING_FORGET, sourceId, id),
+    status: (sourceId: string, id: string) => ipcRenderer.invoke(NOVEL_IPC.LIST_GET, sourceId, id),
+    setStatus: (sourceId: string, id: string, status: string | null, title: string, cover: string | null) =>
+      ipcRenderer.invoke(NOVEL_IPC.LIST_SET, sourceId, id, status, title, cover),
+    list: () => ipcRenderer.invoke(NOVEL_IPC.LIST_ALL),
+    group: (sourceId: string, id: string) => ipcRenderer.invoke(NOVEL_IPC.GROUP, sourceId, id),
+    findOn: (sourceId: string, id: string, target: string) => ipcRenderer.invoke(NOVEL_IPC.FIND_ON, sourceId, id, target),
+    link: (a: unknown, b: unknown) => ipcRenderer.invoke(NOVEL_IPC.LINK, a, b),
+    unlink: (sourceId: string, id: string) => ipcRenderer.invoke(NOVEL_IPC.UNLINK, sourceId, id),
+    updates: (force?: boolean) => ipcRenderer.invoke(NOVEL_IPC.UPDATES, force === true),
+    downloads: () => ipcRenderer.invoke(NOVEL_IPC.DOWNLOADS),
+    downloaded: (sourceId: string, id: string) => ipcRenderer.invoke(NOVEL_IPC.DOWNLOADED, sourceId, id),
+    download: (detail: unknown, chapters: unknown) => ipcRenderer.invoke(NOVEL_IPC.DOWNLOAD, detail, chapters),
+    cancelDownloads: (sourceId: string, id: string) => ipcRenderer.invoke(NOVEL_IPC.DOWNLOAD_CANCEL, sourceId, id),
+    removeDownloads: (sourceId: string, id: string, chapterIds?: string[]) => ipcRenderer.invoke(NOVEL_IPC.DOWNLOAD_REMOVE, sourceId, id, chapterIds),
+    onDownload: (fn: (event: unknown) => void) => {
+      const sub = (_e: unknown, event: unknown) => fn(event);
+      ipcRenderer.on(NOVEL_IPC.DOWNLOAD_EVENT, sub);
+      return () => { ipcRenderer.removeListener(NOVEL_IPC.DOWNLOAD_EVENT, sub); };
+    },
+    syncSnapshot: () => ipcRenderer.invoke(NOVEL_IPC.SYNC_SNAPSHOT),
+    syncApply: (change: unknown) => ipcRenderer.invoke(NOVEL_IPC.SYNC_APPLY, change),
+    syncAck: (sent: unknown, known: unknown) => ipcRenderer.invoke(NOVEL_IPC.SYNC_ACK, sent, known),
   },
   themes: {
     forAnime: (id: number) => ipcRenderer.invoke(IPC.THEMES_FOR_ANIME, id),

@@ -31,41 +31,71 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-enum class HomeMode { Anime, Manga }
+/** App-wide mode. Manga and Novel are both "Manga" on the main switch (reading), told apart below it. */
+enum class HomeMode { Anime, Manga, Novel }
 
-/** Anime | Manga segmented switch shown over the top of Home. */
+/**
+ * Anime | Manga segmented switch shown over the top of Home; in reading modes a
+ * small Manga · Novels choice sits under it (a third segment made the switch too long).
+ */
 @Composable
 internal fun HomeModeToggle(mode: HomeMode, onChange: (HomeMode) -> Unit, modifier: Modifier = Modifier) {
-    Row(
-        modifier
-            .clip(RoundedCornerShape(50))
-            .background(Color.Black.copy(alpha = 0.62f))
-            .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(50))
-            .padding(4.dp),
-    ) {
-        HomeMode.entries.forEach { option ->
-            val selected = option == mode
+    Column(modifier, horizontalAlignment = Alignment.Start) {
+        Row(
+            Modifier
+                .clip(RoundedCornerShape(50))
+                .background(Color.Black.copy(alpha = 0.62f))
+                .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(50))
+                .padding(4.dp),
+        ) {
+            listOf(HomeMode.Anime to "Anime", HomeMode.Manga to "Manga").forEach { (option, label) ->
+                val selected = if (option == HomeMode.Anime) mode == HomeMode.Anime else mode != HomeMode.Anime
+                Row(
+                    Modifier
+                        .clip(RoundedCornerShape(50))
+                        .then(if (selected) Modifier.background(AniColors.BrandGradient) else Modifier)
+                        .clickable(enabled = !selected) { onChange(option) }
+                        .padding(horizontal = 14.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        if (option == HomeMode.Anime) Icons.Rounded.LiveTv else Icons.Rounded.AutoStories,
+                        null,
+                        tint = if (selected) Color.White else Color.White.copy(alpha = 0.7f),
+                        modifier = Modifier.size(17.dp),
+                    )
+                    Spacer(Modifier.width(7.dp))
+                    Text(
+                        label,
+                        color = if (selected) Color.White else Color.White.copy(alpha = 0.7f),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                    )
+                }
+            }
+        }
+        if (mode != HomeMode.Anime) {
+            Spacer(Modifier.height(6.dp))
             Row(
                 Modifier
                     .clip(RoundedCornerShape(50))
-                    .then(if (selected) Modifier.background(AniColors.BrandGradient) else Modifier)
-                    .clickable(enabled = !selected) { onChange(option) }
-                    .padding(horizontal = 14.dp, vertical = 7.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                    .background(Color.Black.copy(alpha = 0.5f))
+                    .padding(3.dp),
             ) {
-                Icon(
-                    if (option == HomeMode.Anime) Icons.Rounded.LiveTv else Icons.Rounded.AutoStories,
-                    null,
-                    tint = if (selected) Color.White else Color.White.copy(alpha = 0.7f),
-                    modifier = Modifier.size(17.dp),
-                )
-                Spacer(Modifier.width(7.dp))
-                Text(
-                    option.name,
-                    color = if (selected) Color.White else Color.White.copy(alpha = 0.7f),
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                )
+                listOf(HomeMode.Manga to "Manga", HomeMode.Novel to "Novels").forEach { (option, label) ->
+                    val selected = option == mode
+                    Text(
+                        label,
+                        color = if (selected) Color.White else Color.White.copy(alpha = 0.6f),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .then(if (selected) Modifier.background(Color.White.copy(alpha = 0.14f)) else Modifier)
+                            .clickable(enabled = !selected) { onChange(option) }
+                            .padding(horizontal = 12.dp, vertical = 5.dp),
+                    )
+                }
             }
         }
     }

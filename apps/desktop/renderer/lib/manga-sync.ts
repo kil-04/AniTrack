@@ -14,7 +14,7 @@ import {
   readingKey,
   serializeMangaSyncDoc,
 } from "../../../../packages/shared/manga-sync";
-import { ghHeaders, syncGist } from "./supabase-sync";
+import { ghHeaders, readGistFile, syncGist } from "./supabase-sync";
 import { hasMangaMode, mangaApi } from "./manga-api";
 
 const GH = "https://api.github.com";
@@ -48,27 +48,11 @@ function addPending(keys: string[]) {
   savePending(value);
 }
 
-/** The manga file's text, or null when the gist has none yet. A failed read throws. */
-async function readFile(token: string, gistId: string): Promise<string | null> {
-  const res = await fetch(`${GH}/gists/${gistId}`, { headers: ghHeaders(token), cache: "no-store" });
-  if (!res.ok) throw new Error(`Could not read the sync gist (GitHub returned ${res.status}).`);
-  const payload = await res.json() as { files?: Record<string, { content?: unknown; truncated?: unknown; raw_url?: unknown }> };
-  const file = payload?.files?.[MANGA_SYNC_FILE];
-  if (!file) return null;
-  if (file.truncated === true) {
-    if (typeof file.raw_url !== "string") throw new Error("The truncated manga sync file has no download URL.");
-    const raw = await fetch(file.raw_url, { headers: ghHeaders(token), cache: "no-store" });
-    if (!raw.ok) throw new Error(`Could not read the manga sync file (GitHub returned ${raw.status}).`);
-    return raw.text();
-  }
-  return typeof file.content === "string" ? file.content : null;
-}
-
 async function reconcile(): Promise<number> {
   if (!hasMangaMode()) return 0;
   const gist = await syncGist();
   if (!gist) return 0;
-  const remote = parseMangaSyncDoc(await readFile(gist.token, gist.gistId));
+  const remote = parseMangaSyncDoc(await readGistFile(gist.token, gist.gistId, MANGA_SYNC_FILE));
   const sent = pending();
   const local = await mangaApi().readingAll();
   const plan = planMangaSync(local, remote, sent, Date.now());

@@ -4,7 +4,8 @@ import { useAppStore } from "../store/useAppStore";
 import GlobalSearch from "./GlobalSearch";
 import { BackgroundMusicButton } from "./BackgroundMusic";
 import { MangaSearchBox } from "./manga/MangaCards";
-import { isMangaPath } from "../lib/manga-api";
+import { modeForPath } from "../lib/manga-api";
+import { NovelSearchBox } from "./novel/NovelCards";
 
 /**
  * The slim header above every page: history buttons, the mode's search and sync
@@ -14,7 +15,7 @@ export default function TopBar() {
   const scanStatus = useAppStore((s) => s.scanStatus);
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  const manga = isMangaPath(pathname);
+  const mode = modeForPath(pathname);
 
   return (
     <header className="titlebar-drag relative z-30 flex h-16 shrink-0 items-center gap-3 border-b border-white/[0.05] bg-bg/55 px-5 backdrop-blur-xl">
@@ -28,7 +29,7 @@ export default function TopBar() {
       </div>
 
       <div className="titlebar-no-drag w-full max-w-[560px]">
-        {manga ? <MangaSearchBox /> : <GlobalSearch />}
+        {mode === "manga" ? <MangaSearchBox /> : mode === "novel" ? <NovelSearchBox /> : <GlobalSearch />}
       </div>
 
       <div className="titlebar-no-drag ml-auto flex items-center gap-3">

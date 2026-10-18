@@ -34,6 +34,7 @@ import { registerAuthIpc } from "./ipc/auth";
 import { registerDbIpc } from "./ipc/db";
 import { registerDownloadsIpc } from "./ipc/downloads";
 import { registerMangaIpc, registerMangaProtocol } from "./ipc/manga";
+import { registerNovelIpc } from "./ipc/novel";
 import { downloadsDir } from "./services/downloads";
 import {
   getRuntimeConfig,
@@ -450,6 +451,7 @@ function registerIpc() {
   registerProviderIpc(registerWebRequestHandlers);
   registerDownloadsIpc(getMainWindow);
   registerMangaIpc(getMainWindow);
+  registerNovelIpc(getMainWindow);
   registerMusicIpc(getMainWindow);
 
   ipcMain.handle(IPC.PROVIDERS_MEDIA_ACCESS_STATUS, (event, mediaAccessId: string) => {

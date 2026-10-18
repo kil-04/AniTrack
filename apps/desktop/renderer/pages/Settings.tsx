@@ -9,6 +9,7 @@ import type { AniListAuthState } from "../../../../packages/shared/types";
 import type { RuntimeConfigStatus } from "../../../../packages/shared/runtime-config";
 import { getSyncConfig, setSyncConfig, clearSyncConfig, pullAndMerge, pushAllProgress } from "../lib/supabase-sync";
 import { syncMangaReading } from "../lib/manga-sync";
+import { syncNovelReading } from "../lib/novel-sync";
 
 const SECTIONS: { id: string; label: string; icon: LucideIcon }[] = [
   { id: "mal", label: "MyAnimeList", icon: BookMarked },
@@ -590,8 +591,9 @@ export default function Settings() {
                 try {
                   const n = await pullAndMerge();
                   const m = await syncMangaReading();
+                  const v = await syncNovelReading();
                   await refreshAll();
-                  setSupaStatus(`Pulled ${n} updated entries${m ? ` and ${m} manga reading changes` : ""}`);
+                  setSupaStatus(`Pulled ${n} updated entries${m ? ` and ${m} manga reading changes` : ""}${v ? ` and ${v} novel changes` : ""}`);
                 } catch (e) {
                   setSupaStatus(null);
                   setSupaError(`Pull failed: ${(e as Error).message}`);
@@ -608,9 +610,10 @@ export default function Settings() {
                 setSupaError(null);
                 try {
                   const n = await pushAllProgress();
-                  // Manga reading is reconciled whole, which uploads every local row.
+                  // Manga and novel reading are reconciled whole, which uploads every local row.
                   await syncMangaReading();
-                  setSupaStatus(`Pushed ${n} entries to cloud, with manga reading`);
+                  await syncNovelReading();
+                  setSupaStatus(`Pushed ${n} entries to cloud, with manga and novel reading`);
                 } catch (e) {
                   setSupaStatus(null);
                   setSupaError(`Push failed: ${(e as Error).message}`);

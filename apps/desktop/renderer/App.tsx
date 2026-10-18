@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect } from "react";
-import { Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Route, Routes, useLocation } from "react-router-dom";
 import TopBar from "./components/TopBar";
 import AppSidebar from "./components/AppSidebar";
 import BottomNav from "./components/BottomNav";
@@ -9,7 +9,7 @@ import { useAppStore } from "./store/useAppStore";
 import { usePlayerStore } from "./store/usePlayerStore";
 import { useMediaQuery } from "./hooks/useMediaQuery";
 import { ThemeBar } from "./components/ThemeSongs";
-import { hasMangaMode, isMangaPath, lastModeWasManga, rememberMode } from "./lib/manga-api";
+import { modeForPath, rememberMode } from "./lib/manga-api";
 import { isCapacitor } from "./lib/platform";
 import { subscribeDownloads } from "./lib/downloads";
 import { deleteAnimeProgress } from "./lib/supabase-sync";
@@ -52,6 +52,12 @@ const MangaUpdates     = lazy(() => import("./pages/manga/MangaUpdates"));
 const MangaDownloads   = lazy(() => import("./pages/manga/MangaDownloads"));
 const MangaDetail      = lazy(() => import("./pages/manga/MangaDetail"));
 const MangaReader      = lazy(() => import("./pages/manga/MangaReader"));
+const NovelHome        = lazy(() => import("./pages/novel/NovelHome"));
+const NovelSearch      = lazy(() => import("./pages/novel/NovelSearch"));
+const NovelList        = lazy(() => import("./pages/novel/NovelList"));
+const NovelDetail      = lazy(() => import("./pages/novel/NovelDetail"));
+const NovelReader      = lazy(() => import("./pages/novel/NovelReader"));
+const NovelDownloads   = lazy(() => import("./pages/novel/NovelDownloads"));
 
 const PageFallback = () => (
   <div className="flex h-full items-center justify-center gap-2 text-sm text-ink-3">
@@ -75,21 +81,17 @@ export default function App() {
 
   const inStreaming   = location.pathname === "/stream";
   const inReader      = location.pathname === "/manga/read";
-  const navigate      = useNavigate();
+  const inNovelReader = location.pathname === "/novels/read";
 
-  // Anime or Manga mode follows the page, and the app reopens in the last one used.
+  // Anime, Manga or Novels mode follows the page (main.tsx reopens the last one used).
   useEffect(() => {
-    if (hasMangaMode() && lastModeWasManga() && location.pathname === "/") navigate("/manga", { replace: true });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (!inReader && !inNovelReader) rememberMode(modeForPath(location.pathname));
+  }, [location.pathname, inReader, inNovelReader]);
+  // The accent follows the mode (azure for anime, deeper blues for manga and novels): see index.css.
+  const appMode = inReader ? "manga" : inNovelReader ? "novel" : modeForPath(location.pathname);
   useEffect(() => {
-    if (!inReader) rememberMode(isMangaPath(location.pathname));
-  }, [location.pathname, inReader]);
-  // The accent follows the mode (azure for anime, a deeper blue for manga): see index.css.
-  const mangaMode = inReader || isMangaPath(location.pathname);
-  useEffect(() => {
-    document.documentElement.dataset.mode = mangaMode ? "manga" : "anime";
-  }, [mangaMode]);
+    document.documentElement.dataset.mode = appMode;
+  }, [appMode]);
   const isPlayerRoute = location.pathname === "/stream-player";
   const playerSearch  = usePlayerStore((s) => s.search);
 
@@ -205,6 +207,16 @@ export default function App() {
     );
   }
 
+  // The novel reader takes the whole window too.
+  if (inNovelReader) {
+    return (
+      <Suspense fallback={<div className="fixed inset-0 bg-bg" />}>
+        <NovelReader />
+        {playerOverlay}
+      </Suspense>
+    );
+  }
+
   // Full-screen routes (no shell)
   if (inStreaming) {
     return (
@@ -252,6 +264,11 @@ export default function App() {
               <Route path="/manga/updates"      element={<PageTransition><MangaUpdates /></PageTransition>} />
               <Route path="/manga/downloads"    element={<PageTransition><MangaDownloads /></PageTransition>} />
               <Route path="/manga/:id"          element={<PageTransition><MangaDetail /></PageTransition>} />
+              <Route path="/novels"             element={<PageTransition><NovelHome /></PageTransition>} />
+              <Route path="/novels/search"      element={<PageTransition><NovelSearch /></PageTransition>} />
+              <Route path="/novels/list"        element={<PageTransition><NovelList /></PageTransition>} />
+              <Route path="/novels/downloads"   element={<PageTransition><NovelDownloads /></PageTransition>} />
+              <Route path="/novels/t/:source/:id" element={<PageTransition><NovelDetail /></PageTransition>} />
             </Routes>
           </AnimatePresence>
         </Suspense>
