@@ -128,3 +128,67 @@ bundle: `ev_858879e8…` (its `/api/v1/…` routes).
 2. **Manga:** add XComic first, once its full chapter-list route is found. Then
    Weeb Central for official-translation quality. MangaK and Toonz are
    name-matched fallbacks.
+
+# Update: 19 Oct 2026 (large libraries, re-checked)
+
+The user asked for more sources with large libraries, anime first, and ruled that a
+Cloudflare/Turnstile check or request signing done inside the site's own page does not
+make a site unusable: AnimePahe and MangaDot already work through user-verified page
+sessions. Sites marked "not usable" above for those reasons were re-checked in a real
+browser page. Plain-HTTP checks used AniTrack's honest user agent, one request at a
+time; library sizes are EverythingMoe's labels.
+
+Kinds of access:
+
+- **Plain HTTP**: works from the app's own requests.
+- **Page session**: works inside the site's page (hidden window or WebView), the way
+  AnimePahe/MangaDot do; the app reads the stream or pages the page loads. "Check"
+  means a visible human check the user passes once in a connect window.
+
+## Anime
+
+| Site | Library | Ids | Access | Stream | Notes |
+| --- | --- | --- | --- | --- | --- |
+| **shonen.to** | Large (scraper) | AniList (`/watch/<anilistId>/<ep>`) | Plain HTTP | `GET /sources/shonen?id=&episode=&language=sub\|dub` -> HLS up to 1080p via `vidcloud.sbs` proxy, VTT subs; no Referer, no key | Strongest fit: no title matching. Depends on the sites it scrapes |
+| **anv** | Large | AniList | Plain HTTP + watch-page cookie | As on 12 Oct: `/api/episode` ready, HLS with disguised segments | Re-confirmed working |
+| **AniChan** | Large | AniList (`/api/watch/*?anilistId=`) | Page session (Turnstile passed invisibly) | 1080p HLS via `c.toroplay.cymru` proxy, several VTT subs | Played Overgeared ep 1 in a page |
+| **Xanime** | Large | MAL id on title pages | Plain HTTP | Signed HLS on its own hosts (`xanivsrc*.org`), 720p seen, TS behind .png/.jpg, English VTT | Episode list on the watch page; search `?word=` |
+| **ANIMEGG** | Very large | Slugs (name match) | Plain HTTP + `Referer: animegg.org` | MP4 480/720/1080p via `vidcache.net` | Simplest format |
+| **Re:Anime** | Medium-large, #1 | AniList | Page session | flixcloud player, 1080p Erai-raws CR WEB-DL, multi-sub | Played in a page |
+| **AnimeX** | Large | AniList ids in URLs | Page session | Own player `plyr.animex.one` -> `/rest/api/sources`, 1080p | Played in a page |
+| **Zanix** | Large | MAL/AniList in its scripts | Page session | Own ReCloud player: `getSources` JSON -> HLS, CR subs in several languages, intro/outro times | Episode API 403s outside its page |
+| **2Dhive** | Large | MAL (`?anime=<malId>`) | Page session | babastream player (in-page encryption + invisible proof-of-work) | Played in a page |
+| AniHQ | Medium-large | ? | Check | Cloudflare "Just a moment" stays up | Needs the user to pass the check once; not tested further |
+| ani.pm | Large | Opaque hashed ids | Page session (untested) | third-party embed | Hard to match titles |
+| hianimes.se | Large | ? | Connection reset | | Looks like an ISP block (India) |
+
+Medium/small (skipped per the user's "large libraries"): AniZone, Senshi, KickAssAnime,
+Anime Nexus, Gotaku, AnimeOnsen, Anify, Otaku-Streamers.
+
+## Manga
+
+| Site | Library | Access | Notes |
+| --- | --- | --- | --- |
+| **Kagane** | Very large | Page session | Reader loaded all 46 pages (blob images decoded in-page) |
+| **MangaKatana** | Medium-large | Plain HTTP | Search, 1,223 One Piece chapters, 40 pages per chapter, images load without Referer |
+| Toonkotsu | Very large | Check | Its own "Quick Check" before chapters; user passes it once |
+| XComic, Weeb Central, MangaK, Toonz | see 12 Oct | Plain HTTP | Not re-checked |
+| MangaFire | Large | Page session (not re-tested) | `vrf` token is computed in-page |
+
+## Novels
+
+| Site | Library | Access | Notes |
+| --- | --- | --- | --- |
+| **NovelCool** | Large | Plain HTTP | All chapter links on the title page (2,497 for Shadow Slave, behind other sites); clean text. Mixes manga |
+| **NovelFire** | Large | Plain HTTP | 100 chapters per list page (Shadow Slave 3,218); clean text; removing Korean novels (includes Overgeared) |
+| **WuxiaClick** | Large | Plain HTTP | Next.js; chapter text in page; some low-quality translations |
+| **Wuxia Box** | Large | Plain HTTP | Search is a POST form; chapter text in page |
+| Novelito | Large, very new | Plain HTTP API (`/api/novels/...`, offers EPUB) | Not probed further |
+| Xnovel | Large, new | ? | App-style site; API not found from its scripts |
+
+## Recommendation (for the user to decide)
+
+1. **Anime:** shonen.to first (AniList-keyed, plain HTTP, 1080p, subs), then AniChan or
+   Re:Anime as page-session sources, and anv. Xanime and ANIMEGG need title matching.
+2. **Manga:** Kagane (very large, page session) and MangaKatana (plain HTTP).
+3. **Novels:** NovelCool or NovelFire as a third source.
