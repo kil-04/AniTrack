@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, ChevronLeft, ChevronRight, List, Minus, Plus, RefreshCw, Type, X } from "lucide-react";
+import { BackgroundMusicButton } from "../../components/BackgroundMusic";
 import {
   isNovelSource,
   novelSourceLabel,
@@ -247,6 +248,8 @@ export default function NovelReader() {
           </div>
         </button>
         <div className="titlebar-no-drag flex items-center gap-1">
+          {/* Background music keeps playing while reading; a dark pill keeps it readable on light themes. */}
+          <div className="mr-1 rounded-full bg-black/60"><BackgroundMusicButton /></div>
           <button onClick={() => go(previous)} disabled={!previous} className="grid h-9 w-9 place-items-center rounded-full transition hover:bg-black/10 disabled:opacity-30" title="Previous chapter (←)">
             <ChevronLeft size={19} />
           </button>

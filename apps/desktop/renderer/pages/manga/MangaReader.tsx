@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, ChevronLeft, ChevronRight, HardDriveDownload, Link2, Maximize, RefreshCw, Settings2, X } from "lucide-react";
+import { BackgroundMusicButton } from "../../components/BackgroundMusic";
 import { chapterLabel, spreadsOf, type MangaChapter, type MangaPageImage, type SourceResult } from "../../../../../packages/shared/manga";
 import {
   mangaApi,
@@ -301,6 +302,8 @@ export default function MangaReader() {
             )}
           </div>
         </div>
+        {/* Background music keeps playing while reading; its controls ride along here. */}
+        <div className="rounded-full bg-black/50 backdrop-blur-md"><BackgroundMusicButton /></div>
         {count > 0 && <span className="rounded-full border border-white/10 bg-black/50 text-white backdrop-blur-md px-3 py-1.5 text-xs font-semibold tabular-nums">{Math.min(page + 1, count)} / {count}</span>}
         <button onClick={() => hasPrev && (save(), go(session.index - 1))} disabled={!hasPrev} className="flex h-10 items-center gap-1 rounded-xl border border-white/10 bg-black/50 text-white backdrop-blur-md transition hover:bg-black/75 px-3.5 text-xs font-semibold disabled:opacity-30" title="Previous chapter (P)">
           <ChevronLeft size={15} /> Prev

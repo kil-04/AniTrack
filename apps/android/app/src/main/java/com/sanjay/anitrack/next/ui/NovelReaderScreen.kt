@@ -205,6 +205,8 @@ fun NovelReaderScreen(onBack: () -> Unit) {
                     Text(session.detail.card.title, color = theme.text, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text("${chapter.label} · ${session.index + 1} of ${session.chapters.size}", color = theme.muted, style = MaterialTheme.typography.labelSmall, maxLines = 1)
                 }
+                // Background music keeps playing while reading; its controls ride along in the reader bar.
+                BackgroundMusicBar(compact = true, onOpenSettings = {}, modifier = Modifier.padding(end = 4.dp))
                 IconButton(onClick = { NovelReading.jump(session.index - 1) }, enabled = session.previous != null) {
                     Icon(Icons.AutoMirrored.Rounded.KeyboardArrowLeft, "Previous chapter", tint = theme.text.copy(alpha = if (session.previous != null) 1f else 0.3f))
                 }

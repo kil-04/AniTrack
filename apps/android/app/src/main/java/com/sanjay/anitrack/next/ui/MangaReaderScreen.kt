@@ -469,6 +469,9 @@ fun MangaReaderScreen(onBack: () -> Unit) {
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+                // Background music keeps playing while reading; its controls ride along in the reader bar.
+                BackgroundMusicBar(compact = true, onOpenSettings = {})
+                Spacer(Modifier.width(8.dp))
                 PillButton("Chapters", { chaptersOpen = true }, icon = Icons.AutoMirrored.Rounded.FormatListBulleted, compact = true)
                 Spacer(Modifier.width(8.dp))
                 PillButton(effective.label, { settingsOpen = true }, icon = Icons.Rounded.Tune, compact = true)
