@@ -1,11 +1,12 @@
 {
   "schemaVersion": 1,
-  "revision": 6,
-  "issuedAt": "2026-08-30T23:12:52.580Z",
+  "revision": 7,
+  "issuedAt": "2026-10-18T22:08:48.000Z",
   "providerOrder": [
     "anikoto",
     "animepahe",
-    "mkissa"
+    "mkissa",
+    "shonen"
   ],
   "providers": {
     "anikoto": {
@@ -120,6 +121,26 @@
         "graphql": "/api",
         "authConfigs": "/authconfigs",
         "cryptoBootstrap": "/client-crypto/v1/bootstrap"
+      },
+      "selectors": {}
+    },
+    "shonen": {
+      "enabled": true,
+      "baseUrls": [
+        "https://shonen.to"
+      ],
+      "streamHostFragments": [
+        "vidcloud.sbs"
+      ],
+      "mediaExtensions": [
+        ".m3u8",
+        ".ts",
+        ".vtt"
+      ],
+      "routes": {
+        "search": "/browse?q={query}",
+        "anime": "/anime/{animeId}",
+        "sources": "/sources/shonen?id={animeId}&episode={episode}&language={language}"
       },
       "selectors": {}
     }
