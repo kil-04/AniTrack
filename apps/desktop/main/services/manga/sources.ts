@@ -28,6 +28,22 @@ import {
   type SourceLatest,
   type SourceTitle,
 } from "../../../../../packages/shared/manga";
+import {
+  isXComicId,
+  isXComicImage,
+  parseXComicTitleRef,
+  XCOMIC,
+  XCOMIC_MAX_CHAPTERS,
+  xcomicChapters,
+  xcomicChapterUrl,
+  xcomicDetail,
+  xcomicEditionUrl,
+  xcomicLatest,
+  xcomicPages,
+  xcomicSearchIds,
+  xcomicSearchUrl,
+  xcomicTitleUrl,
+} from "../../../../../packages/shared/xcomic";
 import { mangaById } from "./anilist-manga";
 import { readCached, writeCached } from "./disk-cache";
 import { saveMatch, savedMatch } from "./store";
@@ -217,7 +233,8 @@ function matcher(
 const savedListName = (title: SourceTitle) => `chapters-${title.sourceId}-${title.id}`;
 const listableTitle = (title: SourceTitle) =>
   (title.sourceId === "mangaball" && isMangaBallId(title.id)) || (title.sourceId === "mangadot" && /^\d{1,12}$/.test(title.id)) ||
-  (title.sourceId === "comix" && /^[a-zA-Z0-9]{1,32}$/.test(title.id));
+  (title.sourceId === "comix" && /^[a-zA-Z0-9]{1,32}$/.test(title.id)) ||
+  (title.sourceId === "xcomic" && parseXComicTitleRef(title.id) != null);
 
 /** Keeps a fresh chapter list on disk, so the title page can show it at once next time (or offline). */
 function keepList(title: SourceTitle, list: MangaChapter[]) {
@@ -518,8 +535,58 @@ const comix: Source = {
   latest: cachedLatest(async id => latestOf(await comixTitleDetail(id))),
 };
 
-/** Preserve existing source preference; Comix is an additional explicit choice. */
-const SOURCES: Source[] = [mangaDot, mangaBall, comix];
+// ── XComic: public HTML, the English edition with the most chapters ─────────
+// packages/shared/xcomic.ts. Title pages run to ~2 MB, so requests are spaced out.
+
+const xcomicHttp = new SourceHttp("XComic", new Set(XCOMIC.HOSTS), 700, () => net.fetch, honestAgent());
+const xcomicLists = new Map<string, { at: number; list: MangaChapter[] }>();
+const XCOMIC_PAGE_BYTES = 6 * 1024 * 1024;
+
+async function xcomicPageImages(_title: SourceTitle, chapterId: string): Promise<MangaPageImage[]> {
+  if (!isXComicId(chapterId)) throw new MangaSourceError("Unrecognised XComic chapter.");
+  const pages = xcomicPages(await xcomicHttp.get(xcomicChapterUrl(chapterId), XCOMIC_PAGE_BYTES))
+    .map((url) => ({ url, width: null, height: null }));
+  if (!pages.length) throw new MangaSourceError("XComic has no pages for this chapter.");
+  return pages;
+}
+
+const xcomic: Source = {
+  info: { id: "xcomic", label: "XComic", needsConnect: false },
+  find: matcher(
+    "xcomic",
+    async (query) => xcomicSearchIds(await xcomicHttp.get(xcomicSearchUrl(query), XCOMIC_PAGE_BYTES)),
+    async (id) => (isXComicId(id) ? xcomicDetail(await xcomicHttp.get(xcomicTitleUrl(id), XCOMIC_PAGE_BYTES), id) : null),
+  ),
+  async chapters(title) {
+    const ref = parseXComicTitleRef(title.id);
+    if (!ref) throw new MangaSourceError("Unrecognised XComic title.");
+    const hit = xcomicLists.get(title.id);
+    if (hit && Date.now() - hit.at < CHAPTERS_TTL_MS) return hit.list;
+    // ~200 chapters per page, newest first: One Piece is 6 pages.
+    const first = xcomicChapters(await xcomicHttp.get(xcomicEditionUrl(ref.editionId), XCOMIC_PAGE_BYTES));
+    const all = [...first.chapters];
+    for (let page = 2; page <= first.lastPage && all.length < XCOMIC_MAX_CHAPTERS; page++) {
+      all.push(...xcomicChapters(await xcomicHttp.get(xcomicEditionUrl(ref.editionId, page), XCOMIC_PAGE_BYTES)).chapters);
+    }
+    const list = [...new Map(all.map((c) => [c.id, c])).values()];
+    if (list.length) xcomicLists.set(title.id, { at: Date.now(), list });
+    keepList(title, list);
+    return list;
+  },
+  pages: viaProtocol("xcomic", xcomicPageImages),
+  pageImages: xcomicPageImages,
+  latest: cachedLatest(async (id) => {
+    const ref = parseXComicTitleRef(id);
+    return ref ? xcomicLatest(await xcomicHttp.get(xcomicEditionUrl(ref.editionId), XCOMIC_PAGE_BYTES)) : null;
+  }),
+};
+
+/**
+ * Preserve existing source preference; XComic is an additional explicit choice.
+ * Comix was removed at the user's request (19 Oct 2026: unreliable); its connector
+ * stays below, unregistered, and its downloaded chapters still open offline.
+ */
+const SOURCES: Source[] = [mangaDot, mangaBall, xcomic];
 
 export const sourceInfos = (): MangaSourceInfo[] => SOURCES.map((source) => source.info);
 
@@ -611,6 +678,9 @@ export function fetchPageImage(sourceId: string, target: URL, signal?: AbortSign
   if (sourceId === "comix") return fetchComixImage(target.toString(), signal);
   if (sourceId === "mangaball" && ballImageHosts.has(target.hostname.toLowerCase())) {
     return net.fetch(target.toString(), { headers: { Referer: `${MANGABALL.SITE}/`, "User-Agent": honestAgent() }, signal });
+  }
+  if (sourceId === "xcomic" && isXComicImage(target)) {
+    return net.fetch(target.toString(), { headers: { "User-Agent": honestAgent() }, signal });
   }
   if (sourceId === "mangadot" && isMangaDotPage(target)) {
     // From the verified page, which sends its own Referer and partitioned clearance.

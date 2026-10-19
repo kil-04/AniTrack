@@ -19,6 +19,7 @@ class WebsiteSessionApplication : Application(), ImageLoaderFactory {
         }
         com.sanjay.anitrack.next.data.manga.mangadot.MangaDotSource.init(this)
         com.sanjay.anitrack.next.data.manga.mangaball.MangaBallSource.init(this)
+        com.sanjay.anitrack.next.data.manga.xcomic.XComicSource.init(this)
         com.sanjay.anitrack.next.data.manga.PageStrips.init(this)
         com.sanjay.anitrack.next.data.manga.MangaDownloads.init(this)
     }

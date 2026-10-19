@@ -21,7 +21,7 @@ object Backup {
     private const val VERSION = 1
     private const val MAX_BYTES = 64 * 1024 * 1024
     private const val PREFS = "anitrack_next"
-    private val PREF_PREFIXES = listOf("manga_source_", "manga_group_", "mangadot_match_", "mangaball_match_", "reader_", "cap_")
+    private val PREF_PREFIXES = listOf("manga_source_", "manga_group_", "mangadot_match_", "mangaball_match_", "xcomic_match_", "reader_", "cap_")
     private val PREF_KEYS = setOf("autoplay", "auto_next", "auto_skip", "home_mode")
 
     data class Summary(val watched: Int, val anime: Int, val reading: Int, val manga: Int, val settings: Int) {

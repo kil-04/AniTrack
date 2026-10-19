@@ -57,13 +57,14 @@ object MangaSources {
     /**
      * Registered reading sources, in preference order (user choice): MangaDot
      * first (largest catalogue, one-time user-completed Cloudflare check), then
-     * MangaBall (public JSON API), then Comix's separately connected catalogue.
-     * MangaPill and MangaDex remain implemented but unregistered.
+     * MangaBall (public JSON API), then XComic (public HTML, read from its largest
+     * English edition). MangaPill, MangaDex and Comix remain implemented but unregistered.
      */
     val all: List<MangaSource> = listOf(
         com.sanjay.anitrack.next.data.manga.mangadot.MangaDotSource,
         com.sanjay.anitrack.next.data.manga.mangaball.MangaBallSource,
-        com.sanjay.anitrack.next.data.manga.comix.ComixSource,
+        // Comix was removed at the user's request (19 Oct 2026: unreliable); its connector stays, unregistered.
+        com.sanjay.anitrack.next.data.manga.xcomic.XComicSource,
     )
 
     fun byId(id: String): MangaSource? = all.firstOrNull { it.id == id }

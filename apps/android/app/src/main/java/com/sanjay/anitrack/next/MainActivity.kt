@@ -109,7 +109,6 @@ class MainActivity : ComponentActivity() {
         com.sanjay.anitrack.next.data.novel.NovelDownloads.init(applicationContext)
         com.sanjay.anitrack.next.data.ReleaseAlerts.takeRoute(intent)
         com.sanjay.anitrack.next.data.providers.connectors.MiruroAndroidProvider.attach(this)
-        com.sanjay.anitrack.next.data.manga.comix.ComixSource.attach(this)
         com.sanjay.anitrack.next.data.Pahe.attach(this)
         // ExoPlayer's HttpURLConnection stack consults this for cookies — the
         // pahe/kwik CDN rejects segment requests without the WebView's cookies.
@@ -197,7 +196,6 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        com.sanjay.anitrack.next.data.manga.comix.ComixSource.detach(this)
         com.sanjay.anitrack.next.data.providers.connectors.MiruroAndroidProvider.detach(this)
         super.onDestroy()
         if (isFinishing) PipState.active.value = false

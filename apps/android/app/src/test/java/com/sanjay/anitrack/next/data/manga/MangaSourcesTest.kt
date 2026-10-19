@@ -6,10 +6,12 @@ import org.junit.Test
 
 class MangaSourcesTest {
     /** Loading the registry initializes every source object (catches init-order cycles). */
-    @Test fun registersExistingSourcesThenComix() {
-        assertEquals(listOf("mangadot", "mangaball", "comix"), MangaSources.all.map { it.id })
+    @Test fun registersExistingSourcesThenXComic() {
+        assertEquals(listOf("mangadot", "mangaball", "xcomic"), MangaSources.all.map { it.id })
         assertEquals("mangaball", MangaSources.byId("mangaball")?.id)
-        assertEquals("comix", MangaSources.byId("comix")?.id)
+        assertEquals("xcomic", MangaSources.byId("xcomic")?.id)
+        // Removed at the user's request (Comix, 19 Oct 2026) or never registered.
+        assertEquals(null, MangaSources.byId("comix"))
         assertEquals(null, MangaSources.byId("mangapill"))
     }
 
