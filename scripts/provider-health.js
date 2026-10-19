@@ -110,6 +110,40 @@ async function probeAnimePahe(config, baseUrl) {
   }
 }
 
+/**
+ * shonen.to (packages/shared/shonen.ts): search, one episode's sources, then that
+ * episode's HLS playlist. It relays other sites' streams, so a reachable site with a
+ * dead playlist is "degraded", not healthy.
+ */
+async function probeShonen(config, baseUrl) {
+  try {
+    const search = await probe(baseUrl + expandRoute(config.routes.search, { query: "one piece" }));
+    if (search.status < 200 || search.status >= 300) {
+      return result("shonen", baseUrl, "failed", `search HTTP ${search.status}`, search.status, search.finalUrl);
+    }
+    if (!/href="\/anime\/21"/.test(search.body)) {
+      return result("shonen", baseUrl, "failed", "search HTML no longer lists AniList-keyed cards", search.status, search.finalUrl);
+    }
+    const sources = await probe(baseUrl + expandRoute(config.routes.sources, { animeId: 21, episode: 1, language: "sub" }));
+    let file = null;
+    try {
+      const json = JSON.parse(sources.body);
+      const hls = Array.isArray(json?.data?.sources) ? json.data.sources.find((s) => s && s.type === "hls") : null;
+      file = typeof hls?.file === "string" && hls.file.startsWith("https://") ? hls.file : null;
+    } catch {}
+    if (!file) {
+      return result("shonen", baseUrl, "failed", `sources HTTP ${sources.status} without an HLS stream`, sources.status, sources.finalUrl);
+    }
+    const playlist = await probe(file);
+    if (playlist.status < 200 || playlist.status >= 300 || !playlist.body.startsWith("#EXTM3U")) {
+      return result("shonen", baseUrl, "degraded", `search and sources work, but the stream playlist answered HTTP ${playlist.status}`, playlist.status, null);
+    }
+    return result("shonen", baseUrl, "healthy", "search, sources and stream playlist passed", sources.status, sources.finalUrl);
+  } catch (error) {
+    return result("shonen", baseUrl, "failed", error.message || String(error));
+  }
+}
+
 function markdown(config, results) {
   const rows = results.map((entry) =>
     `| ${entry.provider} | ${entry.baseUrl} | ${entry.state} | ${String(entry.detail).replace(/\|/g, "\\|")} |`,
@@ -148,6 +182,8 @@ async function main() {
       for (const base of providerConfig.baseUrls) jobs.push(probeAnikoto(providerConfig, base));
     } else if (provider === "animepahe") {
       for (const base of providerConfig.baseUrls) jobs.push(probeAnimePahe(providerConfig, base));
+    } else if (provider === "shonen") {
+      for (const base of providerConfig.baseUrls) jobs.push(probeShonen(providerConfig, base));
     } else {
       for (const base of providerConfig.baseUrls) {
         jobs.push(Promise.resolve(result(
@@ -177,4 +213,4 @@ main().catch((error) => {
   process.exit(1);
 });
 
-module.exports = { expandRoute, readBounded, probeAnikoto, probeAnimePahe };
+module.exports = { expandRoute, readBounded, probeAnikoto, probeAnimePahe, probeShonen };
