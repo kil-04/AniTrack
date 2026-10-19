@@ -7,10 +7,10 @@ import org.junit.Test
 
 class BackupTest {
     @Test fun carriesPlainSettingsOnly() {
-        listOf("reader_mode", "reader_volume_keys", "cap_size", "auto_skip", "autoplay", "home_mode", "manga_source_30002", "mangaball_match_151807")
+        listOf("reader_mode", "reader_volume_keys", "cap_size", "auto_skip", "autoplay", "home_mode", "manga_source_30002", "mangaball_match_151807", "toonkotsu_match_30013")
             .forEach { assertTrue(it, Backup.isBackedUpPref(it)) }
         // Sign-ins, device state and anything unknown stay out.
-        listOf("mal_access_token", "mal_refresh_token", "gist_token", "github_token", "alerts_airing_check", "alerts_episodes", "unknown")
+        listOf("mal_access_token", "mal_refresh_token", "gist_token", "github_token", "toonkotsu_session", "alerts_airing_check", "alerts_episodes", "unknown")
             .forEach { assertFalse(it, Backup.isBackedUpPref(it)) }
     }
 
