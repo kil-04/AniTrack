@@ -82,6 +82,7 @@ object PageStrips {
         if (page.url.startsWith("file:")) {
             MangaDownloads.localFile(page.url)?.let { return@withContext it }
             MangaDownloads.comixCachedFile(page.url)?.let { return@withContext it }
+            MangaDownloads.toonkotsuCachedFile(page.url)?.let { return@withContext it }
             throw MangaSourceException("This downloaded page is missing. Download the chapter again.")
         }
         val dir = directory ?: throw MangaSourceException("The reader isn't ready yet. Reopen AniTrack.")

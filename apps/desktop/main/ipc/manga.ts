@@ -43,7 +43,7 @@ function chapterNumber(value: unknown): number {
 function sourceTitle(value: unknown): SourceTitle {
   const o = value as Record<string, unknown> | null;
   if (!o || typeof o !== "object") throw new Error("Invalid title");
-  return { sourceId: text(o.sourceId, "source", 32), id: text(o.id, "title id", 64), title: optionalText(o.title, 300) ?? "" };
+  return { sourceId: text(o.sourceId, "source", 32), id: text(o.id, "title id", o.sourceId === "toonkotsu" ? 190 : 64), title: optionalText(o.title, 300) ?? "" };
 }
 
 /** The manga fields a download keeps (enough to read it offline). */

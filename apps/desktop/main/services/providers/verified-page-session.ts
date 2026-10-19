@@ -1,4 +1,4 @@
-import { BrowserWindow } from "electron";
+import { app, BrowserWindow } from "electron";
 
 /**
  * A provider homepage opened in an app-owned window so the user can complete
@@ -27,6 +27,8 @@ export interface VerifiedPageSessionOptions {
   idleCloseMs?: number;
   requestTimeoutMs?: number;
   maxBodyBytes?: number;
+  /** Restrict resources for a source-owned website window (omitted for existing providers). */
+  allowedResourceHosts?: string[];
 }
 
 const CHALLENGE_TITLE = /just a moment|attention required|checking your browser|verify you are human/i;
@@ -44,7 +46,7 @@ export class VerifiedPageSession {
   private ready: Promise<BrowserWindow> | null = null;
   private verified = false;
   private idleTimer: NodeJS.Timeout | null = null;
-  private readonly options: Required<VerifiedPageSessionOptions>;
+  private readonly options: Required<Omit<VerifiedPageSessionOptions, "allowedResourceHosts">> & Pick<VerifiedPageSessionOptions, "allowedResourceHosts">;
 
   constructor(options: VerifiedPageSessionOptions) {
     const origin = new URL(options.origin);
@@ -57,6 +59,58 @@ export class VerifiedPageSession {
       maxBodyBytes: 2 * 1024 * 1024,
       ...options,
     };
+  }
+
+  /** Run locally reviewed reader code after normal same-origin website navigation.
+   * Callers serialize operations and validate the bounded result. Never pass site code here. */
+  async readPage(url: string, code: string): Promise<unknown> {
+    const target = new URL(url);
+    if (target.origin !== this.options.origin || target.username || target.password) throw new Error("Unexpected website page.");
+    const win = await this.open();
+    if (win.webContents.getURL() !== target.href) await win.loadURL(target.href);
+    this.touch();
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        win.webContents.executeJavaScriptInIsolatedWorld(this.options.world, [{ code }]),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${this.options.label} page took too long. Retry.`)), 30_000); }),
+      ]);
+    } finally { clearTimeout(timer); this.touch(); }
+  }
+
+  /** A user-operated connection page, with the same sandbox and resource policy. */
+  async connect(url: string, parent: BrowserWindow | null): Promise<void> {
+    const target = new URL(url);
+    if (target.origin !== this.options.origin || target.username || target.password) throw new Error("Unexpected connection page.");
+    const win = await this.open();
+    const contents = win.webContents;
+    if (parent) win.setParentWindow(parent);
+    // The connection is intentionally user-operated. A normal load must not hide it.
+    const keepVisible = () => { if (!win.isDestroyed()) win.show(); };
+    win.webContents.on("did-finish-load", keepVisible);
+    if (contents.getURL() !== target.href) void win.loadURL(target.href).catch(() => {});
+    win.setTitle(`Connect ${this.options.label}`);
+    win.show(); win.focus();
+    await new Promise<void>(resolve => {
+      let quitting = false;
+      const beforeQuit = () => { quitting = true; };
+      app.on("before-quit", beforeQuit);
+      const finish = () => {
+        app.removeListener("before-quit", beforeQuit);
+        win.removeListener("close", onClose);
+        win.removeListener("closed", finish);
+        contents.removeListener("did-finish-load", keepVisible);
+        resolve();
+      };
+      const onClose = (event: Electron.Event) => {
+        if (quitting) { finish(); return; }
+        // Keep this exact verified reader document and its decoded blobs alive.
+        event.preventDefault();
+        win.hide(); this.touch(); finish();
+      };
+      win.on("close", onClose);
+      win.once("closed", finish);
+    });
   }
 
   /** One same-origin GET from the verified page. User-initiated callers only. */
@@ -186,6 +240,14 @@ export class VerifiedPageSession {
     win.webContents.setAudioMuted(true);
     win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     const session = win.webContents.session;
+    if (this.options.allowedResourceHosts) {
+      const hosts = new Set(this.options.allowedResourceHosts);
+      session.webRequest.onBeforeRequest((details, callback) => {
+        let allowed = false;
+        try { const u = new URL(details.url); allowed = (u.protocol === "https:" && hosts.has(u.hostname)) || (u.protocol === "blob:" && u.pathname.startsWith(origin + "/")) || u.protocol === "data:"; } catch { /* refused */ }
+        callback({ cancel: !allowed });
+      });
+    }
     session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
     session.setPermissionCheckHandler(() => false);
     const denyDownload = (event: Electron.Event, _item: Electron.DownloadItem, contents?: Electron.WebContents) => {

@@ -58,6 +58,7 @@ object MangaDownloads {
     private const val PAGE_WORKERS = 3
     private var root: File? = null
     private var comixPageCopy: ComixCachedPageCopy? = null
+    private var toonkotsuPageCopy: ComixCachedPageCopy? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val queue = Channel<Pending>(Channel.UNLIMITED)
     // The live request per chapter: a queued or running download whose generation no
@@ -98,10 +99,14 @@ object MangaDownloads {
     internal fun comixCachedFile(url: String): File? =
         if (!url.startsWith("file:")) null else runCatching { comixPageCopy?.cachedFile(url) }.getOrNull()
 
+    internal fun toonkotsuCachedFile(url: String): File? =
+        if (!url.startsWith("file:")) null else runCatching { toonkotsuPageCopy?.cachedFile(url) }.getOrNull()
+
     fun init(context: Context) {
         if (root != null) return
         val dir = File(context.filesDir, "manga-downloads")
         comixPageCopy = ComixCachedPageCopy(File(context.cacheDir, "comix-pages"))
+        toonkotsuPageCopy = ComixCachedPageCopy(File(context.cacheDir, "toonkotsu-pages"), "toonkotsu")
         root = dir
         scope.launch {
             val restored = dir.listFiles().orEmpty().filter { it.isDirectory }.flatMap { mangaDir ->
@@ -287,7 +292,8 @@ object MangaDownloads {
     private suspend fun fetch(pending: Pending, page: MangaPage, target: File) {
         if (page.url.startsWith("file:", ignoreCase = true)) {
             val context = currentCoroutineContext()
-            (comixPageCopy ?: error("not initialised")).copy(
+            val cache = (if (pending.source.id == "toonkotsu") toonkotsuPageCopy else comixPageCopy) ?: error("not initialised")
+            cache.copy(
                 pending.source.id, page.url, target, MAX_PAGE_BYTES,
             ) {
                 context.ensureActive()

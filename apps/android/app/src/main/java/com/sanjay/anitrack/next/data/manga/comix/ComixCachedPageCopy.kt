@@ -13,12 +13,12 @@ import java.nio.file.StandardOpenOption
  * The approved directory comes from Context.cacheDir, never from website data.
  * There is no network request, cookie access or arbitrary file-URL fallback.
  */
-internal class ComixCachedPageCopy(approvedDirectory: File) {
+internal class ComixCachedPageCopy(approvedDirectory: File, private val expectedSource: String = "comix") {
     private val directory = approvedDirectory.absoluteFile
     private val canonicalDirectory = directory.canonicalFile
 
     init {
-        require(directory.name == "comix-pages") { "Invalid Comix cache directory." }
+        require(expectedSource in setOf("comix", "toonkotsu") && directory.name == "$expectedSource-pages") { "Invalid decoded page cache directory." }
     }
 
     fun copy(
@@ -67,10 +67,10 @@ internal class ComixCachedPageCopy(approvedDirectory: File) {
     }
 
     /** The decoded cache file behind a resolved Comix page, under the same exact-name checks as [copy]. */
-    fun cachedFile(rawUrl: String): File = checkedSource("comix", rawUrl)
+    fun cachedFile(rawUrl: String): File = checkedSource(expectedSource, rawUrl)
 
     private fun checkedSource(sourceId: String, rawUrl: String): File {
-        require(sourceId == "comix") { "Only Comix cache pages can be copied." }
+        require(sourceId == expectedSource) { "Page source does not match its cache." }
         require(rawUrl.none { it.isISOControl() || it == '\\' }) { "Refused an unsafe cached page address." }
         val uri = try { URI(rawUrl) } catch (_: Exception) {
             throw IllegalArgumentException("Refused an unsafe cached page address.")

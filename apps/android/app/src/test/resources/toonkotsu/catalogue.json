@@ -1,0 +1,185 @@
+{
+  "series": {
+    "hid": "ktm04",
+    "slug": "one-piece",
+    "title": "One Piece",
+    "alt": [
+      "ONE PIECE",
+      "Budak Getah",
+      "ONE PIECE～航海王～",
+      "One Piece. Батпан құйрық",
+      "One Piece. Большой куш",
+      "Vua Hải Tặc",
+      "Wanpiisu",
+      "Đảo Hải Tặc"
+    ],
+    "trackers": {
+      "anilist": 30013,
+      "mangaupdates": "pb8uwds"
+    },
+    "externalIds": {
+      "site": "22668",
+      "anilist": "30013",
+      "myanimelist": "13",
+      "mangabaka": "377",
+      "mangaupdates": "pb8uwds"
+    },
+    "year": 1997,
+    "country": "JP",
+    "adult": false,
+    "latest": {
+      "id": 4675553,
+      "label": "Chapter 1196",
+      "n": 1196,
+      "at": 1792155372822
+    }
+  },
+  "chapters": [
+    {
+      "id": 4675553,
+      "n": 1196,
+      "label": "Chapter 1196",
+      "vol": null,
+      "at": 1792155372822,
+      "pages": 17,
+      "w": 1100,
+      "f": "jpg",
+      "mb": 7.7,
+      "wm": 1100,
+      "bpp": 0.239,
+      "thumb": "/cdn/t/4675553/ead9bef1.webp",
+      "src": "s9c35e1d534",
+      "group": {
+        "slug": "tcb-scans",
+        "name": "TCB Scans",
+        "logo": "/cdn/g/146/mv943ouy/64.webp"
+      },
+      "alts": [
+        {
+          "id": 4665613,
+          "src": "sa7d978d2fb",
+          "label": "Chapter 1196",
+          "pages": 17,
+          "w": 1100,
+          "f": "png",
+          "mb": 33.3,
+          "wm": 1100,
+          "bpp": 1.03,
+          "at": 1792126582885,
+          "group": {
+            "slug": "tcb-scans",
+            "name": "TCB Scans",
+            "logo": "/cdn/g/146/mv943ouy/64.webp"
+          }
+        },
+        {
+          "id": 4706277,
+          "src": "scdf39fe37d",
+          "label": "Chapter 1196",
+          "pages": 16,
+          "w": 1100,
+          "f": "png",
+          "mb": 7.2,
+          "wm": 1100,
+          "bpp": 0.243,
+          "at": 1792169980000,
+          "group": {
+            "slug": "official",
+            "name": "Official",
+            "logo": "/cdn/g/1/mv2ldb2q/64.webp"
+          }
+        },
+        {
+          "id": 4678742,
+          "src": "s78d90bf2e2",
+          "label": "Chapter 1196",
+          "pages": 17,
+          "w": 1100,
+          "f": "jpg",
+          "mb": 7.7,
+          "wm": 1100,
+          "bpp": 0.239,
+          "at": 1792164158000,
+          "group": {
+            "slug": "tcb-scans",
+            "name": "TCB Scans",
+            "logo": "/cdn/g/146/mv943ouy/64.webp"
+          }
+        }
+      ]
+    },
+    {
+      "id": 3988568,
+      "n": 1195,
+      "label": "Chapter 1195",
+      "vol": null,
+      "at": 1791521319286,
+      "pages": 16,
+      "w": 1100,
+      "f": "jpg",
+      "mb": 7.9,
+      "wm": 1100,
+      "bpp": 0.247,
+      "thumb": "/cdn/t/3988568/c5b6dd83.webp",
+      "src": "s9c35e1d534",
+      "group": {
+        "slug": "tcb-scans",
+        "name": "TCB Scans",
+        "logo": "/cdn/g/146/mv943ouy/64.webp"
+      },
+      "alts": [
+        {
+          "id": 3964279,
+          "src": "sa7d978d2fb",
+          "label": "Chapter 1195",
+          "pages": 16,
+          "w": 1100,
+          "f": "png",
+          "mb": 36,
+          "wm": 1100,
+          "bpp": 1.11,
+          "at": 1791520143985,
+          "group": {
+            "slug": "tcb-scans",
+            "name": "TCB Scans",
+            "logo": "/cdn/g/146/mv943ouy/64.webp"
+          }
+        },
+        {
+          "id": 4379975,
+          "src": "scdf39fe37d",
+          "label": "Chapter 1195",
+          "pages": 15,
+          "w": 1100,
+          "f": "png",
+          "mb": 7.4,
+          "wm": 1100,
+          "bpp": 0.251,
+          "at": 1791718568000,
+          "group": {
+            "slug": "official",
+            "name": "Official",
+            "logo": "/cdn/g/1/mv2ldb2q/64.webp"
+          }
+        },
+        {
+          "id": 4190748,
+          "src": "s78d90bf2e2",
+          "label": "Chapter 1195",
+          "pages": 16,
+          "w": 1100,
+          "f": "jpg",
+          "mb": 7.9,
+          "wm": 1100,
+          "bpp": 0.247,
+          "at": 1791528206000,
+          "group": {
+            "slug": "tcb-scans",
+            "name": "TCB Scans",
+            "logo": "/cdn/g/146/mv943ouy/64.webp"
+          }
+        }
+      ]
+    }
+  ]
+}

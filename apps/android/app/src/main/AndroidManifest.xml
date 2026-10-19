@@ -21,6 +21,10 @@
             android:process=":comix"
             android:exported="false" />
         <activity
+            android:name=".data.manga.toonkotsu.ToonkotsuConnectActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" />
+        <activity
             android:name=".data.manga.mangadot.MangaDotConnectActivity"
             android:exported="false"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" />

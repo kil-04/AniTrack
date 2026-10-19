@@ -69,7 +69,7 @@ small or medium by EverythingMoe and were not inspected.
 | **MangaK** (mangak.io) | Large (aka MangaBuddy) | Next.js page props | `rx.qvzr*.org`, needs Referer | none | Usable (name match) |
 | **Toonz** (toonz.to) | Large, new | `/api/comics/<id>/chapters` JSON, RSC page data | `toonz.to/uploads/…`, no Referer | none | Usable (name match) |
 | Manganato.gg | Large, low quality, ads | HTML | `img-r1.2xstorage.com`, needs Referer | none | Usable, low quality |
-| Toonkotsu | Very large | Chapter data via obfuscated `prepare()`/`open()` signer and decoder | — | AniList, MAL, … | Not usable |
+| Toonkotsu | Very large | Chapter data via the site's own scripts | See detailed 19 Oct survey below | AniList, MAL, … | Usable with a page session; earlier rejection superseded |
 | MangaFire | Large | API needs a client-computed `vrf` token | — | — | Not usable |
 | MangaHub, Mangago, OniSaga, Kagane, VyManga | Large to very large | Cloudflare challenge to non-browsers | — | — | Only with a user-verified session (MangaDot pattern); not inspected further |
 | Atsumaru | Medium | Open JSON (`/api/home2/…`) | — | — | Not pursued (size) |
@@ -192,3 +192,215 @@ Anime Nexus, Gotaku, AnimeOnsen, Anify, Otaku-Streamers.
    Re:Anime as page-session sources, and anv. Xanime and ANIMEGG need title matching.
 2. **Manga:** Kagane (very large, page session) and MangaKatana (plain HTTP).
 3. **Novels:** NovelCool or NovelFire as a third source.
+
+# Toonkotsu integration survey: 19 Oct 2026
+
+Research only, requested before implementation in desktop and native Android.
+The detailed observations below supersede the earlier Toonkotsu rejection.
+**Result: the current Chrome session can search, show tracker-linked titles,
+list chapters and render chapter pages. A website-session connector is a viable
+implementation direction; AniTrack integration has not yet been built or tested.**
+
+## Method and evidence limits
+
+- Used a real Chrome tab at <https://toonkotsu.com/>, its normal search UI,
+  rendered DOM/accessibility tree and the browser's observed-page asset inventory.
+  Navigated the site's reader normally; did not replay its protected requests.
+- Browser profile/session state was pre-existing. No cookies were inspected,
+  exported or copied, and no user agent or fingerprint was changed. This does
+  not establish how a fresh Electron partition or Android WebView will behave.
+- No human-check control was clicked or solved. A Quick Check screen was not
+  captured in this run; the reader eventually opened without agent interaction
+  with a check. Its observed resources included Cloudflare Turnstile and the
+  site's unlock endpoint. Whether this used existing clearance or an automatic
+  website check is unknown. Fresh sessions still need a visible, user-operated
+  Connect flow.
+- Resource inventory establishes that URLs were observed, not their methods,
+  status codes, request headers, response shapes or token lifetime. Routes below
+  are evidence of the site's normal operation, not a verified plain-HTTP API.
+- Signing/decoding internals were not investigated. The user subsequently
+  overrode the skill restriction on investigating them; that override does not
+  change the requested research-first stop or constitute evidence about their
+  implementation.
+
+## Search and title metadata (confirmed)
+
+- Homepage **Search titles** opens a search dialog. Entering `One Piece`
+  produced **VIEW 55 RESULTS** and ten displayed suggestions, with the main
+  series first. Suggestions included spin-offs and alternative-title matches,
+  so a matching name alone is insufficient.
+- The first result opened
+  <https://toonkotsu.com/title/ktm04-one-piece>.
+  Observed title references have an opaque lower-case alphanumeric id followed
+  by a slug: `/title/<id>-<slug>`. Preserve the source id rather than deriving
+  identity from the translated title or slug.
+- That page explicitly links [AniList manga 30013](https://anilist.co/manga/30013)
+  and [MyAnimeList manga 13](https://myanimelist.net/manga/13).
+  Match the requested AniList id against this title-page link, following
+  `xcomicDetail`/XComic matching. The MAL link is secondary metadata.
+- Rendered metadata includes `One Piece`, alternative titles, `MANGA`,
+  `ONGOING`, year `1997`, author `ODA Eiichiro`, description, genres and cover.
+  The observed cover URL is `https://toonkotsu.com/cdn/c/ktm04/muxe4yu7/460.webp`.
+- Observed catalogue resources include `/cdn/v1/series/ktm04` and
+  `/api/v1/series/ktm04/mangabaka`. Their response schemas were not inspected.
+- Browse is `/manga/browse`. The quick-search request URL, query parameters and
+  a stable URL for submitting a search remain unconfirmed; do not invent an API
+  from this observation. A bounded fixture for search still needs to be captured
+  when implementing the connector.
+
+## Chapter lists (confirmed, completeness limits)
+
+- The hydrated title page says **Chapters (3,862)**. This is an upload count:
+  chapter `1196` appears separately for **TCB Scans** and **Official**.
+  The TCB row reports **17 pages**, **1100px**, **7.7 MB**; Official reports
+  **16 pages**, **1100px**, **7.2 MB**. Other visible groups include
+  WeebCentral and Rolia Scans.
+- Chapter links for those two uploads are:
+  - <https://toonkotsu.com/title/ktm04-one-piece/4675553-chapter-1196>
+  - <https://toonkotsu.com/title/ktm04-one-piece/4706277-chapter-1196>
+- The title DOM contained 100 chapter links and pagination controls `1`, `2`,
+  `3`, `39`. The pagination request/cursor or resulting page URL was not
+  established: an attempted second-page interaction timed out at the browser
+  control layer. The complete 3,862-upload list has **not** been enumerated.
+- Direct chapter navigation briefly exposed a server-rendered fallback with
+  **Chapters (1,209)**, 100 chapter links, volume entries and 13 list pages,
+  before the interactive reader replaced it. This differs from the hydrated
+  upload list and must not be treated as proof that every upload is available
+  from the fallback. A parser must distinguish chapter numbers, volume-only
+  entries and individual upload ids.
+- Keep each upload id, chapter number, optional title, group, page count and
+  upload timestamp where available. Reuse AniTrack's existing group selection
+  and chapter normalization; do not collapse upload choices during parsing.
+
+## Reader and page-image delivery (confirmed)
+
+- Opened TCB Scans chapter `4675553`. The page became an interactive reader
+  titled `Page 1: Chapter 1196 - One Piece - Toonkotsu`, with **1 / 17**.
+  The URL acquired a page-position suffix `/1`.
+- DOM images `Page 1` through `Page 6` loaded successfully, with `blob:` URLs
+  belonging to `https://toonkotsu.com`. Page 1 had natural size **1100 x 1606**.
+- Used the reader's **Last Page** control. It moved to
+  `/title/ktm04-one-piece/4675553-chapter-1196/17`, showed **17 / 17**, then
+  loaded `Page 17` successfully at **1100 x 1606**. The DOM also contained
+  successfully loaded pages 12–16. Pages 7–11 were not individually checked;
+  do not claim every page was verified. Loading is lazy/windowed.
+- The observed reader resource inventory included:
+  - `/cdn/v1/series/ktm04`
+  - `/api/manga/chapter/4675553`
+  - `/api/manga/unlock`
+  - `/api/manga/key`
+  - multiple `/cdn/e/<opaque>.bin` resources
+  - Cloudflare's `https://challenges.cloudflare.com/turnstile/v0/api.js`
+- The normal page converts delivered data into readable image blobs. Observed
+  `.bin` resources plus rendered blobs support that conclusion; the precise
+  signing, encoding and image transformation are unknown. No decoder, keys or
+  signed request material were extracted or reproduced.
+- All observed chapter-delivery resource URLs were on **toonkotsu.com**.
+  No external chapter-image CDN was established. A `blob:` URL is scoped to its
+  owning browser context and is not a reusable HTTPS page URL for AniTrack's
+  renderer, Android image loader or downloads.
+
+## Implementation implications (proposed, not yet implemented)
+
+1. Register `toonkotsu` immediately after XComic in desktop `SOURCES` and Android
+   `MangaSources.all`, with desktop `needsConnect: true` and an Android
+   connection activity. Keep existing source preferences intact.
+2. Implement a pure `packages/shared/toonkotsu.ts` parser and Kotlin twin under
+   `data/manga/toonkotsu/`. Save sanitized fixtures for search, exact tracker-id
+   matches, metadata, paged upload lists and reader page metadata. Test the same
+   cases on both sides, including mismatched tracker ids, duplicate uploads,
+   fractional numbers, volume-only entries and invalid URLs/ids.
+3. Desktop should reuse the isolation/lifecycle safeguards of
+   `VerifiedPageSession` and provide **Connect Toonkotsu** through
+   `connectMangaSource`. Important gap: the helper currently performs fixed
+   same-origin GETs from an isolated world; it does not navigate chapter pages,
+   wait for reader hydration or export decoded blob bytes. Its title-based
+   challenge detector does not specifically detect an in-page **Quick Check**.
+   Merely wrapping a chapter GET in this helper will not produce image URLs.
+4. Android should follow `data/manga/mangadot/` for the visible connection UX
+   and restrictive WebView settings. Its current cookie-backed HTTP pattern is
+   insufficient by itself for decoded blob images. A source-owned website
+   session needs a bounded way to supply already-rendered image bytes to the
+   native reader/cache, with no app/account bridge exposed to the page.
+5. The page-session approach must preserve the actual reader session through
+   decoding and byte transfer. Keep requests sequential and bounded; surface
+   Quick Check to the user and stop on rejection/rate limiting. Establish that
+   the selected title/chapter matches before accepting page bytes. Keep ad
+   resources and popups out of the app's connector window.
+6. For `fetchPageImage`, allow only observed, validated public HTTPS hosts and
+   paths needed by the finished transport. Current evidence supports the exact
+   host `toonkotsu.com`, not a wildcard or any new external CDN. Do not serve
+   raw `.bin` responses as images or pass website blob URLs across processes;
+   a validated decoded-byte/cache hand-off is also needed. Referer, cookie
+   requirements, MIME types and download compatibility remain to be verified.
+
+Before claiming implementation complete, resolve the quick-search transport,
+full chapter pagination, fresh-profile Quick Check behaviour, and decoded-byte
+transfer in both Electron and Android. Then run `npm run typecheck`, `npm test`,
+`npm run build`, `npm run android:next:test`, plus isolated desktop and debug
+tablet reading checks. None of those app checks were run for this documentation
+only survey. **Stopped here as requested; no connector code, commit or push.**
+
+## Implementation follow-up: 19 Oct 2026
+
+The user requested implementation after the research stop. Further inspection of
+the site's current public modules and a separate Electron website session resolved
+the catalogue questions:
+
+- Search is `GET /cdn/v1/search?q=<encoded query>&limit=5`, returning `items`
+  with `hid` and `slug`. The isolated Electron page received HTTP 200.
+- `GET /cdn/v1/series/<hid>` returns `{series, chapters, recs}`. For `ktm04`,
+  the isolated Electron page received HTTP 200 and a 2,523,073-character JSON
+  response. `series.trackers.anilist` is `30013`;
+  `series.externalIds.myanimelist` is `"13"`.
+- The complete raw chapter catalogue is delivered in that response. Each row
+  carries `id`, `n`, `label`, `at`, `pages`, `group` and optional `alts`.
+  Alternate uploads inherit the canonical number/volume and can override their
+  own group, page count and timestamp. The website paginates this data locally;
+  the connector does not need to traverse the UI's 39 chapter-list pages.
+- A fresh isolated reader page returned **Quick Check**, even though catalogue
+  requests worked. Thus homepage/catalogue access is insufficient to declare
+  the reader connected. The connector probes page 1 before returning reader
+  handles and remembers that chapter for the visible Connect window.
+
+Implementation uses `packages/shared/toonkotsu.ts` with a Kotlin twin, and a
+locally bundled `toonkotsu_page.js` reader shared by both apps. The website itself
+performs its normal image decoding. The bundled reader exports only a bounded
+decoded image blob for the requested chapter/page; it exposes no native bridge.
+HTTPS reader URLs are source-specific page handles, intercepted locally rather
+than downloaded as image responses. Resource requests are restricted to
+`toonkotsu.com` and `challenges.cloudflare.com`; no external image CDN is added.
+Decoded images are cached and copied into the existing offline-download system.
+
+Toonkotsu is registered immediately after XComic on both platforms. Existing
+source preferences are retained. Parser fixtures are trimmed from the observed
+catalogue and mirrored in the Kotlin tests. Live reader verification and the
+four required build/test checks are tracked by the implementation task; this
+section does not claim that a check or human-verification flow has passed.
+
+### Validation during implementation
+
+- `npm run typecheck`, `npm test` (428 passing tests), `npm run build` and
+  `npm run android:next:test` passed. The Android debug APK also built.
+- The isolated desktop app matched One Piece to AniList `30013`, returned
+  10,201 individual uploads from the full catalogue, and correctly offered
+  Connect when its fresh reader encountered Quick Check. After the user-operated
+  verification, AniTrack's image protocol returned HTTP 200 JPEGs for pages 1
+  and 17 of chapter `4675553`, both decoded at 1100 x 1606. This verifies actual
+  desktop image-byte delivery, including the final page of that upload.
+  The native desktop reader at `#/manga/read` also displayed page 1 successfully.
+- On the tablet debug app, the user completed Quick Check. The website session
+  rendered chapter `4678742` (1196, TCB Scans), and the native AniTrack reader
+  displayed its first decoded page with a 17-page count. This verifies the
+  WebView-to-cache-to-native-reader hand-off; a complete offline chapter has
+  not yet been checked.
+- Live testing exposed an Android timeout that propagated as coroutine
+  cancellation, leaving a loading placeholder behind. Local session deadlines
+  now become a Connect prompt or a retryable source error, while cancellation
+  of the caller still cancels the operation. Android unit tests and the debug
+  build passed after that fix. The updated debug APK was installed in place and
+  also opened the Official upload of chapter 1196 with its 16-page count.
+- No commit, push or release was made.
+- Follow-up review found that Android's backup preference allowlist omitted
+  `toonkotsu_match_`. It now includes saved Toonkotsu matches on export and
+  restore, with regression coverage in `BackupTest`.

@@ -52,6 +52,8 @@ import { COMIX_CHAPTER_LIST_DEADLINE_MS, comixChapters, comixDetail, comixHasNex
 import { fetchComixImage } from "./comix-images";
 import { ComixHtmlPageParser } from "./comix-html-pages";
 import { PageVerificationError, VerifiedPageSession } from "../providers/verified-page-session";
+import { TOONKOTSU, isToonkotsuChapter, toonkotsuHid, toonkotsuSearchUrl, toonkotsuSeriesUrl, toonkotsuSearch, toonkotsuDetail, toonkotsuChapters, toonkotsuPageUrl } from "../../../../../packages/shared/toonkotsu";
+import { connectToonkotsu, toonkotsuGet, fetchToonkotsuImage, ToonkotsuSessionError } from "./toonkotsu-session";
 
 /** A reading-source failure whose message is safe to show; [verify] asks for the source's one-time check. */
 export class MangaSourceError extends Error {
@@ -234,7 +236,8 @@ const savedListName = (title: SourceTitle) => `chapters-${title.sourceId}-${titl
 const listableTitle = (title: SourceTitle) =>
   (title.sourceId === "mangaball" && isMangaBallId(title.id)) || (title.sourceId === "mangadot" && /^\d{1,12}$/.test(title.id)) ||
   (title.sourceId === "comix" && /^[a-zA-Z0-9]{1,32}$/.test(title.id)) ||
-  (title.sourceId === "xcomic" && parseXComicTitleRef(title.id) != null);
+  (title.sourceId === "xcomic" && parseXComicTitleRef(title.id) != null) ||
+  (title.sourceId === "toonkotsu" && toonkotsuHid(title.id) != null);
 
 /** Keeps a fresh chapter list on disk, so the title page can show it at once next time (or offline). */
 function keepList(title: SourceTitle, list: MangaChapter[]) {
@@ -586,7 +589,46 @@ const xcomic: Source = {
  * Comix was removed at the user's request (19 Oct 2026: unreliable); its connector
  * stays below, unregistered, and its downloaded chapters still open offline.
  */
-const SOURCES: Source[] = [mangaDot, mangaBall, xcomic];
+async function toonRun<T>(work: () => Promise<T>): Promise<T> {
+  try { return await work(); } catch (e) {
+    if (e instanceof ToonkotsuSessionError || e instanceof PageVerificationError) throw new MangaSourceError(e.message, undefined, e instanceof PageVerificationError || e.verify);
+    if (e instanceof MangaSourceError) throw e;
+    throw new MangaSourceError("Toonkotsu couldn't load this title. Retry or choose another source.");
+  }
+}
+const toonCatalogues = new Map<string, { at: number; value: unknown }>();
+async function toonCatalogue(ref: string): Promise<unknown> {
+  const hid = toonkotsuHid(ref);
+  if (!hid) throw new MangaSourceError("Unrecognised Toonkotsu title.");
+  const hit = toonCatalogues.get(hid);
+  if (hit && Date.now() - hit.at < CHAPTERS_TTL_MS) return hit.value;
+  const value = parseJson(await toonkotsuGet(toonkotsuSeriesUrl(ref)));
+  if (!toonkotsuDetail(value, ref)) throw new MangaSourceError("Toonkotsu returned a different title.");
+  toonCatalogues.set(hid, { at: Date.now(), value });
+  if (toonCatalogues.size > 8) toonCatalogues.delete(toonCatalogues.keys().next().value!);
+  return value;
+}
+async function toonPageImages(title: SourceTitle, chapterId: string): Promise<MangaPageImage[]> {
+  return toonRun(async () => {
+    if (!isToonkotsuChapter(chapterId)) throw new MangaSourceError("Unrecognised Toonkotsu chapter.");
+    const chapter = toonkotsuChapters(await toonCatalogue(title.id)).find(c => c.id === chapterId);
+    if (!chapter?.pageCount) throw new MangaSourceError("Toonkotsu has no pages for this chapter.");
+    const pages = Array.from({ length: chapter.pageCount }, (_, i) => ({ url: toonkotsuPageUrl(title.id, chapter, i + 1), width: null, height: null }));
+    // Detect a reader-specific Quick Check before handing images to the native reader.
+    await (await fetchToonkotsuImage(new URL(pages[0].url)))?.body?.cancel();
+    return pages;
+  });
+}
+const toonkotsu: Source = {
+  info: { id: "toonkotsu", label: "Toonkotsu", needsConnect: true },
+  find: matcher("toonkotsu",
+    query => toonRun(async () => toonkotsuSearch(parseJson(await toonkotsuGet(toonkotsuSearchUrl(query))))),
+    ref => toonRun(async () => { const d = toonkotsuDetail(await toonCatalogue(ref), ref); return d?.anilistId ? d : null; })),
+  chapters: title => toonRun(async () => { const list = toonkotsuChapters(await toonCatalogue(title.id)); keepList(title, list); return list; }),
+  pages: viaProtocol("toonkotsu", toonPageImages), pageImages: toonPageImages,
+  latest: title => toonRun(async () => { const d = toonkotsuDetail(await toonCatalogue(title.id), title.id); return d ? { chapter: d.latestChapter, at: d.latestAt } : null; }),
+};
+const SOURCES: Source[] = [mangaDot, mangaBall, xcomic, toonkotsu];
 
 export const sourceInfos = (): MangaSourceInfo[] => SOURCES.map((source) => source.info);
 
@@ -665,6 +707,7 @@ export function connectMangaDot(parent: BrowserWindow | null): Promise<boolean> 
 }
 
 export function connectMangaSource(sourceId: unknown, parent: BrowserWindow | null): Promise<boolean> {
+  if (sourceId === "toonkotsu") return connectToonkotsu(parent);
   if (sourceId === "mangadot") return connectMangaDot(parent);
   if (sourceId === "comix") return comixSession.connect(parent);
   return Promise.resolve(false);
@@ -675,6 +718,7 @@ export function connectMangaSource(sourceId: unknown, parent: BrowserWindow | nu
  * needs, or null for an address the source doesn't serve pages from.
  */
 export function fetchPageImage(sourceId: string, target: URL, signal?: AbortSignal): Promise<Response> | null {
+  if (sourceId === "toonkotsu") return fetchToonkotsuImage(target, signal);
   if (sourceId === "comix") return fetchComixImage(target.toString(), signal);
   if (sourceId === "mangaball" && ballImageHosts.has(target.hostname.toLowerCase())) {
     return net.fetch(target.toString(), { headers: { Referer: `${MANGABALL.SITE}/`, "User-Agent": honestAgent() }, signal });

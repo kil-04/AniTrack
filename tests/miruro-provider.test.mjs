@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 const fixture = JSON.parse(readFileSync(new URL("./fixtures/miruro-v1.json", import.meta.url), "utf8"));
 const mocks = {
-  electron: "export const net={fetch:()=>{throw new Error('unexpected network')}}; export class BrowserWindow{constructor(){throw new Error('no window in tests')}}",
+  electron: "export const app={}; export const net={fetch:()=>{throw new Error('unexpected network')}}; export class BrowserWindow{constructor(){throw new Error('no window in tests')}}",
   anilist: "export const searchAnime=async()=>{throw new Error('inject search')};",
 };
 registerHooks({

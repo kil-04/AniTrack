@@ -768,6 +768,7 @@ export function isSourceChapterId(sourceId: string, chapterId: string): boolean 
   if (sourceId === "mangadot") return MANGADOT_CHAPTER_REF.test(chapterId);
   if (sourceId === "comix") return /^\d{1,15}$/.test(chapterId);
   if (sourceId === "xcomic") return /^[a-z0-9]{3,16}$/.test(chapterId);
+  if (sourceId === "toonkotsu") return /^[1-9]\d{0,14}$/.test(chapterId);
   return false;
 }
 
