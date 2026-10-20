@@ -1,12 +1,13 @@
 {
   "schemaVersion": 1,
-  "revision": 7,
-  "issuedAt": "2026-10-18T22:08:48.000Z",
+  "revision": 8,
+  "issuedAt": "2026-10-19T23:10:47.059Z",
   "providerOrder": [
     "anikoto",
     "animepahe",
     "mkissa",
-    "shonen"
+    "shonen",
+    "anichan"
   ],
   "providers": {
     "anikoto": {
@@ -141,6 +142,29 @@
         "search": "/browse?q={query}",
         "anime": "/anime/{animeId}",
         "sources": "/sources/shonen?id={animeId}&episode={episode}&language={language}"
+      },
+      "selectors": {}
+    },
+    "anichan": {
+      "enabled": true,
+      "baseUrls": [
+        "https://anichan.to"
+      ],
+      "streamHostFragments": [
+        "c.toroplay.cymru"
+      ],
+      "mediaExtensions": [
+        ".m3u8",
+        ".mp4",
+        ".ts",
+        ".vtt",
+        ".key"
+      ],
+      "routes": {
+        "search": "/api/suggest?q={query}",
+        "anime": "/api/catalog/anime/{animeId}",
+        "episodes": "/api/watch/episodes?anilistId={animeId}",
+        "servers": "/api/watch/servers?anilistId={animeId}&ep={episode}&category={category}&tier={tier}"
       },
       "selectors": {}
     }
