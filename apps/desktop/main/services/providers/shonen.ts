@@ -2,7 +2,7 @@ import { app, net } from "electron";
 import {
   isShonenAnimeId,
   parseShonenSearch,
-  parseShonenSources,
+  parseShonenStreams,
   parseShonenTitlePage,
   SHONEN,
   ShonenError,
@@ -10,6 +10,7 @@ import {
   shonenSearchUrl,
   shonenSourcesUrl,
   type ShonenLanguage,
+  type ShonenStream,
 } from "../../../../../packages/shared/shonen";
 import { MangaSourceError, SourceHttp } from "../manga/sources";
 import { authorizeResolvedStream } from "./stream-authorization";
@@ -19,8 +20,12 @@ const EPISODE_PAGE_SIZE = 100;
 const TITLE_TTL_MS = 30 * 60_000;
 const PAGE_BYTES = 2 * 1024 * 1024;
 const SOURCES_BYTES = 256 * 1024;
+const NO_SUB = "shonen.to has no subtitled stream for this episode right now. It sometimes finds one later: retry in a few minutes or choose another source.";
+/** A server list is reused this long, so listing servers and playing one is one API call. */
+const STREAMS_TTL_MS = 60_000;
 
-interface LinkToken { a: number; n: number; l: ShonenLanguage }
+/** `s`/`b`: the chosen stream's index and label (absent in links from before 9.1.5: the first stream). */
+interface LinkToken { a: number; n: number; l: ShonenLanguage; s?: number; b?: string }
 
 function animeIdOf(value: string): number {
   const id = /^[1-9][0-9]{0,9}$/.test(value) ? Number(value) : NaN;
@@ -32,7 +37,9 @@ function decodeLink(value: string): LinkToken {
   let token: Partial<LinkToken> | null = null;
   try { if (value.length <= 200) token = JSON.parse(value); } catch {}
   if (!token || !isShonenAnimeId(token.a) || !Number.isInteger(token.n) || token.n! < 1 || token.n! > 5_000
-    || (token.l !== "sub" && token.l !== "dub")) {
+    || (token.l !== "sub" && token.l !== "dub")
+    || (token.s !== undefined && (!Number.isInteger(token.s) || token.s < 0 || token.s > 7))
+    || (token.b !== undefined && (typeof token.b !== "string" || token.b.length > 40))) {
     throw new ShonenError("Invalid shonen.to server link. Reload the episode list.");
   }
   return token as LinkToken;
@@ -47,11 +54,13 @@ export class ShonenProvider implements StreamProvider {
   readonly id = "shonen";
   readonly name = "shonen.to";
   readonly capabilities = {
-    externalIds: true, downloads: false, prefetch: false,
-    streamVariants: "subtitle-type" as const, episodePageSize: EPISODE_PAGE_SIZE,
+    externalIds: true, downloads: true, prefetch: false,
+    // Each of an episode's streams is a server, so the player falls back to the next one.
+    streamVariants: "server" as const, episodePageSize: EPISODE_PAGE_SIZE,
   };
   private readonly http = new SourceHttp("shonen.to", new Set(SHONEN.HOSTS), 500, () => net.fetch, `AniTrack/${app.getVersion()} (Desktop)`);
   private readonly titles = new Map<number, { at: number; title: string | null; episodes: number | null }>();
+  private readonly streamLists = new Map<string, { at: number; streams: ShonenStream[] }>();
 
   private async get(url: string, maxBytes: number): Promise<string> {
     try {
@@ -105,36 +114,66 @@ export class ShonenProvider implements StreamProvider {
     const match = /^ep:([1-9][0-9]{0,3})$/.exec(episodeId);
     if (!match) throw new ShonenError("Invalid shonen.to episode. Reload the episode list.");
     const n = Number(match[1]);
-    // Both are offered without asking the API: a missing dub answers when it's picked.
-    return (["sub", "dub"] as const).map((l) => ({
-      id: JSON.stringify({ a, n, l } satisfies LinkToken),
-      quality: l === "dub" ? "Auto · Dub" : "Auto · Sub",
-      audio: l === "dub" ? "eng" : "jpn",
-      variant: l === "dub" ? "dub" : "soft",
-    }));
+    const links: StreamLink[] = [];
+    for (const l of ["sub", "dub"] as const) {
+      let streams: ShonenStream[];
+      // Always ask afresh: a stream shonen.to found since the last list (a backup) shows on Retry.
+      try { streams = await this.streams(a, n, l, true); }
+      catch (error) {
+        // A missing dub is normal. Without Sub nothing is offered: AniTrack never
+        // starts a dub the viewer didn't pick (Sub's own servers are tried in turn).
+        if (l === "dub") continue;
+        if (error instanceof ShonenError && error.notFound) throw new ShonenError(NO_SUB, true);
+        throw error;
+      }
+      streams.forEach((stream, s) => links.push({
+        id: JSON.stringify({ a, n, l, s, b: stream.label } satisfies LinkToken),
+        quality: `${l === "dub" ? "Dub" : "Sub"} · ${stream.label}`,
+        audio: l === "dub" ? "eng" : "jpn",
+        variant: l,
+      }));
+    }
+    return links;
   }
 
   async resolveStream(linkId: string): Promise<StreamData> {
-    const { a, n, l } = decodeLink(linkId);
+    const { a, n, l, s = 0, b } = decodeLink(linkId);
+    const streams = await this.streams(a, n, l);
+    // The label survives a reordered list; the index covers a renamed stream.
+    const stream = (b ? streams.find((item) => item.label === b) : undefined) ?? streams[s];
+    if (!stream) throw new ShonenError("That shonen.to server is no longer listed. Reload the servers or choose another.");
+    for (const subtitle of stream.subtitles) authorizeResolvedStream({ url: subtitle.file, authorizationScope: "exact", cors: true });
+    return {
+      url: stream.url,
+      subtitles: stream.subtitles.map((item) => ({ file: item.file, label: item.label, kind: item.kind, default: item.default })),
+      intro: stream.intro ?? undefined,
+      outro: stream.outro ?? undefined,
+      // Playlists, segments and captions all live under one proxy path (/api/v1/ on shonen.to).
+      authorizationScope: "directory",
+      cors: true,
+      // The proxy's playlist URL has no .m3u8 for the player to look for.
+      hls: true,
+    };
+  }
+
+  /** An episode's streams in one language: a fresh answer, or (playing a listed server) one under a minute old. */
+  private async streams(a: number, n: number, l: ShonenLanguage, fresh = false): Promise<ShonenStream[]> {
+    const key = `${a}:${n}:${l}`;
+    const cached = this.streamLists.get(key);
+    const now = Date.now();
+    if (!fresh && cached && now - cached.at < STREAMS_TTL_MS && cached.streams.every((item) => item.expiresAt === null || item.expiresAt - now > STREAMS_TTL_MS)) {
+      return cached.streams;
+    }
     let json: unknown;
     try { json = JSON.parse(await this.get(shonenSourcesUrl(a, n, l), SOURCES_BYTES)); }
     catch (error) {
       if (error instanceof SyntaxError) throw new ShonenError("shonen.to sent a response AniTrack couldn't read.");
       throw error;
     }
-    const stream = parseShonenSources(json);
-    for (const subtitle of stream.subtitles) authorizeResolvedStream({ url: subtitle.file, authorizationScope: "exact", cors: true });
-    return {
-      url: stream.url,
-      subtitles: stream.subtitles.map((s) => ({ file: s.file, label: s.label, kind: s.kind, default: s.default })),
-      intro: stream.intro ?? undefined,
-      outro: stream.outro ?? undefined,
-      // Playlists, segments and captions all live under the proxy's /api/proxy/ path.
-      authorizationScope: "directory",
-      cors: true,
-      // The proxy's playlist URL is /api/proxy/m3u8?t=…, without the .m3u8 the player looks for.
-      hls: true,
-    };
+    const streams = parseShonenStreams(json);
+    if (this.streamLists.size >= 50) this.streamLists.delete(this.streamLists.keys().next().value!);
+    this.streamLists.set(key, { at: now, streams });
+    return streams;
   }
 
   private async titlePage(anilistId: number) {
@@ -149,5 +188,6 @@ export class ShonenProvider implements StreamProvider {
 
   onConfigChanged(): void {
     this.titles.clear();
+    this.streamLists.clear();
   }
 }

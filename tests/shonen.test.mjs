@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  parseShonenStreams,
   parseShonenEpisodeCount,
   parseShonenSearch,
   parseShonenSources,
@@ -54,6 +55,51 @@ test("shonen: sources give the HLS url, subtitles and skip ranges", () => {
   assert.deepEqual(stream.intro, { start: 11, end: 101 });
   assert.equal(stream.outro, null);
   assert.equal(stream.expiresAt, Date.parse("2026-10-18T22:05:27.279Z"));
+});
+
+test("shonen: same-origin media links (shape since 20 Oct 2026) resolve against the site", () => {
+  const stream = parseShonenSources({
+    data: {
+      provider: "shonen",
+      source: "/api/v1/shonen-media?u=aHR0cHM6Ly9leGFtcGxl&e=1792513528&s=85",
+      sources: [{ file: "/api/v1/shonen-media?u=aHR0cHM6Ly9leGFtcGxl&e=1792513528&s=85", type: "hls", label: "Primary", tracks: [] }],
+      tracks: [],
+      intro: null,
+      outro: null,
+      cached: false,
+      expiresAt: "2026-10-20T12:28:00.606Z",
+    },
+  });
+  assert.equal(stream.url, "https://shonen.to/api/v1/shonen-media?u=aHR0cHM6Ly9leGFtcGxl&e=1792513528&s=85");
+  assert.deepEqual(stream.subtitles, []);
+});
+
+test("shonen: every HLS stream is a server, each with its own subtitles", () => {
+  const streams = parseShonenStreams({
+    data: {
+      provider: "shonen",
+      sources: [
+        { file: "/api/v1/shonen-media?u=A&e=1&s=2", type: "hls", label: "Primary", tracks: [] },
+        { file: "/api/v1/anivexa-media?u=B", type: "hls", label: "Anivexa fallback", tracks: [
+          { file: "/api/v1/anivexa-media?u=C", label: "English [MTBB]", kind: "subtitles" },
+        ] },
+        { file: "/api/v1/shonen-media?u=A&e=1&s=2", type: "hls", label: "Duplicate" },
+        { file: "/api/v1/x.mp4", type: "mp4", label: "Progressive" },
+        { file: "https://mirror.example/m", type: "hls" },
+      ],
+      tracks: [],
+      intro: null,
+      outro: null,
+      expiresAt: "2026-10-20T12:37:35.257Z",
+    },
+  });
+  assert.deepEqual(streams.map((s) => [s.label, s.url, s.subtitles.length]), [
+    ["Primary", "https://shonen.to/api/v1/shonen-media?u=A&e=1&s=2", 0],
+    ["Anivexa fallback", "https://shonen.to/api/v1/anivexa-media?u=B", 1],
+    ["Server 3", "https://mirror.example/m", 0],
+  ]);
+  assert.equal(streams[1].subtitles[0].file, "https://shonen.to/api/v1/anivexa-media?u=C");
+  assert.throws(() => parseShonenStreams({ data: { sources: [{ file: "/x.mp4", type: "mp4" }], tracks: [] } }), (e) => e.notFound === true);
 });
 
 test("shonen: a missing episode is a clear not-found, other errors stay generic", () => {

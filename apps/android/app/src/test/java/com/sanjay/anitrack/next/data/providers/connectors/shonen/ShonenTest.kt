@@ -43,6 +43,40 @@ class ShonenTest {
         assertNull(stream.outro)
     }
 
+    /** Same case as tests/shonen.test.mjs: since 20 Oct 2026 media links are same-origin paths. */
+    @Test fun sameOriginMediaLinks() {
+        val stream = Shonen.sources(JSONObject("""{"data":{"provider":"shonen","source":"/api/v1/shonen-media?u=aHR0cHM6Ly9leGFtcGxl&e=1792513528&s=85",
+            "sources":[{"file":"/api/v1/shonen-media?u=aHR0cHM6Ly9leGFtcGxl&e=1792513528&s=85","type":"hls","label":"Primary","tracks":[]}],
+            "tracks":[],"intro":null,"outro":null,"cached":false,"expiresAt":"2026-10-20T12:28:00.606Z"}}"""))
+        assertEquals("https://shonen.to/api/v1/shonen-media?u=aHR0cHM6Ly9leGFtcGxl&e=1792513528&s=85", stream.url)
+        assertTrue(stream.subtitles.isEmpty())
+    }
+
+    /** Same case as tests/shonen.test.mjs: every HLS stream is a server, each with its own subtitles. */
+    @Test fun everyStreamIsAServer() {
+        val streams = Shonen.streams(JSONObject("""{"data":{"provider":"shonen","sources":[
+            {"file":"/api/v1/shonen-media?u=A&e=1&s=2","type":"hls","label":"Primary","tracks":[]},
+            {"file":"/api/v1/anivexa-media?u=B","type":"hls","label":"Anivexa fallback","tracks":[
+              {"file":"/api/v1/anivexa-media?u=C","label":"English [MTBB]","kind":"subtitles"}]},
+            {"file":"/api/v1/shonen-media?u=A&e=1&s=2","type":"hls","label":"Duplicate"},
+            {"file":"/api/v1/x.mp4","type":"mp4","label":"Progressive"},
+            {"file":"https://mirror.example/m","type":"hls"}],
+            "tracks":[],"intro":null,"outro":null,"expiresAt":"2026-10-20T12:37:35.257Z"}}"""))
+        assertEquals(
+            listOf(
+                Triple("Primary", "https://shonen.to/api/v1/shonen-media?u=A&e=1&s=2", 0),
+                Triple("Anivexa fallback", "https://shonen.to/api/v1/anivexa-media?u=B", 1),
+                Triple("Server 3", "https://mirror.example/m", 0),
+            ),
+            streams.map { Triple(it.label, it.url, it.subtitles.size) },
+        )
+        assertEquals("https://shonen.to/api/v1/anivexa-media?u=C", streams[1].subtitles[0].file)
+        val none = assertThrows(ShonenException::class.java) {
+            Shonen.streams(JSONObject("""{"data":{"sources":[{"file":"/x.mp4","type":"mp4"}],"tracks":[]}}"""))
+        }
+        assertTrue(none.notFound)
+    }
+
     @Test fun missingEpisodeIsNotFound() {
         val missing = assertThrows(ShonenException::class.java) {
             Shonen.sources(JSONObject("""{"error":{"code":"SOURCE_NOT_FOUND","message":"No compatible Shonen stream is available."}}"""))

@@ -1,8 +1,9 @@
 /**
  * shonen.to: an anime catalogue keyed by AniList ids. Search and title pages are
- * server-rendered HTML; one JSON call per episode returns an HLS stream (through its
- * vidcloud proxy) with subtitle tracks. No cookies, Referer or human check needed
- * (checked 19 Oct 2026). Mirrored in Kotlin by data/providers/connectors/shonen/Shonen.kt.
+ * server-rendered HTML; one JSON call per episode returns an HLS stream. Since 20 Oct
+ * 2026 its links are same-origin /api/v1/shonen-media paths with English subtitles
+ * burned in (no subtitle tracks); before that, a vidcloud.sbs proxy with VTT tracks.
+ * No cookies, Referer or human check needed. Mirrored in Kotlin by data/providers/connectors/shonen/Shonen.kt.
  */
 
 export const SHONEN = {
@@ -33,6 +34,8 @@ export interface ShonenSubtitle {
 
 export interface ShonenStream {
   url: string;
+  /** The site's name for this stream ("Primary", "Anivexa fallback"). */
+  label: string;
   subtitles: ShonenSubtitle[];
   intro: { start: number; end: number } | null;
   outro: { start: number; end: number } | null;
@@ -145,8 +148,18 @@ function skip(value: unknown): { start: number; end: number } | null {
   return v && Number.isFinite(start) && Number.isFinite(end) && start >= 0 && end > start && end < 24 * 3600 ? { start, end } : null;
 }
 
-/** The /sources/shonen answer: `{data:{sources:[{file,type}],tracks:[…],intro,outro,expiresAt}}` or `{error:{code,message}}`. */
+/** The /sources/shonen answer: `{data:{sources:[{file,type,label,tracks}],tracks:[…],intro,outro,expiresAt}}` or `{error:{code,message}}`. */
 export function parseShonenSources(json: unknown): ShonenStream {
+  return parseShonenStreams(json)[0];
+}
+
+/**
+ * Every HLS stream in a /sources/shonen answer, in the site's order (at most 8): since
+ * 20 Oct 2026 a "Primary" stream with burned-in subtitles, sometimes followed by an
+ * "Anivexa fallback" with its own subtitle tracks. A stream's own tracks win over the
+ * shared ones, as on the site's player. Never empty: no stream is a not-found error.
+ */
+export function parseShonenStreams(json: unknown): ShonenStream[] {
   const root = json as { data?: any; error?: { code?: unknown; message?: unknown } } | null;
   if (!root || typeof root !== "object") throw new ShonenError("shonen.to sent a response AniTrack couldn't read.");
   if (root.error) {
@@ -155,24 +168,33 @@ export function parseShonenSources(json: unknown): ShonenStream {
   }
   const data = root.data;
   if (!data || typeof data !== "object") throw new ShonenError("shonen.to sent a response AniTrack couldn't read.");
-  const sources: any[] = Array.isArray(data.sources) ? data.sources : [];
-  const hls = sources.find((s) => s && s.type === "hls" && httpsUrl(s.file)) ?? null;
-  const url = httpsUrl(hls?.file ?? (typeof data.source === "string" ? data.source : null));
-  if (!url) throw new ShonenError("shonen.to has no stream for this episode in this language.", true);
-  const tracks: any[] = Array.isArray(data.tracks) && data.tracks.length ? data.tracks : Array.isArray(hls?.tracks) ? hls.tracks : [];
-  const subtitles: ShonenSubtitle[] = [];
-  for (const track of tracks.slice(0, 32)) {
-    const file = httpsUrl(track?.file);
-    const kind = typeof track?.kind === "string" ? track.kind : "subtitles";
-    if (!file || (kind !== "subtitles" && kind !== "captions")) continue;
-    subtitles.push({ file, label: typeof track.label === "string" && track.label.trim() ? track.label.trim().slice(0, 60) : "Subtitles", kind, default: track.default === true });
-  }
+  const sources: any[] = Array.isArray(data.sources) ? data.sources.filter((s: any) => s && s.type === "hls" && httpsUrl(s.file)) : [];
+  if (!sources.length && typeof data.source === "string" && httpsUrl(data.source)) sources.push({ file: data.source });
+  const shared: any[] = Array.isArray(data.tracks) ? data.tracks : [];
   const expires = Date.parse(typeof data.expiresAt === "string" ? data.expiresAt : "");
-  return {
-    url,
-    subtitles,
-    intro: skip(data.intro ?? hls?.intro),
-    outro: skip(data.outro ?? hls?.outro),
-    expiresAt: Number.isFinite(expires) ? expires : null,
-  };
+  const streams: ShonenStream[] = [];
+  for (const source of sources) {
+    const url = httpsUrl(source.file)!;
+    if (streams.some((stream) => stream.url === url)) continue;
+    const own: any[] = Array.isArray(source.tracks) ? source.tracks : [];
+    const subtitles: ShonenSubtitle[] = [];
+    for (const track of (own.length ? own : shared).slice(0, 32)) {
+      const file = httpsUrl(track?.file);
+      const kind = typeof track?.kind === "string" ? track.kind : "subtitles";
+      if (!file || (kind !== "subtitles" && kind !== "captions")) continue;
+      subtitles.push({ file, label: typeof track.label === "string" && track.label.trim() ? track.label.trim().slice(0, 60) : "Subtitles", kind, default: track.default === true });
+    }
+    const label = typeof source.label === "string" ? strip(source.label).slice(0, 40) : "";
+    streams.push({
+      url,
+      label: label || `Server ${streams.length + 1}`,
+      subtitles,
+      intro: skip(data.intro ?? source.intro),
+      outro: skip(data.outro ?? source.outro),
+      expiresAt: Number.isFinite(expires) ? expires : null,
+    });
+    if (streams.length >= 8) break;
+  }
+  if (!streams.length) throw new ShonenError("shonen.to has no stream for this episode in this language.", true);
+  return streams;
 }

@@ -20,13 +20,14 @@ import com.sanjay.anitrack.next.data.providers.connectors.shonen.Shonen
 import com.sanjay.anitrack.next.data.providers.connectors.shonen.ShonenException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONException
 import org.json.JSONObject
 
 /**
  * shonen.to: AniList-keyed, plain HTTP (one paced request at a time on its own host,
  * honest user agent). Mirrors apps/desktop/main/services/providers/shonen.ts.
- * Sub and Dub are the two variants of every episode.
+ * Each of an episode's streams, in Sub and Dub, is a server choice ("Sub · Primary").
  */
 object ShonenProvider : AnimeProvider {
     private val USER_AGENT = "AniTrack/${BuildConfig.VERSION_NAME} (Android)"
@@ -34,17 +35,24 @@ object ShonenProvider : AnimeProvider {
     private const val PAGE_BYTES = 2 * 1024 * 1024
     private const val SOURCES_BYTES = 256 * 1024
     private val KEY = Regex("shonen:([1-9][0-9]{0,9})")
-    private val VARIANTS = listOf(ProviderStreamVariant("sub", "Sub"), ProviderStreamVariant("dub", "Dub"))
+    /** A server list is reused this long, so listing servers and playing one is one API call. */
+    private const val STREAMS_TTL_MS = 60_000L
+    /** How long the default play waits for a stream's playlist before trying the next stream. */
+    private const val PROBE_MS = 12_000L
+    private val VARIANT = Regex("(sub|dub):([0-7])")
+    private const val NO_STREAM =
+        "shonen.to has no subtitled stream for this episode right now. It sometimes finds one later: retry in a few minutes or choose another source."
 
     override val descriptor = ProviderDescriptor(
         id = "shonen",
         name = "shonen.to",
-        capabilities = ProviderCapabilities(externalIds = true, downloads = false),
+        capabilities = ProviderCapabilities(externalIds = true, downloads = true),
     )
 
     private val http = MangaHttp("shonen.to", Shonen.HOSTS, { USER_AGENT }, 500)
     private val lock = Mutex()
     private val titles = LinkedHashMap<Int, Pair<Long, Shonen.TitlePage>>()
+    private val streamLists = LinkedHashMap<String, Pair<Long, List<Shonen.Stream>>>()
 
     override fun acceptsResumeKey(key: String): Boolean = key.length <= 20 && KEY.matches(key)
 
@@ -70,29 +78,93 @@ object ShonenProvider : AnimeProvider {
             ProviderEpisode(
                 number = n.toFloat(),
                 title = "Episode $n",
-                variantsResolver = { VARIANTS },
-                variantResolver = { language, _ -> resolve(anilistId, n, language) },
-                resolver = { resolve(anilistId, n, "sub") },
+                variantsResolver = { variants(anilistId, n) },
+                variantResolver = { id, _ -> resolveVariant(anilistId, n, id) },
+                resolver = { resolveFirstWorking(anilistId, n) },
             )
         },
     )
 
-    private suspend fun resolve(anilistId: Int, episode: Int, language: String): ResolvedMedia {
-        val lang = if (language == "dub") "dub" else "sub"
+    /** "sub:0", "sub:1", "dub:0"…: every stream in each language shonen.to has. */
+    private suspend fun variants(anilistId: Int, episode: Int): List<ProviderStreamVariant> {
+        val out = ArrayList<ProviderStreamVariant>()
+        for (lang in listOf("sub", "dub")) {
+            // Always ask afresh: a stream shonen.to found since the last list (a backup) shows on Retry.
+            val list = try { streams(anilistId, episode, lang, fresh = true) } catch (e: Exception) {
+                // A missing dub is normal. Without Sub nothing is offered: AniTrack never
+                // starts a dub the viewer didn't pick (Sub's own servers are tried in turn).
+                if (lang == "dub") continue
+                if (e is ShonenException && e.notFound) throw ShonenException(NO_STREAM, true)
+                throw e
+            }
+            list.forEachIndexed { i, stream ->
+                out += ProviderStreamVariant("$lang:$i", "${if (lang == "dub") "Dub" else "Sub"} · ${stream.label}", lang)
+            }
+        }
+        return out
+    }
+
+    private suspend fun resolveVariant(anilistId: Int, episode: Int, id: String): ResolvedMedia {
+        // "sub"/"dub" are the ids saved before 9.1.5: that language's first stream.
+        val match = VARIANT.matchEntire(id)
+        val lang = match?.groupValues?.get(1) ?: if (id == "dub") "dub" else "sub"
+        val index = match?.groupValues?.get(2)?.toInt() ?: 0
+        val stream = streams(anilistId, episode, lang).getOrNull(index)
+            ?: throw ShonenException("That shonen.to server is no longer listed. Reload the servers or choose another.")
+        return media(stream, "$lang:$index")
+    }
+
+    /**
+     * The default play: Sub's first stream whose playlist loads. The Primary stream
+     * sometimes fails while the site's Anivexa fallback works (20 Oct 2026). Never Dub:
+     * without Sub this is the no-stream error, as on desktop.
+     */
+    private suspend fun resolveFirstWorking(anilistId: Int, episode: Int): ResolvedMedia {
+        val list = try { streams(anilistId, episode, "sub") } catch (e: ShonenException) {
+            if (e.notFound) throw ShonenException(NO_STREAM, true)
+            throw e
+        }
+        if (list.size > 1) {
+            for ((i, stream) in list.withIndex()) {
+                val playlist = try {
+                    withTimeoutOrNull(PROBE_MS) { http.get(stream.url, "application/vnd.apple.mpegurl, */*", 256 * 1024) }
+                } catch (_: MangaSourceException) {
+                    null // unreachable, refused, or off shonen.to's own host
+                }
+                if (playlist?.trimStart()?.startsWith("#EXTM3U") == true) return media(stream, "sub:$i")
+            }
+        }
+        return media(list.first(), "sub:0")
+    }
+
+    /** An episode's streams in one language: a fresh answer, or (playing a listed server) one under a minute old. */
+    private suspend fun streams(anilistId: Int, episode: Int, lang: String, fresh: Boolean = false): List<Shonen.Stream> {
+        val key = "$anilistId:$episode:$lang"
+        if (!fresh) lock.withLock {
+            streamLists[key]?.takeIf { System.currentTimeMillis() - it.first < STREAMS_TTL_MS }?.let { return it.second }
+        }
         val text = try {
             http.get(Shonen.sourcesUrl(anilistId, episode, lang), "application/json", SOURCES_BYTES)
         } catch (e: MangaSourceException) {
             if (e.status == 404) throw ShonenException("shonen.to has no stream for this episode in this language.", true)
             throw e
         }
-        val stream = try { Shonen.sources(JSONObject(text)) } catch (_: JSONException) {
+        val list = try { Shonen.streams(JSONObject(text)) } catch (_: JSONException) {
             throw ShonenException("shonen.to sent a response AniTrack couldn't read.")
         }
+        lock.withLock {
+            if (streamLists.size >= 50) streamLists.remove(streamLists.keys.first())
+            streamLists[key] = System.currentTimeMillis() to list
+        }
+        return list
+    }
+
+    private fun media(stream: Shonen.Stream, variantId: String): ResolvedMedia {
         return ResolvedMedia(
             url = stream.url,
             referer = "${Shonen.ORIGIN}/",
             userAgent = USER_AGENT,
-            // Playlists, segments and captions all live under the proxy's /api/proxy/ path.
+            // Playlists, segments and captions all live under one proxy path (/api/v1/ on shonen.to).
             authorizationScope = StreamAuthorizationScope.DIRECTORY,
             subtitles = stream.subtitles.map {
                 ProviderSubtitle(it.file, it.label, language = if (it.label.startsWith("English", ignoreCase = true)) "en" else null, default = it.default)
@@ -101,10 +173,10 @@ object ShonenProvider : AnimeProvider {
             outro = stream.outro?.let { SkipRange(it.start.toLong(), it.end.toLong()) },
             backend = PlaybackBackend.NATIVE,
             seekMode = SeekMode.EXACT,
-            downloadable = false,
-            // The proxy's playlist URL is /api/proxy/m3u8?t=…, without the .m3u8 the player looks for.
+            downloadable = true,
+            // The proxy's playlist URL has no .m3u8 for the player to look for.
             mimeType = androidx.media3.common.MimeTypes.APPLICATION_M3U8,
-            variantId = lang,
+            variantId = variantId,
         )
     }
 

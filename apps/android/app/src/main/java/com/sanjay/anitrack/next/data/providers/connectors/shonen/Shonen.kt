@@ -30,7 +30,8 @@ object Shonen {
     data class TitlePage(val title: String?, val episodes: Int?)
     data class Subtitle(val file: String, val label: String, val kind: String, val default: Boolean)
     data class Skip(val start: Double, val end: Double)
-    data class Stream(val url: String, val subtitles: List<Subtitle>, val intro: Skip?, val outro: Skip?)
+    /** [label]: the site's name for the stream ("Primary", "Anivexa fallback"). */
+    data class Stream(val url: String, val subtitles: List<Subtitle>, val intro: Skip?, val outro: Skip?, val label: String = "Server 1")
 
     fun isAnimeId(id: Long): Boolean = id in 1..MAX_ID
 
@@ -119,8 +120,16 @@ object Shonen {
         return if (start.isFinite() && end.isFinite() && start >= 0 && end > start && end < 24 * 3600) Skip(start, end) else null
     }
 
-    /** The /sources/shonen answer: `{data:{sources:[{file,type}],tracks:[…],intro,outro}}` or `{error:{code,message}}`. */
-    fun sources(root: JSONObject): Stream {
+    /** The /sources/shonen answer: `{data:{sources:[{file,type,label,tracks}],tracks:[…],intro,outro}}` or `{error:{code,message}}`. */
+    fun sources(root: JSONObject): Stream = streams(root).first()
+
+    /**
+     * Every HLS stream in the answer, in the site's order (at most 8): since 20 Oct 2026 a
+     * "Primary" stream with burned-in subtitles, sometimes followed by an "Anivexa fallback"
+     * with its own subtitle tracks. A stream's own tracks win over the shared ones.
+     * Never empty: no stream is a not-found error. Same as parseShonenStreams.
+     */
+    fun streams(root: JSONObject): List<Stream> {
         root.optJSONObject("error")?.let { error ->
             val notFound = error.optString("code") == "SOURCE_NOT_FOUND"
             throw ShonenException(
@@ -129,29 +138,42 @@ object Shonen {
             )
         }
         val data = root.optJSONObject("data") ?: throw ShonenException("shonen.to sent a response AniTrack couldn't read.")
-        val sources = data.optJSONArray("sources") ?: JSONArray()
-        var hls: JSONObject? = null
-        for (i in 0 until sources.length()) {
-            val s = sources.optJSONObject(i) ?: continue
-            if (s.optString("type") == "hls" && httpsUrl(s.optString("file")) != null) { hls = s; break }
+        val list = data.optJSONArray("sources") ?: JSONArray()
+        val sources = ArrayList<JSONObject>()
+        for (i in 0 until list.length()) {
+            val s = list.optJSONObject(i) ?: continue
+            if (s.optString("type") == "hls" && httpsUrl(s.optString("file")) != null) sources += s
         }
-        val url = httpsUrl(hls?.optString("file") ?: data.optString("source").takeIf { it.isNotEmpty() })
-            ?: throw ShonenException("shonen.to has no stream for this episode in this language.", true)
-        val tracks = data.optJSONArray("tracks")?.takeIf { it.length() > 0 } ?: hls?.optJSONArray("tracks") ?: JSONArray()
-        val subtitles = ArrayList<Subtitle>()
-        for (i in 0 until minOf(tracks.length(), 32)) {
-            val t = tracks.optJSONObject(i) ?: continue
-            val file = httpsUrl(t.optString("file")) ?: continue
-            val kind = t.optString("kind").ifEmpty { "subtitles" }
-            if (kind != "subtitles" && kind != "captions") continue
-            val label = t.optString("label").trim().ifEmpty { "Subtitles" }.take(60)
-            subtitles += Subtitle(file, label, kind, t.optBoolean("default", false))
+        if (sources.isEmpty()) {
+            val single = data.optString("source").takeIf { it.isNotEmpty() && httpsUrl(it) != null }
+            if (single != null) sources += JSONObject().put("file", single)
         }
-        return Stream(
-            url = url,
-            subtitles = subtitles,
-            intro = skip(data.opt("intro")) ?: skip(hls?.opt("intro")),
-            outro = skip(data.opt("outro")) ?: skip(hls?.opt("outro")),
-        )
+        val shared = data.optJSONArray("tracks") ?: JSONArray()
+        val streams = ArrayList<Stream>()
+        for (source in sources) {
+            val url = httpsUrl(source.optString("file")) ?: continue
+            if (streams.any { it.url == url }) continue
+            val own = source.optJSONArray("tracks")
+            val tracks = if (own != null && own.length() > 0) own else shared
+            val subtitles = ArrayList<Subtitle>()
+            for (i in 0 until minOf(tracks.length(), 32)) {
+                val t = tracks.optJSONObject(i) ?: continue
+                val file = httpsUrl(t.optString("file")) ?: continue
+                val kind = t.optString("kind").ifEmpty { "subtitles" }
+                if (kind != "subtitles" && kind != "captions") continue
+                val label = t.optString("label").trim().ifEmpty { "Subtitles" }.take(60)
+                subtitles += Subtitle(file, label, kind, t.optBoolean("default", false))
+            }
+            streams += Stream(
+                url = url,
+                subtitles = subtitles,
+                intro = skip(data.opt("intro")) ?: skip(source.opt("intro")),
+                outro = skip(data.opt("outro")) ?: skip(source.opt("outro")),
+                label = strip(source.optString("label")).take(40).ifEmpty { "Server ${streams.size + 1}" },
+            )
+            if (streams.size >= 8) break
+        }
+        if (streams.isEmpty()) throw ShonenException("shonen.to has no stream for this episode in this language.", true)
+        return streams
     }
 }

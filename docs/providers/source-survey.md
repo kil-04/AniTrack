@@ -1,5 +1,10 @@
 # Source survey: EverythingMoe candidates (12 Oct 2026)
 
+For the latest large-library research, see
+[Large anime catalogs: deeper comparison](large-anime-catalogs-2026-10-20.md).
+The earlier dated verdicts below are historical; the later findings supersede
+them where access, matching or research constraints changed.
+
 The user asked for anime and manga sources with large libraries from
 <https://everythingmoe.com/>, inspected with REA. This records what each
 candidate exposes as of 12 Oct 2026, from the user's network (India). Nothing
@@ -404,3 +409,79 @@ section does not claim that a check or human-verification flow has passed.
 - Follow-up review found that Android's backup preference allowlist omitted
   `toonkotsu_match_`. It now includes saved Toonkotsu matches on export and
   restore, with regression coverage in `BackupTest`.
+
+# Additional anime candidates: 19 Oct 2026
+
+Requested alongside shonen.to download support. These are research findings;
+none of these candidates was added to AniTrack. Earlier size-based exclusions
+are not evidence that a site cannot work. Catalogue access and video delivery
+are tracked separately.
+
+| Source | Observed access and identity | Coverage / remaining work |
+| --- | --- | --- |
+| [Gotaku](https://gotaku.to/) | Its real Chrome homepage rendered current titles with separate sub/dub episode counts. Death Parade was listed with 12 sub and 12 dub episodes at `/title/3xxgz7`. A plain request to that title returned HTTP 200 but only a 2,135-character app shell; its public main module is obfuscated. | [EverythingMoe](https://everythingmoe.com/s/gotaku) describes own encodes/servers and a medium-small library rebuilding after a reset. Tracker IDs, search results, episode delivery and stream resolution remain unverified. |
+| [AniZone](https://anizone.to/) | Homepage returned HTTP 200 (69,553 characters), with `/anime`, `/episode`, `/tag`, a Livewire search form and `/livewire/update`. Catalogue cards are populated by the app; static HTML alone did not expose the resolved title/episode links. | [EverythingMoe](https://everythingmoe.com/s/anizone) describes a medium-small self-hosted library, release information and rich subtitles, chiefly useful for recent anime. Tracker IDs and playable media remain unverified. |
+| [KickAssAnime](https://kaa.lt/) | Its current domain listed by [EverythingMoe](https://everythingmoe.com/s/KickAssAnime) is `kaa.lt`, which returned HTTP 200 and a 148,317-character Nuxt application page. The listed `kaa.to` alternate failed during TLS establishment on this network; that does not establish that the current domain is blocked. | The directory describes a medium-small self-hosted library, high-bitrate recent releases and multilingual soft subtitles, with incomplete older coverage and dub-server issues. Search, IDs, episode APIs and playable media require a separate live investigation. |
+
+Browser control became unavailable after the Gotaku homepage inspection. The
+remaining observations above are plain-HTTP or static public-module evidence,
+not successful playback tests. No signing or decoding restriction was used to
+reject a candidate, and no downloaded website code was executed in a native
+runtime.
+
+For larger-library options, the earlier survey also contains anv, AniChan,
+Xanime, AnimeGG, Re:Anime and AnimeX. Their earlier findings were not re-tested
+in this pass. The user can choose which source to investigate for integration.
+
+# Large-library follow-up: 19–20 Oct 2026
+
+The user requested continued research specifically on large anime libraries.
+The [detailed comparison](large-anime-catalogs-2026-10-20.md) records current
+endpoints, identity checks, older-OVA coverage and transport results.
+
+| Source | Size evidence | New evidence |
+| --- | --- | --- |
+| Xanime | Browse reports 10,430 titles | MAL-linked Bebop and Yokohama Shopping Log; 1080p HLS and real TS bytes; valid sub VTT, one broken dub VTT |
+| ani.pm | Catalog reports 9,052 sourced entries | Direct AniList lookup works, superseding the earlier opaque-ID matching concern; session API works but supplied embed returns Cloudflare 403 |
+| AniChan | Claims 17,000+ titles | Older OVAs and full Bebop episode-count API; stream servers require a verified session (401 outside one) |
+| ANIMEGG | Directory labels it very large | 26 Bebop episodes, 2 Yokohama OVA episodes, direct MP4 byte-range response; sampled older sub upload is 360p |
+
+Counts are site-reported catalog entries, not independently verified playable
+shows. New browser/native playback was not tested because the selected research
+browser was unavailable; direct HTTP media evidence is identified separately.
+No new connector was implemented, committed or published.
+
+REA follow-up on 20 Oct: analyzed the shipped modules for all four shortlisted
+sites and retained Evidence with explicit coverage limits. An isolated REA
+browser captured Xanime's complete 26-episode sample list, successful HLS/segment
+and caption responses, and the player's 24:43 duration. Advancing playback was
+not measured; the browser tool results were partial due to its cleanup deadline.
+ani.pm's native HLS branch needs master URL fields absent from both sampled
+inventories. AniChan's session flow includes optional AES-GCM server responses
+and supports HLS, MP4 and embeds. Full details and Evidence IDs are in the
+[REA follow-up](large-anime-catalogs-2026-10-20.md#rea-follow-up-20-oct-2026).
+
+## AniChan implementation follow-up: 20 Oct 2026
+
+The user selected AniChan for implementation in both apps. A subsequent isolated
+Electron session verified advancing Overgeared episode 1 video at 1920 pixels,
+plus decoded HLS/subtitle metadata. Bebop fast-tier sub and dub responses also
+contained direct HLS servers. The initial empty response was caused by omitting
+the required `tier=fast`, rather than missing title coverage.
+
+The [connector notes](anichan.md) record the exact catalogue/session boundaries,
+shared page reader, native playback contract and validation. This supersedes the
+earlier unverified-session finding for those sampled titles; it does not prove
+the site's entire reported catalog is playable.
+
+Final app checks also passed: AniChan played in the production desktop player
+and the tablet's native debug player, including a delayed server switch on
+Android. The [validation notes](anichan.md#app-validation) include the source-ID
+collision and retained-WebView fixes found by those checks. The current work
+remains uncommitted and unpublished.
+
+AniChan now also exposes HLS downloads in both apps. Full-episode downloads and
+local playback with English subtitles were verified on the desktop and tablet;
+conservative transfer pacing was added after a simultaneous test hit a CDN
+limit. See [download validation](anichan.md#download-validation) for completed
+checks, tested qualities and the sampled mirrors that returned HTTP 502.
