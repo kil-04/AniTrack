@@ -73,6 +73,8 @@ export interface StreamData {
   cors?: boolean;
   /** The URL is an HLS playlist even though it doesn't end in .m3u8 (e.g. a proxy's `/m3u8?t=…`). */
   hls?: boolean;
+  /** Rate-sensitive media: serialize and pace offline file requests. */
+  conservativeNetwork?: boolean;
 }
 
 export interface ExternalIds {

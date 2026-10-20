@@ -38,7 +38,7 @@ export const BUILTIN_RUNTIME_CONFIG: RuntimeConfig = {
   schemaVersion: 1,
   revision: 0,
   issuedAt: "2026-08-17T00:00:00.000Z",
-  providerOrder: ["anikoto", "animepahe", "shonen"],
+  providerOrder: ["anikoto", "animepahe", "shonen", "anichan"],
   providers: {
     anikoto: {
       enabled: true,
@@ -107,6 +107,19 @@ export const BUILTIN_RUNTIME_CONFIG: RuntimeConfig = {
         graphql: "/api",
         authConfigs: "/authconfigs",
         cryptoBootstrap: "/client-crypto/v1/bootstrap",
+      },
+      selectors: {},
+    },
+    anichan: {
+      enabled: true,
+      baseUrls: ["https://anichan.to"],
+      streamHostFragments: ["c.toroplay.cymru"],
+      mediaExtensions: [".m3u8", ".mp4", ".ts", ".vtt", ".key"],
+      routes: {
+        search: "/api/suggest?q={query}",
+        anime: "/api/catalog/anime/{animeId}",
+        episodes: "/api/watch/episodes?anilistId={animeId}",
+        servers: "/api/watch/servers?anilistId={animeId}&ep={episode}&category={category}&tier={tier}",
       },
       selectors: {},
     },

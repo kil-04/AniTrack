@@ -148,7 +148,7 @@ object RemoteConfig {
     private val defaults = AndroidRuntimeConfig(
         revision = 0,
         issuedAt = "2026-08-17T00:00:00.000Z",
-        providerOrder = listOf("anikoto", "animepahe", "shonen"),
+        providerOrder = listOf("anikoto", "animepahe", "shonen", "anichan"),
         providers = linkedMapOf(
             "anikoto" to defaultProvider,
             "animepahe" to ProviderRuntimeConfig(
@@ -192,6 +192,20 @@ object RemoteConfig {
                     "search" to "/browse?q={query}",
                     "anime" to "/anime/{animeId}",
                     "sources" to "/sources/shonen?id={animeId}&episode={episode}&language={language}",
+                ),
+                selectors = emptyMap(),
+            ),
+            "anichan" to ProviderRuntimeConfig(
+                enabled = true,
+                baseUrls = listOf("https://anichan.to"),
+                streamHostFragments = listOf("c.toroplay.cymru"),
+                mediaExtensions = listOf(".m3u8", ".mp4", ".ts", ".m4s", ".vtt", ".key"),
+                routes = mapOf(
+                    "search" to "/api/suggest?q={query}",
+                    "anime" to "/api/catalog/anime/{animeId}",
+                    "watch" to "/anime/{animeId}/watch/1",
+                    "episodes" to "/api/watch/episodes?anilistId={animeId}",
+                    "servers" to "/api/watch/servers?anilistId={animeId}&ep={episode}&category={category}&tier={tier}",
                 ),
                 selectors = emptyMap(),
             ),

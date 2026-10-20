@@ -129,7 +129,7 @@ internal fun EpisodesSection(
                     val caption = captions.firstOrNull { it.default }
                         ?: captions.firstOrNull { it.language == "en" || it.label.contains("english", ignoreCase = true) }
                         ?: captions.firstOrNull()
-                    com.sanjay.anitrack.next.data.Downloads.Source(media.url, media.referer, media.userAgent, caption?.url)
+                    com.sanjay.anitrack.next.data.Downloads.Source(media.url, media.referer, media.userAgent, caption?.url, media.conservativeNetwork)
                 },
             )
         }

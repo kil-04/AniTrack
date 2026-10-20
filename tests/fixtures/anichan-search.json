@@ -1,0 +1,29 @@
+{
+  "results": [
+    {
+      "id": 212888,
+      "idMal": 64340,
+      "title": "Overgeared",
+      "titleRomaji": "Tempal: Item no Chikara",
+      "titleNative": "テムパル～アイテムの力～",
+      "poster": "/media/catalogue/overgeared.jpg",
+      "format": "ONA",
+      "status": "RELEASING",
+      "startDate": {
+        "year": 2026,
+        "month": 9,
+        "day": 27
+      },
+      "endDate": null,
+      "favourites": 773,
+      "score": 75,
+      "episodes": 12,
+      "genres": [
+        "Action",
+        "Adventure",
+        "Comedy",
+        "Fantasy"
+      ]
+    }
+  ]
+}

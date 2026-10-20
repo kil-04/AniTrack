@@ -118,6 +118,15 @@ export function streamVariant(link: StreamLink): string | undefined {
   }
 }
 
+/** A session is local to its connector: several sources use the same AniList ID. */
+export function matchProviderSession<T extends { id?: string | number; session?: string; providerId?: string }>(
+  sources: T[], session: string, providerId: string,
+): T | undefined {
+  const matches = sources.filter(source => String(source.id || source.session || "") === session);
+  return matches.find(source => (source.providerId ?? "animepahe") === providerId)
+    ?? (matches.length === 1 ? matches[0] : undefined);
+}
+
 export function preferredStreamLinkIndex(
   links: StreamLink[],
   descriptor?: ProviderDescriptor,

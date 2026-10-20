@@ -60,9 +60,9 @@ async function waitUntil(condition, timeout = 3000) {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
-async function terminal(opts) {
+async function terminal(opts, timeout = 3000) {
   startDownload(opts);
-  await waitUntil(() => harness.events.some((item) => item.id === opts.id && ["done", "failed"].includes(item.status)));
+  await waitUntil(() => harness.events.some((item) => item.id === opts.id && ["done", "failed"].includes(item.status)), timeout);
   return harness.events.findLast((item) => item.id === opts.id);
 }
 const mediaPlaylist = (...assets) => `#EXTM3U\n#EXT-X-TARGETDURATION:6\n${assets.map((asset) => `#EXTINF:6,\n${asset}`).join("\n")}\n#EXT-X-ENDLIST\n`;
@@ -289,16 +289,82 @@ test("segment requests stay within the CDN-safe concurrency limit", async () => 
   assert.equal(peak, 2);
 });
 
+test("Shonen proxy playlists and captions without file extensions become an offline episode", async () => {
+  const master = "https://vidcloud.sbs/api/proxy/m3u8?t=master";
+  const media = "https://vidcloud.sbs/api/proxy/m3u8?t=media";
+  const segment = "https://vidcloud.sbs/api/proxy/segment?t=part";
+  const captions = "https://vidcloud.sbs/api/proxy/vtt?t=english";
+  const bytes = new Uint8Array([0x47, 1, 2, 3]);
+  const requests = [];
+  resetFixture(async url => {
+    requests.push(url);
+    if (url === master) return new Response(`#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1600000,RESOLUTION=1448x1080\n${media}\n`);
+    if (url === media) return new Response(mediaPlaylist(segment));
+    if (url === segment) return new Response(bytes);
+    if (url === captions) return new Response("WEBVTT\n\n00:00.000 --> 00:01.000\nOffline caption\n");
+    throw new Error("Unexpected proxy request");
+  });
+  const opts = options({ providerId: "shonen", hlsUrl: master, subtitleUrl: captions });
+  assert.equal((await terminal(opts)).status, "done");
+  assert.deepEqual(requests, [master, media, segment, captions]);
+  const local = fs.readFileSync(path.join(folder(opts.id), "index.m3u8"), "utf8");
+  assert.match(local, /seg00000\.ts/);
+  assert.doesNotMatch(local, /https?:|\?t=/);
+  assert.deepEqual(fs.readFileSync(path.join(folder(opts.id), "seg00000.ts")), Buffer.from(bytes));
+  assert.match(fs.readFileSync(path.join(folder(opts.id), "subs.vtt"), "utf8"), /Offline caption/);
+});
+
+test("AniChan signed proxy playlists, disguised segments and captions become self-contained offline files", async () => {
+  const master = "https://c.toroplay.cymru/api/watch/m3u8?fixture=master";
+  const rendition = "https://c.toroplay.cymru/api/watch/m3u8?fixture=720";
+  const segments = ["https://c.toroplay.cymru/assets/token-a/seg-1.css", "https://c.toroplay.cymru/assets/token-b/seg-2.png"];
+  const captions = "https://c.toroplay.cymru/api/watch/vtt?fixture=english";
+  const bytes = Buffer.alloc(376); bytes[0] = bytes[188] = 0x47;
+  const requested = [];
+  const starts = [];
+  let inflight = 0, peak = 0;
+  resetFixture(async (url, init) => {
+    requested.push(url);
+    starts.push(Date.now());
+    peak = Math.max(peak, ++inflight);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    inflight--;
+    assert.deepEqual(init.headers, {}, "the signed proxy needs no source cookies or hotlink headers");
+    if (url === master) return new Response(`#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000000\n${rendition}\n`);
+    if (url === rendition) return new Response(mediaPlaylist(...segments));
+    if (segments.includes(url)) return new Response(bytes, { headers: { "Content-Type": "image/png" } });
+    if (url === captions) return new Response("WEBVTT\n\n00:00.000 --> 00:01.000\nAniChan offline caption\n");
+    throw new Error("Unexpected AniChan request");
+  });
+  const opts = options({ providerId: "anichan", hlsUrl: master, subtitleUrl: captions, conservativeNetwork: true });
+  const done = await terminal(opts, 15000);
+  assert.equal(done.status, "done");
+  assert.equal(done.doneSegments, 2);
+  assert.deepEqual(new Set(requested), new Set([master, rendition, ...segments, captions]));
+  assert.equal(peak, 1, "rate-sensitive downloads never overlap file requests");
+  assert.ok(starts.slice(1).every((time, i) => time - starts[i] >= 450), "requests are paced rather than burst together");
+  const local = fs.readFileSync(path.join(folder(opts.id), "index.m3u8"), "utf8");
+  assert.doesNotMatch(local, /https?:|token-|fixture=|\.css|\.png/);
+  assert.match(local, /seg00000\.ts[\s\S]*seg00001\.ts/);
+  for (const file of ["seg00000.ts", "seg00001.ts"]) assert.deepEqual(fs.readFileSync(path.join(folder(opts.id), file)), bytes);
+  assert.match(fs.readFileSync(path.join(folder(opts.id), "subs.vtt"), "utf8"), /AniChan offline caption/);
+});
+
 test("hanging requests time out even when their transport ignores cancellation", async (context) => {
   context.mock.timers.enable({ apis: ["setTimeout"] });
-  resetFixture(async () => new Promise(() => {}));
-  const opts = options();
-  startDownload(opts);
-  context.mock.timers.tick(30_001);
-  await settle();
-  const item = harness.events.findLast((event) => event.id === opts.id);
-  assert.equal(item.status, "failed");
-  assert.match(item.error, /timed out/);
+  for (const [conservativeNetwork, timeout] of [[false, 30_000], [true, 90_000]]) {
+    resetFixture(async () => new Promise(() => {}));
+    const opts = options({ conservativeNetwork });
+    startDownload(opts);
+    context.mock.timers.tick(timeout - 1);
+    await settle();
+    assert.equal(harness.events.findLast(event => event.id === opts.id).status, "downloading");
+    context.mock.timers.tick(2);
+    await settle();
+    const item = harness.events.findLast((event) => event.id === opts.id);
+    assert.equal(item.status, "failed");
+    assert.match(item.error, /timed out/);
+  }
 });
 
 after(() => {

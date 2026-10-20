@@ -1,0 +1,411 @@
+{
+  "servers": [
+    {
+      "name": "anikoto",
+      "label": "vidstream",
+      "host": "anikoto",
+      "type": "hls",
+      "rank": 2,
+      "stream": "https://c.toroplay.cymru/api/watch/m3u8?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F0%2Fmaster.m3u8&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture",
+      "subtitles": [
+        {
+          "lang": "English",
+          "default": true,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F0.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Portuguese (Brazil)",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F1.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Spanish (Latin America)",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F2.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Spanish",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F3.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Arabic",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F4.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "French",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F5.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "German",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F6.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Italian",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F7.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Russian",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F8.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Polish",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F9.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        }
+      ],
+      "subLangs": [
+        "Arabic",
+        "English",
+        "French",
+        "German",
+        "Italian",
+        "Polish",
+        "Portuguese",
+        "Russian",
+        "Spanish"
+      ],
+      "intro": {
+        "start": 0,
+        "end": 0
+      },
+      "outro": {
+        "start": 0,
+        "end": 0
+      },
+      "subType": "soft"
+    },
+    {
+      "name": "aniwatchtv",
+      "label": "zoko",
+      "host": "aniwatchtv",
+      "type": "hls",
+      "rank": 3,
+      "stream": "https://c.toroplay.cymru/api/watch/m3u8?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F1%2Fmaster.m3u8&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture",
+      "subtitles": [
+        {
+          "lang": "English",
+          "default": true,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F0.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Spanish",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F1.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Spanish (Latin America)",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F2.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Arabic",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F3.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "French",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F4.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Portuguese (Brazil)",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F5.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Polish",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F6.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Italian",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F7.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Russian",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F8.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "German",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F9.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        }
+      ],
+      "subLangs": [
+        "Arabic",
+        "English",
+        "French",
+        "German",
+        "Italian",
+        "Polish",
+        "Portuguese",
+        "Russian",
+        "Spanish"
+      ],
+      "intro": null,
+      "outro": null,
+      "subType": "soft"
+    },
+    {
+      "name": "megaplay_hd1",
+      "label": "HD-1",
+      "host": "megaplay_hd1",
+      "type": "hls",
+      "rank": 5,
+      "stream": "https://c.toroplay.cymru/api/watch/m3u8?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F2%2Fmaster.m3u8&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture",
+      "subtitles": [
+        {
+          "lang": "English",
+          "default": true,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F0.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Portuguese (Brazil)",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F1.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Spanish (Latin America)",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F2.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Spanish",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F3.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Arabic",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F4.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "French",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F5.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "German",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F6.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Italian",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F7.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Russian",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F8.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Polish",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F9.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        }
+      ],
+      "subLangs": [
+        "Arabic",
+        "English",
+        "French",
+        "German",
+        "Italian",
+        "Polish",
+        "Portuguese",
+        "Russian",
+        "Spanish"
+      ],
+      "intro": {
+        "start": 0,
+        "end": 0
+      },
+      "outro": {
+        "start": 0,
+        "end": 0
+      },
+      "subType": "soft"
+    },
+    {
+      "name": "megaplay_hd2",
+      "label": "HD-2",
+      "host": "megaplay_hd2",
+      "type": "hls",
+      "rank": 6,
+      "stream": "https://c.toroplay.cymru/api/watch/m3u8?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F3%2Fmaster.m3u8&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture",
+      "subtitles": [
+        {
+          "lang": "English",
+          "default": true,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F0.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Portuguese (Brazil)",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F1.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Spanish (Latin America)",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F2.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Spanish",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F3.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Arabic",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F4.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "French",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F5.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "German",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F6.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Italian",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F7.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Russian",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F8.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Polish",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F9.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        }
+      ],
+      "subLangs": [
+        "Arabic",
+        "English",
+        "French",
+        "German",
+        "Italian",
+        "Polish",
+        "Portuguese",
+        "Russian",
+        "Spanish"
+      ],
+      "intro": {
+        "start": 0,
+        "end": 0
+      },
+      "outro": {
+        "start": 0,
+        "end": 0
+      },
+      "subType": "soft"
+    },
+    {
+      "name": "kaa",
+      "label": "kaa",
+      "host": "kaa",
+      "type": "hls",
+      "rank": 9,
+      "stream": "https://c.toroplay.cymru/api/watch/m3u8?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F4%2Fmaster.m3u8&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture",
+      "subtitles": [
+        {
+          "lang": "English",
+          "default": true,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F0.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "French",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F1.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "German",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F2.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Italian",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F3.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Polish",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F4.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Spanish",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F5.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Arabic",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F6.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Hindi",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F7.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Portuguese",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F8.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Russian",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F9.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Tamil",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F10.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Telugu",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F11.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        },
+        {
+          "lang": "Thai",
+          "default": false,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fovergeared-sub%2F12.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        }
+      ],
+      "subLangs": [
+        "Arabic",
+        "English",
+        "French",
+        "German",
+        "Hindi",
+        "Italian",
+        "Polish",
+        "Portuguese",
+        "Russian",
+        "Spanish",
+        "Tamil",
+        "Telugu",
+        "Thai"
+      ],
+      "intro": null,
+      "outro": null,
+      "subType": "soft"
+    }
+  ]
+}

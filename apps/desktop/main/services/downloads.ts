@@ -55,9 +55,12 @@ function itemDir(id: string): string {
 interface DownloadJob {
   controller: AbortController;
   removed: boolean;
+  conservativeNetwork: boolean;
+  lastRequestAt: number;
 }
 const running = new Map<string, DownloadJob>();
 const REQUEST_TIMEOUT_MS = 30_000;
+const CONSERVATIVE_REQUEST_TIMEOUT_MS = 90_000;
 const MAX_PLAYLIST_BYTES = 2 * 1024 * 1024;
 const MAX_ASSET_BYTES = 32 * 1024 * 1024;
 const MAX_DOWNLOAD_BYTES = 10 * 1024 * 1024 * 1024;
@@ -74,6 +77,7 @@ export interface StartOpts {
   id: string; animeId: number; episode: number; title: string; coverUrl?: string | null;
   providerId: string; hlsUrl: string; referer?: string | null;
   animeSession?: string; episodeSession?: string; subtitleUrl?: string | null;
+  conservativeNetwork?: boolean;
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -85,7 +89,7 @@ export function startDownload(opts: StartOpts): void {
     emit(opts, "failed", 0, 0, 0, 0, "Downloads are temporarily disabled by signed automation rules.");
     return;
   }
-  const job: DownloadJob = { controller: new AbortController(), removed: false };
+  const job: DownloadJob = { controller: new AbortController(), removed: false, conservativeNetwork: opts.conservativeNetwork === true, lastRequestAt: 0 };
   running.set(opts.id, job);
   void runDownload(opts, job);
 }
@@ -149,6 +153,7 @@ export function assertStartOpts(value: unknown): asserts value is StartOpts {
   assertOptionalString(o.animeSession, "anime session", 4096);
   assertOptionalString(o.episodeSession, "episode session", 4096);
   assertOptionalHttpUrl(o.subtitleUrl, "subtitle URL");
+  if (o.conservativeNetwork != null && typeof o.conservativeNetwork !== "boolean") throw new Error("Invalid download network setting");
 }
 
 function assertOptionalString(value: unknown, name: string, maxLength: number): void {
@@ -281,7 +286,7 @@ async function runDownload(o: StartOpts, job: DownloadJob): Promise<void> {
         if (done % 4 === 0 || done === total) emit(o, "downloading", Math.floor((done * 100) / total), done, total, 0);
       }
     }
-    const workers = Array.from({ length: DOWNLOAD_WORKERS }, () => worker());
+    const workers = Array.from({ length: job.conservativeNetwork ? 1 : DOWNLOAD_WORKERS }, () => worker());
     try {
       await Promise.all(workers);
     } catch (error) {
@@ -413,11 +418,16 @@ async function readWithRetry(url: string, providerId: string, job: DownloadJob, 
     let timedOut = false;
     const abort = () => controller.abort();
     job.controller.signal.addEventListener("abort", abort, { once: true });
-    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, REQUEST_TIMEOUT_MS);
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, job.conservativeNetwork ? CONSERVATIVE_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS);
     try {
       let requestUrl = downloadMediaUrl(url);
       let response: Response;
       for (let redirects = 0; ; redirects++) {
+        if (job.conservativeNetwork) {
+          const wait = job.lastRequestAt + 500 - Date.now();
+          if (wait > 0) await retryWait(wait, job.controller.signal);
+          job.lastRequestAt = Date.now();
+        }
         response = await abortable(net.fetch(requestUrl, {
           headers: reqHeaders(requestUrl, providerId), signal: controller.signal,
           redirect: "manual", credentials: "omit",

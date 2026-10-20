@@ -1,0 +1,112 @@
+{
+  "id": 212888,
+  "idMal": 64340,
+  "title": "Overgeared",
+  "titleRomaji": "Tempal: Item no Chikara",
+  "poster": "/media/catalogue/overgeared.jpg",
+  "startDate": {
+    "year": 2026,
+    "month": 9,
+    "day": 27
+  },
+  "episodes": 12,
+  "available_eps": {
+    "sub": [
+      1,
+      2,
+      3,
+      4
+    ]
+  },
+  "selfhost": {
+    "cached_eps": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "cached_sub": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "cached_dub": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "count": 4,
+    "total_eps": 12,
+    "ep_titles": {
+      "1": "Legendary Class",
+      "2": "First Step Towards Being a Blacksmith",
+      "3": "Second Class",
+      "4": "Item Seisaku Taiketsu"
+    },
+    "ep_meta": {
+      "1": {
+        "title": "Legendary Class",
+        "image": "/media/episodes/1.jpg",
+        "airDate": "2026-10-02",
+        "runtime": 24,
+        "overview": "Grid hopes to strike it rich in the VR game Satisfy. While taking on an S-Ranked quest, he discovers Pagma’s Tome."
+      },
+      "2": {
+        "title": "First Step Towards Being a Blacksmith",
+        "image": "/media/episodes/2.jpg",
+        "airDate": "2026-10-09",
+        "runtime": 24,
+        "overview": "Grid has made a fresh start. With nowhere else to turn, he begins learning the fundamentals of blacksmithing."
+      },
+      "3": {
+        "title": "Second Class",
+        "image": "/media/episodes/3.jpg",
+        "airDate": "2026-10-16",
+        "runtime": 24,
+        "overview": "The Mero Company sends Huroi, an Orator, to the village. There, he forcibly triggers a hidden quest...!?"
+      },
+      "4": {
+        "title": "Item Seisaku Taiketsu",
+        "image": "/media/episodes/4.jpg",
+        "airDate": "2026-10-23",
+        "runtime": 24,
+        "overview": "Grid faces Euphemina in a blacksmithing contest. The contest turns into an S-Ranked quest to rescue Huroi."
+      },
+      "5": {
+        "airDate": "2026-10-30",
+        "runtime": 24
+      },
+      "6": {
+        "airDate": "2026-11-06",
+        "runtime": 24
+      },
+      "7": {
+        "airDate": "2026-11-13",
+        "runtime": 24
+      },
+      "8": {
+        "airDate": "2026-11-20",
+        "runtime": 24
+      },
+      "9": {
+        "airDate": "2026-11-27",
+        "runtime": 24
+      },
+      "10": {
+        "airDate": "2026-12-04",
+        "runtime": 24
+      },
+      "11": {
+        "airDate": "2026-12-11",
+        "runtime": 24
+      },
+      "12": {
+        "airDate": "2026-12-18",
+        "runtime": 24
+      }
+    },
+    "ep_filler": {}
+  }
+}

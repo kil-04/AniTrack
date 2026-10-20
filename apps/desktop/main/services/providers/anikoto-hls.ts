@@ -11,6 +11,9 @@ interface HlsOptions {
   requestHeaders?: Record<string, string>;
   /** Some providers advertise multiple audio tracks alongside video qualities. */
   maxRenditions?: number;
+  /** Signed public proxies may put every segment in a different token directory.
+   * These fixed public prefixes receive CORS only, never hotlink credentials. */
+  publicMediaPrefixes?: readonly string[];
 }
 
 interface VerifiedPlaylist {
@@ -41,6 +44,12 @@ export async function prepareAnikotoHlsAuthorization(
   if (!Number.isInteger(maxRenditions) || maxRenditions < 1 || maxRenditions > 16) throw new Error(`${label} rendition limit is invalid`);
   const rootUrl = assertAnikotoMediaUrl(initialUrl);
   const safeReferer = assertAnikotoMediaUrl(referer);
+  const publicPrefixes = (options.publicMediaPrefixes ?? []).map(raw => {
+    const url = new URL(assertAnikotoMediaUrl(raw));
+    if (url.search || url.hash || url.pathname === "/" || !url.pathname.endsWith("/")) throw new Error(`${label} public media prefix is invalid`);
+    return url.href;
+  });
+  if (publicPrefixes.length > 8) throw new Error(`${label} has too many public media prefixes`);
   const controller = new AbortController();
   const timeoutError = new Error(`${label} playlist verification timed out. Try again or choose another server.`);
   let rejectDeadline: (error: Error) => void = () => {};
@@ -60,10 +69,13 @@ export async function prepareAnikotoHlsAuthorization(
     if (/\/segment\/[A-Za-z0-9_+-]{32,}={0,2}\/?$/.test(parsed.pathname)) {
       throw new Error(`${label} returned encrypted playlist links. Choose another server while support for this stream format is updated.`);
     }
-    const directory = `${parsed.origin}${parsed.pathname.slice(0, parsed.pathname.lastIndexOf("/") + 1)}`;
+    const publicPrefix = publicPrefixes.find(prefix => url.startsWith(prefix));
+    const directory = publicPrefix ?? `${parsed.origin}${parsed.pathname.slice(0, parsed.pathname.lastIndexOf("/") + 1)}`;
     if (!authorizations.has(directory)) {
       if (authorizations.size >= MAX_DIRECTORIES) throw new Error(`${label} playlist references too many media directories`);
-      authorizations.set(directory, {
+      authorizations.set(directory, publicPrefix ? {
+        url: publicPrefix + "__anitrack_media__", authorizationScope: "directory", cors: true,
+      } : {
         url, referer: safeReferer, requestHeaders: options.requestHeaders, authorizationScope: "directory", cors: true,
       });
     }

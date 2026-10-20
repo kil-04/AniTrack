@@ -17,6 +17,24 @@ const referer = "https://player.example/";
 const master = (variants) => "#EXTM3U\n" + variants.map(uri => `#EXT-X-STREAM-INF:BANDWIDTH=1000\n${uri}\n`).join("");
 const media = "#EXTM3U\n#EXTINF:6,\nhttps://media.example/episode/seg1.ts\n#EXT-X-ENDLIST\n";
 
+test("Signed public proxy segments share CORS-only authorization without broadening credentials", async () => {
+  const prefix = "https://proxy.example/assets/";
+  const playlist = "#EXTM3U\n" + Array.from({ length: 600 }, (_, i) => `#EXTINF:6,\n${prefix}token-${i}/seg-f1-${i}.jpg\n`).join("") + "#EXT-X-ENDLIST\n";
+  const authorized = [];
+  await prepareAnikotoHlsAuthorization(root, referer, async () => new Response(playlist), {
+    publicMediaPrefixes: [prefix], requestHeaders: { "X-Source": "private" }, authorize: value => authorized.push(value),
+  });
+  assert.equal(authorized.length, 2);
+  assert.equal(new URL(".", authorized[1].url).href, prefix);
+  assert.equal(authorized[1].referer, undefined);
+  assert.equal(authorized[1].requestHeaders, undefined);
+  assert.equal(authorized[1].cors, true);
+  assert.equal(authorized[0].requestHeaders["X-Source"], "private", "unrelated directories retain their original credential scope");
+  for (const bad of ["https://proxy.example/", "https://proxy.example/assets/?query=1", "https://127.0.0.1/assets/"]) {
+    await assert.rejects(prepareAnikotoHlsAuthorization(root, referer, async () => { throw Error("must not fetch"); }, { publicMediaPrefixes: [bad] }), /invalid|unsafe/);
+  }
+});
+
 test("Miruro can bound five video/audio renditions and preserves supplied headers on observed directories", async () => {
   const authorized = [], calls = [];
   const playlist = "#EXTM3U\n"

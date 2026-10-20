@@ -6,6 +6,16 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 AniTrack is a Windows Electron desktop app for tracking anime, playing local video files, and streaming via AnimePahe. It syncs watch status two-way with MyAnimeList (MAL) and uses AniList as the metadata source.
 
+## New source requirements
+
+Every new source must include downloads in both the desktop and native Android
+apps as part of the integration. Wire the source into the existing download
+queues, including capability and resolved-media flags where applicable. Preserve
+subtitles for anime and page/chapter order for reading sources. Verify a completed
+download opens offline in both running apps before calling the source complete.
+If a concrete source limitation blocks downloads, report it explicitly instead
+of silently shipping the source with downloads disabled.
+
 ## Commands
 
 ```bash

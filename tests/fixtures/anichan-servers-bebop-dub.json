@@ -1,0 +1,84 @@
+{
+  "servers": [
+    {
+      "name": "anikoto",
+      "label": "vidstream",
+      "host": "anikoto",
+      "type": "hls",
+      "rank": 2,
+      "stream": "https://c.toroplay.cymru/api/watch/m3u8?url=https%3A%2F%2Fmedia.example%2Fbebop-dub%2F0%2Fmaster.m3u8&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture",
+      "subtitles": [
+        {
+          "lang": "English",
+          "default": true,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fbebop-dub%2F0.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        }
+      ],
+      "intro": {
+        "start": 49,
+        "end": 144
+      },
+      "outro": {
+        "start": 1357,
+        "end": 1451
+      }
+    },
+    {
+      "name": "aniwatchtv",
+      "label": "zoko",
+      "host": "aniwatchtv",
+      "type": "hls",
+      "rank": 3,
+      "stream": "https://c.toroplay.cymru/api/watch/m3u8?url=https%3A%2F%2Fmedia.example%2Fbebop-dub%2F1%2Fmaster.m3u8&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture",
+      "subtitles": [
+        {
+          "lang": "English",
+          "default": true,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fbebop-dub%2F0.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        }
+      ],
+      "intro": {
+        "start": 49,
+        "end": 144
+      },
+      "outro": {
+        "start": 1357,
+        "end": 1451
+      }
+    },
+    {
+      "name": "echovideo",
+      "label": "echovideo",
+      "host": "echovideo",
+      "type": "hls",
+      "rank": 4,
+      "stream": "https://c.toroplay.cymru/api/watch/m3u8?url=https%3A%2F%2Fmedia.example%2Fbebop-dub%2F2%2Fmaster.m3u8&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture",
+      "subtitles": [],
+      "intro": null,
+      "outro": null
+    },
+    {
+      "name": "megaplay_hd1",
+      "label": "HD-1",
+      "host": "megaplay_hd1",
+      "type": "hls",
+      "rank": 5,
+      "stream": "https://c.toroplay.cymru/api/watch/m3u8?url=https%3A%2F%2Fmedia.example%2Fbebop-dub%2F3%2Fmaster.m3u8&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture",
+      "subtitles": [
+        {
+          "lang": "English",
+          "default": true,
+          "url": "https://c.toroplay.cymru/api/watch/vtt?url=https%3A%2F%2Fmedia.example%2Fbebop-dub%2F0.vtt&ref=https%3A%2F%2Fplayer.example%2F&e=2000000000&s=fixture"
+        }
+      ],
+      "intro": {
+        "start": 49,
+        "end": 144
+      },
+      "outro": {
+        "start": 1357,
+        "end": 1451
+      }
+    }
+  ]
+}

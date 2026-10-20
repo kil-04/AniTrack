@@ -7,6 +7,7 @@ import com.sanjay.anitrack.next.data.providers.connectors.AnikotoProvider
 import com.sanjay.anitrack.next.data.providers.connectors.AnimePaheProvider
 import com.sanjay.anitrack.next.data.providers.connectors.MiruroAndroidProvider
 import com.sanjay.anitrack.next.data.providers.connectors.ShonenProvider
+import com.sanjay.anitrack.next.data.providers.connectors.AniChanAndroidProvider
 
 private val VALID_ID = Regex("^[a-z][a-z0-9-]{1,31}$")
 
@@ -69,6 +70,6 @@ class ProviderRegistry(providers: List<AnimeProvider>) {
 /** Composition root: adding a connector requires one deliberate registry entry. */
 object Providers {
     // MKissa was removed at the user's request (Oct 2026: CAPTCHA on every request); its connector stays unregistered.
-    val registry = ProviderRegistry(listOf(AnikotoProvider, AnimePaheProvider, MiruroAndroidProvider, ShonenProvider))
+    val registry = ProviderRegistry(listOf(AnikotoProvider, AnimePaheProvider, MiruroAndroidProvider, ShonenProvider, AniChanAndroidProvider))
     fun enabled(): List<AnimeProvider> = registry.enabled(RemoteConfig.current())
 }

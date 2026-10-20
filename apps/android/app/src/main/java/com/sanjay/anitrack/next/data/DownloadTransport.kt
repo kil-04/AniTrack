@@ -69,7 +69,7 @@ internal object DownloadTransport {
                 return body
             } else {
                 val req = Request.Builder().url(url).header("User-Agent", ua)
-                    .header("Referer", ref.trimEnd('/') + "/").header("Accept", "*/*")
+                    .apply { if (ref.isNotBlank()) header("Referer", ref.trimEnd('/') + "/") }.header("Accept", "*/*")
                     .apply { if (!cookie.isNullOrBlank()) header("Cookie", cookie) }.build()
                 http.newCall(req).execute().use { resp ->
                     if (isRetryableStatus(resp.code) && attempt < maxRetries) { Thread.sleep((1000L * (attempt + 1)).coerceAtMost(8000)); attempt++; return@use }
@@ -296,7 +296,7 @@ internal object DownloadTransport {
         }
         val builder = engine.newUrlRequestBuilder(url, callback, cronetExecutor)
             .addHeader("User-Agent", ua)
-            .addHeader("Referer", ref.trimEnd('/') + "/")
+            .apply { if (ref.isNotBlank()) addHeader("Referer", ref.trimEnd('/') + "/") }
             .addHeader("Accept", "*/*")
         if (!cookie.isNullOrBlank()) builder.addHeader("Cookie", cookie)
         val blocked = setOf(
@@ -354,7 +354,7 @@ internal object DownloadTransport {
             override fun onCanceled(r: org.chromium.net.UrlRequest, i: org.chromium.net.UrlResponseInfo?) = latch.countDown()
         }
         val b = engine.newUrlRequestBuilder(url, cb, cronetExecutor)
-            .addHeader("User-Agent", ua).addHeader("Referer", ref.trimEnd('/') + "/").addHeader("Accept", "*/*")
+            .addHeader("User-Agent", ua).apply { if (ref.isNotBlank()) addHeader("Referer", ref.trimEnd('/') + "/") }.addHeader("Accept", "*/*")
         if (!cookie.isNullOrBlank()) b.addHeader("Cookie", cookie)
         // Preserve range/conditional requests made by hls.js. Do not forward
         // headers whose values are controlled above or by Cronet itself.
@@ -381,9 +381,9 @@ internal object DownloadTransport {
         return Fetched(status, reason, responseHeaders, out.toByteArray())
     }
 
-    fun text(url: String, ref: String, ua: String): String = String(getBytes(url, ref, ua))
+    fun text(url: String, ref: String, ua: String, maxRetries: Int = 6): String = String(getBytes(url, ref, ua, maxRetries))
 
-    fun bytes(url: String, ref: String, ua: String): ByteArray = getBytes(url, ref, ua, maxRetries = 2)
+    fun bytes(url: String, ref: String, ua: String, maxRetries: Int = 2): ByteArray = getBytes(url, ref, ua, maxRetries)
 
     fun toFile(url: String, file: File, ref: String, ua: String, maxRetries: Int = 6) {
         val tmp = File(file.parentFile, file.name + ".part")
@@ -493,7 +493,7 @@ internal object DownloadTransport {
         }
         val builder = engine.newUrlRequestBuilder(url, callback, cronetExecutor)
             .addHeader("User-Agent", ua)
-            .addHeader("Referer", ref.trimEnd('/') + "/")
+            .apply { if (ref.isNotBlank()) addHeader("Referer", ref.trimEnd('/') + "/") }
             .addHeader("Accept", "*/*")
         if (!cookie.isNullOrBlank()) builder.addHeader("Cookie", cookie)
         val request = try {
@@ -531,7 +531,7 @@ internal object DownloadTransport {
         cookie: String?,
     ): Int {
         val request = Request.Builder().url(url).header("User-Agent", ua)
-            .header("Referer", ref.trimEnd('/') + "/").header("Accept", "*/*")
+            .apply { if (ref.isNotBlank()) header("Referer", ref.trimEnd('/') + "/") }.header("Accept", "*/*")
             .apply { if (!cookie.isNullOrBlank()) header("Cookie", cookie) }.build()
         http.newCall(request).execute().use { response ->
             if (response.isSuccessful) {

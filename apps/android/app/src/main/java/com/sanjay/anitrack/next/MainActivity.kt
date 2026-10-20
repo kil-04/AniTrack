@@ -109,6 +109,7 @@ class MainActivity : ComponentActivity() {
         com.sanjay.anitrack.next.data.novel.NovelDownloads.init(applicationContext)
         com.sanjay.anitrack.next.data.ReleaseAlerts.takeRoute(intent)
         com.sanjay.anitrack.next.data.providers.connectors.MiruroAndroidProvider.attach(this)
+        com.sanjay.anitrack.next.data.providers.connectors.AniChanAndroidProvider.attach(this)
         com.sanjay.anitrack.next.data.Pahe.attach(this)
         // ExoPlayer's HttpURLConnection stack consults this for cookies — the
         // pahe/kwik CDN rejects segment requests without the WebView's cookies.
@@ -165,11 +166,13 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         com.sanjay.anitrack.next.data.providers.connectors.MiruroAndroidProvider.foreground(this, true)
+        com.sanjay.anitrack.next.data.providers.connectors.AniChanAndroidProvider.foreground(this, true)
         com.sanjay.anitrack.next.update.AppUpdater.resumePendingInstall(this)
     }
 
     override fun onPause() {
         com.sanjay.anitrack.next.data.providers.connectors.MiruroAndroidProvider.foreground(this, false)
+        com.sanjay.anitrack.next.data.providers.connectors.AniChanAndroidProvider.foreground(this, false)
         super.onPause()
     }
 
@@ -197,6 +200,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         com.sanjay.anitrack.next.data.providers.connectors.MiruroAndroidProvider.detach(this)
+        com.sanjay.anitrack.next.data.providers.connectors.AniChanAndroidProvider.detach(this)
         super.onDestroy()
         if (isFinishing) PipState.active.value = false
         // The shared player outlives the player screen (mini player) — free it

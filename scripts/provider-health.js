@@ -129,7 +129,9 @@ async function probeShonen(config, baseUrl) {
     try {
       const json = JSON.parse(sources.body);
       const hls = Array.isArray(json?.data?.sources) ? json.data.sources.find((s) => s && s.type === "hls") : null;
-      file = typeof hls?.file === "string" && hls.file.startsWith("https://") ? hls.file : null;
+      // Since 20 Oct 2026 the files are same-origin /api/v1/shonen-media links.
+      const url = typeof hls?.file === "string" ? new URL(hls.file, baseUrl) : null;
+      file = url && url.protocol === "https:" ? url.toString() : null;
     } catch {}
     if (!file) {
       return result("shonen", baseUrl, "failed", `sources HTTP ${sources.status} without an HLS stream`, sources.status, sources.finalUrl);
@@ -141,6 +143,38 @@ async function probeShonen(config, baseUrl) {
     return result("shonen", baseUrl, "healthy", "search, sources and stream playlist passed", sources.status, sources.finalUrl);
   } catch (error) {
     return result("shonen", baseUrl, "failed", error.message || String(error));
+  }
+}
+
+/**
+ * AniChan (packages/shared/anichan.ts): AniList-keyed search, then a title's catalogue
+ * with its availability arrays. Server lists need the website's own watch session, so
+ * streams are not probed here. Cowboy Bebop keeps the catalogue under the size limit.
+ */
+async function probeAniChan(config, baseUrl) {
+  try {
+    const search = await probe(baseUrl + expandRoute(config.routes.search, { query: "cowboy bebop" }));
+    let hit = false;
+    try {
+      const json = JSON.parse(search.body);
+      hit = Array.isArray(json?.results) && json.results.some((entry) => entry && entry.id === 1);
+    } catch {}
+    if (!hit) {
+      return result("anichan", baseUrl, "failed", `search HTTP ${search.status} no longer lists AniList-keyed results`, search.status, search.finalUrl);
+    }
+    const anime = await probe(baseUrl + expandRoute(config.routes.anime, { animeId: 1 }));
+    let episodes = 0;
+    try {
+      const json = JSON.parse(anime.body);
+      const lists = [json?.selfhost?.cached_eps, json?.selfhost?.cached_sub, json?.available_eps?.sub];
+      episodes = Math.max(0, ...lists.map((list) => (Array.isArray(list) ? list.length : 0)));
+    } catch {}
+    if (episodes === 0) {
+      return result("anichan", baseUrl, "failed", `catalogue HTTP ${anime.status} without available episodes`, anime.status, anime.finalUrl);
+    }
+    return result("anichan", baseUrl, "healthy", `search and catalogue passed (${episodes} episodes); streams need a website session and are not probed`, anime.status, anime.finalUrl);
+  } catch (error) {
+    return result("anichan", baseUrl, "failed", error.message || String(error));
   }
 }
 
@@ -184,6 +218,8 @@ async function main() {
       for (const base of providerConfig.baseUrls) jobs.push(probeAnimePahe(providerConfig, base));
     } else if (provider === "shonen") {
       for (const base of providerConfig.baseUrls) jobs.push(probeShonen(providerConfig, base));
+    } else if (provider === "anichan") {
+      for (const base of providerConfig.baseUrls) jobs.push(probeAniChan(providerConfig, base));
     } else {
       for (const base of providerConfig.baseUrls) {
         jobs.push(Promise.resolve(result(
@@ -213,4 +249,4 @@ main().catch((error) => {
   process.exit(1);
 });
 
-module.exports = { expandRoute, readBounded, probeAnikoto, probeAnimePahe, probeShonen };
+module.exports = { expandRoute, readBounded, probeAnikoto, probeAnimePahe, probeShonen, probeAniChan };

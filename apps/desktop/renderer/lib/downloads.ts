@@ -30,6 +30,7 @@ interface StartOpts {
   animeSession?: string;
   episodeSession?: string;
   subtitleUrl?: string | null;
+  conservativeNetwork?: boolean;
 }
 
 interface DownloaderPlugin {
@@ -194,6 +195,7 @@ async function tickQueue() {
     if (!best) throw new Error("No stream link found");
     const resolved = await providerClient.resolve(next.providerId, best.id);
     if (!resolved?.url) throw new Error("Could not resolve stream URL");
+    if (resolved.hls === false) throw new Error("Choose an HLS server before downloading this episode.");
 
     // Anikoto uses soft (separate) subtitles — save the English .vtt so downloads
     // are subtitled offline. AnimePahe is hard-subbed, so it has none.
@@ -216,6 +218,7 @@ async function tickQueue() {
       animeSession: next.animeSession,
       episodeSession: next.episodeSession,
       subtitleUrl,
+      conservativeNetwork: resolved.conservativeNetwork,
     });
     // The native `progress` listener drives status to done/failed, which calls
     // tickQueue() again. Clear the active marker once it settles. Capped: a
