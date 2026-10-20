@@ -1,6 +1,7 @@
 import { app } from "electron";
 import fs from "node:fs";
 import path from "node:path";
+import { fetchAniListResponse } from "./anilist-request";
 import type { AnimeMeta, AnimeRecommendation, RecentEpisodesPage, RelatedAnime } from "../../../../packages/shared/types";
 import { classicEraBoost, classicEraLabel } from "../../../../packages/shared/recommendations";
 import { planStory, type PrintMeta, type StoryPlan } from "../../../../packages/shared/story-bridge";
@@ -15,8 +16,6 @@ import {
   type TimeMachinePart,
   type TimeMachineRelationEdge,
 } from "../../../../packages/shared/time-machine";
-
-const ENDPOINT = "https://graphql.anilist.co";
 
 // Simple TTL cache to stay under AniList's 90 req/min rate limit.
 // Cleared on app restart — fine because AniList metadata doesn't change often.
@@ -228,28 +227,17 @@ export async function gql<T>(
 async function _doGql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     console.log(`[AniList] request attempt ${attempt}/${MAX_RETRIES}`);
-    // Time-box the request — the scheduler is a single serial pump, so one
-    // hung fetch would otherwise stall EVERY AniList call in the app.
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 15_000);
-    let res: Response;
+    let res: Awaited<ReturnType<typeof fetchAniListResponse>>;
     try {
-      res = await fetch(ENDPOINT, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ query, variables }),
-        signal: ac.signal,
-      });
+      res = await fetchAniListResponse(query, variables);
     } catch (err) {
-      clearTimeout(timer);
       if (attempt < MAX_RETRIES) continue;
       throw err;
     }
-    clearTimeout(timer);
 
     if (res.status === 429) {
       if (attempt < MAX_RETRIES) {
-        const retryAfterSec = Number(res.headers.get("retry-after"));
+        const retryAfterSec = Number(res.retryAfter);
         // Cap wait at 5s regardless of what the server says
         const waitMs = Math.min(5000, isFinite(retryAfterSec) && retryAfterSec > 0
           ? retryAfterSec * 1000
@@ -262,8 +250,8 @@ async function _doGql<T>(query: string, variables: Record<string, unknown>): Pro
       throw new Error(`AniList 429: Too Many Requests. Please wait a moment and try again.`);
     }
 
-    if (!res.ok) throw new Error(`AniList ${res.status}: ${await res.text()}`);
-    const json = await res.json() as any;
+    if (res.status < 200 || res.status >= 300) throw new Error(`AniList ${res.status}: ${res.errorText}`);
+    const json = res.json!;
     if (json.errors)
       throw new Error(`AniList error: ${JSON.stringify(json.errors)}`);
     console.log(`[AniList] request succeeded on attempt ${attempt}`);

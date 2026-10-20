@@ -108,9 +108,14 @@ fun NavSearchBox(
 
     LaunchedEffect(query, history) {
         if (query.isBlank()) { results = emptyList(); open = false; return@LaunchedEffect }
+        open = false
         delay(350)
-        runCatching {
+        try {
             results = if (novel) novelSearchHits(context, query.trim(), onOpenNovel) else searchHits(query.trim(), manga, onOpen, onOpenManga)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            results = emptyList()
         }
         open = results.isNotEmpty()
     }

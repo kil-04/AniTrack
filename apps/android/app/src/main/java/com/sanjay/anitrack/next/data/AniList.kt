@@ -2,6 +2,7 @@ package com.sanjay.anitrack.next.data
 
 import android.content.Context
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
@@ -57,6 +58,7 @@ object AniList {
 
     private val lock = Mutex()
     private var lastCallAt = 0L
+    private data class GqlResponse(val data: JSONObject?, val retryAfter: Long? = null)
 
     private val cache = object : LinkedHashMap<String, Pair<Long, JSONObject>>(64, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<Long, JSONObject>>) = size > 200
@@ -138,21 +140,27 @@ object AniList {
                     val req = Request.Builder().url(ENDPOINT).post(body)
                         .header("Accept", "application/json").build()
                     try {
-                        http.newCall(req).execute().use { res ->
+                        val reply = http.newCall(req).readCancellable { res ->
                             if (res.code == 429) {
-                                val ra = res.header("Retry-After")?.toLongOrNull()
-                                delay(((ra ?: (attempt * 2L)) * 1000).coerceAtMost(5000))
-                                return@use
+                                GqlResponse(null, res.header("Retry-After")?.toLongOrNull())
+                            } else {
+                                val text = res.body?.string() ?: throw Exception("empty body")
+                                if (!res.isSuccessful) throw Exception("AniList ${res.code}")
+                                val json = JSONObject(text)
+                                if (json.has("errors")) throw Exception(json.getJSONArray("errors").toString())
+                                GqlResponse(json.getJSONObject("data"))
                             }
-                            val text = res.body?.string() ?: throw Exception("empty body")
-                            if (!res.isSuccessful) throw Exception("AniList ${res.code}")
-                            val json = JSONObject(text)
-                            if (json.has("errors")) throw Exception(json.getJSONArray("errors").toString())
-                            val data = json.getJSONObject("data")
-                            synchronized(cache) { cache[key] = System.currentTimeMillis() to data }
-                            writeDisk(key, data)
-                            return@withLock data
                         }
+                        val data = reply.data
+                        if (data == null) {
+                            delay(((reply.retryAfter ?: (attempt * 2L)) * 1000).coerceAtMost(5000))
+                            continue
+                        }
+                        synchronized(cache) { cache[key] = System.currentTimeMillis() to data }
+                        writeDisk(key, data)
+                        return@withLock data
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
                     } catch (e: Exception) {
                         lastErr = e
                         if (attempt == 3) throw e

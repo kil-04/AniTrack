@@ -58,11 +58,11 @@ fun SearchScreen(onOpen: (Anime) -> Unit, initialQuery: String = "") {
     var topRated by remember { mutableStateOf<List<Anime>>(emptyList()) }
     var searching by remember { mutableStateOf(false) }
     var reload by remember { mutableStateOf(0) }
+    val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 820
 
-    LaunchedEffect(Unit) { runCatching { topRated = AniList.topRated() } }
-    LaunchedEffect(reload, page) {
+    LaunchedEffect(reload, page, wide) {
         searching = true
-        runCatching {
+        try {
             // A typed title ranks by match, as in the top-bar dropdown; "Trending" first
             // could bury the show itself. A sort picked by hand still applies.
             val ranking = if (query.isNotBlank() && sort == "TRENDING_DESC") "SEARCH_MATCH" else sort
@@ -71,11 +71,20 @@ fun SearchScreen(onOpen: (Anime) -> Unit, initialQuery: String = "") {
                 source = source, epMin = epRange?.first, epMax = epRange?.second,
             )
             results = r; hasNext = hn
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // Keep the previous results when a refresh fails.
         }
         searching = false
+        // The user's results win AniList's serial queue. The optional sidebar
+        // loads afterward, and isn't requested at all on a narrow screen.
+        if (wide && results.isNotEmpty() && topRated.isEmpty()) {
+            try { topRated = AniList.topRated() }
+            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (_: Exception) { }
+        }
     }
-
-    val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 820
 
     Row(Modifier.fillMaxSize()) {
         Column(Modifier.weight(1f).padding(horizontal = 24.dp, vertical = 20.dp)) {

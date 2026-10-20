@@ -45,11 +45,15 @@ fun QuickSearchScreen(
 
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     LaunchedEffect(query) {
-        if (query.isBlank()) { results = emptyList(); searched = false; return@LaunchedEffect }
+        if (query.isBlank()) { results = emptyList(); searched = false; searching = false; return@LaunchedEffect }
         delay(350)
         searching = true
-        runCatching {
+        try {
             results = if (novel) novelSearchHits(context, query.trim(), onOpenNovel) else searchHits(query.trim(), manga, onOpen, onOpenManga)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            results = emptyList()
         }
         searching = false
         searched = true

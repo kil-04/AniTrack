@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Row from "./Row";
 import Card from "./Card";
 import { homeFeedSettled } from "../store/useAppStore";
@@ -39,37 +39,81 @@ function writeCache(key: string, items: AnimeMeta[]) {
 export default function DiscoverRow({ title, filters, limit = 18 }: Props) {
   const key = CACHE_PREFIX + JSON.stringify(filters);
   const [items, setItems] = useState<AnimeMeta[]>(() => readCache(key)?.items.slice(0, limit) ?? []);
+  const anchor = useRef<HTMLDivElement>(null);
+  const [homeReady, setHomeReady] = useState(false);
+  const [nearViewport, setNearViewport] = useState(false);
+  const [settledKey, setSettledKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Measure after the hero/latest rows have painted: before then, a lower
+    // row can briefly sit at the top and would defeat deferred loading.
+    let cancelled = false;
+    const timer = setTimeout(() => { if (!cancelled) setHomeReady(true); }, MAX_WAIT_MS);
+    void homeFeedSettled.then(() => {
+      clearTimeout(timer);
+      if (!cancelled) setHomeReady(true);
+    });
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, []);
+
+  useEffect(() => {
+    if (!homeReady) return;
+    if (!anchor.current) return;
+    if (typeof IntersectionObserver === "undefined") { setNearViewport(true); return; }
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) {
+        setNearViewport(true);
+        observer.disconnect();
+      }
+    }, { root: anchor.current.closest("main"), rootMargin: "240px 0px" });
+    observer.observe(anchor.current);
+    return () => observer.disconnect();
+  }, [homeReady]);
 
   useEffect(() => {
     let cancelled = false;
     const cached = readCache(key);
     setItems(cached?.items.slice(0, limit) ?? []);
     if (cached && Date.now() - cached.savedAt < FRESH_MS) return;
-    // Below the fold: let Home's hero and Latest Episodes go first, since AniList
-    // answers one request at a time.
-    const wait = new Promise<void>((resolve) => setTimeout(resolve, MAX_WAIT_MS));
-    void Promise.race([homeFeedSettled, wait])
-      .then(() => (cancelled ? null : window.api.anilist.advancedSearch({ ...filters, page: 1 })))
+    // Reserve the row's space, but don't queue slow catalogue queries until
+    // scrolling brings this row close. Cached rows still paint immediately.
+    if (!nearViewport) return;
+    void window.api.anilist.advancedSearch({ ...filters, page: 1 })
       .then((res) => {
         if (cancelled || !res) return;
         const next = res.results.slice(0, limit);
         setItems(next);
         if (next.length > 0) writeCache(key, next);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setSettledKey(key); });
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, limit]);
+  }, [key, limit, nearViewport]);
 
-  if (items.length === 0) return null;
+  if (items.length === 0) {
+    return (
+      <div ref={anchor} data-discover-row={title}>
+        {settledKey !== key && (
+          <Row title={title}>
+            {Array.from({ length: 6 }, (_, index) => (
+              <div key={index} aria-hidden="true" className="h-[232px] w-[144px] shrink-0 rounded-xl bg-white/[0.03]" />
+            ))}
+          </Row>
+        )}
+      </div>
+    );
+  }
 
   return (
-    <Row title={title}>
-      {items.map((a) => (
-        <Card key={a.id} anime={a} size="sm" />
-      ))}
-    </Row>
+    <div ref={anchor} data-discover-row={title}>
+      <Row title={title}>
+        {items.map((a) => (
+          <Card key={a.id} anime={a} size="sm" />
+        ))}
+      </Row>
+    </div>
   );
 }
