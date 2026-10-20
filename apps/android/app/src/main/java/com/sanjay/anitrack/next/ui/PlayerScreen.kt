@@ -64,6 +64,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 private val Accent: Color get() = AniColors.Accent
+private const val SERVERS_UNAVAILABLE = "Could not load this episode's servers. Reconnect or retry manually."
+
 @OptIn(UnstableApi::class)
 @Composable
 fun PlayerScreen(
@@ -284,6 +286,29 @@ fun PlayerScreen(
             .build()
     }
 
+    // Servers that failed on this episode, so the automatic hand-over never loops.
+    var failedVariantIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    LaunchedEffect(index, provider) { failedVariantIds = emptySet() }
+
+    /**
+     * Like desktop: a server that fails hands over to the next one in the SAME language
+     * (Sub never becomes Dub). Not after a 429: that source is limiting requests.
+     */
+    fun nextServerAfterFailure(httpCode: Int?): Boolean {
+        if (httpCode == 429) return false
+        val current = selectedVariantId ?: com.sanjay.anitrack.next.data.PlayerHolder.lastResolved?.variantId ?: return false
+        val failed = failedVariantIds + current
+        val next = com.sanjay.anitrack.next.data.providers.nextSameLanguageVariant(streamVariants, current, failed) ?: return false
+        android.util.Log.i("AniTrackNext", "server $current failed; trying ${next.label}")
+        failedVariantIds = failed
+        pendingSwitchPositionMs = player.currentPosition.coerceAtLeast(0L)
+        pendingSwitchPlayWhenReady = true
+        error = null
+        selectedVariantId = next.id
+        retry++
+        return true
+    }
+
     DisposableEffect(player, useWeb) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
@@ -315,6 +340,7 @@ fun PlayerScreen(
                     httpCode?.let { code ->
                         Providers.registry.get(PlaySession.provider).access?.playbackRejected(code)
                     }
+                    if (nextServerAfterFailure(httpCode)) return
                     error = if (httpCode != null) "Stream request failed (HTTP $httpCode). No automatic retry."
                         else "Native playback stopped (${e.errorCodeName}). Choose another server or retry manually."
                     return
@@ -323,6 +349,7 @@ fun PlayerScreen(
                 // the same URL; retrying in place only kept the screen black for
                 // half a minute. Say so at once and offer Retry / another provider.
                 if (httpCode != null && httpCode in REFUSED_HTTP_CODES) {
+                    if (nextServerAfterFailure(httpCode)) return
                     val name = providerDescriptors.firstOrNull { it.id == PlaySession.provider }?.name ?: "This server"
                     error = "$name refused this stream (HTTP $httpCode). Retry, or try another provider."
                     return
@@ -340,6 +367,7 @@ fun PlayerScreen(
                     if (pos > 0) player.seekTo(pos)
                     player.playWhenReady = true
                 } else {
+                    if (nextServerAfterFailure(httpCode)) return
                     error = if (httpCode != null)
                         "Stream request failed (HTTP $httpCode) — the CDN rejected playback."
                     else e.errorCodeName.removePrefix("ERROR_CODE_").replace('_', ' ').lowercase()
@@ -371,7 +399,7 @@ fun PlayerScreen(
         catch (_: Exception) {
             if (generation == variantGeneration.get()) {
                 variantsLoading = false
-                switchError = "Could not load this episode's servers. Reconnect or retry manually."
+                switchError = SERVERS_UNAVAILABLE
             }
             return@LaunchedEffect
         }
@@ -379,6 +407,8 @@ fun PlayerScreen(
             requestProvider == PlaySession.provider &&
             requestIndex == PlaySession.index
         ) {
+            // A list that loads replaces an earlier episode's "could not load" note.
+            if (switchError == SERVERS_UNAVAILABLE) switchError = null
             streamVariants = variants
             if (selectedVariantId != null && variants.none { it.id == selectedVariantId }) {
                 // Retain explicit identity: clearing it would silently resolve

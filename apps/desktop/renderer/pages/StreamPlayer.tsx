@@ -54,6 +54,7 @@ import {
 import { createCapacitorHlsLoader } from "../lib/capacitor-hls-loader";
 import {
   preferredStreamLinkIndex,
+  matchProviderSession,
   providerClient,
   providerName,
   providerVariantPreference,
@@ -437,7 +438,7 @@ export default function StreamPlayer({
       }
     } else {
       // Verify the stored session against freshly matched provider sources.
-      const actualSource = availableSources.find((source) => sourceSession(source) === animeSession);
+      const actualSource = matchProviderSession(availableSources, animeSession, providerId);
       if (actualSource) {
         const actualProvider = sourceProviderId(actualSource);
         if (actualProvider !== providerId) {
@@ -940,7 +941,24 @@ export default function StreamPlayer({
               try { track.track.mode = subtitlesEnabled ? "showing" : "hidden"; } catch (e) {}
             });
         } else {
-          track.src = sub.file;
+          // Fetch the captions and give the track a blob, as shonen.to's own player does:
+          // its proxy refuses any request with an Origin header, which a <track> sends
+          // from this page and fetch() does not. Anything else falls back to the URL.
+          fetch(sub.file, { credentials: "omit" })
+            .then(async (response) => {
+              const text = response.ok ? await response.text() : "";
+              if (!text.trimStart().startsWith("WEBVTT") || text.length > 4 * 1024 * 1024) throw new Error(`HTTP ${response.status}`);
+              return text;
+            })
+            // The track keeps the mode the player chose (one English track showing).
+            .then((text) => {
+              if (!isCurrent() || track.parentNode !== video) return;
+              track.src = URL.createObjectURL(new Blob([text], { type: "text/vtt" }));
+            })
+            .catch(() => {
+              if (!isCurrent() || track.parentNode !== video) return;
+              track.src = sub.file;
+            });
         }
 
         if (sub.default) track.default = true;

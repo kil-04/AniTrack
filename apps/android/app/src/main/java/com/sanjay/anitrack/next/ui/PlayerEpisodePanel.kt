@@ -2,6 +2,8 @@ package com.sanjay.anitrack.next.ui
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -50,6 +52,7 @@ internal fun PlayerEpisodePanel(
     val rangeCount = ((count + EPISODE_RANGE_SIZE - 1) / EPISODE_RANGE_SIZE).coerceAtLeast(1)
     var range by remember(current, count) { mutableStateOf(current / EPISODE_RANGE_SIZE) }
     var find by remember { mutableStateOf("") }
+    var serverMenuOpen by remember(provider, current, selectedVariantId, variantsLoading) { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
     LaunchedEffect(current, range) {
@@ -61,7 +64,7 @@ internal fun PlayerEpisodePanel(
 
     Column(modifier.background(Color(0xFF0E0E12))) {
         Text(
-            "PROVIDERS",
+            "SOURCES",
             style = MaterialTheme.typography.labelSmall,
             color = Color.White.copy(alpha = 0.45f),
             modifier = Modifier.padding(start = 14.dp, top = 10.dp, bottom = 6.dp),
@@ -95,29 +98,57 @@ internal fun PlayerEpisodePanel(
         if (streamVariants.isNotEmpty() || variantsLoading) {
             Spacer(Modifier.height(8.dp))
             Text(
-                "${providers.firstOrNull { it.id == provider }?.name?.uppercase() ?: "STREAM"} SERVERS",
+                "SERVER",
                 style = MaterialTheme.typography.labelSmall,
                 color = Color.White.copy(alpha = 0.45f),
                 modifier = Modifier.padding(start = 14.dp, bottom = 6.dp),
             )
-            FlowRow(
-                Modifier.padding(horizontal = 14.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                streamVariants.forEach { variant ->
-                    FilterChip(
-                        selected = selectedVariantId == variant.id,
-                        enabled = !switching,
-                        onClick = { onStreamVariant(variant.id) },
-                        label = { Text(variant.label) },
-                    )
-                }
+            Box(Modifier.fillMaxWidth().padding(horizontal = 14.dp)) {
                 if (variantsLoading) {
                     CircularProgressIndicator(
                         Modifier.size(16.dp),
                         strokeWidth = 2.dp,
                         color = EpisodePanelAccent,
+                    )
+                } else if (streamVariants.size > 1) {
+                    val selected = streamVariants.firstOrNull { it.id == selectedVariantId }
+                    OutlinedButton(
+                        onClick = { serverMenuOpen = true },
+                        enabled = !switching,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                    ) {
+                        Text(
+                            selected?.label ?: "Choose a server",
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Icon(Icons.Rounded.ExpandMore, contentDescription = "Choose server")
+                    }
+                    DropdownMenu(
+                        expanded = serverMenuOpen && !switching,
+                        onDismissRequest = { serverMenuOpen = false },
+                        modifier = Modifier.widthIn(min = 200.dp, max = 320.dp).heightIn(max = 360.dp),
+                    ) {
+                        streamVariants.forEach { variant ->
+                            DropdownMenuItem(
+                                text = { Text(variant.label) },
+                                trailingIcon = if (selectedVariantId == variant.id) ({
+                                    Icon(Icons.Rounded.Check, contentDescription = "Selected")
+                                }) else null,
+                                onClick = {
+                                    serverMenuOpen = false
+                                    onStreamVariant(variant.id)
+                                },
+                            )
+                        }
+                    }
+                } else {
+                    Text(
+                        streamVariants.first().label,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White.copy(alpha = 0.7f),
                     )
                 }
             }

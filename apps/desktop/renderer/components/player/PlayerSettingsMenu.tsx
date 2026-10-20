@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { Check, ChevronRight, ChevronLeft, Gauge, RectangleHorizontal, Captions } from "lucide-react";
+import SelectField from "../SelectField";
 
 // Shared settings popup used by both the desktop bar (YouTubeControls) and the
 // mobile/tablet overlay (MobileControls). Renders the styled box + the
@@ -49,7 +50,7 @@ export function SettingsMenuContent(props: SettingsMenuProps) {
 
   const [view, setView] = useState<MenuView>("main");
 
-  const hasLinkChoice = links.length > 1 && streamVariants !== "subtitle-type";
+  const hasLinkChoice = links.length > 1 && streamVariants !== "subtitle-type" && streamVariants !== "server";
   const hasHls = hlsLevels.length > 1;
   const speedLabel = playbackRate === 1 ? "Normal" : `${playbackRate}×`;
   const qualityLabel = hasHls
@@ -68,6 +69,21 @@ export function SettingsMenuContent(props: SettingsMenuProps) {
       {view === "main" && (
         <>
           <MenuRow label="Playback speed" value={speedLabel} chevron onClick={() => setView("speed")} icon={<Gauge size={16} />} />
+          {streamVariants === "server" && links.length > 1 && (
+            <label className="block px-3 py-2">
+              <span className="mb-2 block">Server</span>
+              <SelectField
+                value={links[selectedLink] ? String(selectedLink) : ""}
+                onChange={(value) => { if (Number(value) !== selectedLink) onChangeQuality(Number(value)); }}
+                title="Server"
+              >
+                {!links[selectedLink] && <option value="" disabled>Choose a server</option>}
+                {links.map((link, index) => (
+                  <option key={link.id ?? index} value={index}>{link.quality}</option>
+                ))}
+              </SelectField>
+            </label>
+          )}
           {(hasHls || hasLinkChoice) && (
             <MenuRow label="Quality" value={qualityLabel} chevron onClick={() => setView("quality")} icon={<RectangleHorizontal size={16} />} />
           )}

@@ -1,6 +1,7 @@
 import type { FormEventHandler } from "react";
 import { ChevronDown, Loader2 } from "lucide-react";
 import { streamVariant } from "../../lib/provider-api";
+import SelectField from "../SelectField";
 
 export interface EpisodeRange {
   start: number;
@@ -62,7 +63,7 @@ export function StreamEpisodePanel({
     <div className={`flex flex-col ${mobile ? "flex-1 overflow-hidden" : "w-[260px] flex-shrink-0 border-r border-white/10"} bg-bg`}>
       {sources.length > 0 && (
         <div className="border-b border-white/10 p-2">
-          <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-white/50">Servers</div>
+          <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-white/50">Sources</div>
           <div className="flex flex-wrap gap-2">
             {sources.map((source) => {
               const id = source.providerId || "animepahe";
@@ -82,6 +83,27 @@ export function StreamEpisodePanel({
               );
             })}
           </div>
+        </div>
+      )}
+      {streamVariants === "server" && links.length > 0 && (
+        <div className="border-b border-white/10 p-2">
+          {links.length > 1 ? (
+            <label className="block">
+              <span className="mb-2 block text-[10px] font-semibold uppercase tracking-wider text-white/50">Server</span>
+              <SelectField
+                value={links[selectedLink] ? String(selectedLink) : ""}
+                onChange={(value) => { if (Number(value) !== selectedLink) onChangeVariant(Number(value)); }}
+                title={`${providerLabel(providerId)} server`}
+              >
+                {!links[selectedLink] && <option value="" disabled>Choose a server</option>}
+                {links.map((link, index) => (
+                  <option key={link.id ?? index} value={index}>{link.quality}</option>
+                ))}
+              </SelectField>
+            </label>
+          ) : (
+            <div className="text-xs text-white/70">Server: {links[0].quality}</div>
+          )}
         </div>
       )}
       {streamVariants === "subtitle-type" && links.length > 1 && (

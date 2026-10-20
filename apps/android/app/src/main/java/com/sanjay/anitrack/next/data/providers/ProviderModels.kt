@@ -34,7 +34,28 @@ data class ProviderSubtitle(
 data class SkipRange(val startSeconds: Long?, val endSeconds: Long?)
 
 /** A provider-native stream choice for one episode (for example an MKissa server alias). */
-data class ProviderStreamVariant(val id: String, val label: String)
+data class ProviderStreamVariant(
+    val id: String,
+    val label: String,
+    /** "sub" or "dub" when known: a failed server hands over only to one in the same language. */
+    val language: String? = null,
+)
+
+/**
+ * The server to try after [current] fails: the next one in list order, wrapping, in the
+ * same language and not already [failed]. Null when the language is unknown or none is
+ * left, so Sub never turns into Dub (as desktop's nextAvailableLinkIndex keeps the audio).
+ */
+fun nextSameLanguageVariant(
+    variants: List<ProviderStreamVariant>,
+    current: String,
+    failed: Set<String>,
+): ProviderStreamVariant? {
+    val start = variants.indexOfFirst { it.id == current }
+    val language = variants.getOrNull(start)?.language ?: return null
+    return (1 until variants.size).map { variants[(start + it) % variants.size] }
+        .firstOrNull { it.language == language && it.id != current && it.id !in failed }
+}
 
 data class ResolvedMedia(
     val url: String,
