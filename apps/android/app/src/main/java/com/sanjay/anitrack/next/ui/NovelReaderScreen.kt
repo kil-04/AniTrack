@@ -71,7 +71,7 @@ private class NovelPrefs(context: Context) {
 }
 
 @Composable
-fun NovelReaderScreen(onBack: () -> Unit) {
+fun NovelReaderScreen(onBack: () -> Unit, onOpenTitle: (com.sanjay.anitrack.next.data.novel.NovelSourceId, String) -> Unit) {
     val session = NovelReading.current.value
     if (session == null) {
         LaunchedEffect(Unit) { onBack() }
@@ -117,6 +117,18 @@ fun NovelReaderScreen(onBack: () -> Unit) {
             if (atEnd) t.paragraphs.size - 1 else (list.firstVisibleItemIndex - 1).coerceAtLeast(0)
         }.distinctUntilChanged().debounce(700).collectLatest { NovelReading.save(session, it, t.paragraphs.size) }
     }
+    /** The novel's title page (where another source can be picked), keeping the place read. */
+    val openTitle: () -> Unit = {
+        scope.launch {
+            text?.let { t ->
+                val info = list.layoutInfo
+                val atEnd = info.visibleItemsInfo.lastOrNull()?.index == info.totalItemsCount - 1
+                val place = if (atEnd) t.paragraphs.size - 1 else (list.firstVisibleItemIndex - 1).coerceAtLeast(0)
+                runCatching { NovelReading.save(session, place, t.paragraphs.size) }
+            }
+            onOpenTitle(session.source, session.titleId)
+        }
+    }
     // Scrolling down hides the bars; scrolling back up shows them.
     LaunchedEffect(list) {
         var last = 0
@@ -154,7 +166,10 @@ fun NovelReaderScreen(onBack: () -> Unit) {
                     Column(Modifier.widthIn(max = prefs.width.dp).fillMaxWidth().border(1.dp, theme.rule, RoundedCornerShape(16.dp)).padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(error!!, color = theme.muted, textAlign = TextAlign.Center)
                         Spacer(Modifier.height(12.dp))
-                        PillButton("Retry", { attempt++ }, icon = Icons.Rounded.Refresh, style = PillStyle.Primary)
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            PillButton("Retry", { attempt++ }, icon = Icons.Rounded.Refresh, style = PillStyle.Primary)
+                            PillButton("Open the title page", openTitle, style = PillStyle.Tonal)
+                        }
                     }
                 }
                 t == null -> items(8) {
@@ -201,7 +216,7 @@ fun NovelReaderScreen(onBack: () -> Unit) {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back", tint = theme.text) }
-                Column(Modifier.weight(1f)) {
+                Column(Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).clickable(onClickLabel = "Open the title page", onClick = openTitle).padding(vertical = 2.dp)) {
                     Text(session.detail.card.title, color = theme.text, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text("${chapter.label} · ${session.index + 1} of ${session.chapters.size}", color = theme.muted, style = MaterialTheme.typography.labelSmall, maxLines = 1)
                 }

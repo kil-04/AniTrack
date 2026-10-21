@@ -201,6 +201,13 @@ export default function NovelReader() {
     else if (sourceId) navigate(novelTitlePath(sourceId, titleId));
   }, [navigate, save, firstVisible, sourceId, titleId]);
 
+  /** The novel's title page (where another source can be picked), keeping the place read. */
+  const openTitle = useCallback(() => {
+    if (!sourceId) return;
+    save(firstVisible());
+    navigate(novelTitlePath(sourceId, titleId));
+  }, [navigate, save, firstVisible, sourceId, titleId]);
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) return;
@@ -238,7 +245,7 @@ export default function NovelReader() {
           <ArrowLeft size={18} />
         </button>
         <button
-          onClick={() => navigate(novelTitlePath(sourceId, titleId))}
+          onClick={openTitle}
           className="titlebar-no-drag min-w-0 flex-1 text-left"
           title="Open the title page"
         >
@@ -292,7 +299,10 @@ export default function NovelReader() {
           {text.state === "failed" && (
             <div className="rounded-2xl border p-6 text-center" style={{ borderColor: theme.rule }}>
               <p className="mb-4 text-sm" style={{ color: theme.muted }}>{text.error}</p>
-              <button onClick={() => setAttempt((n) => n + 1)} className="btn btn-primary btn-sm"><RefreshCw size={14} /> Retry</button>
+              <div className="flex justify-center gap-2">
+                <button onClick={() => setAttempt((n) => n + 1)} className="btn btn-primary btn-sm"><RefreshCw size={14} /> Retry</button>
+                <button onClick={openTitle} className="btn btn-secondary btn-sm">Open the title page</button>
+              </div>
             </div>
           )}
           {text.state === "ready" && (

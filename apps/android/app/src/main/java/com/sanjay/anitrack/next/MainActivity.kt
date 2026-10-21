@@ -380,7 +380,13 @@ fun AppShell() {
                         }
                     }
                     composable("novel-reader") {
-                        com.sanjay.anitrack.next.ui.NovelReaderScreen(onBack = { nav.popBackStack() })
+                        com.sanjay.anitrack.next.ui.NovelReaderScreen(onBack = { nav.popBackStack() }, onOpenTitle = { source, id ->
+                            // Opened from that title page: go back to it rather than stacking a second copy.
+                            val previous = nav.previousBackStackEntry
+                            if (previous?.destination?.route == "novel/{source}/{id}" &&
+                                previous.arguments?.getString("source") == source.key && previous.arguments?.getString("id") == id
+                            ) nav.popBackStack() else openNovel(source, id)
+                        })
                     }
                     composable(
                         "novel-search?q={q}&genre={genre}",
