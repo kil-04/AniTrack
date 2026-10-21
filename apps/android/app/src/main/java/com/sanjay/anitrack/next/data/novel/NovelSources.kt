@@ -49,7 +49,8 @@ object NovelSources {
             override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<Long, T>>) = size > max
         }
         @Synchronized fun get(key: String): T? = map[key]?.takeIf { System.currentTimeMillis() - it.first < ttlMs }?.second
-        @Synchronized fun set(key: String, value: T) { map[key] = System.currentTimeMillis() to value }
+        /** [life] shortens this entry's life (a stand-in answer). */
+        @Synchronized fun set(key: String, value: T, life: Long = ttlMs) { map[key] = System.currentTimeMillis() - (ttlMs - life) to value }
     }
 
     private val homeCache = Ttl<NovelHome>(30 * 60_000L, 1)
@@ -63,8 +64,41 @@ object NovelSources {
         return try { read(json) } catch (e: NovelParseException) { throw MangaSourceException(e.message ?: "$label sent a response AniTrack couldn't read.") }
     }
 
+    /**
+     * Home: NovelBuddy's feed; while NovelBuddy is down, NovelArchive's lists; while both
+     * are, the last Home saved on disk. Each stand-in carries a notice saying so
+     * (mirrors novelHome in the desktop's services/novel/sources.ts).
+     */
     suspend fun home(): NovelHome {
         homeCache.get("home")?.let { return it }
+        try {
+            val value = buddyHome()
+            homeCache.set("home", value)
+            writeHome(value)
+            return value
+        } catch (buddyError: Exception) {
+            if (buddyError is kotlinx.coroutines.CancellationException) throw buddyError
+            runCatching { archiveHome() }.getOrNull()?.let {
+                // Short-lived, so NovelBuddy's feed comes back soon after NovelBuddy does.
+                homeCache.set("home", it, 5 * 60_000L)
+                return it
+            }
+            savedHome()?.let { return it.copy(notice = Novels.HOME_SAVED_NOTICE) }
+            throw buddyError
+        }
+    }
+
+    private suspend fun archiveHome(): NovelHome? {
+        val archive = http(NovelSourceId.NovelArchive)
+        suspend fun list(l: Pair<NovelFilters, Int>) =
+            parse("NovelArchive", archive.get(NovelArchiveParser.searchUrl(l.first, l.second), JSON_TYPE, LIST_BYTES), NovelArchiveParser::search).items
+        // The first list proves NovelArchive answers; the rest may come back empty.
+        val popular = list(NovelArchiveParser.HOME_POPULAR)
+        suspend fun maybe(l: Pair<NovelFilters, Int>) = runCatching { list(l) }.getOrDefault(emptyList())
+        return NovelArchiveParser.home(popular, maybe(NovelArchiveParser.HOME_LATEST), maybe(NovelArchiveParser.HOME_COMPLETED), maybe(NovelArchiveParser.HOME_FAVOURITES))
+    }
+
+    private suspend fun buddyHome(): NovelHome {
         val buddy = http(NovelSourceId.NovelBuddy)
         val home = parse("NovelBuddy", buddy.get(NovelBuddyParser.homeUrl(), JSON_TYPE, LIST_BYTES), NovelBuddyParser::home)
         // The feed's "latest" is mostly machine translations: ask for recent updates, finished
@@ -75,9 +109,7 @@ object NovelSources {
         val latest = human(NovelFilters(sort = NovelSort.Latest), 60)
         val completed = human(NovelFilters(status = "completed"), 30)
         val favourites = human(NovelFilters(sort = NovelSort.Favourites), 30)
-        val value = home.copy(latest = latest.ifEmpty { home.latest }, completed = completed, favourites = favourites)
-        homeCache.set("home", value)
-        return value
+        return home.copy(latest = latest.ifEmpty { home.latest }, completed = completed, favourites = favourites)
     }
 
     suspend fun search(source: NovelSourceId, filters: NovelFilters): NovelPage {
@@ -266,6 +298,39 @@ object NovelSources {
             url = o.optString("url"),
         )
     }
+
+    private fun homeFile() = cacheDir?.let { File(it, "home.json") }
+
+    private suspend fun writeHome(home: NovelHome) {
+        fun cards(list: List<NovelCard>) = JSONArray().apply { list.forEach { put(cardJson(it)) } }
+        write(homeFile(), JSONObject()
+            .put("trending", cards(home.trending)).put("popular", cards(home.popular)).put("latest", cards(home.latest))
+            .put("completed", cards(home.completed)).put("favourites", cards(home.favourites)).toString())
+    }
+
+    /** The last NovelBuddy Home saved (kept a week), for when both sources are down. */
+    internal suspend fun savedHome(): NovelHome? = withContext(Dispatchers.IO) {
+        val target = homeFile()?.takeIf { it.exists() && System.currentTimeMillis() - it.lastModified() < 7 * 24 * 3_600_000L } ?: return@withContext null
+        runCatching { homeFrom(JSONObject(target.readText())) }.getOrNull()
+    }
+
+    internal fun homeFrom(o: JSONObject): NovelHome? {
+        fun cards(key: String) = o.optJSONArray(key)?.let { a ->
+            (0 until a.length()).mapNotNull { i ->
+                val c = a.optJSONObject(i) ?: return@mapNotNull null
+                val source = NovelSourceId.of(c.optString("source")) ?: return@mapNotNull null
+                val id = c.optString("id").takeIf { Novels.isTitleId(source, it) } ?: return@mapNotNull null
+                runCatching { detailFrom(source, id, c).let { it.card.copy(synopsis = it.synopsis) } }.getOrNull()
+            }
+        }.orEmpty()
+        val home = NovelHome(cards("trending"), cards("popular"), cards("latest"), cards("completed"), cards("favourites"))
+        return home.takeIf { it.trending.isNotEmpty() || it.latest.isNotEmpty() }
+    }
+
+    private fun cardJson(c: NovelCard): JSONObject = JSONObject()
+        .put("source", c.source.key).put("id", c.id).put("title", c.title).put("cover", c.cover ?: JSONObject.NULL)
+        .put("status", c.status ?: JSONObject.NULL).put("chapters", c.chapters ?: JSONObject.NULL).put("rating", c.rating ?: JSONObject.NULL)
+        .put("genres", JSONArray(c.genres)).put("mtl", c.mtl).put("synopsis", c.synopsis ?: JSONObject.NULL)
 
     internal fun chaptersJson(list: List<NovelChapter>): JSONArray =
         JSONArray().apply { list.forEach { put(JSONArray().put(it.id).put(it.label).put(it.updatedAt ?: 0L)) } }

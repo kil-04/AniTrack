@@ -176,4 +176,45 @@ class NovelTest {
         val ranked = Novels.rankMatches("Overgeared", listOf("템빨"), listOf(card("a", "Overgeared: Sage"), card("b", "MTL-Overgeared", true), card("c", "템빨"), card("d", "Overgeared (Web Novel)")))
         assertEquals(listOf("c", "d", "a"), ranked.map { it.id })
     }
+
+    // Same cases as tests/novel.test.mjs ("NovelBuddy down: …", "a search falls back …").
+    private fun na(id: String, mtl: Boolean = false) = NovelCard(NovelSourceId.NovelArchive, id, "Novel $id", null, null, null, null, emptyList(), mtl)
+
+    @Test fun buddyDownHomeIsBuiltFromArchiveListsWithANotice() {
+        val popular = (0 until 15).map { na("p$it", it == 1) }
+        val home = NovelArchiveParser.home(popular, listOf(na("l1"), na("l2", true)), listOf(na("c1")), emptyList())!!
+        assertEquals(listOf("p0", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10", "p11", "p12"), home.trending.map { it.id })
+        assertEquals(listOf("p13", "p14"), home.popular.map { it.id })
+        assertEquals(listOf("l1"), home.latest.map { it.id })
+        assertEquals(listOf("c1"), home.completed.map { it.id })
+        assertEquals(Novels.HOME_FALLBACK_NOTICE, home.notice)
+        assertNull(NovelArchiveParser.home(listOf(na("x", true)), emptyList(), emptyList(), emptyList()))
+    }
+
+    @Test fun buddyDownArchiveStandInListsAskForTheSameRows() {
+        fun url(l: Pair<NovelFilters, Int>) = NovelArchiveParser.searchUrl(l.first, l.second)
+        assertEquals("https://novelarchive.cc/api/novels?sort=popular&ai_generated=exclude&page=1&limit=40", url(NovelArchiveParser.HOME_POPULAR))
+        assertEquals("https://novelarchive.cc/api/novels?sort=recent&ai_generated=exclude&page=1&limit=40", url(NovelArchiveParser.HOME_LATEST))
+        assertEquals("https://novelarchive.cc/api/novels?status=completed&sort=popular&ai_generated=exclude&page=1&limit=30", url(NovelArchiveParser.HOME_COMPLETED))
+        assertEquals("https://novelarchive.cc/api/novels?sort=rating&ai_generated=exclude&page=1&limit=30", url(NovelArchiveParser.HOME_FAVOURITES))
+    }
+
+    @Test fun aSearchFallsBackToTheOtherSourceAndSaysSo() {
+        assertEquals(NovelSourceId.NovelArchive, Novels.otherSource(NovelSourceId.NovelBuddy))
+        assertEquals(NovelSourceId.NovelBuddy, Novels.otherSource(NovelSourceId.NovelArchive))
+        assertEquals("NovelBuddy isn't responding right now, so these results are from NovelArchive.",
+            Novels.fallbackNotice(NovelSourceId.NovelBuddy, NovelSourceId.NovelArchive))
+    }
+
+    @Test fun theSavedHomeReadsBackAndDropsBadRows() {
+        val card = JSONObject().put("source", "novelbuddy").put("id", "AbC123xY").put("title", "Example Saga").put("cover", JSONObject.NULL)
+            .put("status", "ongoing").put("chapters", 3).put("rating", 4.5).put("genres", JSONArray().put("Fantasy")).put("mtl", false).put("synopsis", "A blurb.")
+        val bad = JSONObject().put("source", "novelbuddy").put("id", "../x").put("title", "Bad")
+        val home = NovelSources.homeFrom(JSONObject().put("trending", JSONArray().put(card).put(bad)).put("latest", JSONArray()))!!
+        assertEquals(listOf("AbC123xY"), home.trending.map { it.id })
+        assertEquals("A blurb.", home.trending[0].synopsis)
+        assertEquals(4.5, home.trending[0].rating!!, 0.0)
+        assertNull(home.notice)
+        assertNull(NovelSources.homeFrom(JSONObject()))
+    }
 }

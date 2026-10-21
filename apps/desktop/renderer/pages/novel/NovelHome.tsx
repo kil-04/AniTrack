@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { BookOpen, BookText, ChevronLeft, ChevronRight, Flame, Info, Shapes, Star, X } from "lucide-react";
+import { BookOpen, BookText, ChevronLeft, ChevronRight, CloudOff, Flame, Info, RefreshCw, Shapes, Star, X } from "lucide-react";
 import SectionHeader from "../../components/SectionHeader";
 import {
   isChapterFinished,
+  NOVEL_HOME_NOTICES,
   type NovelCard as Card,
   type NovelHome as Feed,
   type NovelReadingRow,
@@ -22,28 +23,38 @@ const GENRES = ["Fantasy", "Action", "Romance", "Martial Arts", "Xianxia", "Sci-
 function savedFeed(): Feed | null {
   try {
     const saved = JSON.parse(localStorage.getItem(FEED_KEY) ?? "null") as { at: number; feed: Feed } | null;
-    return saved && Date.now() - saved.at < FEED_MAX_AGE_MS && Array.isArray(saved.feed?.trending) ? saved.feed : null;
+    // A stand-in feed (a source was down) isn't kept: its notice would outlive the outage.
+    return saved && Date.now() - saved.at < FEED_MAX_AGE_MS && Array.isArray(saved.feed?.trending) && !saved.feed.notice ? saved.feed : null;
   } catch {
     return null;
   }
 }
 
 function saveFeed(feed: Feed) {
+  if (feed.notice) return;
   try { localStorage.setItem(FEED_KEY, JSON.stringify({ at: Date.now(), feed })); } catch { /* storage full or unavailable */ }
 }
 
 export default function NovelHome() {
   const [feed, setFeed] = useState<Feed | null>(savedFeed);
   const [failed, setFailed] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   const [reading, setReading] = useState<NovelReadingRow[]>([]);
   const [updates, setUpdates] = useState<NovelUpdate[]>([]);
   const navigate = useNavigate();
 
   useEffect(() => {
     let alive = true;
+    setFailed(null);
     unwrap(novelApi().home())
       .then((value) => { saveFeed(value); if (alive) setFeed(value); })
+      // The feed already on screen stays, marked as saved earlier.
       .catch((error: Error) => { if (alive) setFailed(error.message); });
+    return () => { alive = false; };
+  }, [attempt]);
+
+  useEffect(() => {
+    let alive = true;
     const loadReading = () => {
       novelApi().continueReading().then((rows) => { if (alive) setReading(rows); }).catch(() => {});
       // New chapters are checked in the background (slow lane, cached for a while).
@@ -73,6 +84,7 @@ export default function NovelHome() {
 
   const newFor = (row: NovelReadingRow) => updates.find((u) => u.sourceId === row.sourceId && u.titleId === row.titleId)?.newCount ?? 0;
   const heroes = (feed?.trending ?? []).slice(0, HERO_COUNT);
+  const notice = feed?.notice ?? (failed && feed ? NOVEL_HOME_NOTICES.saved : null);
 
   return (
     <div className="pb-16">
@@ -80,7 +92,20 @@ export default function NovelHome() {
         <HeroCarousel items={heroes} reading={reading} />
       ) : (
         <div className={`mx-8 mb-12 mt-6 h-[min(52vh,500px)] min-h-[380px] rounded-[28px] ${failed ? "panel" : "skeleton"}`}>
-          {failed && <p className="px-10 pt-24 text-sm text-ink-3">{failed} Check your connection, then reopen this page.</p>}
+          {failed && (
+            <div className="px-10 pt-24">
+              <p className="flex items-center gap-2 text-base font-bold text-white"><CloudOff size={18} className="text-amber-300" /> Novel sources unavailable</p>
+              <p className="mt-2 max-w-[640px] text-sm text-ink-3">{failed} NovelBuddy and NovelArchive both failed to answer. Continue Reading and your lists still work.</p>
+              <button onClick={() => setAttempt((n) => n + 1)} className="btn btn-secondary mt-5"><RefreshCw size={16} /> Try again</button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {notice && (
+        <div className="mx-8 -mt-6 mb-10 flex items-center gap-3 rounded-2xl border border-amber-300/20 bg-amber-300/[0.07] px-4 py-3 text-sm text-amber-100">
+          <CloudOff size={17} className="shrink-0 text-amber-300" />
+          <span className="flex-1">{notice}</span>
         </div>
       )}
 

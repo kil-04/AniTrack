@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { BookText, ChevronLeft, ChevronRight, Search, Star, X } from "lucide-react";
 import { novelSourceLabel, type NovelCard as Card } from "../../../../../packages/shared/novel";
-import { novelApi, novelTitlePath, preferredNovelSource } from "../../lib/novel-api";
+import { novelTitlePath, preferredNovelSource, searchNovels } from "../../lib/novel-api";
 
 /** A novel's cover, or a typeset stand-in when the source has none (or it fails to load). */
 export function NovelCover({ cover, title, className = "" }: { cover: string | null; title: string; className?: string }) {
@@ -112,9 +112,9 @@ export function NovelSearchBox() {
     let alive = true;
     const timer = setTimeout(() => {
       setLoading(true);
-      novelApi().search({ sourceId: preferredNovelSource(), query })
-        .then((r) => { if (alive) setResults(r.ok ? r.value.items.filter((c) => !c.mtl).slice(0, 8) : []); })
-        .catch(() => {})
+      searchNovels({ sourceId: preferredNovelSource(), query })
+        .then((r) => { if (alive) setResults(r.page.items.filter((c) => !c.mtl).slice(0, 8)); })
+        .catch(() => { if (alive) setResults([]); })
         .finally(() => { if (alive) setLoading(false); });
     }, 350);
     return () => { alive = false; clearTimeout(timer); };

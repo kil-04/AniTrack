@@ -19,6 +19,7 @@ import type {
   NovelStatus,
 } from "../../../../packages/shared/novel";
 import type { NovelSyncLocal, NovelSyncPlan, NovelSyncRemovals } from "../../../../packages/shared/novel-sync";
+import { novelFallbackNotice, otherNovelSource } from "../../../../packages/shared/novel";
 
 /** The Electron bridge for novels mode (see main/ipc/novel.ts). */
 export interface NovelApi {
@@ -96,6 +97,19 @@ export async function unwrap<T>(result: Promise<NovelResult<T>>): Promise<T> {
   const r = await result;
   if (!r.ok) throw new Error(r.error);
   return r.value;
+}
+
+/**
+ * A search on the chosen source, or on the other one when it doesn't answer (with a
+ * notice saying so). Throws the chosen source's message when neither answers.
+ */
+export async function searchNovels(filters: NovelSearchFilters): Promise<{ page: NovelSearchPage; sourceId: NovelSourceId; notice: string | null }> {
+  const first = await novelApi().search(filters);
+  if (first.ok) return { page: first.value, sourceId: filters.sourceId, notice: null };
+  const other = otherNovelSource(filters.sourceId);
+  const second = await novelApi().search({ ...filters, sourceId: other }).catch(() => null);
+  if (second?.ok) return { page: second.value, sourceId: other, notice: novelFallbackNotice(filters.sourceId, other) };
+  throw new Error(first.error);
 }
 
 // ── Reader preferences (per viewer) ───────────────────────────────────────────

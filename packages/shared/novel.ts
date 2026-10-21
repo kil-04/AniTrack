@@ -129,6 +129,46 @@ export interface NovelHome {
   completed: NovelCard[];
   /** Most bookmarked: the readers' favourites. */
   favourites: NovelCard[];
+  /** Set when this isn't NovelBuddy's live feed (a source is down): why, shown above the rows. */
+  notice?: string | null;
+}
+
+/** The other reading source: where a request goes when its own source is down. */
+export const otherNovelSource = (id: NovelSourceId): NovelSourceId => (id === "novelbuddy" ? "novelarchive" : "novelbuddy");
+
+/** What Home says when it isn't showing NovelBuddy's live feed. */
+export const NOVEL_HOME_NOTICES = {
+  fallback: "NovelBuddy isn't responding right now, so Home shows NovelArchive's lists. Your reading and lists are untouched.",
+  saved: "The novel sources aren't responding right now, so this is the Home saved earlier. Your reading and lists are untouched.",
+} as const;
+
+/** What search says when its source didn't answer and the other one did. */
+export const novelFallbackNotice = (failed: NovelSourceId, used: NovelSourceId) =>
+  `${novelSourceLabel(failed)} isn't responding right now, so these results are from ${novelSourceLabel(used)}.`;
+
+/** NovelArchive listings that stand in for NovelBuddy's Home while it's down (filters and page size). */
+export const NOVELARCHIVE_HOME_LISTS = {
+  popular: { filters: { sort: "popular" }, limit: 40 },
+  latest: { filters: { sort: "latest" }, limit: 40 },
+  completed: { filters: { sort: "popular", status: "completed" }, limit: 30 },
+  favourites: { filters: { sort: "rating" }, limit: 30 },
+} as const satisfies Record<string, { filters: Omit<NovelSearchFilters, "sourceId">; limit: number }>;
+
+const ARCHIVE_TRENDING = 12;
+
+/** Home rows from NovelArchive's listings (machine translations dropped); null when they're all empty. */
+export function novelArchiveHome(lists: Record<keyof typeof NOVELARCHIVE_HOME_LISTS, NovelCard[]>): NovelHome | null {
+  const human = (list: NovelCard[]) => list.filter((c) => !c.mtl);
+  const popular = human(lists.popular);
+  const home: NovelHome = {
+    trending: popular.slice(0, ARCHIVE_TRENDING),
+    popular: popular.slice(ARCHIVE_TRENDING),
+    latest: human(lists.latest),
+    completed: human(lists.completed),
+    favourites: human(lists.favourites),
+    notice: NOVEL_HOME_NOTICES.fallback,
+  };
+  return home.trending.length || home.latest.length || home.completed.length || home.favourites.length ? home : null;
 }
 
 export type NovelSort = "popular" | "favourites" | "rating" | "latest" | "newest";

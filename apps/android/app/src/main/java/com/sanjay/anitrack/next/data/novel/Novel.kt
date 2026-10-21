@@ -67,6 +67,8 @@ data class NovelHome(
     val completed: List<NovelCard>,
     /** Most bookmarked: the readers' favourites. */
     val favourites: List<NovelCard> = emptyList(),
+    /** Set when this isn't NovelBuddy's live feed (a source is down): why, shown above the rows. */
+    val notice: String? = null,
 )
 
 /** NovelArchive only sorts by recent, popular, rating or chapters (anything else falls back to recent). */
@@ -125,6 +127,17 @@ object NovelGenres {
 object Novels {
     const val MAX_CHAPTERS = 20_000
     const val MAX_PARAGRAPHS = 5_000
+
+    /** The other reading source: where a request goes when its own source is down. */
+    fun otherSource(source: NovelSourceId) = if (source == NovelSourceId.NovelBuddy) NovelSourceId.NovelArchive else NovelSourceId.NovelBuddy
+
+    /** What Home says when it isn't showing NovelBuddy's live feed. */
+    const val HOME_FALLBACK_NOTICE = "NovelBuddy isn't responding right now, so Home shows NovelArchive's lists. Your reading and lists are untouched."
+    const val HOME_SAVED_NOTICE = "The novel sources aren't responding right now, so this is the Home saved earlier. Your reading and lists are untouched."
+
+    /** What search says when its source didn't answer and the other one did. */
+    fun fallbackNotice(failed: NovelSourceId, used: NovelSourceId) =
+        "${failed.label} isn't responding right now, so these results are from ${used.label}."
 
     private val NB_ID = Regex("^[A-Za-z0-9]{4,24}$")
     private val NA_ID = Regex("^[a-f0-9]{24}$")
@@ -537,6 +550,27 @@ object NovelArchiveParser {
         p += "page=${f.page.coerceIn(1, 500)}"
         p += "limit=$limit"
         return "$ORIGIN/api/novels?${p.joinToString("&")}"
+    }
+
+    /** Listings that stand in for NovelBuddy's Home while it's down (filters and page size). */
+    val HOME_POPULAR = NovelFilters(sort = NovelSort.Popular) to 40
+    val HOME_LATEST = NovelFilters(sort = NovelSort.Latest) to 40
+    val HOME_COMPLETED = NovelFilters(sort = NovelSort.Popular, status = "completed") to 30
+    val HOME_FAVOURITES = NovelFilters(sort = NovelSort.Rating) to 30
+    private const val HOME_TRENDING = 12
+
+    /** Home rows from those listings (machine translations dropped); null when they're all empty. */
+    fun home(popular: List<NovelCard>, latest: List<NovelCard>, completed: List<NovelCard>, favourites: List<NovelCard>): NovelHome? {
+        val ranked = popular.filter { !it.mtl }
+        val home = NovelHome(
+            trending = ranked.take(HOME_TRENDING),
+            popular = ranked.drop(HOME_TRENDING),
+            latest = latest.filter { !it.mtl },
+            completed = completed.filter { !it.mtl },
+            favourites = favourites.filter { !it.mtl },
+            notice = Novels.HOME_FALLBACK_NOTICE,
+        )
+        return home.takeIf { it.trending.isNotEmpty() || it.latest.isNotEmpty() || it.completed.isNotEmpty() || it.favourites.isNotEmpty() }
     }
 
     fun titleUrl(id: String) = "$ORIGIN/api/novels/${enc(id)}"

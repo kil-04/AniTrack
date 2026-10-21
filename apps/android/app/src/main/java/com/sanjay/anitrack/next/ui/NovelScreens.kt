@@ -109,6 +109,7 @@ fun NovelCardView(novel: NovelCard, onOpen: OpenNovel, width: Int? = POSTER_WIDT
 fun NovelHomeScreen(onOpen: OpenNovel, onRead: () -> Unit, onBrowseGenre: (String) -> Unit, toggle: @Composable (Modifier) -> Unit) {
     var home by remember { mutableStateOf<NovelHome?>(null) }
     var failed by remember { mutableStateOf<String?>(null) }
+    var attempt by remember { mutableIntStateOf(0) }
     var reading by remember { mutableStateOf<List<NovelStore.ReadingRow>>(emptyList()) }
     var updates by remember { mutableStateOf<List<NovelSources.Update>>(emptyList()) }
     val scope = rememberCoroutineScope()
@@ -121,9 +122,13 @@ fun NovelHomeScreen(onOpen: OpenNovel, onRead: () -> Unit, onBrowseGenre: (Strin
         // New chapters are checked on the slow lane and cached for a while.
         updates = runCatching { NovelSources.updates() }.getOrDefault(emptyList())
     }
-    LaunchedEffect(Unit) {
+    LaunchedEffect(attempt) {
+        failed = null
+        // The Home saved last time paints at once (and stays, marked, if the sources are down).
+        if (home == null) NovelSources.savedHome()?.let { home = it }
         runCatching { NovelSources.home() }.onSuccess { home = it }.onFailure { failed = it.novelMessage() }
     }
+    val notice = home?.notice ?: if (failed != null && home != null) Novels.HOME_SAVED_NOTICE else null
     val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 820
     /** Straight back into a chapter, from the saved title page and list. */
     val resume: (NovelStore.ReadingRow) -> Unit = { row ->
@@ -146,6 +151,9 @@ fun NovelHomeScreen(onOpen: OpenNovel, onRead: () -> Unit, onBrowseGenre: (Strin
                 else Spacer(Modifier.height(110.dp))
                 toggle(Modifier.align(Alignment.TopStart).padding(16.dp))
             }
+        }
+        if (notice != null) {
+            item(key = "notice") { SourceNotice(notice, Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
         }
         if (reading.isNotEmpty()) {
             item(key = "continue-header") { SectionHeader("Continue Reading") }
@@ -206,7 +214,11 @@ fun NovelHomeScreen(onOpen: OpenNovel, onRead: () -> Unit, onBrowseGenre: (Strin
         val h = home
         if (h == null) {
             item(key = "loading") {
-                if (failed != null) EmptyState(Icons.Rounded.CloudOff, "Couldn't load novels", "$failed Check your connection and reopen Home.")
+                if (failed != null) {
+                    EmptyState(Icons.Rounded.CloudOff, "Novel sources unavailable",
+                        "$failed NovelBuddy and NovelArchive both failed to answer. Continue Reading and your lists still work.",
+                        actionLabel = "Try again", onAction = { attempt++ })
+                }
                 else Column { SectionHeader("Trending now"); RowPlaceholder() }
             }
         } else {
@@ -294,6 +306,21 @@ private fun androidx.compose.foundation.lazy.LazyListScope.novelSection(title: S
     }
 }
 
+/** A source is down and something else is shown in its place: says so above the content. */
+@Composable
+internal fun SourceNotice(text: String, modifier: Modifier = Modifier) {
+    val shape = RoundedCornerShape(16.dp)
+    Row(
+        modifier.fillMaxWidth().clip(shape).background(Color(0xFFFCD34D).copy(alpha = 0.08f))
+            .border(1.dp, Color(0xFFFCD34D).copy(alpha = 0.22f), shape).padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Rounded.CloudOff, null, tint = Color(0xFFFCD34D), modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(10.dp))
+        Text(text, style = MaterialTheme.typography.bodySmall, color = Color(0xFFFEF3C7))
+    }
+}
+
 // ── Search ────────────────────────────────────────────────────────────────────
 
 private val NOVEL_STATUSES = listOf("Any status" to null, "Ongoing" to "ongoing", "Completed" to "completed")
@@ -319,11 +346,21 @@ fun NovelSearchScreen(initialQuery: String = "", initialGenre: String? = null, o
     var searching by remember { mutableStateOf(false) }
     var showMtl by remember { mutableStateOf(false) }
     var reload by remember { mutableIntStateOf(0) }
+    // The source that answered (the other one while the chosen one is down), and why.
+    var answered by remember { mutableStateOf(source) }
+    var notice by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(reload, page, source) {
         searching = true
         error = null
-        runCatching { NovelSources.search(source, NovelFilters(query, genre, status, sort, page)) }
+        if (page == 1) { answered = source; notice = null }
+        val filters = NovelFilters(query, genre, status, sort, page)
+        runCatching { NovelSources.search(answered, filters) }
+            .recoverCatching { first ->
+                if (page != 1) throw first
+                val other = Novels.otherSource(source)
+                NovelSources.search(other, filters).also { answered = other; notice = Novels.fallbackNotice(source, other) }
+            }
             .onSuccess { results = it.items; hasNext = it.hasNext }
             .onFailure { results = emptyList(); error = it.novelMessage() }
         searching = false
@@ -360,9 +397,10 @@ fun NovelSearchScreen(initialQuery: String = "", initialGenre: String? = null, o
         when {
             searching && results.isEmpty() ->
                 LinearProgressIndicator(Modifier.fillMaxWidth().clip(RoundedCornerShape(50)), color = AniColors.Accent, trackColor = AniColors.SurfaceHigh)
-            error != null -> EmptyState(Icons.Rounded.CloudOff, "${source.label} didn't answer", "$error Try again, or switch to the other source.", actionLabel = "Retry", onAction = apply)
-            !searching && shown.isEmpty() -> EmptyState(Icons.Rounded.SearchOff, "No results", "Nothing matches on ${source.label}. Try fewer filters, another spelling, or the other source.")
+            error != null -> EmptyState(Icons.Rounded.CloudOff, "${source.label} didn't answer", "$error NovelBuddy and NovelArchive both failed to answer. Check your connection, then try again.", actionLabel = "Retry", onAction = apply)
+            !searching && shown.isEmpty() -> EmptyState(Icons.Rounded.SearchOff, "No results", "Nothing matches on ${answered.label}. Try fewer filters, another spelling, or the other source.")
         }
+        notice?.takeIf { error == null }?.let { SourceNotice(it, Modifier.padding(bottom = 14.dp)) }
         LazyVerticalGrid(
             columns = GridCells.Adaptive(140.dp),
             horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -506,7 +544,14 @@ fun NovelDetailScreen(source: NovelSourceId, titleId: String, onRead: () -> Unit
     val d = detail
     if (d == null) {
         if (detailError != null) {
-            EmptyState(Icons.Rounded.CloudOff, "${source.label} didn't answer", detailError!!, actionLabel = "Retry", onAction = { attempt++ })
+            // The same novel on the other source, when it's linked: readable while this one is down.
+            val elsewhere = group.firstOrNull { it.source != source }
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                EmptyState(Icons.Rounded.CloudOff, "${source.label} didn't answer", detailError!!, actionLabel = "Retry", onAction = { attempt++ })
+                if (elsewhere != null) {
+                    PillButton("Open on ${elsewhere.source.label}", { onSwitch(elsewhere.source, elsewhere.id) }, icon = Icons.Rounded.AutoStories, style = PillStyle.Primary)
+                }
+            }
         } else {
             Column(Modifier.padding(24.dp)) { SkeletonBox(Modifier.fillMaxWidth().height(260.dp)); Spacer(Modifier.height(16.dp)); SkeletonBox(Modifier.fillMaxWidth(0.6f).height(32.dp)) }
         }

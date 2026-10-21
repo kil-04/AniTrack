@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
-import { Search, SearchX, TriangleAlert } from "lucide-react";
+import { CloudOff, Search, SearchX, TriangleAlert } from "lucide-react";
 import PageHeader from "../../components/PageHeader";
 import SelectField from "../../components/SelectField";
 import EmptyState from "../../components/EmptyState";
@@ -14,7 +14,7 @@ import {
   type NovelSearchFilters,
 } from "../../../../../packages/shared/novel";
 import { NovelCard } from "../../components/novel/NovelCards";
-import { novelApi, preferredNovelSource, setPreferredNovelSource, unwrap } from "../../lib/novel-api";
+import { novelApi, preferredNovelSource, searchNovels, setPreferredNovelSource, unwrap } from "../../lib/novel-api";
 
 const STATUSES: [string, string][] = [["", "Any status"], ["ongoing", "Ongoing"], ["completed", "Completed"]];
 
@@ -35,6 +35,8 @@ export default function NovelSearch() {
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   const [showMtl, setShowMtl] = useState(false);
+  // The source that answered (the other one while the chosen one is down), and why.
+  const [answered, setAnswered] = useState<{ sourceId: NovelSearchFilters["sourceId"]; notice: string | null } | null>(null);
 
   const sourceParam = params.get("source");
   const sourceId = isNovelSource(sourceParam) ? sourceParam : preferredNovelSource();
@@ -54,8 +56,14 @@ export default function NovelSearch() {
     setLoading(true);
     setFailed(null);
     setPage(1);
-    unwrap(novelApi().search({ ...filters, page: 1 }))
-      .then((result) => { if (alive) { setResults(result.items); setHasMore(result.hasNextPage); } })
+    setAnswered(null);
+    searchNovels({ ...filters, page: 1 })
+      .then((result) => {
+        if (!alive) return;
+        setResults(result.page.items);
+        setHasMore(result.page.hasNextPage);
+        setAnswered({ sourceId: result.sourceId, notice: result.notice });
+      })
       .catch((error: Error) => { if (alive) { setResults([]); setFailed(error.message); } })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
@@ -70,7 +78,7 @@ export default function NovelSearch() {
   const loadMore = () => {
     const next = page + 1;
     setLoading(true);
-    unwrap(novelApi().search({ ...filters, page: next }))
+    unwrap(novelApi().search({ ...filters, sourceId: answered?.sourceId ?? filters.sourceId, page: next }))
       .then((result) => {
         setResults((items) => [...items, ...result.items.filter((m) => !items.some((i) => i.id === m.id))]);
         setHasMore(result.hasNextPage);
@@ -138,13 +146,18 @@ export default function NovelSearch() {
         </div>
       </div>
 
+      {answered?.notice && (
+        <div className="mb-6 flex items-center gap-3 rounded-2xl border border-amber-300/20 bg-amber-300/[0.07] px-4 py-3 text-sm text-amber-100">
+          <CloudOff size={17} className="shrink-0 text-amber-300" /> {answered.notice}
+        </div>
+      )}
       {failed && !results.length ? (
         <EmptyState icon={TriangleAlert} tone="danger" title={`${source.label} didn't answer`}>
-          {failed} Try again, or switch to the other source.
+          {failed} NovelBuddy and NovelArchive both failed to answer. Check your connection, then try again.
         </EmptyState>
       ) : !loading && !shown.length ? (
         <EmptyState icon={SearchX} title="Nothing matches">
-          No novels match on {source.label}. Try fewer filters, another spelling, or the other source.
+          No novels match on {NOVEL_SOURCES.find((s) => s.id === (answered?.sourceId ?? sourceId))!.label}. Try fewer filters, another spelling, or the other source.
         </EmptyState>
       ) : (
         <div className="grid grid-cols-2 gap-x-4 gap-y-7 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7">

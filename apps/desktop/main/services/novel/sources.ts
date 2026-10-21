@@ -5,9 +5,12 @@ import {
   novelArchiveChapterText,
   novelArchiveChapterUrl,
   novelArchiveDetail,
+  novelArchiveHome,
   novelArchiveSearch,
   novelArchiveSearchUrl,
   novelArchiveTitleUrl,
+  NOVEL_HOME_NOTICES,
+  NOVELARCHIVE_HOME_LISTS,
   NOVELBUDDY,
   novelBuddyChapters,
   novelBuddyChapterText,
@@ -78,9 +81,10 @@ class Ttl<T> {
     this.map.set(key, hit);
     return hit.value;
   }
-  set(key: string, value: T) {
+  /** [ttlMs] shortens this entry's life (a stand-in answer). */
+  set(key: string, value: T, ttlMs = this.ttlMs) {
     this.map.delete(key);
-    this.map.set(key, { at: Date.now(), value });
+    this.map.set(key, { at: Date.now() - (this.ttlMs - ttlMs), value });
     while (this.map.size > this.max) this.map.delete(this.map.keys().next().value!);
   }
 }
@@ -97,9 +101,46 @@ const diskName = (kind: "chapters" | "title", sourceId: NovelSourceId, id: strin
 
 // ── Operations ────────────────────────────────────────────────────────────────
 
+const HOME_DISK = "home-novel";
+
+/**
+ * Home: NovelBuddy's feed; while NovelBuddy is down, NovelArchive's lists; while both
+ * are, the last Home saved on disk. Each stand-in carries a notice saying so.
+ */
 export async function novelHome(): Promise<NovelHome> {
   const hit = homeCache.get("home");
   if (hit) return hit;
+  try {
+    const value = await buddyHome();
+    homeCache.set("home", value);
+    void writeCached(HOME_DISK, value);
+    return value;
+  } catch (buddyError) {
+    const archive = await archiveHome().catch(() => null);
+    if (archive) {
+      // Short-lived, so NovelBuddy's feed comes back soon after NovelBuddy does.
+      homeCache.set("home", archive, 5 * 60 * 1000);
+      return archive;
+    }
+    const saved = await readCached<NovelHome>(HOME_DISK);
+    if (saved && Array.isArray(saved.value.trending)) return { ...saved.value, notice: NOVEL_HOME_NOTICES.saved };
+    throw buddyError;
+  }
+}
+
+async function archiveHome(): Promise<NovelHome | null> {
+  const archive = http.novelarchive.front;
+  const list = async ({ filters, limit }: { filters: Omit<NovelSearchFilters, "sourceId">; limit: number }) =>
+    parse("NovelArchive", await archive.get(novelArchiveSearchUrl(filters, limit), LIST_BYTES), novelArchiveSearch).items;
+  // The first list proves NovelArchive answers; the rest may come back empty.
+  const popular = await list(NOVELARCHIVE_HOME_LISTS.popular);
+  const [latest, completed, favourites] = await Promise.all(
+    [NOVELARCHIVE_HOME_LISTS.latest, NOVELARCHIVE_HOME_LISTS.completed, NOVELARCHIVE_HOME_LISTS.favourites].map((l) => list(l).catch(() => [] as NovelCard[])),
+  );
+  return novelArchiveHome({ popular, latest, completed, favourites });
+}
+
+async function buddyHome(): Promise<NovelHome> {
   const buddy = http.novelbuddy.front;
   const home = parse("NovelBuddy", await buddy.get(novelBuddyHomeUrl(), LIST_BYTES), novelBuddyHome);
   // The home feed's "latest" is mostly machine translations, so ask for recent updates,
@@ -113,9 +154,7 @@ export async function novelHome(): Promise<NovelHome> {
     human({ sort: "popular", status: "completed" }, 30),
     human({ sort: "favourites" }, 30),
   ]);
-  const value: NovelHome = { ...home, latest: latest.length ? latest : home.latest, completed, favourites };
-  homeCache.set("home", value);
-  return value;
+  return { ...home, latest: latest.length ? latest : home.latest, completed, favourites };
 }
 
 export async function novelSearch(filters: NovelSearchFilters): Promise<NovelSearchPage> {

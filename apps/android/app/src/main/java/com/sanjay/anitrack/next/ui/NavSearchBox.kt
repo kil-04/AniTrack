@@ -49,11 +49,15 @@ internal suspend fun searchHits(query: String, manga: Boolean, onOpen: (Anime) -
         AniList.search(query).map { a -> SearchHit(a.title, a.cover, a.year, a.score, a.status) { onOpen(a) } }
     }
 
-/** Novels from the source the Search tab last used, machine translations left out as there. */
-internal suspend fun novelSearchHits(context: android.content.Context, query: String, onOpenNovel: OpenNovel): List<SearchHit> =
-    NovelSources.search(preferredNovelSource(context), NovelFilters(query)).items.filter { !it.mtl }.map { n ->
+/** Novels from the source the Search tab last used (the other one while it's down), machine translations left out as there. */
+internal suspend fun novelSearchHits(context: android.content.Context, query: String, onOpenNovel: OpenNovel): List<SearchHit> {
+    val source = preferredNovelSource(context)
+    val page = runCatching { NovelSources.search(source, NovelFilters(query)) }
+        .getOrElse { first -> runCatching { NovelSources.search(com.sanjay.anitrack.next.data.novel.Novels.otherSource(source), NovelFilters(query)) }.getOrElse { throw first } }
+    return page.items.filter { !it.mtl }.map { n ->
         SearchHit(n.title, n.cover, null, null, n.status, novel = n) { onOpenNovel(n.source, n.id) }
     }
+}
 
 /** Which recent-searches list a search box keeps. */
 internal fun searchHistoryMode(manga: Boolean, novel: Boolean) = if (novel) "novel" else if (manga) "manga" else "anime"

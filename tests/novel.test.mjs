@@ -9,9 +9,12 @@ import {
   isChapterFinished,
   isNovelChapterId,
   isNovelTitleId,
+  NOVEL_HOME_NOTICES,
+  NOVELARCHIVE_HOME_LISTS,
   novelArchiveChapters,
   novelArchiveChapterText,
   novelArchiveDetail,
+  novelArchiveHome,
   novelArchiveSearch,
   novelArchiveSearchUrl,
   novelBuddyChapters,
@@ -20,7 +23,9 @@ import {
   novelBuddyHome,
   novelBuddySearch,
   novelBuddySearchUrl,
+  novelFallbackNotice,
   novelResumeTarget,
+  otherNovelSource,
   progressFor,
   rankNovelMatches,
   sameNovel,
@@ -263,4 +268,34 @@ test("cross-source matches: exact names first, machine translations dropped", ()
     card("a", "Overgeared: Sage"), card("b", "MTL-Overgeared", true), card("c", "템빨"), card("d", "Overgeared (Web Novel)"),
   ]);
   assert.deepEqual(ranked.map((c) => c.id), ["c", "d", "a"]);
+});
+
+test("NovelBuddy down: Home is built from NovelArchive's lists, with a notice", () => {
+  const na = (id, mtl = false) => ({ sourceId: "novelarchive", id, title: `Novel ${id}`, cover: null, status: null, chapters: null, rating: null, genres: [], mtl, synopsis: null });
+  const popular = Array.from({ length: 15 }, (_, i) => na(`p${i}`, i === 1));
+  const home = novelArchiveHome({ popular, latest: [na("l1"), na("l2", true)], completed: [na("c1")], favourites: [] });
+  assert.deepEqual(home.trending.map((c) => c.id), ["p0", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10", "p11", "p12"]);
+  assert.deepEqual(home.popular.map((c) => c.id), ["p13", "p14"]);
+  assert.deepEqual(home.latest.map((c) => c.id), ["l1"]);
+  assert.deepEqual(home.completed.map((c) => c.id), ["c1"]);
+  assert.equal(home.notice, NOVEL_HOME_NOTICES.fallback);
+  assert.equal(novelArchiveHome({ popular: [na("x", true)], latest: [], completed: [], favourites: [] }), null);
+});
+
+test("NovelBuddy down: NovelArchive's stand-in lists ask for the same rows", () => {
+  assert.equal(novelArchiveSearchUrl(NOVELARCHIVE_HOME_LISTS.popular.filters, NOVELARCHIVE_HOME_LISTS.popular.limit),
+    "https://novelarchive.cc/api/novels?sort=popular&ai_generated=exclude&page=1&limit=40");
+  assert.equal(novelArchiveSearchUrl(NOVELARCHIVE_HOME_LISTS.latest.filters, NOVELARCHIVE_HOME_LISTS.latest.limit),
+    "https://novelarchive.cc/api/novels?sort=recent&ai_generated=exclude&page=1&limit=40");
+  assert.equal(novelArchiveSearchUrl(NOVELARCHIVE_HOME_LISTS.completed.filters, NOVELARCHIVE_HOME_LISTS.completed.limit),
+    "https://novelarchive.cc/api/novels?status=completed&sort=popular&ai_generated=exclude&page=1&limit=30");
+  assert.equal(novelArchiveSearchUrl(NOVELARCHIVE_HOME_LISTS.favourites.filters, NOVELARCHIVE_HOME_LISTS.favourites.limit),
+    "https://novelarchive.cc/api/novels?sort=rating&ai_generated=exclude&page=1&limit=30");
+});
+
+test("a search falls back to the other source and says so", () => {
+  assert.equal(otherNovelSource("novelbuddy"), "novelarchive");
+  assert.equal(otherNovelSource("novelarchive"), "novelbuddy");
+  assert.equal(novelFallbackNotice("novelbuddy", "novelarchive"),
+    "NovelBuddy isn't responding right now, so these results are from NovelArchive.");
 });

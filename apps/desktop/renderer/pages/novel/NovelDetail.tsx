@@ -160,6 +160,8 @@ export default function NovelDetail() {
   };
 
   if (!detail) {
+    // The same novel on the other source, when it's linked: readable while this one is down.
+    const elsewhere = group?.members.find((m) => m.sourceId !== sourceId);
     return detailError ? (
       <div className="px-8 pt-10">
         <EmptyState
@@ -169,7 +171,12 @@ export default function NovelDetail() {
           action={
             <div className="flex gap-2">
               <button onClick={() => navigate(-1)} className="btn btn-secondary"><ArrowLeft size={16} /> Go back</button>
-              <button onClick={() => setAttempt((n) => n + 1)} className="btn btn-primary"><RefreshCw size={16} /> Retry</button>
+              <button onClick={() => setAttempt((n) => n + 1)} className={`btn ${elsewhere ? "btn-secondary" : "btn-primary"}`}><RefreshCw size={16} /> Retry</button>
+              {elsewhere && (
+                <button onClick={() => navigate(novelTitlePath(elsewhere.sourceId, elsewhere.id), { replace: true })} className="btn btn-primary">
+                  <BookOpen size={16} /> Open on {novelSourceLabel(elsewhere.sourceId)}
+                </button>
+              )}
             </div>
           }
         >
