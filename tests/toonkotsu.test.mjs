@@ -57,6 +57,15 @@ test('toonkotsu: shared website reader exports only a selected decoded image blo
   assert.equal((await evaluate({operation:'image',ref:'ktm04-one-piece',chapterId:'4675553',page:1},{document:{title:'Reader',body:{innerText:''},images:[image]}})).error,'image');
 });
 
+test('toonkotsu: the reader accepts the site redirecting our hid to its own series code (20 Oct 2026)', async()=>{
+  const image={alt:'Page 5',complete:true,naturalWidth:1100,naturalHeight:1606,currentSrc:'blob:https://toonkotsu.com/p5'};
+  const scope={location:{origin:TOONKOTSU.ORIGIN,pathname:'/title/lokbk2-one-piece/4675553-chapter-1196/5'},document:{title:'Reader',body:{innerText:''},images:[image]},fetch:async()=>({blob:async()=>({size:3,type:'image/webp'})}),FileReader:class { readAsDataURL(){this.result='data:image/webp;base64,YWJj';this.onload();} }};
+  const result=await evaluate({operation:'image',ref:'ktm04-one-piece',chapterId:'4675553',page:5},scope);
+  assert.equal(result.page,5);assert.equal(result.chapterId,'4675553');
+  assert.equal((await evaluate({operation:'image',ref:'ktm04-one-piece',chapterId:'4675554',page:5},scope)).error,'chapter');
+  assert.equal((await evaluate({operation:'image',ref:'ktm04-one-piece',chapterId:'1.*',page:5},scope)).error,'request');
+});
+
 test('toonkotsu: closing Connect preserves the verified reader document and its blobs', async()=>{
   const require=createRequire(import.meta.url);
   const ts=require('typescript');

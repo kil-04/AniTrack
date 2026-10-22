@@ -16,12 +16,16 @@
     return { body: await new Blob(chunks).text() };
   }
   if (request.operation !== 'image' || !Number.isInteger(request.page) || request.page < 1 || request.page > 500) return { error: 'request' };
-  const base = `/title/${request.ref}/${request.chapterId}-chapter-`;
-  if (!location.pathname.startsWith(base)) return { error: 'chapter' };
+  if (!/^[1-9]\d{0,14}$/.test(String(request.chapterId))) return { error: 'request' };
+  // Since 20 Oct 2026 the site redirects /title/<hid>-<slug>/ to its own /title/<code>-<slug>/,
+  // so only the chapter part of the path identifies the page.
+  const chapterPath = new RegExp(`^/title/[a-z0-9-]{1,190}/${request.chapterId}-chapter-`);
+  const atChapter = () => chapterPath.test(location.pathname);
+  if (!atChapter()) return { error: 'chapter' };
   const until = Date.now() + 24000;
   while (Date.now() < until) {
     if (check()) return { error: 'check' };
-    if (location.origin !== origin || !location.pathname.startsWith(base)) return { error: 'chapter' };
+    if (location.origin !== origin || !atChapter()) return { error: 'chapter' };
     const image = [...document.images].find(i => i.alt === `Page ${request.page}` && i.complete && i.naturalWidth > 0);
     if (image) {
       const src = image.currentSrc || image.src;
