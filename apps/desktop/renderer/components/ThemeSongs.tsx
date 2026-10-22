@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
-import { AudioLines, Film, Pause, Play, Shuffle, SkipBack, SkipForward, X } from "lucide-react";
+import { AudioLines, Film, Pause, Play, Shuffle, SkipBack, SkipForward, Tv, X } from "lucide-react";
 import type { ThemeSong } from "../../../../packages/shared/anime-themes";
+import { withSongClips } from "../../../../packages/shared/anisongs";
 import { currentTheme, RADIO_LABEL, useThemePlayer } from "../store/useThemePlayer";
+import { VideoPlayer, type VideoItem } from "./VideoPlayer";
 
 const OPENING = "#ff5c7a";
 const ENDING = "#7aa7ff";
@@ -14,10 +15,13 @@ function episodesLabel(episodes: string | null): string | null {
   return /[-,]/.test(episodes) ? `Eps ${episodes.replace(/-/g, "–")}` : `Ep ${episodes}`;
 }
 
-/** A show's openings and endings, from AnimeThemes.moe. */
-export function ThemeSongs({ animeId, animeTitle }: { animeId: number; animeTitle: string }) {
+/**
+ * A show's openings and endings from AnimeThemes.moe, with AnisongDB's clips where AnimeThemes
+ * has no video (or doesn't know the show). Watch plays them in the Songs page's video player.
+ */
+export function ThemeSongs({ animeId, animeTitle, malId }: { animeId: number; animeTitle: string; malId?: number | null }) {
   const [songs, setSongs] = useState<ThemeSong[]>([]);
-  const [video, setVideo] = useState<ThemeSong | null>(null);
+  const [video, setVideo] = useState<{ index: number; full: boolean } | null>(null);
   const current = useThemePlayer(currentTheme);
   const playing = useThemePlayer((s) => s.playing);
   const { play, toggle } = useThemePlayer.getState();
@@ -25,20 +29,43 @@ export function ThemeSongs({ animeId, animeTitle }: { animeId: number; animeTitl
   useEffect(() => {
     let cancelled = false;
     setSongs([]);
-    if (animeId > 0 && animeId < 1_000_000_000) {
-      window.api.themes.forAnime(animeId)
-        .then((list) => { if (!cancelled) setSongs(list); })
-        .catch(() => {});
-    }
+    setVideo(null);
+    (async () => {
+      const themes = animeId > 0 && animeId < 1_000_000_000 ? await window.api.themes.forAnime(animeId).catch(() => []) : [];
+      if (cancelled) return;
+      setSongs(themes);
+      // AnisongDB fills what AnimeThemes lacks: videos, songs it doesn't list, or the whole show.
+      if (!malId) return;
+      const clips = await window.api.songs.show(malId).catch(() => []);
+      if (!cancelled && clips.length) setSongs(withSongClips(themes, clips.map((c) => ({ ...c, anilistId: animeId }))));
+    })();
     return () => { cancelled = true; };
-  }, [animeId]);
+  }, [animeId, malId]);
 
   if (!songs.length) return null;
+  const watchable = songs.filter((song) => song.videoUrl && !song.nsfw);
+  const items: VideoItem[] = watchable.map((song) => ({
+    key: `${song.animeId}:${song.slug}`,
+    title: song.title,
+    byline: [song.artists.join(", "), animeTitle, song.slug].filter(Boolean).join(" · "),
+    cover: song.cover,
+    src: song.videoUrl!,
+  }));
+  const watch = (song: ThemeSong) => setVideo({ index: Math.max(0, watchable.indexOf(song)), full: true });
   const playingHere = current?.animeId === animeId;
   return (
     <section className="mt-8 px-8">
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-lg font-semibold">Theme songs</h2>
+        <div className="flex items-center gap-2">
+        {items.length > 0 && (
+          <button
+            onClick={() => setVideo({ index: 0, full: true })}
+            className="flex items-center gap-1.5 rounded-full bg-white px-4 py-1.5 text-xs font-bold text-black transition hover:bg-white/85"
+          >
+            <Tv size={13} /> Watch all
+          </button>
+        )}
         <button
           onClick={() => (playingHere ? toggle() : play(songs, 0, animeTitle))}
           className="flex items-center gap-1.5 rounded-full bg-white/10 px-4 py-1.5 text-xs font-bold text-white transition hover:bg-white/15"
@@ -46,6 +73,7 @@ export function ThemeSongs({ animeId, animeTitle }: { animeId: number; animeTitl
           {playingHere && playing ? <Pause size={13} /> : <Play size={13} />}
           {playingHere && playing ? "Pause" : "Play all"}
         </button>
+        </div>
       </div>
       <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
         {songs.map((song, i) => {
@@ -79,48 +107,30 @@ export function ThemeSongs({ animeId, animeTitle }: { animeId: number; animeTitl
               </div>
               {song.videoUrl && !song.nsfw && (
                 <button
-                  onClick={() => setVideo(song)}
-                  title="Watch the creditless video"
-                  className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-white/50 transition hover:bg-white/10 hover:text-white"
+                  onClick={() => watch(song)}
+                  title="Watch the video"
+                  className="flex flex-shrink-0 items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs font-bold text-white/80 transition hover:bg-white/20 hover:text-white"
                 >
-                  <Film size={17} />
+                  <Film size={14} /> Watch
                 </button>
               )}
             </div>
           );
         })}
       </div>
-      <p className="mt-2 text-[11px] text-white/30">Songs and creditless videos from AnimeThemes.moe.</p>
-      {video && <ThemeVideoModal song={video} onClose={() => setVideo(null)} />}
+      <p className="mt-2 text-[11px] text-white/30">Songs and creditless videos from AnimeThemes.moe; other videos from AnisongDB.</p>
+      {video && items.length > 0 && (
+        <VideoPlayer
+          items={items}
+          index={Math.min(video.index, items.length - 1)}
+          label={`${animeTitle} · theme songs`}
+          full={video.full}
+          onIndex={(index) => setVideo((v) => v && { ...v, index: (index + items.length) % items.length })}
+          onFull={(full) => setVideo((v) => v && { ...v, full })}
+          onClose={() => setVideo(null)}
+        />
+      )}
     </section>
-  );
-}
-
-/** Plays a theme's creditless video over the page. */
-export function ThemeVideoModal({ song, onClose }: { song: ThemeSong; onClose: () => void }) {
-  useEffect(() => {
-    useThemePlayer.getState().pause();
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-  if (!song.videoUrl) return null;
-  return createPortal(
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/90 p-8" onClick={onClose}>
-      <div className="relative w-full max-w-5xl" onClick={(event) => event.stopPropagation()}>
-        <div className="mb-3 flex items-start justify-between gap-4">
-          <div>
-            <div className="text-lg font-bold">{song.slug} · {song.title}</div>
-            <div className="text-sm text-white/60">{[song.artists.join(", "), song.animeTitle].filter(Boolean).join(" — ")}</div>
-          </div>
-          <button onClick={onClose} className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 hover:bg-white/20" title="Close">
-            <X size={18} />
-          </button>
-        </div>
-        <video data-theme-video="true" src={song.videoUrl} controls autoPlay className="aspect-video w-full rounded-xl bg-black" />
-      </div>
-    </div>,
-    document.body,
   );
 }
 

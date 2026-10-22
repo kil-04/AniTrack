@@ -9,6 +9,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Movie
+import androidx.compose.material.icons.rounded.OndemandVideo
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Shuffle
@@ -30,6 +31,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import com.sanjay.anitrack.next.data.AniSongs
 import com.sanjay.anitrack.next.data.Anime
 import com.sanjay.anitrack.next.data.AnimeThemes
 import com.sanjay.anitrack.next.data.PlayerHolder
@@ -38,7 +40,7 @@ import com.sanjay.anitrack.next.data.ThemeSong
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-// ── Theme songs: a show's openings and endings (AnimeThemes.moe) ──────────────
+// ── Theme songs: a show's openings and endings (AnimeThemes.moe, AnisongDB) ────
 
 private val OpeningTone = Color(0xFFFF5C7A)
 private val EndingTone = Color(0xFF7AA7FF)
@@ -51,15 +53,32 @@ private fun episodesLabel(episodes: String?): String? =
 internal fun ThemesSection(anime: Anime) {
     val context = LocalContext.current
     var songs by remember(anime.id) { mutableStateOf<List<ThemeSong>>(emptyList()) }
-    var video by remember(anime.id) { mutableStateOf<ThemeSong?>(null) }
+    var queue by remember(anime.id) { mutableStateOf<VideoQueue?>(null) }
     LaunchedEffect(anime.id) {
-        songs = runCatching { AnimeThemes.forAnime(anime) }.getOrDefault(emptyList())
+        val themes = runCatching { AnimeThemes.forAnime(anime) }.getOrDefault(emptyList())
+        songs = themes
+        // AnisongDB fills what AnimeThemes lacks: videos, songs it doesn't list, or the whole show.
+        val malId = anime.malId ?: return@LaunchedEffect
+        val clips = runCatching { AniSongs.forShow(malId) }.getOrDefault(emptyList())
+        if (clips.isNotEmpty()) songs = AniSongs.withClips(themes, clips.map { it.copy(anilistId = anime.id, cover = it.cover ?: anime.cover) })
     }
     if (songs.isEmpty()) return
+    val watchable = songs.filter { it.videoUrl != null && !it.nsfw }
+    fun watch(at: Int) {
+        queue = VideoQueue(
+            watchable.map { VideoItem("${it.animeId}:${it.slug}", it.title, listOfNotNull(it.artistLine, anime.title, it.slug).joinToString(" · "), it.cover ?: anime.cover, it.videoUrl!!) },
+            at.coerceIn(0, watchable.lastIndex),
+            "${anime.title} · theme songs",
+        )
+    }
     val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 820
     val playingHere = ThemePlayer.current?.animeId == anime.id
     Column(Modifier.padding(bottom = 8.dp)) {
         SectionHeader("Theme songs", trailing = {
+            if (watchable.isNotEmpty()) {
+                PillButton("Watch all", { watch(0) }, icon = Icons.Rounded.OndemandVideo, compact = true)
+                Spacer(Modifier.width(8.dp))
+            }
             PillButton(
                 if (playingHere && ThemePlayer.isPlaying.value) "Pause" else "Play all",
                 {
@@ -85,18 +104,21 @@ internal fun ThemesSection(anime: Anime) {
                         if (ThemePlayer.isCurrent(song)) ThemePlayer.toggle()
                         else ThemePlayer.play(context, songs, i, anime.title)
                     },
-                    onWatch = { video = song },
+                    onWatch = { watch(watchable.indexOf(song)) },
                 )
             }
         }
         Text(
-            "Songs and creditless videos from AnimeThemes.moe.",
+            "Songs and creditless videos from AnimeThemes.moe; other videos from AnisongDB.",
             style = MaterialTheme.typography.labelSmall,
             color = AniColors.TextTertiary,
             modifier = Modifier.padding(start = 16.dp, top = 10.dp),
         )
     }
-    video?.let { ThemeVideoDialog(it, onClose = { video = null }) }
+    queue?.let { q ->
+        val video = rememberSongVideo(q)
+        SongFullPlayer(video, onDock = null, onClose = { queue = null }, onStep = { video.go(it) }, onJump = { video.jump(it) })
+    }
 }
 
 @Composable
@@ -146,49 +168,11 @@ private fun ThemeRow(song: ThemeSong, modifier: Modifier, onPlay: () -> Unit, on
             }
         }
         if (song.videoUrl != null && !song.nsfw) {
-            IconButton(onClick = onWatch) {
-                Icon(Icons.Rounded.Movie, "Watch the creditless video", tint = AniColors.TextSecondary)
+            FilledTonalButton(onClick = onWatch, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
+                Icon(Icons.Rounded.Movie, null, Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Watch", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
             }
-        }
-    }
-}
-
-/** Plays a theme's creditless video full screen. */
-@Composable
-internal fun ThemeVideoDialog(song: ThemeSong, onClose: () -> Unit) {
-    val context = LocalContext.current
-    val url = song.videoUrl ?: return
-    val exo = remember(url) {
-        ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(url))
-            prepare()
-            playWhenReady = true
-        }
-    }
-    DisposableEffect(exo) {
-        ThemePlayer.pause()
-        PlayerHolder.peek()?.pause()
-        com.sanjay.anitrack.next.data.BackgroundMusic.setHold(com.sanjay.anitrack.next.data.BackgroundMusic.Hold.VIDEO, true)
-        onDispose {
-            exo.release()
-            com.sanjay.anitrack.next.data.BackgroundMusic.setHold(com.sanjay.anitrack.next.data.BackgroundMusic.Hold.VIDEO, false)
-        }
-    }
-    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Box(Modifier.fillMaxSize().background(Color.Black)) {
-            AndroidView(
-                factory = { PlayerView(it).apply { player = exo; useController = true } },
-                modifier = Modifier.fillMaxSize(),
-            )
-            Column(Modifier.align(Alignment.TopStart).padding(20.dp)) {
-                Text("${song.slug} · ${song.title}", color = Color.White, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Text(
-                    listOfNotNull(song.artistLine, song.animeTitle).joinToString(" — "),
-                    color = Color.White.copy(alpha = 0.7f),
-                    style = MaterialTheme.typography.labelMedium,
-                )
-            }
-            GlassIconButton(Icons.Rounded.Close, "Close", onClose, Modifier.align(Alignment.TopEnd).padding(16.dp), size = 40.dp)
         }
     }
 }

@@ -399,8 +399,8 @@ export default function ShowDetail() {
         />
       </div>
 
-      {/* Openings and endings (AnimeThemes.moe) */}
-      <ThemeSongs animeId={animeId} animeTitle={anime.title} />
+      {/* Openings and endings (AnimeThemes.moe, AnisongDB) */}
+      <ThemeSongs animeId={animeId} animeTitle={anime.title} malId={anime.malId} />
     </div>
   );
 }
