@@ -116,3 +116,12 @@ test("shonen: source URLs only for valid ids, episodes and languages", () => {
   assert.throws(() => shonenSourcesUrl(0, 1, "sub"), ShonenError);
   assert.throws(() => shonenSourcesUrl(21, 1.5, "sub"), ShonenError);
 });
+
+test("shonen: two streams with one name stay apart (22 Oct 2026: both \"Primary\")", () => {
+  const streams = parseShonenStreams({ data: { sources: [
+    { file: "https://anigato.lol/api/stream/proxy?url=s1.abc", type: "hls", label: "Primary" },
+    { file: "https://stream.shonen.to/media/xyz", type: "hls", label: "Primary" },
+  ], tracks: [] } });
+  assert.deepEqual(streams.map((s) => s.label), ["Primary", "Primary 2"]);
+  assert.equal(streams[0].url, "https://anigato.lol/api/stream/proxy?url=s1.abc");
+});

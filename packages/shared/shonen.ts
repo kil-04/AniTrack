@@ -1,9 +1,10 @@
 /**
  * shonen.to: an anime catalogue keyed by AniList ids. Search and title pages are
- * server-rendered HTML; one JSON call per episode returns an HLS stream. Since 20 Oct
- * 2026 its links are same-origin /api/v1/shonen-media paths with English subtitles
- * burned in (no subtitle tracks); before that, a vidcloud.sbs proxy with VTT tracks.
- * No cookies, Referer or human check needed. Mirrored in Kotlin by data/providers/connectors/shonen/Shonen.kt.
+ * server-rendered HTML; one JSON call per episode returns HLS streams. Since 22 Oct 2026
+ * those are an anigato.lol proxy (its playlists need `Referer: https://shonen.to/`; the
+ * segments are TS behind a small PNG header on tiktokcdn) and a stream.shonen.to link
+ * that may not connect. 20 Oct: same-origin /api/v1/shonen-media paths; before that, a
+ * vidcloud.sbs proxy with VTT tracks. No cookies or human check needed. Mirrored in Kotlin by data/providers/connectors/shonen/Shonen.kt.
  */
 
 export const SHONEN = {
@@ -184,10 +185,11 @@ export function parseShonenStreams(json: unknown): ShonenStream[] {
       if (!file || (kind !== "subtitles" && kind !== "captions")) continue;
       subtitles.push({ file, label: typeof track.label === "string" && track.label.trim() ? track.label.trim().slice(0, 60) : "Subtitles", kind, default: track.default === true });
     }
-    const label = typeof source.label === "string" ? strip(source.label).slice(0, 40) : "";
+    const named = (typeof source.label === "string" ? strip(source.label).slice(0, 40) : "") || `Server ${streams.length + 1}`;
     streams.push({
       url,
-      label: label || `Server ${streams.length + 1}`,
+      // Two streams can share a name ("Primary", 22 Oct 2026): the second becomes "Primary 2".
+      label: streams.some((stream) => stream.label === named) ? `${named} ${streams.length + 1}` : named,
       subtitles,
       intro: skip(data.intro ?? source.intro),
       outro: skip(data.outro ?? source.outro),

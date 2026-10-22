@@ -92,4 +92,11 @@ class ShonenTest {
         assertEquals("https://shonen.to/sources/shonen?id=21&episode=1150&language=dub", Shonen.sourcesUrl(21, 1150, "dub"))
         assertThrows(ShonenException::class.java) { Shonen.sourcesUrl(0, 1, "sub") }
     }
+
+    @Test fun twoStreamsWithOneNameStayApart() {
+        val streams = Shonen.streams(JSONObject("""{"data":{"sources":[
+            {"file":"https://anigato.lol/api/stream/proxy?url=s1.abc","type":"hls","label":"Primary"},
+            {"file":"https://stream.shonen.to/media/xyz","type":"hls","label":"Primary"}],"tracks":[]}}"""))
+        assertEquals(listOf("Primary", "Primary 2"), streams.map { it.label })
+    }
 }

@@ -23,6 +23,8 @@ const SOURCES_BYTES = 256 * 1024;
 const NO_SUB = "shonen.to has no subtitled stream for this episode right now. It sometimes finds one later: retry in a few minutes or choose another source.";
 /** A server list is reused this long, so listing servers and playing one is one API call. */
 const STREAMS_TTL_MS = 60_000;
+/** How long a stream's playlist gets to answer before it's listed after the ones that did. */
+const PROBE_MS = 3_000;
 
 /** `s`/`b`: the chosen stream's index and label (absent in links from before 9.1.5: the first stream). */
 interface LinkToken { a: number; n: number; l: ShonenLanguage; s?: number; b?: string }
@@ -48,7 +50,8 @@ function decodeLink(value: string): LinkToken {
 /**
  * shonen.to (packages/shared/shonen.ts): AniList-keyed, plain HTTP, one paced request
  * at a time on its own host with AniTrack's honest user agent. Video comes from the
- * HLS proxy the API names; no Referer, cookies or human check.
+ * HLS proxies the API names, with shonen.to as Referer (anigato.lol's playlists refuse
+ * requests without it); no cookies or human check.
  */
 export class ShonenProvider implements StreamProvider {
   readonly id = "shonen";
@@ -148,7 +151,9 @@ export class ShonenProvider implements StreamProvider {
       subtitles: stream.subtitles.map((item) => ({ file: item.file, label: item.label, kind: item.kind, default: item.default })),
       intro: stream.intro ?? undefined,
       outro: stream.outro ?? undefined,
-      // Playlists, segments and captions all live under one proxy path (/api/v1/ on shonen.to).
+      // anigato.lol answers its playlists only with shonen.to's Referer (22 Oct 2026).
+      referer: SHONEN.ORIGIN,
+      // Master and rendition playlists live under one proxy path (/api/stream/ on anigato.lol).
       authorizationScope: "directory",
       cors: true,
       // The proxy's playlist URL has no .m3u8 for the player to look for.
@@ -170,10 +175,30 @@ export class ShonenProvider implements StreamProvider {
       if (error instanceof SyntaxError) throw new ShonenError("shonen.to sent a response AniTrack couldn't read.");
       throw error;
     }
-    const streams = parseShonenStreams(json);
+    const streams = await this.workingFirst(parseShonenStreams(json));
     if (this.streamLists.size >= 50) this.streamLists.delete(this.streamLists.keys().next().value!);
     this.streamLists.set(key, { at: now, streams });
     return streams;
+  }
+
+  /**
+   * The streams whose playlist answers first, the rest after in the site's order: one link
+   * (stream.shonen.to, 22 Oct 2026) may not connect at all, and the player would wait it out.
+   */
+  private async workingFirst(streams: ShonenStream[]): Promise<ShonenStream[]> {
+    if (streams.length < 2) return streams;
+    const works = await Promise.all(streams.map(async (stream) => {
+      try {
+        const response = await fetch(stream.url, {
+          headers: { Referer: `${SHONEN.ORIGIN}/`, Accept: "application/vnd.apple.mpegurl, */*", "User-Agent": `AniTrack/${app.getVersion()} (Desktop)` },
+          signal: AbortSignal.timeout(PROBE_MS),
+        });
+        return response.ok && (await response.text()).trimStart().startsWith("#EXTM3U");
+      } catch {
+        return false;
+      }
+    }));
+    return [...streams.filter((_, i) => works[i]), ...streams.filter((_, i) => !works[i])];
   }
 
   private async titlePage(anilistId: number) {

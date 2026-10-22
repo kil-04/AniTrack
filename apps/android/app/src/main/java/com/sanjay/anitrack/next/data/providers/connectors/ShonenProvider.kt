@@ -20,7 +20,7 @@ import com.sanjay.anitrack.next.data.providers.connectors.shonen.Shonen
 import com.sanjay.anitrack.next.data.providers.connectors.shonen.ShonenException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.async
 import org.json.JSONException
 import org.json.JSONObject
 
@@ -38,7 +38,12 @@ object ShonenProvider : AnimeProvider {
     /** A server list is reused this long, so listing servers and playing one is one API call. */
     private const val STREAMS_TTL_MS = 60_000L
     /** How long the default play waits for a stream's playlist before trying the next stream. */
-    private const val PROBE_MS = 12_000L
+    private const val PROBE_MS = 4_000L
+    /** Checks a stream's playlist on whatever proxy host the API names, with shonen.to as Referer. */
+    private val probeClient = okhttp3.OkHttpClient.Builder()
+        .callTimeout(PROBE_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+        .followRedirects(false)
+        .build()
     private val VARIANT = Regex("(sub|dub):([0-7])")
     private const val NO_STREAM =
         "shonen.to has no subtitled stream for this episode right now. It sometimes finds one later: retry in a few minutes or choose another source."
@@ -115,9 +120,9 @@ object ShonenProvider : AnimeProvider {
     }
 
     /**
-     * The default play: Sub's first stream whose playlist loads. The Primary stream
-     * sometimes fails while the site's Anivexa fallback works (20 Oct 2026). Never Dub:
-     * without Sub this is the no-stream error, as on desktop.
+     * The default play: Sub's first stream whose playlist loads. One stream often fails
+     * while another works (20 Oct 2026: Primary vs Anivexa; 22 Oct: stream.shonen.to never
+     * connects, anigato.lol does). Never Dub: without Sub this is the no-stream error, as on desktop.
      */
     private suspend fun resolveFirstWorking(anilistId: Int, episode: Int): ResolvedMedia {
         val list = try { streams(anilistId, episode, "sub") } catch (e: ShonenException) {
@@ -125,16 +130,26 @@ object ShonenProvider : AnimeProvider {
             throw e
         }
         if (list.size > 1) {
-            for ((i, stream) in list.withIndex()) {
-                val playlist = try {
-                    withTimeoutOrNull(PROBE_MS) { http.get(stream.url, "application/vnd.apple.mpegurl, */*", 256 * 1024) }
-                } catch (_: MangaSourceException) {
-                    null // unreachable, refused, or off shonen.to's own host
-                }
-                if (playlist?.trimStart()?.startsWith("#EXTM3U") == true) return media(stream, "sub:$i")
+            val works = kotlinx.coroutines.coroutineScope {
+                list.map { stream -> async(kotlinx.coroutines.Dispatchers.IO) { playlistLoads(stream.url) } }.map { it.await() }
             }
+            works.indexOf(true).takeIf { it >= 0 }?.let { return media(list[it], "sub:$it") }
         }
         return media(list.first(), "sub:0")
+    }
+
+    /** Whether a stream's master playlist answers within [PROBE_MS] (anigato.lol needs shonen.to's Referer). */
+    private fun playlistLoads(url: String): Boolean = try {
+        val request = okhttp3.Request.Builder().url(url)
+            .header("Referer", "${Shonen.ORIGIN}/")
+            .header("User-Agent", USER_AGENT)
+            .header("Accept", "application/vnd.apple.mpegurl, */*")
+            .build()
+        probeClient.newCall(request).execute().use { response ->
+            response.isSuccessful && response.body?.source()?.let { it.request(7); it.buffer.snapshot(minOf(7L, it.buffer.size).toInt()).utf8() } == "#EXTM3U"
+        }
+    } catch (_: Exception) {
+        false // unreachable, refused, or too slow
     }
 
     /** An episode's streams in one language: a fresh answer, or (playing a listed server) one under a minute old. */

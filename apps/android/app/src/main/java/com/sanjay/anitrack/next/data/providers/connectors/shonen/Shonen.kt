@@ -169,7 +169,9 @@ object Shonen {
                 subtitles = subtitles,
                 intro = skip(data.opt("intro")) ?: skip(source.opt("intro")),
                 outro = skip(data.opt("outro")) ?: skip(source.opt("outro")),
-                label = strip(source.optString("label")).take(40).ifEmpty { "Server ${streams.size + 1}" },
+                // Two streams can share a name ("Primary", 22 Oct 2026): the second becomes "Primary 2".
+                label = strip(source.optString("label")).take(40).ifEmpty { "Server ${streams.size + 1}" }
+                    .let { name -> if (streams.none { it.label == name }) name else "$name ${streams.size + 1}" },
             )
             if (streams.size >= 8) break
         }
