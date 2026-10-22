@@ -225,6 +225,10 @@ export const IPC = {
   ANILIST_STORY: "anilist:story",
   THEMES_FOR_ANIME: "themes:for-anime",
   THEMES_RADIO: "themes:radio",
+  SONGS_CHARTS: "songs:charts",
+  SONGS_SEASON: "songs:season",
+  SONGS_SEARCH: "songs:search",
+  SONGS_SHOW: "songs:show",
   PROGRESS_GET_FOR_ANIME: "progress:get-for-anime",
   // Updater
   UPDATE_CHECK: "update:check",

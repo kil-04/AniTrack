@@ -43,6 +43,7 @@ const Schedule         = lazy(() => import("./pages/Schedule"));
 const LatestEpisodes   = lazy(() => import("./pages/LatestEpisodes"));
 const Downloads        = lazy(() => import("./pages/Downloads"));
 const TimeMachine      = lazy(() => import("./pages/TimeMachine"));
+const Songs            = lazy(() => import("./pages/Songs"));
 const TasteGenome      = lazy(() => import("./pages/TasteGenome"));
 const Museum           = lazy(() => import("./pages/Museum"));
 const MangaHome        = lazy(() => import("./pages/manga/MangaHome"));
@@ -256,6 +257,7 @@ export default function App() {
               <Route path="/latest"             element={<PageTransition><LatestEpisodes /></PageTransition>} />
               <Route path="/downloads"          element={<PageTransition><Downloads /></PageTransition>} />
               <Route path="/time-machine"       element={<PageTransition><TimeMachine /></PageTransition>} />
+              <Route path="/songs"              element={<PageTransition><Songs /></PageTransition>} />
               <Route path="/taste-genome"       element={<PageTransition><TasteGenome /></PageTransition>} />
               <Route path="/museum/:id"         element={<PageTransition><Museum /></PageTransition>} />
               <Route path="/manga"              element={<PageTransition><MangaHome /></PageTransition>} />

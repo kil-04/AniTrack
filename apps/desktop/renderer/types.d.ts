@@ -48,6 +48,14 @@ interface ApiBridge {
     forAnime(id: number): Promise<import("../../../packages/shared/anime-themes").ThemeSong[]>;
     radio(): Promise<import("../../../packages/shared/anime-themes").ThemeSong[]>;
   };
+  /** Anime openings and endings from AnisongDB, with shipped decade charts. */
+  songs: {
+    charts(): Promise<import("../../../packages/shared/anisongs").SongCharts>;
+    season(season: import("../../../packages/shared/anisongs").SeasonName, year: number): Promise<import("../../../packages/shared/anisongs").AniSong[]>;
+    search(query: string, by: import("../../../packages/shared/anisongs").SongSearchBy): Promise<import("../../../packages/shared/anisongs").AniSong[]>;
+    /** A show's openings and endings, by its MyAnimeList id. */
+    show(malId: number): Promise<import("../../../packages/shared/anisongs").AniSong[]>;
+  };
   /** Background music: the user's own tracks (desktop only; absent in the legacy Android shell). */
   music?: {
     list(): Promise<import("../../../packages/shared/bg-music").BgTrack[]>;

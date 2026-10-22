@@ -19,6 +19,7 @@ import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.NewReleases
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.rounded.Bookmarks
+import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.DownloadForOffline
 import androidx.compose.material.icons.rounded.History
@@ -65,6 +66,7 @@ private val destinations = listOf(
     Dest("home", "Home", Icons.Outlined.Home, Icons.Rounded.Home),
     Dest("search", "Search", Icons.Rounded.Search),
     Dest("time-machine", "Time Machine", Icons.Rounded.History),
+    Dest("songs", "Songs", Icons.Rounded.MusicNote),
     Dest("mylist", "My List", Icons.Outlined.Bookmarks, Icons.Rounded.Bookmarks),
     Dest("schedule", "Schedule", Icons.Outlined.CalendarMonth, Icons.Rounded.CalendarMonth),
     Dest("downloads", "Downloads", Icons.Outlined.DownloadForOffline, Icons.Rounded.DownloadForOffline),
@@ -263,6 +265,9 @@ fun AppShell() {
     // Reading modes deepen the accent a shade, as on desktop.
     androidx.compose.runtime.SideEffect { com.sanjay.anitrack.next.ui.AniColors.mangaMode.value = manga || novel }
     val tabs = if (novel) novelDestinations else if (manga) mangaDestinations else destinations
+    // Each tab past six needs about 200 dp more before every tab can show its label
+    // (the 1280 dp tablet fits six labelled anime tabs and a usable search box).
+    val labelsFit = tabLabels && widthDp >= 1100 + 200 * (tabs.count { it.route != "settings" } - 6).coerceAtLeast(0)
     val openNovel: (com.sanjay.anitrack.next.data.novel.NovelSourceId, String) -> Unit = { source, id ->
         nav.navigate("novel/${source.key}/${android.net.Uri.encode(id)}")
     }
@@ -289,7 +294,7 @@ fun AppShell() {
                     Spacer(Modifier.width(18.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                         tabs.filter { it.route != "settings" }.forEach { d ->
-                            NavTab(d, selected = currentTab == d.route, showLabel = tabLabels || currentTab == d.route) { go(d.route) }
+                            NavTab(d, selected = currentTab == d.route, showLabel = labelsFit || currentTab == d.route) { go(d.route) }
                         }
                     }
                     // Inline search with a live results dropdown (desktop-style).
@@ -307,7 +312,7 @@ fun AppShell() {
                     MalProfileButton(
                         connected = malConnected,
                         username = malUsername,
-                        showUsername = tabLabels,
+                        showUsername = labelsFit,
                         selected = currentTab == "settings",
                         onClick = { go("settings") },
                     )
@@ -417,6 +422,9 @@ fun AppShell() {
                         // "View all results" from the top bar: a fresh search for that text.
                         val q = entry.arguments?.getString("q").orEmpty()
                         androidx.compose.runtime.key(q) { com.sanjay.anitrack.next.ui.SearchScreen(openDetail, initialQuery = q) }
+                    }
+                    composable("songs") {
+                        com.sanjay.anitrack.next.ui.SongsScreen(onOpenAnime = { id -> nav.navigate("anime/$id") })
                     }
                     composable("time-machine") {
                         com.sanjay.anitrack.next.ui.TimeMachineScreen(

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
-  BellRing, Bookmark, BookOpen, BookText, CalendarDays, Download, History, House, MonitorPlay,
+  BellRing, Bookmark, BookOpen, BookText, CalendarDays, Download, History, House, MonitorPlay, Music2,
   PanelLeftClose, PanelLeftOpen, Search, Settings, Tv, UserRound, type LucideIcon,
 } from "lucide-react";
 import { useAppStore } from "../store/useAppStore";
@@ -22,6 +22,7 @@ const ANIME: Group[] = [
       { to: "/filter", label: "Search", icon: Search },
       { to: "/schedule", label: "Schedule", icon: CalendarDays },
       { to: "/time-machine", label: "Time Machine", icon: History },
+      { to: "/songs", label: "Songs", icon: Music2 },
     ],
   },
   {

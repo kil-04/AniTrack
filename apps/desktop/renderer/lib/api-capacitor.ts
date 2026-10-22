@@ -13,6 +13,7 @@ import { ScreenOrientation } from "@capacitor/screen-orientation";
 import { classicEraBoost, classicEraLabel } from "../../../../packages/shared/recommendations";
 import { planStory } from "../../../../packages/shared/story-bridge";
 import { mixRadio, parseThemesResponse, themesUrl } from "../../../../packages/shared/anime-themes";
+import { ANISONGS, isSeasonQuery, parseAniSongs, parseCharts, searchBody } from "../../../../packages/shared/anisongs";
 import {
   gemPopularityFloor,
   timeMachineCandidate,
@@ -526,6 +527,28 @@ export async function installCapacitorApiBridge() {
             }));
           return planStory(data.Media?.source ?? null, links);
         } catch { return planStory(null, []); }
+      },
+    },
+
+    // ── songs (AnisongDB). The legacy shell ships no chart file: charts are empty. ──
+    songs: {
+      async charts() {
+        return parseCharts({ generatedAt: new Date(0).toISOString(), decades: {}, allTime: {} });
+      },
+      async season(season, year) {
+        if (!isSeasonQuery(season, year)) return [];
+        const res = await fetch(`${ANISONGS.API}/season_request`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ season: `${season} ${year}` }) });
+        return res.ok ? parseAniSongs(await res.json()) : [];
+      },
+      async show(malId) {
+        if (!Number.isSafeInteger(malId) || malId <= 0) return [];
+        const res = await fetch(`${ANISONGS.API}/mal_ids_request`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mal_ids: [malId] }) });
+        return res.ok ? parseAniSongs(await res.json()) : [];
+      },
+      async search(query, by) {
+        if (query.trim().length < 2) return [];
+        const res = await fetch(`${ANISONGS.API}/search_request`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(searchBody(query, by)) });
+        return res.ok ? parseAniSongs(await res.json()) : [];
       },
     },
 

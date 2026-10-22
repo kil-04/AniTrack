@@ -113,6 +113,12 @@ contextBridge.exposeInMainWorld("api", {
     forAnime: (id: number) => ipcRenderer.invoke(IPC.THEMES_FOR_ANIME, id),
     radio: () => ipcRenderer.invoke(IPC.THEMES_RADIO),
   },
+  songs: {
+    charts: () => ipcRenderer.invoke(IPC.SONGS_CHARTS),
+    season: (season: string, year: number) => ipcRenderer.invoke(IPC.SONGS_SEASON, season, year),
+    search: (query: string, by: string) => ipcRenderer.invoke(IPC.SONGS_SEARCH, query, by),
+    show: (malId: number) => ipcRenderer.invoke(IPC.SONGS_SHOW, malId),
+  },
   music: {
     list: () => ipcRenderer.invoke(IPC.MUSIC_LIST),
     import: () => ipcRenderer.invoke(IPC.MUSIC_IMPORT),

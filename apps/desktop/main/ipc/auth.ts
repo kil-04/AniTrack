@@ -12,6 +12,7 @@ import {
 } from "../services/mal";
 import { getById, getRelations, searchAnime, advancedSearchAnime, trending, getAiringFor, recentEpisodes, recommendations, premieredOn, getStory, timeMachineYear } from "../services/anilist";
 import { themeRadio, themesForAnime } from "../services/animethemes";
+import { searchSongs, seasonSongs, showSongs, songCharts } from "../services/anisongs";
 import {
   beginAuth as alBeginAuth,
   disconnect as alDisconnect,
@@ -84,6 +85,19 @@ export function registerAuthIpc(getMainWindow: () => BrowserWindow | null) {
     return themesForAnime(animeId);
   });
   ipcMain.handle(IPC.THEMES_RADIO, () => themeRadio());
+  ipcMain.handle(IPC.SONGS_CHARTS, () => songCharts());
+  ipcMain.handle(IPC.SONGS_SEASON, (_e, season: unknown, year: unknown) => {
+    if (typeof season !== "string" || typeof year !== "number") throw new Error("Invalid season");
+    return seasonSongs(season as never, year);
+  });
+  ipcMain.handle(IPC.SONGS_SHOW, (_e, malId: unknown) => {
+    if (typeof malId !== "number" || !Number.isSafeInteger(malId) || malId <= 0) throw new Error("Invalid MAL id");
+    return showSongs(malId);
+  });
+  ipcMain.handle(IPC.SONGS_SEARCH, (_e, query: unknown, by: unknown) => {
+    if (typeof query !== "string" || query.length > 200 || (by !== "song" && by !== "artist" && by !== "anime")) throw new Error("Invalid song search");
+    return searchSongs(query, by);
+  });
   ipcMain.handle(IPC.ANILIST_STORY, (_e, id: unknown) => {
     const animeId = Number(id);
     if (!Number.isInteger(animeId) || animeId <= 0) throw new Error("Invalid anime id");
