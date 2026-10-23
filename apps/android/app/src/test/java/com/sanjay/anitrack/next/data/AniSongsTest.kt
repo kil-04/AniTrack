@@ -89,6 +89,7 @@ class AniSongsTest {
         // YouTube views share the scale (about 3,000 views a listener); whichever says more counts.
         assertEquals(64.9, AniSongs.bestScore(sara.copy(views = 7_800_000))!!, 0.2)
         assertEquals(99.8, AniSongs.bestScore(sara.copy(views = 7_800_000, listeners = 180_000))!!, 0.3)
+        assertEquals("listeners", AniSongs.bestSource(sara.copy(views = 7_800_000, listeners = 180_000)))
         assertEquals(15.0, AniSongs.bestScore(sara.copy(views = 900_000_000, licensed = true, recognition = 30.0))!!, 0.001)
     }
 

@@ -241,10 +241,11 @@ export type ChartOrder = "best" | "known";
 
 /**
  * A song's "best" score (0–100), from how much people play it: YouTube views across all its
- * uploads, or Last.fm listeners, whichever says more, on one log scale (about 3,000 views per
- * listener: 2.8k listeners ≈ 8M views ≈ 66, 180k listeners ≈ 100). A song neither knows gets
- * half its quiz recognition, and a Kids show's song counts 60%: those are known by everyone
- * but rarely played as music.
+ * uploads or Last.fm listeners, whichever says more, on one log scale (about 3,000 views per
+ * listener: 8M views ≈ 2.8k listeners ≈ 66). Either can undercount (uploads titled only in
+ * Japanese, tracks Last.fm files under another name), so the stronger one decides; the charts
+ * show it with a bar of this score. A song neither knows gets half its quiz recognition, and
+ * a Kids show's song counts 60%: those are known by everyone but rarely played as music.
  */
 export function bestScore(song: AniSong): number | null {
   // A licensed song's plays aren't anime fans': it scores on its quiz recognition.
@@ -341,8 +342,26 @@ const MINOR = new Set(["no", "wo", "wa", "ga", "to", "ni", "de", "e", "mo", "the
 const titleWords = (title: string) => baseTitle(title).split(" ").map(fold).filter((w) => w && !MINOR.has(w));
 /** "Lupin III: Part II" → also "Lupin III"; "Gegege no Kitarou (1985)" → also "Gegege no Kitarou". */
 const showNames = (names: (string | null)[]) => [...new Set(names.flatMap((n) => (n
-  ? [n, n.replace(/\s*[:(\[].*$/, ""), n.replace(/\s+(?:part|season|series)\s+\S+$/i, "")]
+  ? [n, n.replace(/\s*[:(\[].*$/, ""), n.replace(/\s+(?:part|season|series)\s+\S+$/i, ""),
+    // "City Hunter 2", "Lupin III Part II", "Bleach 2nd Season" → also the first show's name.
+    n.replace(/\s*[:(\[].*$/, "").replace(/\s+(?:\d{1,2}|[IVX]{1,4}|\d+(?:st|nd|rd|th)(?:\s+season)?)$/i, "")]
   : [])).map(fold).filter((v) => v.length >= 4))];
+
+/** A romaji word: syllables like "ko", "shi", "tsu", "kyou", with "n" and doubled consonants. */
+const ROMAJI = /^(?:(?:[kgsztdnhbpmyrwfjv]|ch|sh|ts)?y?[aiueo]|n|[kstpc](?=[kstpc]))+$/;
+const PARTICLES = new Set(["no", "wo", "wa", "ga", "ni", "de", "to", "yo", "na", "mo", "e"]);
+
+/**
+ * "Zankoku na Tenshi no Thesis" or "Odoru Ponpokorin": a particle beside a real romaji word,
+ * or mostly romaji words and 8+ letters. Not "Get Wild", "Ai no Story" or "SARA".
+ */
+export function readsAsJapanese(title: string): boolean {
+  const all = baseTitle(title).split(" ").filter(Boolean);
+  const words = all.filter((w) => !MINOR.has(w));
+  const romaji = words.filter((w) => ROMAJI.test(w));
+  if (all.some((w) => PARTICLES.has(w)) && romaji.some((w) => w.length >= 4)) return true;
+  return words.join("").length >= 8 && romaji.length * 2 >= words.length + 1;
+}
 
 /** Videos about many songs, or about something else. */
 const NOT_THE_SONG = /\btop\s*\d+|ranking|\ball\s+(?:the\s+)?(?:openings|endings|op|ed)s?\b|\bevery\s+(?:opening|ending)|compilation|medley|メドレー|\breact(?:ion|s|ing)?\b|but it'?s/i;
@@ -364,12 +383,15 @@ export function songYouTubeViews(videos: YouTubeVideo[], song: AniSong, otherNam
   const words = titleWords(song.title);
   // The track's own name elsewhere (Spotify's ラムのラブソング for "Lum no Love Song").
   const aliases = otherNames.filter((n): n is string => !!n).map(fold).filter((n) => n.length >= 2 && n !== words.join(""));
-  // Only a distinctive name counts without the show or artist beside it: "Cheap Thrills",
-  // "Hello Goodbye" or "Pretender" alone would count Sia's, the Beatles' or anyone's song.
-  const letters = words.join("").length;
-  const short = letters < 14 && (words.length < 3 || letters < 10);
+  // Only a long name that reads as Japanese counts without the show or artist beside it. An
+  // English one ("Cheap Thrills", "She's so lovely") would count Sia's or Scouting for Girls'
+  // song, and a short Japanese one can be another show's ("Jiyuu no Tsubasa": Captain Tylor's
+  // 1994 ending, and Attack on Titan's).
+  const short = !(readsAsJapanese(song.title) && words.length >= 2 && words.join("").length >= 14);
   // A band like "You & Explosion Band" is its whole name; a duet's first singer is theirs.
-  const artists = [...new Set([song.artist, song.artist.split(/,| feat\.| & | x /i)[0] ?? ""].map(fold))].filter((a) => a.length >= 3);
+  // Long vowels spelled either way: AnisongDB's "Yuuko Matsutani" is YouTube's "Yuko Matsutani - Topic".
+  const vowels = (text: string) => text.replace(/ou/g, "o").replace(/uu/g, "u").replace(/oo/g, "o");
+  const artists = [...new Set([song.artist, song.artist.split(/,| feat\.| & | x /i)[0] ?? ""].map((a) => vowels(fold(a))))].filter((a) => a.length >= 3);
   const shows = showNames([song.anime, song.animeJp]);
   const seen = new Set<string>();
   let total = 0;
@@ -377,10 +399,10 @@ export function songYouTubeViews(videos: YouTubeVideo[], song: AniSong, otherNam
   for (const video of videos) {
     if (seen.has(video.id) || NOT_THE_SONG.test(video.title) || (video.seconds != null && video.seconds > 15 * 60)) continue;
     const titles = [fold(video.title), fold(kanaToRomaji(video.title))];
-    const channel = fold(video.channel);
+    const channel = vowels(fold(video.channel));
     const has = (text: string) => titles.some((t) => t.includes(text));
     const ofShow = shows.some(has);
-    const byArtist = artists.some((a) => has(a) || channel.includes(a));
+    const byArtist = artists.some((a) => titles.some((t) => vowels(t).includes(a)) || channel.includes(a));
     const named = (words.length > 0 && words.every(has) && (!short || ofShow || byArtist))
       || aliases.some((name) => has(name) && (name.length >= 4 || ofShow || byArtist));
     let themed = false;
@@ -397,6 +419,15 @@ export function songYouTubeViews(videos: YouTubeVideo[], song: AniSong, otherNam
     total += video.views;
   }
   return total;
+}
+
+/** Which number decided a song's "best" score: its YouTube views, its Last.fm listeners, or (neither) its quiz score. */
+export function bestSource(song: AniSong): "views" | "listeners" | "quiz" {
+  if (song.licensed) return "quiz";
+  const watched = song.views ? Math.log10(song.views / 3000 + 1) : null;
+  const heard = song.listeners != null ? Math.log10(song.listeners + 1) : null;
+  if (watched == null && heard == null) return "quiz";
+  return (watched ?? -1) >= (heard ?? -1) ? "views" : "listeners";
 }
 
 const scoreOf = (song: AniSong, order: ChartOrder) => (order === "best" ? bestScore(song) : song.recognition);
@@ -449,6 +480,18 @@ export function isSeasonQuery(season: unknown, year: unknown, now = new Date()):
 export type SongSearchBy = "song" | "artist" | "anime";
 
 /** The JSON body of an AnisongDB search_request. */
+/**
+ * AnisongDB's refusal in place of songs, said plainly: it turns text search off while Anime
+ * Music Quiz runs ranked games ({"detail":"… disabled during ranked time"}), a few times a day.
+ */
+export function anisongdbRefusal(json: unknown): string | null {
+  const detail = obj(json)?.detail;
+  if (typeof detail !== "string") return null;
+  return /ranked/i.test(detail)
+    ? "AnisongDB pauses song search while Anime Music Quiz runs its ranked games. Try again in a little while."
+    : `AnisongDB couldn't search right now (${detail.slice(0, 120)}).`;
+}
+
 export function searchBody(query: string, by: SongSearchBy): Json {
   const search = { search: query.trim().slice(0, 100), partial_match: true };
   return {

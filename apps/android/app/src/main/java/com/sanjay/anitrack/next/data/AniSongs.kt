@@ -239,10 +239,20 @@ object AniSongs {
         // A licensed song's plays aren't anime fans': it scores on its quiz recognition.
         val watched = song.views?.takeIf { !song.licensed && it > 0 }?.let { minOf(100.0, kotlin.math.log10(it / 3000.0 + 1) * 19) }
         val heard = song.listeners?.takeIf { !song.licensed }?.let { minOf(100.0, kotlin.math.log10(it + 1.0) * 19) }
+        // Whichever says more: either can undercount (Japanese-titled uploads, renamed tracks).
         val base = listOfNotNull(watched, heard).maxOrNull()
             ?: song.recognition?.let { it * 0.5 }
             ?: return null
         return if (song.kids) base * 0.6 else base
+    }
+
+    /** Which number decided a song's "best" score: "views", "listeners" or (neither) "quiz". Same as bestSource in anisongs.ts. */
+    fun bestSource(song: AniSong): String {
+        if (song.licensed) return "quiz"
+        val watched = song.views?.takeIf { it > 0 }?.let { kotlin.math.log10(it / 3000.0 + 1) }
+        val heard = song.listeners?.let { kotlin.math.log10(it + 1.0) }
+        if (watched == null && heard == null) return "quiz"
+        return if ((watched ?: -1.0) >= (heard ?: -1.0)) "views" else "listeners"
     }
 
     private fun scoreOf(song: AniSong, order: String): Double? = if (order == "best") bestScore(song) else song.recognition
@@ -283,6 +293,13 @@ object AniSongs {
     }
 
     /** The JSON body of an AnisongDB search_request; [by] is "song", "artist" or "anime". */
+    /** AnisongDB's refusal in place of songs, said plainly (it pauses text search during AMQ ranked games). Same as anisongdbRefusal in anisongs.ts. */
+    fun refusal(text: String): String? {
+        val detail = runCatching { JSONObject(text).optString("detail") }.getOrNull()?.takeIf { it.isNotBlank() } ?: return null
+        return if (detail.contains("ranked", ignoreCase = true)) "AnisongDB pauses song search while Anime Music Quiz runs its ranked games. Try again in a little while."
+        else "AnisongDB couldn't search right now (${detail.take(120)})."
+    }
+
     fun searchBody(query: String, by: String): JSONObject {
         val search = JSONObject().put("search", query.trim().take(100)).put("partial_match", true)
         return JSONObject().apply {
@@ -399,6 +416,7 @@ object AniSongs {
             if (bytes.size > 16 * 1024 * 1024) throw IllegalStateException("AnisongDB sent too much")
             String(bytes)
         }
+        refusal(text)?.let { throw IllegalStateException(it) }
         val songs = parseSongs(JSONArray(text))
         synchronized(cache) { cache[key] = now to songs }
         songs

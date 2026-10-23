@@ -2,14 +2,17 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   ANISONGS,
+  anisongdbRefusal,
   baseTitle,
   bestScore,
+  bestSource,
   isSongMedia,
   isSeasonQuery,
   parseAniSongs,
   parseCharts,
   kanaToRomaji,
   parseYouTubeSearch,
+  readsAsJapanese,
   previousSeason,
   rankSongs,
   searchBody,
@@ -162,9 +165,14 @@ test("anisongs: YouTube views add up everyone's uploads of the song, and only th
   assert.equal(lum.length, 9);
   assert.deepEqual(lum[1], { id: "aaaaaaaaaa2", title: "ラムのラブソング", channel: "Yuko Matsutani - Topic", views: 6264897, seconds: 164 });
   const [song] = parseAniSongs([row({ annSongId: 40, songName: "Lum no Love Song", songArtist: "Yuko Matsutani", animeENName: "Urusei Yatsura", animeJPName: "Urusei Yatsura", animeVintage: "Fall 1981" })]);
-  // Fan upload, official Topic upload, the show's opening 1, a re-upload and a cover; not the
-  // BGM, the meme, opening 2 or the countdown.
-  assert.equal(songYouTubeViews(lum, song), 76415 + 6264897 + 2289204 + 5666871 + 176669);
+  // Fan upload, official Topic upload, the show's opening 1 and a cover; not a bare "Lum no
+  // Love Song" (a short name needs the show or artist beside it), the BGM, the meme, opening 2
+  // or the countdown.
+  assert.equal(songYouTubeViews(lum, song), 76415 + 6264897 + 2289204 + 176669);
+
+  // Long vowels match either way: "Yuuko" is YouTube's "Yuko".
+  const [yuuko] = parseAniSongs([row({ annSongId: 47, songName: "Lum no Love Song", songArtist: "Yuuko Matsutani", animeENName: "Urusei Yatsura", animeVintage: "Fall 1981" })]);
+  assert.equal(songYouTubeViews(lum, yuuko), songYouTubeViews(lum, song));
 
   // A short name needs the show or the artist beside it.
   const [sara] = parseAniSongs([row({ annSongId: 41, songName: "SARA", songArtist: "Fence of Defense", animeENName: "City Hunter 2", animeJPName: "City Hunter 2", songType: "Opening 2", animeVintage: "Spring 1988" })]);
@@ -189,8 +197,16 @@ test("anisongs: YouTube views add up everyone's uploads of the song, and only th
     video("cccccccccc3", "Lupin III '80", "fan", "500,000 views", "3:00"),
   ));
   assert.equal(songYouTubeViews(lupinPage, lupin), 4_000_000);
-  const marukoPage = parseYouTubeSearch(page(video("dddddddddd1", "B.B.クィーンズ - おどるポンポコリン", "Being", "2,000,000 views", "4:20")));
+  const marukoPage = parseYouTubeSearch(page(video("dddddddddd1", "ちびまる子ちゃん ED - B.B.クィーンズ「おどるポンポコリン」", "Being", "2,000,000 views", "4:20")));
   assert.equal(songYouTubeViews(marukoPage, maruko), 2_000_000);
+
+  // Romaji that's really English ("Ai no Story") or a short Japanese name ("Jiyuu no Tsubasa")
+  // needs the show or artist: AI's "Story" and Attack on Titan's song aren't God Mars' or Tylor's.
+  assert.equal(readsAsJapanese("Ai no Story"), false);
+  assert.equal(readsAsJapanese("YOU!YOU!YOU!"), true); // reads as romaji, but too short to stand alone
+  const [tylor] = parseAniSongs([row({ annSongId: 46, songName: "Jiyuu no Tsubasa", songArtist: "T's WORK SHOP", animeENName: "The Irresponsible Captain Tylor", songType: "Ending 1", animeVintage: "Fall 1994" })]);
+  const tylorPage = parseYouTubeSearch(page(video("hhhhhhhhhh1", "Attack on Titan Opening 2 | Jiyuu no Tsubasa by Linked Horizon", "Crunchyroll", "36,295,889 views", "1:30")));
+  assert.equal(songYouTubeViews(tylorPage, tylor), 0);
 
   // A generic name needs the show or artist: Sia's "Cheap Thrills" isn't Dangaioh's.
   const [thrills] = parseAniSongs([row({ annSongId: 45, songName: "CHEAP THRILLS", songArtist: "Kenichi Takakura", animeENName: "Dangaioh", animeVintage: "Fall 1987" })]);
@@ -206,9 +222,15 @@ test("anisongs: YouTube views add up everyone's uploads of the song, and only th
   assert.equal(songYouTubeViews(kanjiPage, thesis), 0);
   assert.equal(songYouTubeViews(kanjiPage, thesis, ["残酷な天使のテーゼ"]), 50_000_000);
 
-  // On one scale with Last.fm: whichever says more; licensed songs don't count.
+  // A sequel's uploads often carry the first show's name: "City Hunter - Sara" for City Hunter 2.
+  const saraByShow = parseYouTubeSearch(page(video("gggggggggg1", "City Hunter - Sara", "GODZAK81", "5,263,796 views", "4:33")));
+  assert.equal(songYouTubeViews(saraByShow, sara), 5_263_796);
+
+  // On one scale with Last.fm: whichever says more decides; licensed songs don't count.
   assert.ok(Math.abs(bestScore({ ...sara, views: 7_800_000 }) - 64.9) < 0.2);
   assert.ok(Math.abs(bestScore({ ...sara, views: 7_800_000, listeners: 180_000 }) - 99.8) < 0.3);
+  assert.equal(bestSource({ ...sara, views: 7_800_000, listeners: 180_000 }), "listeners");
+  assert.equal(bestSource({ ...sara, views: 7_800_000, listeners: 200 }), "views");
   assert.equal(bestScore({ ...sara, views: 900_000_000, licensed: true, recognition: 30 }), 15);
 });
 
@@ -229,4 +251,9 @@ test("anisongs: title pages fill AnimeThemes' gaps with AnisongDB clips", () => 
   assert.deepEqual(withSongClips([], clips).map((s) => s.slug), ["OP1", "ED2"]);
   // Songs AnimeThemes doesn't list come after its own (God Mars has only its OP there).
   assert.deepEqual(withSongClips([theme("OP1", "https://v.animethemes.moe/x.webm")], clips).map((s) => s.slug), ["OP1", "ED2"]);
+});
+
+test("anisongs: AnisongDB's ranked-time pause reads as such, not as no songs", () => {
+  assert.match(anisongdbRefusal({ detail: "Song name/artist/composer text search is disabled during ranked time" }), /ranked games/);
+  assert.equal(anisongdbRefusal([]), null);
 });

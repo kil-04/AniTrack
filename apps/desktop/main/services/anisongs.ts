@@ -3,6 +3,7 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import {
   ANISONGS,
+  anisongdbRefusal,
   isSeasonQuery,
   parseAniSongs,
   parseCharts,
@@ -44,7 +45,10 @@ async function post(key: string, path: string, body: unknown): Promise<AniSong[]
     if (!response.ok) throw new Error(`AnisongDB answered ${response.status}. Try again later.`);
     const text = await response.text();
     if (text.length > MAX_BYTES) throw new Error("AnisongDB sent too much.");
-    const songs = parseAniSongs(JSON.parse(text));
+    const json = JSON.parse(text);
+    const refusal = anisongdbRefusal(json);
+    if (refusal) throw new Error(refusal);
+    const songs = parseAniSongs(json);
     if (cache.size >= 40) cache.delete(cache.keys().next().value!);
     cache.set(key, { at: Date.now(), songs });
     return songs;

@@ -17,7 +17,8 @@
  * searching again. The most-recognised songs of every year go first, and a run stops
  * the YouTube part (keeping what it has) as soon as YouTube refuses or asks for a check.
  * Both cover every song with a video (~20.7k; YouTube's part takes about 28 h in all).
- * YT=off skips it; YT_MAX=<n> caps a run's searches.
+ * YT=off skips it; YT_MAX=<n> caps a run's searches. LISTEN=off skips the Last.fm/Spotify lookups
+ * (a rebuild from what's cached).
  *
  *   node --env-file=.env scripts/build-song-charts.mjs
  *
@@ -43,6 +44,10 @@ const ARTIST_TAGS = path.join(ROOT, "out", "song-artist-tags.json");
 const YOUTUBE = path.join(ROOT, "out", "song-youtube.json");
 /** AniList covers and Kids tags by show id. */
 const SHOWS = path.join(ROOT, "out", "song-shows.json");
+/** The first episode each later OP/ED plays from, by AniList id and slug (AnimeThemes). */
+const THEME_EPISODES = path.join(ROOT, "out", "song-theme-episodes.json");
+/** Long shows' air dates and episode counts (AniList), to date their later themes. */
+const SHOW_RUNS = path.join(ROOT, "out", "song-show-runs.json");
 /** Any of these in an artist's Last.fm tags marks an anime or Japanese act (not a licensed import). */
 const ANIME_TAG = /anime|anisong|japan|j-?pop|j-?rock|city ?pop|visual kei|seiyuu|idol|enka|kayou?kyoku|shibuya|vocaloid|tokusatsu|\bgame|k-?pop|asian|soundtrack|\bost\b|[぀-ヿ一-鿿]/i;
 const firstArtist = (artist) => artist.split(/,| feat\.| & | x /i)[0].trim();
@@ -73,6 +78,7 @@ const spotifyAuth = pacer(0);
 const lastfmLane = pacer(220);
 // A person-like pace for YouTube's search page, with a little jitter.
 const youtubeLane = pacer(3000);
+const animethemesLane = pacer(1500);
 
 async function withRetries(pace, label, fn) {
   for (let attempt = 1; ; attempt++) {
@@ -263,6 +269,90 @@ async function youtubeSearch(song) {
 /** The song's views from its cached search, or null when it hasn't been searched. */
 const viewsOf = (song) => (Array.isArray(youtube[listenKey(song)]) ? songYouTubeViews(youtube[listenKey(song)], song, [spotifyNames[listenKey(song)]]) : null);
 
+// ── Song dates ─────────────────────────────────────────────────────────────────
+// AnisongDB files every song under its show's first season, so One Piece's 2017 opening
+// "Hope" sat in 1999. AnimeThemes says which episode each theme starts at and AniList how
+// long the show ran: a later theme is dated by the show's own pace (breaks included).
+
+const readJson = (file) => (fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {});
+
+/** Per AniList id, each theme's first episode ("OP20" → 807); {} when AnimeThemes doesn't know the show. */
+async function themeEpisodes(ids) {
+  const cache = readJson(THEME_EPISODES);
+  const missing = ids.filter((id) => !(id in cache));
+  console.log(`Theme episodes: ${ids.length - missing.length} cached, ${missing.length} to look up`);
+  for (let i = 0; i < missing.length; i += 25) {
+    const chunk = missing.slice(i, i + 25);
+    const url = "https://api.animethemes.moe/anime?" + [
+      "filter%5Bhas%5D=resources", "filter%5Bsite%5D=AniList", `filter%5Bexternal_id%5D=${chunk.join(",")}`,
+      "include=animethemes.animethemeentries,resources", "page%5Bsize%5D=25",
+    ].join("&");
+    const json = await withRetries(animethemesLane, "AnimeThemes", () => fetch(url, { headers: { Accept: "application/json", "User-Agent": UA }, signal: AbortSignal.timeout(30_000) }))
+      .then((response) => response.json()).catch(() => null);
+    if (!json) continue; // retried next run
+    for (const id of chunk) cache[id] = {};
+    for (const anime of json.anime ?? []) {
+      const id = Number(anime.resources?.find((r) => r.site === "AniList")?.external_id);
+      if (!cache[id]) continue;
+      for (const theme of anime.animethemes ?? []) {
+        const first = Number(/\d+/.exec(String(theme.animethemeentries?.[0]?.episodes ?? ""))?.[0]);
+        const slug = /^(OP|ED)(\d*)/.exec(String(theme.slug ?? ""));
+        if (slug && first > 0) cache[id][`${slug[1]}${slug[2] || 1}`] = first;
+      }
+    }
+    fs.writeFileSync(THEME_EPISODES, JSON.stringify(cache));
+  }
+  return cache;
+}
+
+/** Per AniList id, {start, end, episodes} in ms and counts (an ongoing show's episodes are those aired). */
+async function showRuns(ids) {
+  const cache = readJson(SHOW_RUNS);
+  const missing = ids.filter((id) => !(id in cache));
+  console.log(`Show runs: ${ids.length - missing.length} cached, ${missing.length} to look up`);
+  const day = (d) => (d?.year ? Date.UTC(d.year, (d.month ?? 1) - 1, d.day ?? 1) : null);
+  try {
+    for (let i = 0; i < missing.length; i += 50) {
+      const chunk = missing.slice(i, i + 50);
+      const response = await withRetries(anilist, "AniList", () => fetch("https://graphql.anilist.co", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          query: "query($ids:[Int]){Page(perPage:50){media(id_in:$ids,type:ANIME){id episodes status startDate{year month day} endDate{year month day} nextAiringEpisode{episode}}}}",
+          variables: { ids: chunk },
+        }),
+      }));
+      const json = await response.json();
+      for (const id of chunk) cache[id] = null;
+      for (const media of json?.data?.Page?.media ?? []) {
+        const airing = media.nextAiringEpisode?.episode;
+        cache[media.id] = {
+          start: day(media.startDate),
+          end: media.status === "FINISHED" ? day(media.endDate) : null,
+          episodes: airing ? airing - 1 : media.episodes ?? null,
+        };
+      }
+      fs.writeFileSync(SHOW_RUNS, JSON.stringify(cache));
+    }
+  } catch (error) {
+    console.log(`  AniList: ${error.message}; later themes keep their show's year where it's missing`);
+  }
+  return cache;
+}
+
+/** The song moved to the season its theme started, when it starts after the first cour. */
+function datedSong(song, episodes, runs) {
+  const first = episodes[song.anilistId]?.[`${song.kind}${song.number ?? 1}`];
+  const run = runs[song.anilistId];
+  if (!first || first <= 13 || !run?.start || !run.episodes || run.episodes < first) return song;
+  const until = run.end ?? Date.now();
+  const at = Math.min(until, run.start + ((until - run.start) / run.episodes) * (first - 1));
+  const date = new Date(at);
+  const year = date.getUTCFullYear();
+  if (year === song.year) return song;
+  return { ...song, year, season: `${SEASONS[Math.floor(date.getUTCMonth() / 3)]} ${year}` };
+}
+
 // ── Build ──────────────────────────────────────────────────────────────────
 
 const now = new Date();
@@ -274,9 +364,15 @@ for (let year = ANISONGS.FIRST_YEAR; year <= thisYear; year++) {
     all.push(...parseAniSongs(await season(name, year, year >= thisYear - 1)));
   }
 }
+// Later themes of long shows move to the year they started (One Piece's "Hope" → 2017).
+const laterShows = [...new Set(all.filter((s) => s.anilistId && (s.number ?? 1) >= 2).map((s) => s.anilistId))];
+const episodesByShow = await themeEpisodes(laterShows);
+const runsByShow = await showRuns(laterShows.filter((id) => Object.keys(episodesByShow[id] ?? {}).length));
+const dated = all.map((song) => datedSong(song, episodesByShow, runsByShow));
+console.log(`Dated ${dated.filter((song, i) => song !== all[i]).length} later themes by when they aired`);
 // Merge reused songs to their original show first, so a 1979 song a 1985 film reuses
 // stays in the 1970s chart.
-const originals = originalSongs(all.filter((s) => s.video));
+const originals = originalSongs(dated.filter((s) => s.video));
 console.log(`${all.length} songs, ${originals.length} originals with video`);
 
 /** Every song, each year's best-known first; Last.fm and YouTube both look them all up. */
@@ -299,11 +395,24 @@ const youtube = fs.existsSync(YOUTUBE) ? JSON.parse(fs.readFileSync(YOUTUBE, "ut
 
 /** Last.fm (with Spotify's names) and YouTube run side by side: different services, different lanes. */
 async function lookUpListening() {
+if (process.env.LISTEN === "off") return;
 if (listeningOn) {
   let done = 0;
   const spotified = new Set(fs.existsSync(SPOTIFIED) ? JSON.parse(fs.readFileSync(SPOTIFIED, "utf8")) : []);
   // New songs, and (while Spotify answers) songs looked up before without its names.
-  const todo = candidates.filter((s) => !(listenKey(s) in listening) || (spotifyAllowed() && !spotified.has(listenKey(s))));
+  // Spotify answers ~600 searches a day, so the songs the shipped decade charts show go first,
+  // then each year's best-known: their Japanese names fix the counts people actually see.
+  const charted = new Set();
+  try {
+    const shipped = JSON.parse(fs.readFileSync(OUTPUT, "utf8"));
+    const byId = new Map(shipped.songs.map((s) => [s.id, s]));
+    for (const set of Object.values(shipped.decades)) for (const order of Object.values(set)) for (const ids of Object.values(order)) for (const id of ids) {
+      const song = byId.get(id);
+      if (song) charted.add(listenKey(song));
+    }
+  } catch { /* no charts yet */ }
+  const todo = candidates.filter((s) => !(listenKey(s) in listening) || (spotifyAllowed() && !spotified.has(listenKey(s))))
+    .sort((a, b) => Number(charted.has(listenKey(b))) - Number(charted.has(listenKey(a))) || placeInYear.get(a) - placeInYear.get(b));
   console.log(`Listening: ${candidates.length - todo.length} cached, ${todo.length} to look up`);
   fs.mkdirSync(path.dirname(LISTENING), { recursive: true });
   const save = () => {
