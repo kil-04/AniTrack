@@ -81,7 +81,7 @@ class AniSongsTest {
             row("annSongId" to 32, "songName" to "Obscure", "songArtist" to "Nobody", "animeENName" to "Rare Show", "animeVintage" to "Fall 1987", "songDifficulty" to 40),
         )))
         val songs = listOf(sara.copy(listeners = 2858), doraemon.copy(listeners = 27, kids = true), unknown)
-        assertEquals(65.6, AniSongs.bestScore(songs[0])!!, 0.2)
+        assertEquals(44.0, AniSongs.bestScore(songs[0])!!, 0.2) // 2,858 listeners ≈ 1.1M views
         assertTrue(AniSongs.bestScore(songs[1])!! < 20)
         assertEquals(20.0, AniSongs.bestScore(unknown)!!, 0.001)
         assertEquals(listOf("SARA", "Obscure", "Doraemon no Uta"), AniSongs.rank(songs, "OP", 10, Int.MAX_VALUE, "best").map { it.title })
@@ -90,11 +90,14 @@ class AniSongsTest {
         val alone = unknown.copy(id = 33, title = "Alone Again", listeners = 539769, licensed = true, recognition = 29.0)
         assertEquals(14.5, AniSongs.bestScore(alone)!!, 0.001)
         assertEquals("SARA", AniSongs.rank(listOf(songs[0], alone), "OP", 10, Int.MAX_VALUE, "best")[0].title)
-        // YouTube views share the scale (about 3,000 views a listener); whichever says more counts.
-        assertEquals(64.9, AniSongs.bestScore(sara.copy(views = 7_800_000))!!, 0.2)
-        assertEquals(100.0, AniSongs.bestScore(sara.copy(views = 7_800_000, listeners = 180_000))!!, 0.3)
+        // YouTube views decide; Last.fm stands in only when YouTube missed the song.
+        assertEquals(58.6, AniSongs.bestScore(sara.copy(views = 7_800_000))!!, 0.2)
+        assertEquals(58.6, AniSongs.bestScore(sara.copy(views = 7_800_000, listeners = 180_000))!!, 0.2)
+        assertEquals(AniSongs.bestScore(sara.copy(views = 68_820L * 384))!!, AniSongs.bestScore(sara.copy(listeners = 68_820))!!, 0.01)
+        assertEquals("views", AniSongs.bestSource(sara.copy(views = 5_525, listeners = 68_820)))
+        assertEquals("listeners", AniSongs.bestSource(sara.copy(listeners = 68_820)))
         assertTrue(AniSongs.bestScore(sara.copy(views = 154_300_000, listeners = 102_000))!! > AniSongs.bestScore(sara.copy(views = 19_800_000, listeners = 102_500))!!)
-        assertEquals("listeners", AniSongs.bestSource(sara.copy(views = 7_800_000, listeners = 180_000)))
+        assertEquals("views", AniSongs.bestSource(sara.copy(views = 7_800_000, listeners = 180_000)))
         assertEquals(15.0, AniSongs.bestScore(sara.copy(views = 900_000_000, licensed = true, recognition = 30.0))!!, 0.001)
     }
 

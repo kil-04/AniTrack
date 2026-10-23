@@ -243,33 +243,31 @@ object AniSongs {
     }
 
     /**
-     * A song's "best" score (0–100): YouTube views across its uploads or Last.fm listeners,
-     * whichever says more, on one log scale (about 3,000 views per listener). A song neither
-     * knows gets half its quiz recognition, and a Kids show's song counts 60%. Same as
+     * The plays a song is ranked on: its YouTube views; Last.fm listeners (at the median 384
+     * views each) only when YouTube found nothing. Licensed songs have none. Same as plays in
+     * anisongs.ts.
+     */
+    private fun plays(song: AniSong): Pair<Double, String>? {
+        if (song.licensed) return null
+        song.views?.takeIf { it > 0 }?.let { return it.toDouble() to "views" }
+        return song.listeners?.takeIf { it > 0 }?.let { it * 384.0 to "listeners" }
+    }
+
+    /**
+     * A song's "best" score (0–100) from its plays, on a log scale; a song neither YouTube nor
+     * Last.fm knows gets half its quiz recognition, and a Kids show's song counts 60%. Same as
      * bestScore in anisongs.ts.
      */
     fun bestScore(song: AniSong): Double? {
-        // A licensed song's plays aren't anime fans': it scores on its quiz recognition.
-        val watched = song.views?.takeIf { !song.licensed && it > 0 }?.let { minOf(100.0, kotlin.math.log10(it / 3000.0 + 1) * 19) }
-        val heard = song.listeners?.takeIf { !song.licensed }?.let { minOf(100.0, kotlin.math.log10(it + 1.0) * 19) }
-        // Whichever says more: either can undercount (Japanese-titled uploads, renamed tracks).
-        // The stronger count leads; the other counts 30% when they roughly agree, else it's a
-        // failed match and is ignored (same as bestScore in anisongs.ts).
-        val both = listOfNotNull(watched, heard)
-        val base = (if (both.size == 2 && both.max() - both.min() <= 25) 0.7 * both.max() + 0.3 * both.min() else both.maxOrNull())
+        // 1M views ≈ 43, 10M ≈ 60, 100M ≈ 78, 2B = 100; else half the quiz recognition.
+        val base = plays(song)?.let { minOf(100.0, kotlin.math.log10(it.first / 3000.0 + 1) * 17.17) }
             ?: song.recognition?.let { it * 0.5 }
             ?: return null
         return if (song.kids) base * 0.6 else base
     }
 
     /** Which number decided a song's "best" score: "views", "listeners" or (neither) "quiz". Same as bestSource in anisongs.ts. */
-    fun bestSource(song: AniSong): String {
-        if (song.licensed) return "quiz"
-        val watched = song.views?.takeIf { it > 0 }?.let { kotlin.math.log10(it / 3000.0 + 1) }
-        val heard = song.listeners?.let { kotlin.math.log10(it + 1.0) }
-        if (watched == null && heard == null) return "quiz"
-        return if ((watched ?: -1.0) >= (heard ?: -1.0)) "views" else "listeners"
-    }
+    fun bestSource(song: AniSong): String = plays(song)?.second ?: "quiz"
 
     private fun scoreOf(song: AniSong, order: String): Double? = if (order == "best") bestScore(song) else song.recognition
 

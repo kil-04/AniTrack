@@ -98,7 +98,7 @@ test("anisongs: best ranks what people listen to; kids' songs everyone knows dro
     row({ annSongId: 32, songName: "Obscure", songArtist: "Nobody", animeENName: "Rare Show", animeVintage: "Fall 1987", songDifficulty: 40 }),
   ]);
   const songs = [{ ...sara, listeners: 2858 }, { ...doraemon, listeners: 27, kids: true }, unknown];
-  assert.ok(Math.abs(bestScore(songs[0]) - 65.6) < 0.2);
+  assert.ok(Math.abs(bestScore(songs[0]) - 44.0) < 0.2); // 2,858 listeners ≈ 1.1M views
   assert.ok(bestScore(songs[1]) < 20);
   assert.equal(bestScore(unknown), 20);
   assert.deepEqual(rankSongs(songs, "OP", 10, Infinity, "best").map((s) => s.title), ["SARA", "Obscure", "Doraemon no Uta"]);
@@ -300,12 +300,18 @@ test("anisongs: YouTube views add up everyone's uploads of the song, and only th
   assert.equal(songYouTubeViews(kanjiShort, loveTheme), 0);
   assert.equal(songYouTubeViews(kanjiShort, snow), 7_623_761 + 3_417_319);
 
-  // On one scale with Last.fm: whichever says more decides; licensed songs don't count.
-  assert.ok(Math.abs(bestScore({ ...sara, views: 7_800_000 }) - 64.9) < 0.2);
-  assert.ok(Math.abs(bestScore({ ...sara, views: 7_800_000, listeners: 180_000 }) - 100) < 0.3); // far apart: the weaker is ignored
-  // Close together, views break the tie: Blue Bird (154M, 102K) over distance (20M, 102K).
+  // YouTube views decide, on a log scale; licensed songs don't count.
+  assert.ok(Math.abs(bestScore({ ...sara, views: 7_800_000 }) - 58.6) < 0.2);
+  // Views decide; listeners don't lift them ("♥Lonely in Gorgeous♥": 11M views, 255k listeners).
+  assert.ok(Math.abs(bestScore({ ...sara, views: 7_800_000, listeners: 180_000 }) - 58.6) < 0.2);
+  // Only a song YouTube found nothing for falls back on Last.fm, at 384 views a listener.
+  assert.ok(Math.abs(bestScore({ ...sara, listeners: 68_820 }) - bestScore({ ...sara, views: 68_820 * 384 })) < 0.01);
+  assert.ok(bestScore({ ...sara, views: 5_525, listeners: 68_820 }) < bestScore({ ...sara, listeners: 68_820 }));
+  // More views rank higher whatever Last.fm says: Blue Bird (154M, 102K) over distance (20M, 102K).
   assert.ok(bestScore({ ...sara, views: 154_300_000, listeners: 102_000 }) > bestScore({ ...sara, views: 19_800_000, listeners: 102_500 }));
-  assert.equal(bestSource({ ...sara, views: 7_800_000, listeners: 180_000 }), "listeners");
+  assert.equal(bestSource({ ...sara, views: 7_800_000, listeners: 180_000 }), "views");
+  assert.equal(bestSource({ ...sara, views: 5_525, listeners: 68_820 }), "views");
+  assert.equal(bestSource({ ...sara, listeners: 68_820 }), "listeners");
   assert.equal(bestSource({ ...sara, views: 7_800_000, listeners: 200 }), "views");
   assert.equal(bestScore({ ...sara, views: 900_000_000, licensed: true, recognition: 30 }), 15);
 });

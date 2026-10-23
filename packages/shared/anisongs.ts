@@ -258,25 +258,29 @@ export function originalSongs(songs: AniSong[]): AniSong[] {
 /** "best": what people listen to as music; "known": what most fans recognise. */
 export type ChartOrder = "best" | "known";
 
+/** Charted songs with both counts have a median of 384 YouTube views per Last.fm listener. */
+const VIEWS_PER_LISTENER = 384;
+
 /**
- * A song's "best" score (0–100), from how much people play it: YouTube views across all its
- * uploads and Last.fm listeners, the stronger leading (70/30), on one log scale (about 3,000 views per
- * listener: 8M views ≈ 2.8k listeners ≈ 66). Either can undercount (uploads titled only in
- * Japanese, tracks Last.fm files under another name), so the stronger one leads; the charts
- * show it with a bar of this score. A song neither knows gets half its quiz recognition, and
- * a Kids show's song counts 60%: those are known by everyone but rarely played as music.
+ * The plays a song is ranked on: its YouTube views, across everyone's uploads. Only a song
+ * YouTube found nothing for falls back on Last.fm, at the median rate. A licensed song's
+ * plays aren't anime fans', and neither count is used for it.
+ */
+function plays(song: AniSong): { count: number; source: "views" | "listeners" } | null {
+  if (song.licensed) return null;
+  if (song.views) return { count: song.views, source: "views" };
+  return song.listeners ? { count: song.listeners * VIEWS_PER_LISTENER, source: "listeners" } : null;
+}
+
+/**
+ * A song's "best" score (0–100), from how much people play it (plays): a log scale where
+ * 1M views ≈ 43, 10M ≈ 60, 100M ≈ 78 and 2B = 100; the charts show it with a bar. A song
+ * neither YouTube nor Last.fm knows gets half its quiz recognition, and a Kids show's song
+ * counts 60%: those are known by everyone but rarely played as music.
  */
 export function bestScore(song: AniSong): number | null {
-  // A licensed song's plays aren't anime fans': it scores on its quiz recognition.
-  const watched = !song.licensed && song.views ? Math.min(100, Math.log10(song.views / 3000 + 1) * 19) : null;
-  const heard = !song.licensed && song.listeners != null ? Math.min(100, Math.log10(song.listeners + 1) * 19) : null;
-  // The stronger count leads; the other counts 30% when the two roughly agree, so two songs
-  // level on Last.fm are told apart by their views (Blue Bird's 154M over distance's 20M). Far
-  // apart, the weaker is a failed match (Shinzou o Sasageyo!: 347M views, 14 "listeners").
-  const both = [watched, heard].filter((v): v is number => v != null);
-  const [high, low] = [Math.max(...both), Math.min(...both)];
-  const played = !both.length ? null : both.length === 1 || high - low > 25 ? high : 0.7 * high + 0.3 * low;
-  const base = played ?? (song.recognition != null ? song.recognition * 0.5 : null);
+  const played = plays(song);
+  const base = played ? Math.min(100, Math.log10(played.count / 3000 + 1) * 17.17) : song.recognition != null ? song.recognition * 0.5 : null;
   return base == null ? null : song.kids ? base * 0.6 : base;
 }
 
@@ -573,11 +577,7 @@ function sequelOf(title: string): number {
 
 /** Which number decided a song's "best" score: its YouTube views, its Last.fm listeners, or (neither) its quiz score. */
 export function bestSource(song: AniSong): "views" | "listeners" | "quiz" {
-  if (song.licensed) return "quiz";
-  const watched = song.views ? Math.log10(song.views / 3000 + 1) : null;
-  const heard = song.listeners != null ? Math.log10(song.listeners + 1) : null;
-  if (watched == null && heard == null) return "quiz";
-  return (watched ?? -1) >= (heard ?? -1) ? "views" : "listeners";
+  return plays(song)?.source ?? "quiz";
 }
 
 const scoreOf = (song: AniSong, order: ChartOrder) => (order === "best" ? bestScore(song) : song.recognition);
