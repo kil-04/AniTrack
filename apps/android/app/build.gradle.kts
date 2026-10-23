@@ -32,8 +32,8 @@ android {
         applicationId = "com.sanjay.anitrack.next"
         minSdk = 26
         targetSdk = 36
-        versionCode = 24
-        versionName = "9.1.7"
+        versionCode = 25
+        versionName = "9.1.8"
 
         // Explicitly opted-in, bounded on-device connector diagnostics; no live
         // requests are made by the ordinary JVM regression suite.
