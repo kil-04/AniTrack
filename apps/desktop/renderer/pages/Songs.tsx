@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import {
-  ChevronLeft, ChevronRight, Dices, Disc3, Flower2, Headphones, Leaf, ListMusic, Music2, Play, Search,
+  CalendarDays, ChevronLeft, ChevronRight, Dices, Disc3, ExternalLink, Flower2, Headphones, Layers, Leaf, ListMusic, Mic2, Music2, Play, Search, Trophy, X,
   Snowflake, Sparkles, Sun, Tv, Volume2, VolumeX, Waves,
 } from "lucide-react";
 import {
@@ -16,6 +17,8 @@ import {
   songSlug,
   songVideoUrl,
   toThemeSong,
+  bestScore,
+  bestSource,
   type AniSong,
   type ChartOrder,
   type SeasonName,
@@ -25,6 +28,7 @@ import {
 } from "../../../../packages/shared/anisongs";
 import { useThemePlayer } from "../store/useThemePlayer";
 import { VideoPlayer, type VideoItem } from "../components/VideoPlayer";
+import { FlipText, FX_KEYFRAMES, Roulette, Slider, Tilt, Vinyl } from "../components/SongsFx";
 import { safeImageSrc } from "../lib/image-guard";
 
 /**
@@ -52,6 +56,17 @@ const PODIUM = ["#FCD34D", "#CBD5E1", "#D97706"];
 type Scope = { type: "decade"; value: number } | { type: "year"; value: number } | { type: "all" };
 type Tab = "chart" | "seasons" | "search";
 type Watch = (songs: AniSong[], index: number, label: string) => void;
+
+/** Where a song can take you: its card, its artist, its show, its year. */
+interface SongsNav {
+  open: (song: AniSong, list: AniSong[], label: string) => void;
+  /** With a MAL id, a show's songs come by id (AnisongDB's text search pauses during AMQ ranked games). */
+  search: (query: string, by: SongSearchBy, malId?: number | null) => void;
+  year: (year: number, order?: ChartOrder, kind?: SongKind) => void;
+  decade: (decade: number) => void;
+}
+const Nav = createContext<SongsNav | null>(null);
+const useNav = () => useContext(Nav)!;
 
 function read(key: string): string | null {
   try { return window.localStorage.getItem(key); } catch { return null; }
@@ -97,6 +112,9 @@ const SOUNDS = {
   select: () => { blip(660, 70, 0.05); setTimeout(() => blip(990, 90, 0.05), 60); },
   tab: () => blip(520, 60, 0.04, "triangle"),
   dice: () => [0, 50, 100, 150].forEach((d, i) => setTimeout(() => blip(400 + i * 120, 40, 0.04, "square"), d)),
+  scratch: () => blip(110 + Math.random() * 180, 45, 0.035, "sawtooth"),
+  reel: () => blip(1300, 16, 0.018, "square"),
+  win: () => [0, 90, 180].forEach((d, i) => setTimeout(() => blip([784, 988, 1319][i], 140, 0.05, "triangle"), d)),
 };
 
 let previewAudio: HTMLAudioElement | null = null;
@@ -146,6 +164,10 @@ export default function Songs() {
   // The video player: docked beside the page, or full screen.
   const [player, setPlayer] = useState<{ songs: AniSong[]; index: number; label: string; full: boolean } | null>(null);
   const [previewing, setPreviewing] = useState<number | null>(null);
+  // The open song card, and a search another tap asked for.
+  const [card, setCard] = useState<{ song: AniSong; list: AniSong[]; label: string } | null>(null);
+  const [seed, setSeed] = useState<SearchSeed | null>(null);
+  const tabsRef = useRef<HTMLDivElement>(null);
   const themePlaying = useThemePlayer((s) => s.playing);
 
   useEffect(() => { window.api.songs.charts().then(setCharts).catch(() => setCharts(null)); }, []);
@@ -179,13 +201,24 @@ export default function Songs() {
     },
     leave: () => { window.clearTimeout(previewTimer); stopPreview(); setPreviewing(null); },
   }), [previews]);
+  const [roulette, setRoulette] = useState<number | null>(null);
   const surprise = () => {
     if (!chart.length) return;
     sfx("dice");
-    watch(chart, Math.floor(Math.random() * chart.length), `${label} · surprise`);
+    stopPreview();
+    setRoulette(Math.floor(Math.random() * chart.length));
+  };
+  const playing = themePlaying || previewing != null || playingId != null;
+  const toTabs = () => window.setTimeout(() => tabsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+  const nav: SongsNav = {
+    open: (song, list, title) => { sfx("select"); stopPreview(); setCard({ song, list, label: title }); },
+    search: (query, by, malId) => { sfx("tab"); setCard(null); setSeed({ query, by, at: Date.now(), malId: malId ?? null }); setTab("search"); toTabs(); },
+    year: (year, o, k) => { sfx("tab"); setCard(null); setScope({ type: "year", value: year }); if (o) setOrder(o); if (k) setKind(k); setTab("chart"); toTabs(); },
+    decade: (decade) => { sfx("tab"); setCard(null); setScope({ type: "decade", value: decade }); setTab("chart"); toTabs(); },
   };
 
   return (
+    <Nav.Provider value={nav}>
     <div className={`mx-auto max-w-[1400px] px-8 pb-28 pt-6 transition-[padding] duration-300 ${docked ? "pr-[412px]" : ""}`}>
       <style>{`
         @keyframes songs-spin { to { transform: rotate(360deg); } }
@@ -199,21 +232,24 @@ export default function Songs() {
         @keyframes songs-zoom { from { opacity: 0; transform: scale(.97); } to { opacity: 1; transform: none; } }
         .songs-rise { animation: songs-rise .35s ease-out both; }
         .songs-pop { animation: songs-pop .55s cubic-bezier(.2,.8,.2,1) both; }
+        ${FX_KEYFRAMES}
       `}</style>
 
       {/* Jukebox */}
       <section className="relative mb-5 overflow-hidden rounded-3xl border border-white/10 bg-surface-1">
         {lead?.cover && <img src={safeImageSrc(lead.cover)} alt="" className="absolute inset-0 h-full w-full scale-110 object-cover opacity-20 blur-2xl" />}
         <div className="absolute inset-0 bg-gradient-to-r from-black/80 via-black/50 to-transparent" />
+        {/* A soft pulse behind the record while music plays. */}
+        {playing && <div className="pointer-events-none absolute -left-20 top-1/2 h-96 w-96 -translate-y-1/2 rounded-full bg-accent/30 blur-3xl" style={{ animation: "fx-beat .55s ease-in-out infinite alternate" }} />}
         <div className="relative flex items-center gap-8 p-7">
           {/* Docked player: the record steps aside until the window is wide. */}
-          <div className={docked ? "hidden 2xl:block" : ""}><Vinyl song={lead} spinning={themePlaying || previewing != null || playingId != null} onClick={() => lead && watch(chart, 0, label)} /></div>
+          <div className={docked ? "hidden 2xl:block" : ""}><Vinyl cover={safeImageSrc(lead?.cover ?? undefined)} spinning={playing} title={lead ? `Watch ${lead.title} · drag to spin` : undefined} onScratch={() => sfx("scratch")} onClick={() => lead && watch(chart, 0, label)} /></div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.2em] text-accent"><Music2 size={14} /> AniTrack Jukebox</div>
-            <h1 className="mt-1 text-5xl font-black tracking-tight">{scopeTitle(scope)}</h1>
+            <h1 className="mt-1 text-5xl font-black tracking-tight"><FlipText text={scopeTitle(scope)} /></h1>
             <p className="mt-1 text-sm text-white/55">{scope.type === "all" ? "Sixty years of openings and endings." : ERA_NOTE[decadeOf(scope.value)]}</p>
             {lead && (
-              <p className="mt-4 truncate text-lg"><span className="font-black text-amber-300">#1 </span><span className="font-bold">{lead.title}</span><span className="text-white/50"> · {lead.artist} · {lead.anime}</span></p>
+              <button onClick={() => nav.open(lead, chart, label)} title="Open this song" className="group mt-4 block max-w-full truncate text-left text-lg"><span className="font-black text-amber-300">#1 </span><span className="font-bold group-hover:underline">{lead.title}</span><span className="text-white/50"> · {lead.artist} · {lead.anime}</span></button>
             )}
             <div className="mt-5 flex flex-wrap items-center gap-2">
               <button disabled={!chart.length} onClick={() => { sfx("select"); watch(chart, 0, label); }} className="flex items-center gap-2 rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black transition hover:scale-[1.03] hover:bg-white/90 disabled:opacity-40"><Tv size={16} /> Watch all</button>
@@ -233,13 +269,19 @@ export default function Songs() {
       </section>
 
       {/* Tabs */}
-      <div className="sticky top-0 z-20 -mx-2 mb-4 flex items-center gap-1 bg-bg/90 px-2 py-2 backdrop-blur">
-        {([["chart", "Chart", <ListMusic key="c" size={15} />], ["seasons", "Seasons", <Sparkles key="s" size={15} />], ["search", "Search", <Search key="q" size={15} />]] as const).map(([key, text, icon]) => (
-          <button key={key} onClick={() => { sfx("tab"); setTab(key); }}
-            className={`flex items-center gap-2 rounded-full px-5 py-2 text-sm font-bold transition ${tab === key ? "bg-accent text-white shadow-[0_0_20px_rgb(var(--accent)/0.4)]" : "text-white/60 hover:bg-white/5 hover:text-white"}`}>
-            {icon}{text}
-          </button>
-        ))}
+      <div ref={tabsRef} className="sticky top-0 z-20 -mx-2 mb-4 flex scroll-mt-2 items-center gap-1 bg-bg/90 px-2 py-2 backdrop-blur">
+        <Slider
+          value={tab}
+          onChange={(key) => { sfx("tab"); setTab(key); }}
+          options={[
+            { key: "chart", label: <><ListMusic size={15} />Chart</> },
+            { key: "seasons", label: <><Sparkles size={15} />Seasons</> },
+            { key: "search", label: <><Search size={15} />Search</> },
+          ]}
+          pill="bg-accent shadow-[0_0_20px_rgb(var(--accent)/0.45)]"
+          idle="px-5 py-2 text-sm font-bold text-white/60 hover:text-white"
+          active="px-5 py-2 text-sm font-bold text-white"
+        />
         <span className="ml-auto text-xs text-white/35">{previews ? "Hover a song to hear it" : "Previews off"}</span>
       </div>
 
@@ -251,7 +293,7 @@ export default function Songs() {
           : <Empty text="No chart for this year yet." />
       )}
       {tab === "seasons" && <SeasonsView year={scope.type === "year" ? scope.value : scope.type === "decade" ? scope.value + 5 : 1998} kind={kind} onWatch={watch} hover={hover} previewing={previewing} sfx={sfx} />}
-      {tab === "search" && <SearchView onWatch={watch} hover={hover} previewing={previewing} />}
+      {tab === "search" && <SearchView onWatch={watch} hover={hover} previewing={previewing} seed={seed} />}
       </div>
 
       <p className="mt-6 text-[11px] text-white/30">
@@ -261,6 +303,20 @@ export default function Songs() {
         {" "}Videos and songs from AnisongDB. {charts ? `Charts updated ${new Date(charts.generatedAt).toLocaleDateString()}.` : ""}
       </p>
 
+      {card && (
+        <SongCard {...card} onClose={() => setCard(null)}
+          onWatch={() => { const { song, list, label: title } = card; setCard(null); watch(list, Math.max(0, list.indexOf(song)), title); }}
+          onListen={() => { const { song, list, label: title } = card; playAudio(list, Math.max(0, list.indexOf(song)), title); }} />
+      )}
+      {roulette != null && chart[roulette] && (
+        <Roulette
+          items={chart.map((song) => ({ key: String(song.id), title: song.title, cover: safeImageSrc(song.cover ?? undefined) }))}
+          target={roulette}
+          onTick={() => sfx("reel")}
+          onClose={() => setRoulette(null)}
+          onDone={() => { sfx("win"); const at = roulette; setRoulette(null); watch(chart, at, `${label} · surprise`); }}
+        />
+      )}
       {player && (
         <VideoPlayer
           label={player.label}
@@ -274,35 +330,13 @@ export default function Songs() {
         />
       )}
     </div>
+    </Nav.Provider>
   );
 }
 
 type Hover = { enter: (song: AniSong) => void; leave: () => void };
 
 // ── Jukebox pieces ──────────────────────────────────────────────────────────
-
-function Vinyl({ song, spinning, onClick }: { song?: AniSong; spinning: boolean; onClick: () => void }) {
-  const cover = safeImageSrc(song?.cover ?? undefined);
-  return (
-    <button onClick={onClick} title={song ? `Watch ${song.title}` : undefined} className="group relative h-52 w-52 flex-shrink-0 rounded-full shadow-[0_20px_60px_rgba(0,0,0,.6)]">
-      <div
-        className="absolute inset-0 rounded-full"
-        style={{
-          background: "repeating-radial-gradient(circle at center, #111 0 2px, #1c1c1c 2px 4px)",
-          animation: "songs-spin 5s linear infinite",
-          animationPlayState: spinning ? "running" : "paused",
-        }}
-      >
-        <div className="absolute inset-[30%] overflow-hidden rounded-full border-4 border-black/60 bg-accent">
-          {cover && <img src={cover} alt="" className="h-full w-full object-cover" />}
-        </div>
-        <div className="absolute left-1/2 top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-black" />
-        <div className="absolute inset-0 rounded-full bg-[conic-gradient(from_0deg,transparent_0deg,rgba(255,255,255,.08)_40deg,transparent_80deg,transparent_180deg,rgba(255,255,255,.06)_220deg,transparent_260deg)]" />
-      </div>
-      <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/40 opacity-0 transition group-hover:opacity-100"><Play size={40} fill="white" /></span>
-    </button>
-  );
-}
 
 /** A radio tuner from 1960 to now: drag or click for a year, tap a decade label for the decade. */
 function YearDial({ scope, onScope, sfx }: { scope: Scope; onScope: (s: Scope) => void; sfx: (n: keyof typeof SOUNDS) => void }) {
@@ -387,12 +421,15 @@ function YearDial({ scope, onScope, sfx }: { scope: Scope; onScope: (s: Scope) =
 
 function Toggle<T extends string>({ value, onChange, options }: { value: T; onChange: (v: T) => void; options: readonly (readonly [T, string, string])[] }) {
   return (
-    <div className="flex rounded-full bg-white/5 p-1" role="radiogroup">
-      {options.map(([key, text, hint]) => (
-        <button key={key} role="radio" aria-checked={value === key} title={hint || undefined} onClick={() => onChange(key)}
-          className={`rounded-full px-3.5 py-1.5 text-xs font-bold transition ${value === key ? "bg-white text-black" : "text-white/60 hover:text-white"}`}>{text}</button>
-      ))}
-    </div>
+    <Slider
+      value={value}
+      onChange={onChange}
+      options={options.map(([key, text, hint]) => ({ key, label: text, hint: hint || undefined }))}
+      className="rounded-full bg-white/5 p-1"
+      pill="bg-white"
+      idle="px-3.5 py-1.5 text-xs font-bold text-white/60 hover:text-white"
+      active="px-3.5 py-1.5 text-xs font-bold text-black"
+    />
   );
 }
 
@@ -425,6 +462,7 @@ function Empty({ text }: { text: string }) {
 // ── Chart ───────────────────────────────────────────────────────────────────
 
 function ChartView({ songs, order, label, onWatch, hover, previewing, playingId }: { songs: AniSong[]; order: ChartOrder; label: string; onWatch: Watch; hover: Hover; previewing: number | null; playingId: number | null }) {
+  const nav = useNav();
   const [expanded, setExpanded] = useState(false);
   useEffect(() => setExpanded(false), [songs]);
   const top = songs.slice(0, 3);
@@ -435,8 +473,8 @@ function ChartView({ songs, order, label, onWatch, hover, previewing, playingId 
       <div className="mb-6 grid grid-cols-3 items-end gap-4">
         {[1, 0, 2].map((i, slot) => top[i] && (
           <div key={top[i].id} className="songs-pop" style={{ animationDelay: `${[110, 0, 220][slot]}ms` }}>
-            <PodiumCard song={top[i]} rank={i + 1} tall={i === 0} order={order}
-              onWatch={() => onWatch(songs, i, label)} hover={hover} playing={previewing === top[i].id || playingId === top[i].id} />
+            <Tilt className="rounded-2xl"><PodiumCard song={top[i]} rank={i + 1} tall={i === 0} order={order}
+              onWatch={() => nav.open(top[i], songs, label)} hover={hover} playing={previewing === top[i].id || playingId === top[i].id} /></Tilt>
           </div>
         ))}
       </div>
@@ -477,10 +515,19 @@ function PodiumCard({ song, rank, tall, order, onWatch, hover, playing }: { song
 function Score({ song, order, compact = false }: { song: AniSong; order: ChartOrder; compact?: boolean }) {
   if (order === "best") {
     if (song.licensed) return <span className="whitespace-nowrap text-white/40" title="Its plays aren't anime fans' (a licensed western song, or an artist name shared with another act), so it's ranked by its quiz score">not counted</span>;
-    if (song.views) return <span className="whitespace-nowrap font-semibold text-white/70" title={`${song.views.toLocaleString()} views across everyone's YouTube uploads of it`}>▶ {compactCount(song.views)}{compact ? "" : " views"}</span>;
-    return song.listeners != null
-      ? <span className="whitespace-nowrap font-semibold text-white/70" title={`${song.listeners.toLocaleString()} people play it on Last.fm`}>♫ {compactCount(song.listeners)}{compact ? "" : " listeners"}</span>
-      : <span className="whitespace-nowrap text-white/35" title="Not on Last.fm: ranked by its quiz score">—</span>;
+    // A Kids show's song counts 60%, so it can sit below a song with a bigger number: say so.
+    const kids = song.kids && <span className="ml-1 rounded bg-white/10 px-1 text-[9px] font-bold uppercase tracking-wide text-white/50" title="A kids' show: everyone knows it, few play it as music, so it counts 60%">Kids</span>;
+    // The number that decided the rank, with a bar of the score so the order reads at a glance.
+    const source = bestSource(song);
+    const text = source === "views" ? `▶ ${compactCount(song.views!)}${compact ? "" : " views"}`
+      : source === "listeners" ? `♫ ${compactCount(song.listeners!)}${compact ? "" : " listeners"}` : "—";
+    const hint = source === "views" ? `${song.views!.toLocaleString()} views across everyone's YouTube uploads of it${song.listeners ? ` · ${song.listeners.toLocaleString()} Last.fm listeners` : ""}`
+      : source === "listeners" ? `${song.listeners!.toLocaleString()} people play it on Last.fm${song.views ? ` · ${song.views.toLocaleString()} YouTube views` : ""}` : "Ranked by its quiz score";
+    return (
+      <span className="inline-flex items-center gap-1.5 whitespace-nowrap font-semibold text-white/70" title={hint}>
+        {!compact && <ScoreBar value={bestScore(song) ?? 0} />}{text}{kids}
+      </span>
+    );
   }
   return song.recognition != null
     ? <span className="whitespace-nowrap font-semibold text-white/70" title={`${Math.round(song.recognition)}% of quiz players recognise it`}>{Math.round(song.recognition)}%{compact ? "" : " know it"}</span>
@@ -491,7 +538,7 @@ function Score({ song, order, compact = false }: { song: AniSong; order: ChartOr
 function SongRows({ songs, start = 0, shown, order, label, onWatch, hover, previewing, playingId = null, ranked = true }: {
   songs: AniSong[]; start?: number; shown?: AniSong[]; order: ChartOrder | null; label: string; onWatch: Watch; hover: Hover; previewing: number | null; playingId?: number | null; ranked?: boolean;
 }) {
-  const navigate = useNavigate();
+  const nav = useNav();
   const list = shown ?? songs;
   return (
     <ol className="grid gap-x-6 gap-y-1 lg:grid-cols-2">
@@ -508,14 +555,15 @@ function SongRows({ songs, start = 0, shown, order, label, onWatch, hover, previ
               {song.video && <span className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 transition group-hover:opacity-100"><Play size={18} fill="white" /></span>}
             </button>
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2 truncate text-sm font-bold">{song.title}{playing && <Equalizer />}</div>
+              <button onClick={() => nav.open(song, songs, label)} title="Open this song" className="flex max-w-full items-center gap-2 truncate text-left text-sm font-bold hover:text-accent">{song.title}{playing && <Equalizer />}</button>
               <div className="truncate text-xs text-white/50">
-                {song.artist} ·{" "}
-                {song.anilistId ? <button onClick={() => navigate(`/anime/${song.anilistId}`)} className="hover:text-white hover:underline">{song.anime}</button> : song.anime}
-                {" "}· {songSlug(song)}{song.season ? ` · ${song.season}` : ""}
+                <Jump title={`More by ${song.artist}`} onClick={() => nav.search(song.artist, "artist")}>{song.artist}</Jump> ·{" "}
+                <Jump title={`Every song from ${song.anime}`} onClick={() => nav.search(song.anime, "anime", song.malId)}>{song.anime}</Jump>
+                {" "}· {songSlug(song)}
+                {song.year ? <> · <Jump title={`The ${song.year} chart`} onClick={() => nav.year(song.year!, undefined, song.kind)}>{song.season ?? song.year}</Jump></> : null}
               </div>
             </div>
-            {order && <div className="hidden w-24 flex-shrink-0 text-right text-xs sm:block"><Score song={song} order={order} /></div>}
+            {order && <div className="hidden w-40 flex-shrink-0 text-right text-xs sm:block"><Score song={song} order={order} /></div>}
             <button onClick={() => playAudio(songs, index, label)} disabled={!song.audio} title="Listen" className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-white/50 hover:bg-white/10 hover:text-white disabled:opacity-20">
               <Headphones size={15} />
             </button>
@@ -601,18 +649,35 @@ function SeasonsView({ year: initial, kind, onWatch, hover, previewing, sfx }: {
 
 // ── Search ──────────────────────────────────────────────────────────────────
 
-function SearchView({ onWatch, hover, previewing }: { onWatch: Watch; hover: Hover; previewing: number | null }) {
-  const [query, setQuery] = useState("");
-  const [by, setBy] = useState<SongSearchBy>("song");
+interface SearchSeed { query: string; by: SongSearchBy; at: number; malId: number | null }
+
+function SearchView({ onWatch, hover, previewing, seed }: { onWatch: Watch; hover: Hover; previewing: number | null; seed: SearchSeed | null }) {
+  const [query, setQuery] = useState(seed?.query ?? "");
+  const [by, setBy] = useState<SongSearchBy>(seed?.by ?? "song");
   const [songs, setSongs] = useState<AniSong[] | null>(null);
   const [busy, setBusy] = useState(false);
-  const run = async () => {
-    if (query.trim().length < 2) return;
+  const [problem, setProblem] = useState<string | null>(null);
+  const run = async (q = query, b = by, malId: number | null = null) => {
+    if (q.trim().length < 2 && !malId) return;
     setBusy(true);
-    const found = await window.api.songs.search(query, by).catch(() => []);
-    setSongs(rankSongs(found, null, 60).concat(found.filter((s) => s.recognition == null && s.video).slice(0, 20)));
+    setProblem(null);
+    try {
+      const found = malId ? await window.api.songs.show(malId) : await window.api.songs.search(q, b);
+      setSongs(rankSongs(found, null, 60).concat(found.filter((s) => s.recognition == null && s.video).slice(0, 20)));
+    } catch (error) {
+      // IPC wraps the main process's message: keep just AnisongDB's reason.
+      setProblem(String((error as Error)?.message ?? error).replace(/^.*?Error: /, ""));
+      setSongs(null);
+    }
     setBusy(false);
   };
+  // An artist or show tapped elsewhere: search it straight away.
+  useEffect(() => {
+    if (!seed) return;
+    setQuery(seed.query);
+    setBy(seed.by);
+    void run(seed.query, seed.by, seed.malId);
+  }, [seed?.at]);
   return (
     <div>
       <form onSubmit={(e) => { e.preventDefault(); void run(); }} className="mb-5 flex flex-wrap gap-2">
@@ -624,6 +689,7 @@ function SearchView({ onWatch, hover, previewing }: { onWatch: Watch; hover: Hov
         <Toggle value={by} onChange={setBy} options={[["song", "Song", ""], ["artist", "Artist", ""], ["anime", "Anime", ""]]} />
         <button type="submit" disabled={busy} className="rounded-full bg-accent px-6 py-2 text-sm font-bold text-white disabled:opacity-50">{busy ? "Searching…" : "Search"}</button>
       </form>
+      {problem && <Empty text={problem} />}
       {songs && (songs.length ? <SongRows songs={songs} order="known" ranked={false} label={`“${query.trim()}”`} onWatch={onWatch} hover={hover} previewing={previewing} /> : <Empty text="No songs found." />)}
     </div>
   );
@@ -638,4 +704,98 @@ function videoItem(song: AniSong): VideoItem {
     cover: song.cover,
     src: songVideoUrl(song) ?? "",
   };
+}
+
+/** A thin bar of a 0–100 score. */
+function ScoreBar({ value }: { value: number }) {
+  return (
+    <span className="relative inline-block h-1.5 w-10 overflow-hidden rounded-full bg-white/10">
+      <span className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-accent to-amber-300" style={{ width: `${Math.max(4, Math.min(100, value))}%`, transition: "width .6s ease-out" }} />
+    </span>
+  );
+}
+
+/** A bit of text that takes you somewhere. */
+function Jump({ children, onClick, title }: { children: ReactNode; onClick: () => void; title: string }) {
+  return <button onClick={onClick} title={title} className="rounded px-0.5 transition hover:bg-white/10 hover:text-white">{children}</button>;
+}
+
+// ── Song card ───────────────────────────────────────────────────────────────
+
+/**
+ * A song up close, and everywhere it leads: watch or listen, its show's page, more by the
+ * artist, every song from the show, its year's and decade's charts. The numbers lead to the
+ * charts they rank in.
+ */
+function SongCard({ song, onClose, onWatch, onListen }: { song: AniSong; list: AniSong[]; label: string; onClose: () => void; onWatch: () => void; onListen: () => void }) {
+  const nav = useNav();
+  const navigate = useNavigate();
+  const cover = safeImageSrc(song.cover ?? undefined);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const decade = song.year ? decadeOf(song.year) : null;
+  const tiles: { icon: JSX.Element; title: string; sub: string; onClick?: () => void; tint: string }[] = [
+    { icon: <Play size={20} fill="currentColor" />, title: "Watch the video", sub: `${songSlug(song)} · ${song.quality ?? "clip"}`, onClick: song.video ? onWatch : undefined, tint: "#ef4444" },
+    { icon: <Headphones size={20} />, title: "Listen", sub: "In the music player", onClick: song.audio ? onListen : undefined, tint: "#8b5cf6" },
+    { icon: <ExternalLink size={20} />, title: `Open ${song.anime}`, sub: "Its title page", onClick: song.anilistId ? () => navigate(`/anime/${song.anilistId}`) : undefined, tint: "#3b82f6" },
+    { icon: <Mic2 size={20} />, title: `More by ${song.artist}`, sub: "Every song they sang", onClick: () => nav.search(song.artist, "artist"), tint: "#ec4899" },
+    { icon: <Layers size={20} />, title: `All of ${song.anime}`, sub: "Its openings and endings", onClick: () => nav.search(song.anime, "anime", song.malId), tint: "#14b8a6" },
+    { icon: <CalendarDays size={20} />, title: song.year ? `The ${song.year} chart` : "Its year", sub: song.season ?? "", onClick: song.year ? () => nav.year(song.year!, undefined, song.kind) : undefined, tint: "#f59e0b" },
+    { icon: <Trophy size={20} />, title: decade ? `The ${String(decade).slice(2)}s` : "Its decade", sub: decade ? ERA_NOTE[decade]?.split(",")[0] ?? "" : "", onClick: decade ? () => nav.decade(decade) : undefined, tint: "#eab308" },
+  ];
+  return createPortal(
+    <div className="fixed inset-0 z-[82] flex items-center justify-center bg-black/75 p-6 backdrop-blur-sm" onClick={onClose} style={{ animation: "songs-zoom .2s ease-out both" }}>
+      <div className="relative w-full max-w-3xl overflow-hidden rounded-3xl border border-white/10 bg-surface-1 shadow-2xl" onClick={(e) => e.stopPropagation()}
+        style={{ animation: "songs-pop .45s cubic-bezier(.2,.8,.2,1) both" }}>
+        {cover && <img src={cover} alt="" className="absolute inset-0 h-full w-full scale-125 object-cover opacity-25 blur-3xl" />}
+        <div className="relative p-6">
+          <button onClick={onClose} title="Close (Esc)" className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-black/40 transition hover:scale-110 hover:bg-black/60"><X size={18} /></button>
+          <div className="flex gap-5">
+            <button onClick={song.video ? onWatch : undefined} className="group relative h-40 w-40 flex-shrink-0 overflow-hidden rounded-2xl bg-white/5 shadow-xl">
+              {cover ? <img src={cover} alt="" className="h-full w-full object-cover transition duration-500 group-hover:scale-110" /> : <Disc3 className="m-auto h-full text-white/20" size={48} />}
+              {song.video && <span className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition group-hover:opacity-100"><Play size={36} fill="white" /></span>}
+            </button>
+            <div className="min-w-0 flex-1 pt-1">
+              <div className="text-xs font-black uppercase tracking-[0.2em] text-accent">{song.kind === "OP" ? "Opening" : "Ending"} {song.number ?? ""} · {song.format ?? "TV"}</div>
+              <h2 className="mt-1 text-3xl font-black leading-tight">{song.title}</h2>
+              <p className="mt-1 text-white/70">{song.artist}</p>
+              <p className="text-sm text-white/45">{song.anime}{song.season ? ` · ${song.season}` : ""}</p>
+              {/* The numbers lead to the charts they rank in. */}
+              <div className="mt-4 flex flex-wrap gap-2">
+                {song.views ? <Chip onClick={() => song.year && nav.year(song.year, "best", song.kind)} title={`Best ${song.year} ${song.kind === "OP" ? "openings" : "endings"}`}>▶ {compactCount(song.views)} views</Chip> : null}
+                {song.listeners ? <Chip onClick={() => song.year && nav.year(song.year, "best", song.kind)} title="Last.fm listeners">♫ {compactCount(song.listeners)} listeners</Chip> : null}
+                {song.recognition != null ? <Chip onClick={() => song.year && nav.year(song.year, "known", song.kind)} title={`Most known ${song.year} songs`}>{Math.round(song.recognition)}% know it</Chip> : null}
+                {song.kids ? <Chip title="A kids' show: counts 60% in Best">Kids</Chip> : null}
+              </div>
+            </div>
+          </div>
+          <div className="mt-6 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+            {tiles.map((tile, i) => (
+              <button key={tile.title} onClick={tile.onClick} disabled={!tile.onClick}
+                className="songs-rise group relative overflow-hidden rounded-2xl border border-white/10 bg-black/30 p-3.5 text-left transition duration-300 hover:-translate-y-1 hover:border-white/25 hover:bg-black/50 disabled:pointer-events-none disabled:opacity-35"
+                style={{ animationDelay: `${120 + i * 45}ms` }}>
+                <span className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl transition duration-300 group-hover:scale-110 group-hover:rotate-[-6deg]" style={{ background: `${tile.tint}26`, color: tile.tint }}>{tile.icon}</span>
+                <div className="truncate text-sm font-bold">{tile.title}</div>
+                <div className="truncate text-[11px] text-white/45">{tile.sub}</div>
+                <span className="pointer-events-none absolute inset-y-0 left-0 w-1/3 bg-gradient-to-r from-transparent via-white/10 to-transparent opacity-0 group-hover:opacity-100" style={{ animation: "fx-shine .8s ease-out" }} />
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function Chip({ children, onClick, title }: { children: ReactNode; onClick?: () => void; title?: string }) {
+  return (
+    <button onClick={onClick} disabled={!onClick} title={title}
+      className="rounded-full bg-white/10 px-3 py-1 text-xs font-bold text-white/80 transition hover:scale-105 hover:bg-white/20 disabled:pointer-events-none">
+      {children}
+    </button>
+  );
 }
