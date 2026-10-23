@@ -20,7 +20,8 @@ export const ANISONGS = {
   YEAR_SIZE: 30,
 };
 
-export type SongKind = "OP" | "ED";
+/** Opening, ending, or insert song (one sung inside an episode or film). */
+export type SongKind = "OP" | "ED" | "IN";
 export type SeasonName = "Winter" | "Spring" | "Summer" | "Fall";
 export const SEASONS: SeasonName[] = ["Winter", "Spring", "Summer", "Fall"];
 
@@ -75,12 +76,18 @@ export function isSongFile(value: unknown): value is string {
   return typeof value === "string" && FILE.test(value);
 }
 
-/** One AnisongDB row as an AniSong; null for inserts, dubs, rebroadcasts or rows without media. */
+/**
+ * One AnisongDB row as an AniSong; null for dubs, rebroadcasts or rows without media. Insert
+ * songs count only when "Standard": AnisongDB's character songs, chants and instrumentals
+ * aren't songs people play as music.
+ */
 export function parseAniSong(raw: unknown): AniSong | null {
   const row = obj(raw);
   if (!row || row.isDub === true || row.isRebroadcast === true) return null;
-  const type = /^(Opening|Ending)\s*(\d+)?$/i.exec(str(row.songType, 40) ?? "");
+  const type = /^(Opening|Ending|Insert Song)\s*(\d+)?$/i.exec(str(row.songType, 40) ?? "");
   if (!type) return null;
+  const insert = /^insert/i.test(type[1]);
+  if (insert && row.songCategory !== "Standard") return null;
   const id = int(row.annSongId);
   const title = str(row.songName);
   const artist = str(row.songArtist) ?? "Unknown artist";
@@ -104,8 +111,8 @@ export function parseAniSong(raw: unknown): AniSong | null {
     season: seasonMatch ? season : null,
     year: seasonMatch ? Number(seasonMatch[2]) : null,
     format: str(row.animeType, 20),
-    kind: type[1].toLowerCase() === "opening" ? "OP" : "ED",
-    number: type[2] ? Number(type[2]) : null,
+    kind: insert ? "IN" : type[1].toLowerCase() === "opening" ? "OP" : "ED",
+    number: !insert && type[2] ? Number(type[2]) : null,
     title,
     artist,
     recognition: difficulty,
@@ -141,7 +148,7 @@ export function isSongMedia(url: string | null): url is string {
 }
 
 /** "OP1", "ED", as the theme player shows it. */
-export const songSlug = (song: AniSong) => `${song.kind}${song.number ?? ""}`;
+export const songSlug = (song: AniSong) => (song.kind === "IN" ? "Insert" : `${song.kind}${song.number ?? ""}`);
 
 /** The song in the shape both apps' theme players and video viewers take. */
 /**
@@ -151,7 +158,8 @@ export const songSlug = (song: AniSong) => `${song.kind}${song.number ?? ""}`;
  * know is AnisongDB's songs alone. AnimeThemes' own creditless videos still come first.
  */
 export function withSongClips(themes: ThemeSong[], clips: AniSong[]): ThemeSong[] {
-  const playable = clips.filter((clip) => clip.video || clip.audio);
+  // Title pages list openings and endings; insert songs stay in the Songs section.
+  const playable = clips.filter((clip) => clip.kind !== "IN" && (clip.video || clip.audio));
   const covered = new Set(themes.map((theme) => /^(OP|ED)(\d*)/.exec(theme.slug)).filter(Boolean).map((m) => `${m![1]}${m![2] || 1}`));
   // Songs AnimeThemes doesn't list at all (God Mars' endings), after its own.
   const extra = playable.filter((clip) => !covered.has(`${clip.kind}${clip.number ?? 1}`)).map(toThemeSong);
@@ -175,7 +183,8 @@ export function toThemeSong(song: AniSong): ThemeSong {
     animeTitle: song.anime,
     cover: song.cover ?? null,
     slug: songSlug(song),
-    type: song.kind,
+    // The theme players know openings and endings; an insert plays as one.
+    type: song.kind === "ED" ? "ED" : "OP",
     title: song.title,
     artists: [song.artist],
     episodes: null,
@@ -200,11 +209,16 @@ export function baseTitle(title: string): string {
     .trim();
   return base || title.toLowerCase().trim();
 }
-const songKey = (song: AniSong) => `${baseTitle(song.title)}\u0000${song.artist.toLowerCase()}`;
-const showKey = (song: AniSong) => `${song.anilistId ?? song.anime.toLowerCase()}\u0000${baseTitle(song.title)}`;
+// Openings and endings merge with each other, insert songs only with insert songs: a song first
+// heard inside a 1990 OVA is still the ending it became in 1993.
+const group = (song: AniSong) => (song.kind === "IN" ? "in" : "theme");
+const songKey = (song: AniSong) => `${group(song)}\u0000${baseTitle(song.title)}\u0000${song.artist.toLowerCase()}`;
+const showKey = (song: AniSong) => `${group(song)}\u0000${song.anilistId ?? song.anime.toLowerCase()}\u0000${baseTitle(song.title)}`;
 /** Earlier first; in the same year a TV series before its films and specials. */
 const isEarlier = (a: AniSong, b: AniSong) =>
-  (a.year ?? 9999) - (b.year ?? 9999) || (a.format === "TV" ? 0 : 1) - (b.format === "TV" ? 0 : 1) || a.id - b.id;
+  (a.year ?? 9999) - (b.year ?? 9999) || (a.format === "TV" ? 0 : 1) - (b.format === "TV" ? 0 : 1)
+  // The same year, an opening or ending over an insert of the same recording.
+  || (a.kind === "IN" ? 1 : 0) - (b.kind === "IN" ? 1 : 0) || a.id - b.id;
 
 /**
  * Each song once, under its original show: the earliest (a TV series before its films)
@@ -231,9 +245,14 @@ export function originalSongs(songs: AniSong[]): AniSong[] {
     }
     return [...best.values()];
   };
+  // An "insert" that's the same recording as an opening or ending somewhere is that theme
+  // played again (Get Wild inside City Hunter 2), not an insert song of its own.
+  const recording = (song: AniSong) => `${baseTitle(song.title)}\u0000${song.artist.toLowerCase()}`;
+  const themes = new Set(songs.filter((song) => song.kind !== "IN").map(recording));
+  const own = songs.filter((song) => song.kind !== "IN" || !themes.has(recording(song)));
   // The same recording across shows, then one song's versions within a show
   // (a show's re-recordings by other singers are still its one theme).
-  return merge(merge(songs, songKey), showKey);
+  return merge(merge(own, songKey), showKey);
 }
 
 /** "best": what people listen to as music; "known": what most fans recognise. */
@@ -241,9 +260,9 @@ export type ChartOrder = "best" | "known";
 
 /**
  * A song's "best" score (0–100), from how much people play it: YouTube views across all its
- * uploads or Last.fm listeners, whichever says more, on one log scale (about 3,000 views per
+ * uploads and Last.fm listeners, the stronger leading (70/30), on one log scale (about 3,000 views per
  * listener: 8M views ≈ 2.8k listeners ≈ 66). Either can undercount (uploads titled only in
- * Japanese, tracks Last.fm files under another name), so the stronger one decides; the charts
+ * Japanese, tracks Last.fm files under another name), so the stronger one leads; the charts
  * show it with a bar of this score. A song neither knows gets half its quiz recognition, and
  * a Kids show's song counts 60%: those are known by everyone but rarely played as music.
  */
@@ -251,7 +270,12 @@ export function bestScore(song: AniSong): number | null {
   // A licensed song's plays aren't anime fans': it scores on its quiz recognition.
   const watched = !song.licensed && song.views ? Math.min(100, Math.log10(song.views / 3000 + 1) * 19) : null;
   const heard = !song.licensed && song.listeners != null ? Math.min(100, Math.log10(song.listeners + 1) * 19) : null;
-  const played = watched == null && heard == null ? null : Math.max(watched ?? 0, heard ?? 0);
+  // The stronger count leads; the other counts 30% when the two roughly agree, so two songs
+  // level on Last.fm are told apart by their views (Blue Bird's 154M over distance's 20M). Far
+  // apart, the weaker is a failed match (Shinzou o Sasageyo!: 347M views, 14 "listeners").
+  const both = [watched, heard].filter((v): v is number => v != null);
+  const [high, low] = [Math.max(...both), Math.min(...both)];
+  const played = !both.length ? null : both.length === 1 || high - low > 25 ? high : 0.7 * high + 0.3 * low;
   const base = played ?? (song.recognition != null ? song.recognition * 0.5 : null);
   return base == null ? null : song.kids ? base * 0.6 : base;
 }
@@ -340,12 +364,15 @@ export function kanaToRomaji(text: string): string {
 /** Words a song title is matched on: particles and version words don't need to be there. */
 const MINOR = new Set(["no", "wo", "wa", "ga", "to", "ni", "de", "e", "mo", "the", "a", "an", "of"]);
 const titleWords = (title: string) => baseTitle(title).split(" ").map(fold).filter((w) => w && !MINOR.has(w));
-/** "Lupin III: Part II" → also "Lupin III"; "Gegege no Kitarou (1985)" → also "Gegege no Kitarou". */
+/** "Lupin III: Part II" → also "Lupin III"; "Gegege no Kitarou (1985)" → also "Gegege no Kitarou"; "Love Live! School Idol Project" → also "Love Live!". */
 const showNames = (names: (string | null)[]) => [...new Set(names.flatMap((n) => (n
-  ? [n, n.replace(/\s*[:(\[].*$/, ""), n.replace(/\s+(?:part|season|series)\s+\S+$/i, ""),
+  ? [n, n.replace(/\s*[:(\[].*$/, ""), n.replace(/\s+(?:part|season|series)\s+\S+$/i, ""), n.replace(/([!?])\s.*$/, "$1"),
     // "City Hunter 2", "Lupin III Part II", "Bleach 2nd Season" → also the first show's name.
     n.replace(/\s*[:(\[].*$/, "").replace(/\s+(?:\d{1,2}|[IVX]{1,4}|\d+(?:st|nd|rd|th)(?:\s+season)?)$/i, "")]
   : [])).map(fold).filter((v) => v.length >= 4))];
+
+/** The names a song's show goes by, sequels' first-season name among them: its franchise. */
+export const franchiseNames = (song: AniSong): string[] => showNames([song.anime, song.animeJp]);
 
 /** A romaji word: syllables like "ko", "shi", "tsu", "kyou", with "n" and doubled consonants. */
 const ROMAJI = /^(?:(?:[kgsztdnhbpmyrwfjv]|ch|sh|ts)?y?[aiueo]|n|[kstpc](?=[kstpc]))+$/;
@@ -365,7 +392,7 @@ export function readsAsJapanese(title: string): boolean {
 
 /** Videos about many songs, or about something else. */
 const NOT_THE_SONG = /\btop\s*\d+|ranking|\ball\s+(?:the\s+)?(?:openings|endings|op|ed)s?\b|\bevery\s+(?:opening|ending)|compilation|medley|メドレー|\breact(?:ion|s|ing)?\b|but it'?s/i;
-const THEME: Record<SongKind, RegExp> = {
+const THEME: Record<"OP" | "ED", RegExp> = {
   OP: /(?:\bopening|\bintro|オープニング|\bop(?![a-z]))\s*(\d+)?/i,
   ED: /(?:\bending|\boutro|エンディング|\bed(?![a-z]))\s*(\d+)?/i,
 };
@@ -375,12 +402,25 @@ const THEME: Record<SongKind, RegExp> = {
  * versions, lyric and live videos, covers and fan edits. A video counts when its title has
  * every word of the song's name, in romaji or kana ("Lupin III Theme" for "Lupin III no
  * Theme", おどるポンポコリン for "Odoru Ponpokorin"; a short name like "SARA" also needs the
- * show or artist), when it's the show's opening/ending with this song's number, or when it's
- * the artist's official "- Topic" upload titled in Japanese. Compilations, rankings,
- * reactions and anything over 15 minutes don't.
+ * show or artist), when it's the show's opening/ending with this song's number (not another
+ * season's, and not naming another of `rivals`, the franchise's other songs, or their singers),
+ * or when it's the artist's official "- Topic" upload titled in Japanese. Compilations,
+ * rankings, reactions and anything over 15 minutes don't.
  */
-export function songYouTubeViews(videos: YouTubeVideo[], song: AniSong, otherNames: (string | null | undefined)[] = []): number {
+export function songYouTubeViews(
+  videos: YouTubeVideo[], song: AniSong, otherNames: (string | null | undefined)[] = [], rivals: SongRival[] = [],
+): number {
   const words = titleWords(song.title);
+  // "THE HERO !! ~Ikareru Kobushi ni Hi o Tsukero~" is mostly uploaded as "THE HERO!!".
+  const main = song.title.replace(/\s*[~～(（].*$/, "");
+  const mainWords = main !== song.title ? titleWords(main) : [];
+  const longWords = words.filter((w) => w.length >= 3);
+  // …when what's left isn't only the show's name ("THEME FROM LUPIN Ⅲ" isn't "Lupin III no Ai no Theme"),
+  // unless the show is named after the song (the film "Macross: Ai Oboete Imasu ka").
+  const showWords = showNames([song.anime, song.animeJp]);
+  const kanjiWords = words.some((w) => w.length < 3 && /^[a-z]+$/.test(w)) && words.every((w) => w.length >= 3 || /^[a-z]+$/.test(w))
+    && (longWords.filter((w) => !showWords.some((n) => n.includes(w))).join("").length >= 8
+      || showWords.some((n) => n.includes(fold(song.title))));
   // The track's own name elsewhere (Spotify's ラムのラブソング for "Lum no Love Song").
   const aliases = otherNames.filter((n): n is string => !!n).map(fold).filter((n) => n.length >= 2 && n !== words.join(""));
   // Only a long name that reads as Japanese counts without the show or artist beside it. An
@@ -391,11 +431,35 @@ export function songYouTubeViews(videos: YouTubeVideo[], song: AniSong, otherNam
   // A band like "You & Explosion Band" is its whole name; a duet's first singer is theirs.
   // Long vowels spelled either way: AnisongDB's "Yuuko Matsutani" is YouTube's "Yuko Matsutani - Topic".
   const vowels = (text: string) => text.replace(/ou/g, "o").replace(/uu/g, "u").replace(/oo/g, "o");
-  const artists = [...new Set([song.artist, song.artist.split(/,| feat\.| & | x /i)[0] ?? ""].map((a) => vowels(fold(a))))].filter((a) => a.length >= 3);
+  // Two letters are a name only outside the Latin alphabet: Love Live!'s "μ's".
+  const artists = [...new Set([song.artist, song.artist.split(/,| feat\.| & | x /i)[0] ?? ""].map((a) => vowels(fold(a))))]
+    .filter((a) => a.length >= 3 || (a.length === 2 && /[^a-z0-9]/.test(a)));
   const shows = showNames([song.anime, song.animeJp]);
+  // "Opening 2" alone names a theme beside the show's whole name, or its short name when it's the
+  // franchise's first show: "Demon Slayer Opening 1" is Gurenge, not the Entertainment District
+  // Arc's, and "Fairy Tail ED 6" is the 2009 show's.
+  const ownShows = [song.anime, song.animeJp].filter((n): n is string => !!n).map(fold).filter((v) => v.length >= 4);
+  const showYear = Math.min(song.year ?? Infinity, ...rivals.filter((r) => r.anime === song.anime && r.year != null).map((r) => r.year!));
+  const first = !rivals.some((r) => r.anime !== song.anime && r.year != null && r.year < showYear);
+  const themeNames = first ? shows : ownShows;
+  // The franchise's other songs, by their words: not a 2-letter "ai" (in every title), nor one
+  // named after the show itself (1969 Dororo's "Dororo" is in every Dororo upload).
+  const own = words.join("");
+  const rivalWords = rivals.map((r) => titleWords(r.title)).filter((w) => w.join("").length >= 4 && w.join("") !== own
+    && !w.every((x) => ownShows.some((n) => n.includes(x))));
+  // …and their singers ("DAN DA DAN Season 2 OP | On The Way by AiNA THE END" isn't Otonoke).
+  const rivalArtists = [...new Set(rivals.map((r) => vowels(fold(r.artist))))]
+    .filter((a) => a.length >= 4 && !artists.some((own) => own.includes(a) || a.includes(own)) && !shows.some((n) => n.includes(a)));
+  const sequel = sequelOf(`${song.anime} ${song.animeJp ?? ""}`);
+  // A "Season 2" upload is another season's only when the franchise has that season under its
+  // own name: AnisongDB files Dandadan's second season as plain "Dandadan".
+  const seasons = new Set(rivals.map((r) => sequelOf(r.anime)));
+  const sameSeason = (title: string) => { const n = sequelOf(title); return n === sequel || (sequel === 1 && !seasons.has(n)); };
+  const isTopic = (channel: string) => artists.some((a) => channel === `${a}topic`);
   const seen = new Set<string>();
   let total = 0;
   let topic = false;
+  const counted: { video: YouTubeVideo; official: boolean }[] = [];
   for (const video of videos) {
     if (seen.has(video.id) || NOT_THE_SONG.test(video.title) || (video.seconds != null && video.seconds > 15 * 60)) continue;
     const titles = [fold(video.title), fold(kanaToRomaji(video.title))];
@@ -404,21 +468,41 @@ export function songYouTubeViews(videos: YouTubeVideo[], song: AniSong, otherNam
     const ofShow = shows.some(has);
     const byArtist = artists.some((a) => titles.some((t) => vowels(t).includes(a)) || channel.includes(a));
     const named = (words.length > 0 && words.every(has) && (!short || ofShow || byArtist))
+      || (mainWords.length > 0 && mainWords.every(has) && (ofShow || byArtist))
+      // A one- or two-letter word is often a kanji in Japanese titles: 愛・おぼえていますか is
+      // "Ai Oboete Imasu ka", on the artist's or show's upload.
+      || (kanjiWords && /[㐀-鿿]/.test(video.title) && longWords.every(has) && (ofShow || byArtist))
       || aliases.some((name) => has(name) && (name.length >= 4 || ofShow || byArtist));
     let themed = false;
-    if (!named && ofShow) {
+    // An insert song has no "Opening 2" of its own to look for, and a video naming another of
+    // the show's songs is that one's ("Atashi ga Tonari ni Iru Uchi ni (Shield Hero Ending Theme)").
+    if (!named && song.kind !== "IN" && themeNames.some(has) && sameSeason(video.title)
+      && !rivalWords.some((w) => w.every(has)) && !rivalArtists.some((a) => titles.some((t) => vowels(t).includes(a)) || channel.includes(a))) {
       const match = video.title.match(THEME[song.kind]);
       if (match) themed = match[1] ? Number(match[1]) === (song.number ?? 1) : (song.number ?? 1) === 1;
     }
-    const official = !named && !themed && !topic && artists.some((a) => channel === `${a}topic`)
+    const official = !named && !themed && !topic && isTopic(channel)
       // Titled in Japanese: the artist's "4:00 A.M." on the same channel is another song.
       && /[぀-ヿ㐀-鿿]/.test(video.title) && !/[a-z]{3}/i.test(video.title);
     if (!named && !themed && !official) continue;
     if (official) topic = true;
     seen.add(video.id);
-    total += video.views;
+    counted.push({ video, official });
   }
+  // The artist's Topic channel already uploaded it under a name we know: its other untitled
+  // uploads are other songs (Nakano-ke no Itsutsugo's はつこい beside 五等分のカタチ).
+  const topicNamed = counted.some(({ video, official }) => !official && isTopic(vowels(fold(video.channel))));
+  for (const { video, official } of counted) if (!official || !topicNamed) total += video.views;
   return total;
+}
+
+/** Another song of the same franchise, which a "Show Opening" upload may be about instead. */
+export interface SongRival { title: string; artist: string; anime: string; year: number | null }
+
+/** The season or part a title names ("Season 2", "2nd Season", "Part 2", "第2期"); 1 when it names none. */
+function sequelOf(title: string): number {
+  const match = /\bseason\s*(\d+)|\b(\d+)(?:st|nd|rd|th)\s+season|\bpart\s*(\d+)|第\s*(\d+)\s*期|\bs(\d)\b/i.exec(title);
+  return match ? Number(match.slice(1).find(Boolean)) : 1;
 }
 
 /** Which number decided a song's "best" score: its YouTube views, its Last.fm listeners, or (neither) its quiz score. */
@@ -456,7 +540,7 @@ export function rankSongs(songs: AniSong[], kind: SongKind | null = null, limit 
 }
 
 /** Decade and all-time charts keep at most this many songs a show. */
-export const CHART_PER_SHOW = 3;
+export const CHART_PER_SHOW = 4;
 
 export const decadeOf = (year: number) => Math.floor(year / 10) * 10;
 export const decadeLabel = (decade: number) => `${decade}s`;
@@ -507,7 +591,7 @@ export function searchBody(query: string, by: SongSearchBy): Json {
 }
 
 /** One chart scope's lists: each order, each kind. */
-export interface ChartSet { best: { OP: AniSong[]; ED: AniSong[] }; known: { OP: AniSong[]; ED: AniSong[] } }
+export interface ChartSet { best: Record<SongKind, AniSong[]>; known: Record<SongKind, AniSong[]> }
 
 /** Charts shipped with both apps (built by scripts/build-song-charts.mjs). */
 export interface SongCharts {
@@ -521,7 +605,7 @@ export interface SongCharts {
 
 function parseSong(raw: unknown): AniSong | null {
   const s = obj(raw);
-  if (!s || !int(s.id) || (s.kind !== "OP" && s.kind !== "ED") || !str(s.title) || !str(s.anime)) return null;
+  if (!s || !int(s.id) || (s.kind !== "OP" && s.kind !== "ED" && s.kind !== "IN") || !str(s.title) || !str(s.anime)) return null;
   if (s.video != null && !isSongFile(s.video)) return null;
   if (s.audio != null && !isSongFile(s.audio)) return null;
   const cover = str(s.cover, 500);
@@ -558,7 +642,7 @@ export function parseCharts(json: unknown): SongCharts {
   }
   const list = (value: unknown): AniSong[] =>
     (Array.isArray(value) ? value.slice(0, ANISONGS.CHART_SIZE) : []).map((id) => byId.get(id as number)).filter((s): s is AniSong => !!s);
-  const pair = (value: unknown) => ({ OP: list(obj(value)?.OP), ED: list(obj(value)?.ED) });
+  const pair = (value: unknown) => ({ OP: list(obj(value)?.OP), ED: list(obj(value)?.ED), IN: list(obj(value)?.IN) });
   const set = (value: unknown): ChartSet => ({ best: pair(obj(value)?.best), known: pair(obj(value)?.known) });
   const decades: SongCharts["decades"] = {};
   for (const decade of ANISONGS.DECADES) decades[String(decade)] = set(obj(root.decades)?.[String(decade)]);

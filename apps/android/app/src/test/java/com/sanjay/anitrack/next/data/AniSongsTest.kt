@@ -23,11 +23,15 @@ class AniSongsTest {
             row("annSongId" to 26, "songType" to "Ending 1", "songName" to "THE REAL FOLK BLUES", "songArtist" to "Mai Yamane",
                 "songDifficulty" to 44, "HQ" to null, "MQ" to "ffr7rh.webm"),
             row("annSongId" to 27, "songType" to "Insert Song", "songName" to "Rush"),
+            row("annSongId" to 30, "songType" to "Insert Song", "songName" to "A character song", "songCategory" to "Character"),
             row("annSongId" to 28, "isDub" to true),
             row("annSongId" to 29, "HQ" to "../evil.webm", "MQ" to null, "audio" to null),
             row(),
         )))
-        assertEquals(2, songs.size)
+        // A Standard insert song is kept as "IN"; character songs, dubs and bad files aren't.
+        assertEquals(3, songs.size)
+        assertEquals("IN", songs[2].kind)
+        assertEquals("Insert", AniSongs.slug(songs[2]))
         assertEquals(
             AniSong(25, 1, 1, "Cowboy Bebop", "Cowboy Bebop", "Spring 1998", 1998, "TV", "OP", 1, "Tank!", "Seatbelts", 85.0,
                 "byvisp.webm", "720p", "je3987.mp3"),
@@ -88,7 +92,8 @@ class AniSongsTest {
         assertEquals("SARA", AniSongs.rank(listOf(songs[0], alone), "OP", 10, Int.MAX_VALUE, "best")[0].title)
         // YouTube views share the scale (about 3,000 views a listener); whichever says more counts.
         assertEquals(64.9, AniSongs.bestScore(sara.copy(views = 7_800_000))!!, 0.2)
-        assertEquals(99.8, AniSongs.bestScore(sara.copy(views = 7_800_000, listeners = 180_000))!!, 0.3)
+        assertEquals(100.0, AniSongs.bestScore(sara.copy(views = 7_800_000, listeners = 180_000))!!, 0.3)
+        assertTrue(AniSongs.bestScore(sara.copy(views = 154_300_000, listeners = 102_000))!! > AniSongs.bestScore(sara.copy(views = 19_800_000, listeners = 102_500))!!)
         assertEquals("listeners", AniSongs.bestSource(sara.copy(views = 7_800_000, listeners = 180_000)))
         assertEquals(15.0, AniSongs.bestScore(sara.copy(views = 900_000_000, licensed = true, recognition = 30.0))!!, 0.001)
     }

@@ -48,7 +48,7 @@ data class AniSong(
     val licensed: Boolean = false,
 )
 
-/** One chart scope: order ("best" / "known") → kind ("OP" / "ED") → songs. */
+/** One chart scope: order ("best" / "known") → kind ("OP" / "ED" / "IN") → songs. */
 typealias ChartSet = Map<String, Map<String, List<AniSong>>>
 
 data class SongCharts(
@@ -79,7 +79,7 @@ object AniSongs {
 
     private val FILE = Regex("^[a-z0-9]{4,16}\\.(?:webm|mp4|mp3)$", RegexOption.IGNORE_CASE)
     private val SEASON = Regex("^(Winter|Spring|Summer|Fall) (\\d{4})$")
-    private val TYPE = Regex("^(Opening|Ending)\\s*(\\d+)?$", RegexOption.IGNORE_CASE)
+    private val TYPE = Regex("^(Opening|Ending|Insert Song)\\s*(\\d+)?$", RegexOption.IGNORE_CASE)
 
     fun isSongFile(value: Any?): Boolean = value is String && FILE.matches(value)
 
@@ -88,10 +88,15 @@ object AniSongs {
     private fun JSONObject.positive(key: String): Int? = (opt(key) as? Number)?.toDouble()
         ?.takeIf { it > 0 && it % 1.0 == 0.0 && it <= Int.MAX_VALUE }?.toInt()
 
-    /** One AnisongDB row as a song; null for inserts, dubs, rebroadcasts or rows without media. */
+    /**
+     * One AnisongDB row as a song; null for dubs, rebroadcasts or rows without media. Insert
+     * songs count only when "Standard" (not character songs, chants or instrumentals).
+     */
     fun parseSong(row: JSONObject?): AniSong? {
         if (row == null || row.optBoolean("isDub") || row.optBoolean("isRebroadcast")) return null
         val type = TYPE.matchEntire(row.text("songType", 40) ?: "") ?: return null
+        val insert = type.groupValues[1].startsWith("insert", ignoreCase = true)
+        if (insert && row.optString("songCategory") != "Standard") return null
         val id = row.positive("annSongId") ?: return null
         val title = row.text("songName") ?: return null
         val anime = row.text("animeENName") ?: row.text("animeJPName") ?: return null
@@ -111,8 +116,8 @@ object AniSongs {
             season = season,
             year = season?.let { SEASON.matchEntire(it)!!.groupValues[2].toInt() },
             format = row.text("animeType", 20),
-            kind = if (type.groupValues[1].equals("opening", true)) "OP" else "ED",
-            number = type.groupValues[2].toIntOrNull(),
+            kind = if (insert) "IN" else if (type.groupValues[1].equals("opening", true)) "OP" else "ED",
+            number = if (insert) null else type.groupValues[2].toIntOrNull(),
             title = title,
             artist = row.text("songArtist") ?: "Unknown artist",
             recognition = difficulty,
@@ -140,7 +145,7 @@ object AniSongs {
         uri.scheme == "https" && uri.host in HOSTS && FILE.matches(uri.rawPath.removePrefix("/"))
     }.getOrDefault(false)
 
-    fun slug(song: AniSong) = "${song.kind}${song.number ?: ""}"
+    fun slug(song: AniSong) = if (song.kind == "IN") "Insert" else "${song.kind}${song.number ?: ""}"
 
     /**
      * A title page's theme songs with AnisongDB's clips filling the gaps: an AnimeThemes song
@@ -148,7 +153,8 @@ object AniSongs {
      * doesn't list come after its own, and a show AnimeThemes doesn't know is AnisongDB's alone. Same as withSongClips in anisongs.ts.
      */
     fun withClips(themes: List<ThemeSong>, clips: List<AniSong>): List<ThemeSong> {
-        val playable = clips.filter { it.video != null || it.audio != null }
+        // Title pages list openings and endings; insert songs stay in the Songs section.
+        val playable = clips.filter { it.kind != "IN" && (it.video != null || it.audio != null) }
         val covered = themes.mapNotNull { SLUG.find(it.slug) }.map { "${it.groupValues[1]}${it.groupValues[2].ifEmpty { "1" }}" }.toSet()
         // Songs AnimeThemes doesn't list at all (God Mars' endings), after its own.
         val extra = playable.filter { "${it.kind}${it.number ?: 1}" !in covered }.map(::toThemeSong)
@@ -173,7 +179,7 @@ object AniSongs {
         animeTitle = song.anime,
         cover = song.cover,
         slug = slug(song),
-        type = song.kind,
+        type = if (song.kind == "ED") "ED" else "OP",
         title = song.title,
         artists = listOf(song.artist),
         episodes = null,
@@ -200,7 +206,7 @@ object AniSongs {
     }
 
     private fun earlier(a: AniSong, b: AniSong): Boolean = compareValuesBy(a, b,
-        { it.year ?: 9999 }, { if (it.format == "TV") 0 else 1 }, { it.id }) < 0
+        { it.year ?: 9999 }, { if (it.format == "TV") 0 else 1 }, { if (it.kind == "IN") 1 else 0 }, { it.id }) < 0
 
     /**
      * Each song once, under its original show: the earliest (a TV series before its films)
@@ -223,10 +229,17 @@ object AniSongs {
             }
             return best.values.toList()
         }
-        // The same recording across shows, then one song's versions within a show.
+        // The same recording across shows, then one song's versions within a show. Openings and
+        // endings merge with each other, insert songs only with insert songs.
+        fun group(song: AniSong) = if (song.kind == "IN") "in\u0000" else "theme\u0000"
+        // An "insert" that's the same recording as an opening or ending somewhere is that theme
+        // played again, not an insert song of its own.
+        fun recording(song: AniSong) = baseTitle(song.title) + "\u0000" + song.artist.lowercase()
+        val themes = songs.filter { it.kind != "IN" }.map(::recording).toSet()
+        val own = songs.filter { it.kind != "IN" || recording(it) !in themes }
         return merge(
-            merge(songs) { baseTitle(it.title) + "\u0000" + it.artist.lowercase() },
-        ) { (it.anilistId?.toString() ?: it.anime.lowercase()) + "\u0000" + baseTitle(it.title) }
+            merge(own) { group(it) + baseTitle(it.title) + "\u0000" + it.artist.lowercase() },
+        ) { group(it) + (it.anilistId?.toString() ?: it.anime.lowercase()) + "\u0000" + baseTitle(it.title) }
     }
 
     /**
@@ -240,7 +253,10 @@ object AniSongs {
         val watched = song.views?.takeIf { !song.licensed && it > 0 }?.let { minOf(100.0, kotlin.math.log10(it / 3000.0 + 1) * 19) }
         val heard = song.listeners?.takeIf { !song.licensed }?.let { minOf(100.0, kotlin.math.log10(it + 1.0) * 19) }
         // Whichever says more: either can undercount (Japanese-titled uploads, renamed tracks).
-        val base = listOfNotNull(watched, heard).maxOrNull()
+        // The stronger count leads; the other counts 30% when they roughly agree, else it's a
+        // failed match and is ignored (same as bestScore in anisongs.ts).
+        val both = listOfNotNull(watched, heard)
+        val base = (if (both.size == 2 && both.max() - both.min() <= 25) 0.7 * both.max() + 0.3 * both.min() else both.maxOrNull())
             ?: song.recognition?.let { it * 0.5 }
             ?: return null
         return if (song.kids) base * 0.6 else base
@@ -277,7 +293,7 @@ object AniSongs {
     }
 
     /** Decade and all-time charts keep at most this many songs a show. */
-    const val CHART_PER_SHOW = 3
+    const val CHART_PER_SHOW = 4
 
     fun decadeOf(year: Int) = year / 10 * 10
 
@@ -315,7 +331,7 @@ object AniSongs {
 
     private fun chartSong(s: JSONObject): AniSong? {
         val id = s.positive("id") ?: return null
-        val kind = s.optString("kind").takeIf { it == "OP" || it == "ED" } ?: return null
+        val kind = s.optString("kind").takeIf { it == "OP" || it == "ED" || it == "IN" } ?: return null
         val title = s.text("title") ?: return null
         val anime = s.text("anime") ?: return null
         val video = s.opt("video").takeIf { it != null && it != JSONObject.NULL }
@@ -349,7 +365,7 @@ object AniSongs {
         for (i in 0 until minOf(songs.length(), 50_000)) chartSong(songs.optJSONObject(i) ?: continue)?.let { byId[it.id] = it }
         fun list(array: JSONArray?): List<AniSong> =
             if (array == null) emptyList() else (0 until minOf(array.length(), CHART_SIZE)).mapNotNull { byId[array.optInt(it)] }
-        fun pair(o: JSONObject?) = mapOf("OP" to list(o?.optJSONArray("OP")), "ED" to list(o?.optJSONArray("ED")))
+        fun pair(o: JSONObject?) = mapOf("OP" to list(o?.optJSONArray("OP")), "ED" to list(o?.optJSONArray("ED")), "IN" to list(o?.optJSONArray("IN")))
         fun set(o: JSONObject?): ChartSet = mapOf("best" to pair(o?.optJSONObject("best")), "known" to pair(o?.optJSONObject("known")))
         val decades = root.optJSONObject("decades")
         val rawYears = root.optJSONObject("years")

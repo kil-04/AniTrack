@@ -81,6 +81,9 @@ function readScope(): Scope {
   if (m && +m[2] >= ANISONGS.FIRST_YEAR && +m[2] <= THIS_YEAR) return { type: m[1] as "decade" | "year", value: +m[2] };
   return { type: "decade", value: 1980 };
 }
+/** "openings", "endings" or "insert songs". */
+const kindWords = (kind: SongKind) => (kind === "OP" ? "openings" : kind === "ED" ? "endings" : "insert songs");
+
 const scopeKey = (s: Scope) => (s.type === "all" ? "all" : `${s.type}:${s.value}`);
 const scopeTitle = (s: Scope) => (s.type === "all" ? "All time" : s.type === "decade" ? `The ${String(s.value).slice(2)}s` : String(s.value));
 
@@ -183,7 +186,7 @@ export default function Songs() {
     const set = scope.type === "all" ? charts.allTime : scope.type === "decade" ? charts.decades[String(scope.value)] : charts.years[String(scope.value)];
     return set?.[order][kind] ?? [];
   }, [charts, scope, order, kind]);
-  const label = `${scopeTitle(scope)} · ${kind === "OP" ? "openings" : "endings"}`;
+  const label = `${scopeTitle(scope)} · ${kindWords(kind)}`;
   const lead = chart[0];
   const playingId = player ? player.songs[player.index]?.id ?? null : null;
   const docked = !!player && !player.full;
@@ -257,7 +260,7 @@ export default function Songs() {
               <button disabled={!chart.length} onClick={surprise} className="group flex items-center gap-2 rounded-full bg-white/10 px-5 py-2.5 text-sm font-semibold transition hover:bg-white/20 disabled:opacity-40"><Dices size={16} className="transition group-hover:rotate-45" /> Surprise me</button>
               <span className="mx-2 h-6 w-px bg-white/10" />
               <Toggle value={order} onChange={(v) => { sfx("tab"); setOrder(v); }} options={[["best", "Best", "What people listen to as music"], ["known", "Most known", "What most fans recognise"]]} />
-              <Toggle value={kind} onChange={(v) => { sfx("tab"); setKind(v); }} options={[["OP", "Openings", ""], ["ED", "Endings", ""]]} />
+              <Toggle value={kind} onChange={(v) => { sfx("tab"); setKind(v); }} options={[["OP", "Openings", ""], ["ED", "Endings", ""], ["IN", "Inserts", "Songs sung inside an episode or film"]]} />
             </div>
           </div>
           <div className="flex flex-col gap-2 self-start">
@@ -640,9 +643,9 @@ function SeasonsView({ year: initial, kind, onWatch, hover, previewing, sfx }: {
       )}
       {state === "loading" ? <Loading /> : state === "failed" ? <Empty text="Couldn't reach AnisongDB. Try again later." />
         : ranked.length ? <>
-          <h3 className="mb-2 text-sm font-bold text-white/60">{state.label} · {kind === "OP" ? "openings" : "endings"}</h3>
+          <h3 className="mb-2 text-sm font-bold text-white/60">{state.label} · {kindWords(kind)}</h3>
           <SongRows songs={ranked} order={season === "latest" ? null : "known"} label={state.label} onWatch={onWatch} hover={hover} previewing={previewing} />
-        </> : <Empty text={`No ${kind === "OP" ? "openings" : "endings"} with videos for ${state.label}.`} />}
+        </> : <Empty text={`No ${kindWords(kind)} with videos for ${state.label}.`} />}
     </div>
   );
 }
@@ -759,13 +762,13 @@ function SongCard({ song, onClose, onWatch, onListen }: { song: AniSong; list: A
               {song.video && <span className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition group-hover:opacity-100"><Play size={36} fill="white" /></span>}
             </button>
             <div className="min-w-0 flex-1 pt-1">
-              <div className="text-xs font-black uppercase tracking-[0.2em] text-accent">{song.kind === "OP" ? "Opening" : "Ending"} {song.number ?? ""} · {song.format ?? "TV"}</div>
+              <div className="text-xs font-black uppercase tracking-[0.2em] text-accent">{song.kind === "OP" ? "Opening" : song.kind === "ED" ? "Ending" : "Insert song"} {song.number ?? ""} · {song.format ?? "TV"}</div>
               <h2 className="mt-1 text-3xl font-black leading-tight">{song.title}</h2>
               <p className="mt-1 text-white/70">{song.artist}</p>
               <p className="text-sm text-white/45">{song.anime}{song.season ? ` · ${song.season}` : ""}</p>
               {/* The numbers lead to the charts they rank in. */}
               <div className="mt-4 flex flex-wrap gap-2">
-                {song.views ? <Chip onClick={() => song.year && nav.year(song.year, "best", song.kind)} title={`Best ${song.year} ${song.kind === "OP" ? "openings" : "endings"}`}>▶ {compactCount(song.views)} views</Chip> : null}
+                {song.views ? <Chip onClick={() => song.year && nav.year(song.year, "best", song.kind)} title={`Best ${song.year} ${kindWords(song.kind)}`}>▶ {compactCount(song.views)} views</Chip> : null}
                 {song.listeners ? <Chip onClick={() => song.year && nav.year(song.year, "best", song.kind)} title="Last.fm listeners">♫ {compactCount(song.listeners)} listeners</Chip> : null}
                 {song.recognition != null ? <Chip onClick={() => song.year && nav.year(song.year, "known", song.kind)} title={`Most known ${song.year} songs`}>{Math.round(song.recognition)}% know it</Chip> : null}
                 {song.kids ? <Chip title="A kids' show: counts 60% in Best">Kids</Chip> : null}

@@ -28,7 +28,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  ANISONGS, CHART_PER_SHOW, SEASONS, baseTitle, decadeOf, originalSongs, parseAniSongs, parseYouTubeSearch, rankSongs,
+  ANISONGS, CHART_PER_SHOW, SEASONS, baseTitle, decadeOf, franchiseNames, originalSongs, parseAniSongs, parseYouTubeSearch, rankSongs,
   songYouTubeViews,
 } from "../packages/shared/anisongs.ts";
 
@@ -54,6 +54,8 @@ const firstArtist = (artist) => artist.split(/,| feat\.| & | x /i)[0].trim();
 const OUTPUT = path.join(ROOT, "apps", "android", "app", "src", "main", "assets", "song_charts.json");
 const UA = "AniTrack song charts (+https://github.com/kil-04/AniTrack)";
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Insert songs looked up on YouTube and Last.fm each year (~11k exist; these are the best-known). */
+const INSERTS_PER_YEAR = 60;
 
 /** One request at a time per service, at least `spacing` ms apart. */
 function pacer(spacing) {
@@ -267,7 +269,8 @@ async function youtubeSearch(song) {
   return parseYouTubeSearch(JSON.parse(data[1])).slice(0, 30);
 }
 /** The song's views from its cached search, or null when it hasn't been searched. */
-const viewsOf = (song) => (Array.isArray(youtube[listenKey(song)]) ? songYouTubeViews(youtube[listenKey(song)], song, [spotifyNames[listenKey(song)]]) : null);
+const viewsOf = (song) => (Array.isArray(youtube[listenKey(song)])
+  ? songYouTubeViews(youtube[listenKey(song)], song, [spotifyNames[listenKey(song)]], rivalsOf(song)) : null);
 
 // ── Song dates ─────────────────────────────────────────────────────────────────
 // AnisongDB files every song under its show's first season, so One Piece's 2017 opening
@@ -342,11 +345,24 @@ async function showRuns(ids) {
 
 /** The song moved to the season its theme started, when it starts after the first cour. */
 function datedSong(song, episodes, runs) {
-  const first = episodes[song.anilistId]?.[`${song.kind}${song.number ?? 1}`];
+  const known = episodes[song.anilistId] ?? {};
+  const number = song.number ?? 1;
+  let first = known[`${song.kind}${number}`];
+  if (!first) {
+    // AnimeThemes lists only some of a long show's themes (Conan: endings 1, 9 and 56–75):
+    // place a missing one between the nearest it does list.
+    const listed = Object.entries(known).filter(([slug]) => slug.startsWith(song.kind))
+      .map(([slug, ep]) => [Number(slug.slice(2)), ep]).sort((a, b) => a[0] - b[0]);
+    const below = listed.filter(([n]) => n < number).at(-1);
+    const above = listed.find(([n]) => n > number);
+    if (below && above) first = Math.round(below[1] + ((number - below[0]) / (above[0] - below[0])) * (above[1] - below[1]));
+  }
   const run = runs[song.anilistId];
-  if (!first || first <= 13 || !run?.start || !run.episodes || run.episodes < first) return song;
+  // A theme past a finished run's end belongs to the run AniList files apart (AnisongDB keeps
+  // Ranma ½ Nettouhen's themes on the 18-episode first series): it's dated at the same pace.
+  if (!first || first <= 13 || !run?.start || !run.episodes || (run.episodes < first && !run.end)) return song;
   const until = run.end ?? Date.now();
-  const at = Math.min(until, run.start + ((until - run.start) / run.episodes) * (first - 1));
+  const at = Math.min(Date.now(), run.start + ((until - run.start) / run.episodes) * (first - 1));
   const date = new Date(at);
   const year = date.getUTCFullYear();
   if (year === song.year) return song;
@@ -369,6 +385,16 @@ const laterShows = [...new Set(all.filter((s) => s.anilistId && (s.number ?? 1) 
 const episodesByShow = await themeEpisodes(laterShows);
 const runsByShow = await showRuns(laterShows.filter((id) => Object.keys(episodesByShow[id] ?? {}).length));
 const dated = all.map((song) => datedSong(song, episodesByShow, runsByShow));
+// Each franchise's songs: a "Dandadan Opening" upload naming Otonoke (or Creepy Nuts) isn't Kakumei Douchuu.
+const franchises = new Map();
+for (const song of all) {
+  for (const name of franchiseNames(song)) {
+    if (!franchises.has(name)) franchises.set(name, new Set());
+    franchises.get(name).add(song);
+  }
+}
+const rivalsOf = (song) => [...new Set(franchiseNames(song).flatMap((n) => [...(franchises.get(n) ?? [])]))]
+  .filter((s) => baseTitle(s.title) !== baseTitle(song.title)).map((s) => ({ title: s.title, artist: s.artist, anime: s.anime, year: s.year }));
 console.log(`Dated ${dated.filter((song, i) => song !== all[i]).length} later themes by when they aired`);
 // Merge reused songs to their original show first, so a 1979 song a 1985 film reuses
 // stays in the 1970s chart.
@@ -380,7 +406,11 @@ const everySong = [];
 /** A song's place among its year's best-known songs (0 = most recognised). */
 const placeInYear = new Map();
 for (let year = ANISONGS.FIRST_YEAR; year <= thisYear; year++) {
-  const ranked = rankSongs(originals.filter((s) => s.year === year), null, Infinity);
+  // Every opening and ending; of the many insert songs, each year's best-known (the rest
+  // still chart on their quiz score, behind these).
+  let inserts = 0;
+  const ranked = rankSongs(originals.filter((s) => s.year === year), null, Infinity)
+    .filter((s) => s.kind !== "IN" || inserts++ < INSERTS_PER_YEAR);
   ranked.forEach((song, place) => placeInYear.set(song, place));
   everySong.push(...ranked);
 }
@@ -500,6 +530,7 @@ const ids = (list) => list.map((song) => { songs.set(song.id, song); return song
 const chartSet = (list, size) => Object.fromEntries(["best", "known"].map((order) => [order, {
   OP: ids(rankSongs(list, "OP", size, CHART_PER_SHOW, order)),
   ED: ids(rankSongs(list, "ED", size, CHART_PER_SHOW, order)),
+  IN: ids(rankSongs(list, "IN", size, CHART_PER_SHOW, order)),
 }]));
 const decades = Object.fromEntries(ANISONGS.DECADES.map((d) => [d, chartSet(enriched.filter((s) => s.year != null && decadeOf(s.year) === d), ANISONGS.CHART_SIZE)]));
 const years = {};

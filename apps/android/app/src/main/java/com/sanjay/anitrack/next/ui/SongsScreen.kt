@@ -132,6 +132,9 @@ private val ERA_NOTE = mapOf(
     2020 to "Global hits and openings everyone covers.",
 )
 private const val SONGS_PREFS = "songs"
+
+/** "openings", "endings" or "insert songs". */
+private fun kindWords(kind: String) = when (kind) { "OP" -> "openings"; "ED" -> "endings"; else -> "insert songs" }
 private const val CHART_PREVIEW = 20
 private val Gold = Color(0xFFFCD34D)
 private val PODIUM = listOf(Gold, Color(0xFFCBD5E1), Color(0xFFD97706))
@@ -231,7 +234,7 @@ fun SongsScreen(onOpenAnime: (Int) -> Unit) {
         val set = when (scope.type) { "all" -> c.allTime; "decade" -> c.decades[scope.value]; else -> c.years[scope.value] }
         set?.get(order)?.get(kind).orEmpty()
     }
-    val label = "${scope.title} · ${if (kind == "OP") "openings" else "endings"}"
+    val label = "${scope.title} · ${kindWords(kind)}"
     fun watch(songs: List<AniSong>, index: Int, title: String) {
         SongPreview.stop()
         val playable = songs.filter { it.video != null }
@@ -410,7 +413,7 @@ private fun Jukebox(
                     Spacer(Modifier.height(10.dp))
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Segments(listOf("best" to "Best", "known" to "Most known"), order, onOrder)
-                        Segments(listOf("OP" to "Openings", "ED" to "Endings"), kind, onKind)
+                        Segments(listOf("OP" to "Openings", "ED" to "Endings", "IN" to "Inserts"), kind, onKind)
                         // Here rather than top-right, where the app's Music button floats.
                         SwitchChip("Sounds", sounds, if (sounds) Icons.AutoMirrored.Rounded.VolumeUp else Icons.AutoMirrored.Rounded.VolumeOff, onSounds)
                         SwitchChip("Previews", previews, Icons.Rounded.GraphicEq, onPreviews)
@@ -724,11 +727,11 @@ private fun SeasonsView(startYear: Int, kind: String, thisYear: Int, actions: So
         }
         Spacer(Modifier.height(10.dp))
         val ranked = songs?.let { AniSongs.rank(it, kind, 60) }
-        val label = "${title.orEmpty()} · ${if (kind == "OP") "openings" else "endings"}"
+        val label = "${title.orEmpty()} · ${kindWords(kind)}"
         when {
             failed -> Note("Couldn't reach AnisongDB. Try again later.")
             ranked == null -> Loading()
-            ranked.isEmpty() -> Note("No ${if (kind == "OP") "openings" else "endings"} with videos for ${title.orEmpty()}.")
+            ranked.isEmpty() -> Note("No ${kindWords(kind)} with videos for ${title.orEmpty()}.")
             else -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(label, color = AniColors.TextSecondary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 4.dp))
                 ranked.forEachIndexed { i, song ->
@@ -874,7 +877,7 @@ private fun SongCardDialog(song: AniSong, actions: SongActions, onClose: () -> U
                         }
                         Spacer(Modifier.width(20.dp))
                         Column(Modifier.weight(1f)) {
-                            Text("${if (song.kind == "OP") "OPENING" else "ENDING"} ${song.number ?: ""} · ${song.format ?: "TV"}", color = AniColors.Accent, fontSize = 11.sp, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
+                            Text("${when (song.kind) { "OP" -> "OPENING"; "ED" -> "ENDING"; else -> "INSERT SONG" }} ${song.number ?: ""} · ${song.format ?: "TV"}", color = AniColors.Accent, fontSize = 11.sp, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
                             Text(song.title, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             Text(song.artist, color = Color.White.copy(alpha = 0.75f))
                             Text(listOfNotNull(song.anime, song.season).joinToString(" · "), color = Color.White.copy(alpha = 0.5f), fontSize = 13.sp)

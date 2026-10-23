@@ -17,6 +17,7 @@ import {
   rankSongs,
   searchBody,
   seasonOf,
+  songSlug,
   songVideoUrl,
   songYouTubeViews,
   toThemeSong,
@@ -37,11 +38,16 @@ test("anisongs: rows become songs with ids, season, kind, video and recognition"
     row(),
     row({ annSongId: 26, songType: "Ending 1", songName: "THE REAL FOLK BLUES", songArtist: "Mai Yamane", songDifficulty: 44, HQ: null, MQ: "ffr7rh.webm" }),
     row({ annSongId: 27, songType: "Insert Song", songName: "Rush" }),
+    row({ annSongId: 30, songType: "Insert Song", songName: "A character song", songCategory: "Character" }),
     row({ annSongId: 28, isDub: true }),
     row({ annSongId: 29, HQ: "../evil.webm", MQ: null, audio: null }),
     row(), // repeated row
   ]);
-  assert.equal(songs.length, 2);
+  // A Standard insert song is kept as "IN"; character songs, dubs and bad files aren't.
+  assert.equal(songs.length, 3);
+  assert.equal(songs[2].kind, "IN");
+  assert.equal(songs[2].number, null);
+  assert.equal(songSlug(songs[2]), "Insert");
   assert.deepEqual(songs[0], {
     id: 25, anilistId: 1, malId: 1, anime: "Cowboy Bebop", animeJp: "Cowboy Bebop", season: "Spring 1998", year: 1998, format: "TV",
     kind: "OP", number: 1, title: "Tank!", artist: "Seatbelts", recognition: 85, video: "byvisp.webm", quality: "720p", audio: "je3987.mp3",
@@ -226,9 +232,79 @@ test("anisongs: YouTube views add up everyone's uploads of the song, and only th
   const saraByShow = parseYouTubeSearch(page(video("gggggggggg1", "City Hunter - Sara", "GODZAK81", "5,263,796 views", "4:33")));
   assert.equal(songYouTubeViews(saraByShow, sara), 5_263_796);
 
+  // "Ending Theme" alone is any of the show's endings, and another season's is that season's.
+  const [kimi, yuzurenai] = parseAniSongs([
+    row({ annSongId: 50, songName: "Kimi no Namae", songArtist: "Chiai Fujikawa", animeENName: "The Rising of the Shield Hero", songType: "Ending 1", animeVintage: "Winter 2019" }),
+    row({ annSongId: 51, songName: "Yuzurenai", songArtist: "Chiai Fujikawa", animeENName: "The Rising of the Shield Hero Season 2", songType: "Ending 1", animeVintage: "Spring 2022" }),
+  ]);
+  const shield = [
+    { title: "Atashi ga Tonari ni Iru Uchi ni", artist: "Chiai Fujikawa", anime: "The Rising of the Shield Hero", year: 2019 },
+    { title: "Kimi no Namae", artist: "Chiai Fujikawa", anime: "The Rising of the Shield Hero", year: 2019 },
+    { title: "Yuzurenai", artist: "Chiai Fujikawa", anime: "The Rising of the Shield Hero Season 2", year: 2022 },
+  ];
+  const shieldPage = parseYouTubeSearch(page(
+    video("iiiiiiiiii1", "Chiai Fujikawa / Atashi ga tonari ni iruuchini ( \"The Rising of the Shield Hero\" Ending Theme )", "Chiai Fujikawa", "27,846,955 views", "4:40"),
+    video("iiiiiiiiii2", "The Rising of the Shield Hero Season 2 Ending 1", "fan", "40,000 views", "1:30"),
+    video("iiiiiiiiii3", "The Rising of the Shield Hero Ending", "fan", "20,000 views", "1:30"),
+  ));
+  assert.equal(songYouTubeViews(shieldPage, kimi, [], shield), 20_000);
+  assert.equal(songYouTubeViews(shieldPage, yuzurenai, [], shield), 40_000);
+
+  // A later show's opening isn't the short name's ("Demon Slayer Opening 1" is Gurenge), but a
+  // season AnisongDB files under the plain name keeps its "Season 2" uploads, minus those
+  // naming another song's singer.
+  const [gurenge, zankyou, kakumei] = parseAniSongs([
+    row({ annSongId: 52, songName: "Gurenge", songArtist: "LiSA", animeENName: "Demon Slayer: Kimetsu no Yaiba", animeVintage: "Spring 2019" }),
+    row({ annSongId: 53, songName: "Zankyou Sanka", songArtist: "Aimer", animeENName: "Demon Slayer: Kimetsu no Yaiba Entertainment District Arc", animeVintage: "Winter 2022" }),
+    row({ annSongId: 54, songName: "Kakumei Douchuu", songArtist: "AiNA THE END", animeENName: "Dandadan", animeVintage: "Summer 2025" }),
+  ]);
+  const slayer = [{ title: "Gurenge", artist: "LiSA", anime: "Demon Slayer: Kimetsu no Yaiba", year: 2019 }, { title: "Zankyou Sanka", artist: "Aimer", anime: "Demon Slayer: Kimetsu no Yaiba Entertainment District Arc", year: 2022 }];
+  const slayerPage = parseYouTubeSearch(page(video("jjjjjjjjjj1", "Demon Slayer - Opening 1 | 4K Creditless", "Anicrad", "11,901,395 views", "1:30")));
+  assert.equal(songYouTubeViews(slayerPage, gurenge, [], slayer), 11_901_395);
+  assert.equal(songYouTubeViews(slayerPage, zankyou, [], slayer), 0);
+  const dandadan = [{ title: "Otonoke", artist: "Creepy Nuts", anime: "Dandadan", year: 2024 }];
+  const dandadanPage = parseYouTubeSearch(page(
+    video("kkkkkkkkkk1", "DAN DA DAN Season 2 OP | On The Way by AiNA THE END | Netflix Anime", "Netflix Anime", "19,872,172 views", "1:30"),
+    video("kkkkkkkkkk2", "DAN DA DAN | OPENING THEME ♪Otonoke by Creepy Nuts", "Netflix Anime", "100,000,000 views", "1:30"),
+    video("kkkkkkkkkk3", "Dandadan Opening | Creepy Nuts", "fan", "1,000,000 views", "1:30"),
+  ));
+  assert.equal(songYouTubeViews(dandadanPage, kakumei, [], dandadan), 19_872_172);
+
+  // A subtitled name is uploaded under its main title; a Topic channel's untitled uploads are
+  // other songs once one of its uploads is named.
+  const [hero] = parseAniSongs([row({ annSongId: 55, songName: "THE HERO !! ~Ikareru Kobushi ni Hi o Tsukero~", songArtist: "JAM Project", animeENName: "One Punch Man", animeVintage: "Fall 2015" })]);
+  const heroPage = parseYouTubeSearch(page(video("llllllllll1", "One Punch Man - Opening | THE HERO!!", "Crunchyroll", "60,000,000 views", "1:30"), video("llllllllll2", "THE HERO!!", "random", "1,000 views", "3:00")));
+  assert.equal(songYouTubeViews(heroPage, hero), 60_000_000);
+  const [katachi] = parseAniSongs([row({ annSongId: 56, songName: "Gotoubun no Katachi", songArtist: "Nakano-ke no Itsutsugo", animeENName: "The Quintessential Quintuplets 2", animeVintage: "Winter 2021" })]);
+  const topicPage = parseYouTubeSearch(page(
+    video("mmmmmmmmmm1", "はつこい", "Nakanoke no Itsutsugo - Topic", "5,271,407 views", "4:00"),
+    video("mmmmmmmmmm2", "五等分のカタチ", "Nakanoke no Itsutsugo - Topic", "7,224,382 views", "4:00"),
+  ));
+  assert.equal(songYouTubeViews(topicPage, katachi), 5_271_407); // no name known: the first Topic upload
+  assert.equal(songYouTubeViews(topicPage, katachi, ["五等分のカタチ"]), 7_224_382);
+
+  // A kanji can stand for a short word on the artist's upload (愛 for "Ai"), but not leave only
+  // the show's name ("THEME FROM LUPIN Ⅲ" isn't Part II's love theme); "μ's" and "Love Live!" name Snow halation.
+  const [aiOboete, loveTheme, snow] = parseAniSongs([
+    row({ annSongId: 57, songName: "Ai Oboete Imasu ka", songArtist: "Mari Iijima", animeENName: "Super Dimension Fortress Macross: Do You Remember Love?", animeJPName: "Choujikuu Yousai Macross: Ai Oboete Imasu ka", songType: "Insert Song", songCategory: "Standard", animeVintage: "Summer 1984" }),
+    row({ annSongId: 58, songName: "Lupin III no Ai no Theme", songArtist: "Yuji Ohno", animeENName: "Lupin III: Part II", songType: "Ending 1", animeVintage: "Fall 1977" }),
+    row({ annSongId: 59, songName: "Snow halation", songArtist: "μ's", animeENName: "Love Live! School Idol Project", songType: "Insert Song", songCategory: "Standard", animeVintage: "Winter 2013" }),
+  ]);
+  const kanjiShort = parseYouTubeSearch(page(
+    video("nnnnnnnnnn1", "愛・おぼえていますか", "Mari Iijima", "1,260,571 views", "4:00"),
+    video("nnnnnnnnnn2", "THEME FROM LUPIN Ⅲ 2021［Live Music Video］| ルパン三世のテーマ2021", "Lupin Official", "5,167,035 views", "4:00"),
+    video("nnnnnnnnnn3", "【MV Full】µ's 2ndシングル「Snow halation」", "Love Live! series", "7,623,761 views", "5:00"),
+    video("nnnnnnnnnn4", "Snow halation - Love Live! OST [Piano]", "Animenz Piano Sheets", "3,417,319 views", "4:30"),
+  ));
+  assert.equal(songYouTubeViews(kanjiShort, aiOboete), 1_260_571);
+  assert.equal(songYouTubeViews(kanjiShort, loveTheme), 0);
+  assert.equal(songYouTubeViews(kanjiShort, snow), 7_623_761 + 3_417_319);
+
   // On one scale with Last.fm: whichever says more decides; licensed songs don't count.
   assert.ok(Math.abs(bestScore({ ...sara, views: 7_800_000 }) - 64.9) < 0.2);
-  assert.ok(Math.abs(bestScore({ ...sara, views: 7_800_000, listeners: 180_000 }) - 99.8) < 0.3);
+  assert.ok(Math.abs(bestScore({ ...sara, views: 7_800_000, listeners: 180_000 }) - 100) < 0.3); // far apart: the weaker is ignored
+  // Close together, views break the tie: Blue Bird (154M, 102K) over distance (20M, 102K).
+  assert.ok(bestScore({ ...sara, views: 154_300_000, listeners: 102_000 }) > bestScore({ ...sara, views: 19_800_000, listeners: 102_500 }));
   assert.equal(bestSource({ ...sara, views: 7_800_000, listeners: 180_000 }), "listeners");
   assert.equal(bestSource({ ...sara, views: 7_800_000, listeners: 200 }), "views");
   assert.equal(bestScore({ ...sara, views: 900_000_000, licensed: true, recognition: 30 }), 15);
