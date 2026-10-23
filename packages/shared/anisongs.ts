@@ -393,8 +393,9 @@ export function readsAsJapanese(title: string): boolean {
 /** Videos about many songs, or about something else. */
 const NOT_THE_SONG = /\btop\s*\d+|ranking|\ball\s+(?:the\s+)?(?:openings|endings|op|ed)s?\b|\bevery\s+(?:opening|ending)|compilation|medley|メドレー|\breact(?:ion|s|ing)?\b|but it'?s/i;
 const THEME: Record<"OP" | "ED", RegExp> = {
-  OP: /(?:\bopening|\bintro|オープニング|\bop(?![a-z]))\s*(\d+)?/i,
-  ED: /(?:\bending|\boutro|エンディング|\bed(?![a-z]))\s*(\d+)?/i,
+  // "Opening 2", "Opening #2", "OP No.2".
+  OP: /(?:\bopening|\bintro|オープニング|\bop(?![a-z]))\s*(?:#|no\.?\s*)?(\d+)?/i,
+  ED: /(?:\bending|\boutro|エンディング|\bed(?![a-z]))\s*(?:#|no\.?\s*)?(\d+)?/i,
 };
 
 /**
@@ -412,12 +413,22 @@ export function songYouTubeViews(
 ): number {
   const words = titleWords(song.title);
   // "THE HERO !! ~Ikareru Kobushi ni Hi o Tsukero~" is mostly uploaded as "THE HERO!!".
-  const main = song.title.replace(/\s*[~～(（].*$/, "");
-  const mainWords = main !== song.title ? titleWords(main) : [];
+  // Not when that main title is the show's name ("CITY HUNTER ~Ai yo Kienaide~") or another of
+  // the franchise's songs ("memories ~17years after~" beside One Piece's ending "memories").
+  const showWords = showNames([song.anime, song.animeJp]);
+  // A trailing "(…)" is one too ("STILL LOVE HER(Ushinawareta Fuukei)"), a middle one isn't ("Sogeking (Hero) no Uta").
+  const mainOf = (title: string) => title.replace(/\s*[~～].*$/, "").replace(/\s*[(（][^)）]*[)）]\s*$/, "");
+  const main = mainOf(song.title);
+  // An insert also yields to a theme of that name ("Departures~Blessing~" to Guilty Crown's ending).
+  const rivalNames = new Set(rivals.flatMap((r) => [fold(baseTitle(r.title)), ...(song.kind === "IN" && r.kind !== "IN" ? [fold(mainOf(r.title))] : [])]));
+  const mainWords = main !== song.title && !showWords.some((n) => n.includes(fold(main))) && !rivalNames.has(fold(main))
+    ? titleWords(main) : [];
+  // …and not on an upload naming a longer title with the same start ("Departures ~Blessing~").
+  const longerRivals = mainWords.length ? rivals.map((r) => titleWords(r.title))
+    .filter((w) => w.length > mainWords.length && mainWords.every((m) => w.includes(m)) && w.join("") !== words.join("")) : [];
   const longWords = words.filter((w) => w.length >= 3);
   // …when what's left isn't only the show's name ("THEME FROM LUPIN Ⅲ" isn't "Lupin III no Ai no Theme"),
   // unless the show is named after the song (the film "Macross: Ai Oboete Imasu ka").
-  const showWords = showNames([song.anime, song.animeJp]);
   const kanjiWords = words.some((w) => w.length < 3 && /^[a-z]+$/.test(w)) && words.every((w) => w.length >= 3 || /^[a-z]+$/.test(w))
     && (longWords.filter((w) => !showWords.some((n) => n.includes(w))).join("").length >= 8
       || showWords.some((n) => n.includes(fold(song.title))));
@@ -439,14 +450,21 @@ export function songYouTubeViews(
   // franchise's first show: "Demon Slayer Opening 1" is Gurenge, not the Entertainment District
   // Arc's, and "Fairy Tail ED 6" is the 2009 show's.
   const ownShows = [song.anime, song.animeJp].filter((n): n is string => !!n).map(fold).filter((v) => v.length >= 4);
-  const showYear = Math.min(song.year ?? Infinity, ...rivals.filter((r) => r.anime === song.anime && r.year != null).map((r) => r.year!));
-  const first = !rivals.some((r) => r.anime !== song.anime && r.year != null && r.year < showYear);
+  // The song's own show: its other songs share its AniList id (or, without one, its name).
+  const sameShow = (r: SongRival) => (song.anilistId != null && r.anilistId != null ? r.anilistId === song.anilistId : r.anime === song.anime);
+  const showYear = Math.min(song.year ?? Infinity, ...rivals.filter((r) => sameShow(r) && r.year != null).map((r) => r.year!));
+  const first = !rivals.some((r) => !sameShow(r) && r.year != null && r.year < showYear);
   const themeNames = first ? shows : ownShows;
   // The franchise's other songs, by their words: not a 2-letter "ai" (in every title), nor one
   // named after the show itself (1969 Dororo's "Dororo" is in every Dororo upload).
   const own = words.join("");
-  const rivalWords = rivals.map((r) => titleWords(r.title)).filter((w) => w.join("").length >= 4 && w.join("") !== own
-    && !w.every((x) => ownShows.some((n) => n.includes(x))));
+  const rivalWords = rivals.flatMap((r) => [titleWords(r.title), titleWords(mainOf(r.title))])
+    .filter((w) => w.join("").length >= 4 && w.join("") !== own && w.join("") !== fold(main)
+      && !w.every((x) => ownShows.some((n) => n.includes(x))));
+  // …their shows' names ("Lupin III: The First Opening", "No Game No Life: Zero OP" aren't the first show's)…
+  // (long vowels either way: "Naruto Shippuden" is AnisongDB's "Naruto: Shippuuden")
+  const rivalShows = [...new Set(rivals.flatMap((r) => [r.anime, r.animeJp ?? ""]).map((n) => vowels(fold(n))))]
+    .filter((n) => n.length >= 6 && !ownShows.some((o) => vowels(o).includes(n)) && themeNames.some((t) => n.includes(vowels(t))));
   // …and their singers ("DAN DA DAN Season 2 OP | On The Way by AiNA THE END" isn't Otonoke).
   const rivalArtists = [...new Set(rivals.map((r) => vowels(fold(r.artist))))]
     .filter((a) => a.length >= 4 && !artists.some((own) => own.includes(a) || a.includes(own)) && !shows.some((n) => n.includes(a)));
@@ -454,8 +472,37 @@ export function songYouTubeViews(
   // A "Season 2" upload is another season's only when the franchise has that season under its
   // own name: AnisongDB files Dandadan's second season as plain "Dandadan".
   const seasons = new Set(rivals.map((r) => sequelOf(r.anime)));
-  const sameSeason = (title: string) => { const n = sequelOf(title); return n === sequel || (sequel === 1 && !seasons.has(n)); };
+  // Then same-named shows are seasons in the order they aired, a year each (One Punch Man's 2015
+  // series, OVA and specials, then 2019's season 2).
+  const sameName = rivals.filter((r) => !sameShow(r) && ownShows.includes(fold(r.anime)) && r.year != null);
+  const earlier = new Set(sameName.filter((r) => r.year! < showYear).map((r) => r.year)).size;
+  const sameSeason = (title: string) => {
+    const n = sequelOf(title);
+    return n === sequel || (sequel === 1 && !seasons.has(n) && n === earlier + 1);
+  };
+  // A bare "Opening 1" is ambiguous when a same-named show of another year has an opening 1 too
+  // (One Punch Man's three seasons, My Hero Academia's first two).
+  const twin = sameName.some((r) => r.kind === song.kind && (r.number ?? 1) === (song.number ?? 1));
   const isTopic = (channel: string) => artists.some((a) => channel === `${a}topic`);
+  // An untitled Topic upload could be any of the artist's songs for the franchise (Galla's
+  // two Initial D endings, Mikio Sakai's opening and insert): then it counts only when its kana
+  // sound out the song's name (ラムのラブソング: r-m-n-r-b-s-n-g, as "Lum no Love Song").
+  const sounds = soundsOf(fold(baseTitle(song.title)));
+  // Kanji can't be sounded out, but the kana beside them can: 魂のルフラン's "no rufuran" is
+  // n-r-f-r-n, the end of "Tamashii no Refrain".
+  const soundsLike = (title: string) => {
+    const heard = fold(kanaToRomaji(title)).split(/[^a-z0-9]+/).map(soundsOf).join("");
+    return heard.length >= 4 && sounds.length >= 4 && sounds.includes(heard);
+  };
+  const sharedArtist = rivals.some((r) => artists.includes(vowels(fold(r.artist)))
+    || artists.includes(vowels(fold(r.artist.split(/,| feat\.| & | x /i)[0] ?? ""))));
+  // A Japanese upload names its song in 「」: kana that sound like another of the franchise's
+  // songs are that one's (ONE PIECE オープニングテーマ「あーーっす！」 is "Uuuuus!", not "We Are!").
+  const rivalSounds = new Set(rivals.map((r) => soundsOf(fold(baseTitle(r.title)))).filter((v) => v && v !== sounds));
+  const namesOtherSong = (title: string) => [...title.matchAll(/[「『]([^」』]+)[」』]/g)].some(([, quoted]) => {
+    const name = fold(kanaToRomaji(quoted));
+    return name.length >= 3 && rivalSounds.has(soundsOf(name)) && !words.every((w) => name.includes(w));
+  });
   const seen = new Set<string>();
   let total = 0;
   let topic = false;
@@ -468,7 +515,7 @@ export function songYouTubeViews(
     const ofShow = shows.some(has);
     const byArtist = artists.some((a) => titles.some((t) => vowels(t).includes(a)) || channel.includes(a));
     const named = (words.length > 0 && words.every(has) && (!short || ofShow || byArtist))
-      || (mainWords.length > 0 && mainWords.every(has) && (ofShow || byArtist))
+      || (mainWords.length > 0 && mainWords.every(has) && (ofShow || byArtist) && !longerRivals.some((w) => w.every(has)))
       // A one- or two-letter word is often a kanji in Japanese titles: 愛・おぼえていますか is
       // "Ai Oboete Imasu ka", on the artist's or show's upload.
       || (kanjiWords && /[㐀-鿿]/.test(video.title) && longWords.every(has) && (ofShow || byArtist))
@@ -476,12 +523,19 @@ export function songYouTubeViews(
     let themed = false;
     // An insert song has no "Opening 2" of its own to look for, and a video naming another of
     // the show's songs is that one's ("Atashi ga Tonari ni Iru Uchi ni (Shield Hero Ending Theme)").
-    if (!named && song.kind !== "IN" && themeNames.some(has) && sameSeason(video.title)
-      && !rivalWords.some((w) => w.every(has)) && !rivalArtists.some((a) => titles.some((t) => vowels(t).includes(a)) || channel.includes(a))) {
-      const match = video.title.match(THEME[song.kind]);
-      if (match) themed = match[1] ? Number(match[1]) === (song.number ?? 1) : (song.number ?? 1) === 1;
+    if (!named && song.kind !== "IN" && themeNames.some(has) && sameSeason(video.title) && !rivalShows.some((n) => titles.some((t) => vowels(t).includes(n)))
+      && !rivalWords.some((w) => w.every(has)) && !rivalArtists.some((a) => titles.some((t) => vowels(t).includes(a)) || channel.includes(a))
+      && !namesOtherSong(video.title)) {
+      // The first "Opening" with a number decides ("OP / Opening 2" is opening 2).
+      const matches = [...video.title.matchAll(new RegExp(THEME[song.kind].source, "gi"))];
+      const numbered = matches.find((m) => m[1]);
+      // With a same-named later season, an upload naming no season is the first one's.
+      const thisSeason = !twin || earlier === 0 || namesSeason(video.title);
+      if (numbered) themed = Number(numbered[1]) === (song.number ?? 1) && thisSeason;
+      else if (matches.length) themed = (song.number ?? 1) === 1 && thisSeason;
     }
     const official = !named && !themed && !topic && isTopic(channel)
+      && (!sharedArtist || soundsLike(video.title))
       // Titled in Japanese: the artist's "4:00 A.M." on the same channel is another song.
       && /[぀-ヿ㐀-鿿]/.test(video.title) && !/[a-z]{3}/i.test(video.title);
     if (!named && !themed && !official) continue;
@@ -496,8 +550,20 @@ export function songYouTubeViews(
   return total;
 }
 
+/** A name's consonants as Japanese hears them: "lumnolovesong" and "ramunorabusongu" are both "rmnrbsng". */
+function soundsOf(text: string): string {
+  if (/[^a-z0-9]/.test(text)) return ""; // kanji left over: nothing to compare
+  return text.replace(/l/g, "r").replace(/v/g, "b").replace(/c(?!h)/g, "k").replace(/[aeiouy]/g, "").replace(/(.)\1+/g, "$1");
+}
+
 /** Another song of the same franchise, which a "Show Opening" upload may be about instead. */
-export interface SongRival { title: string; artist: string; anime: string; year: number | null }
+export interface SongRival {
+  title: string; artist: string; anime: string; animeJp?: string | null; year: number | null;
+  anilistId?: number | null; kind?: SongKind; number?: number | null;
+}
+
+/** A title that names its season or part, even the first ("Lupin III Part 1 Opening"). */
+const namesSeason = (title: string) => /\bseason\s*\d|\b\d+(?:st|nd|rd|th)\s+season|\bpart\s*\d|第\s*\d+\s*期|\bs\d\b/i.test(title);
 
 /** The season or part a title names ("Season 2", "2nd Season", "Part 2", "第2期"); 1 when it names none. */
 function sequelOf(title: string): number {

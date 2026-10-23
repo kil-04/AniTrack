@@ -393,8 +393,16 @@ for (const song of all) {
     franchises.get(name).add(song);
   }
 }
-const rivalsOf = (song) => [...new Set(franchiseNames(song).flatMap((n) => [...(franchises.get(n) ?? [])]))]
-  .filter((s) => baseTitle(s.title) !== baseTitle(song.title)).map((s) => ({ title: s.title, artist: s.artist, anime: s.anime, year: s.year }));
+// …and the shows named after it: Naruto's include Naruto Shippuuden's (a long enough name only).
+const franchiseKeys = [...franchises.keys()];
+const related = new Map();
+const relatedNames = (name) => {
+  if (!related.has(name)) related.set(name, name.length >= 6 ? franchiseKeys.filter((n) => n.startsWith(name)) : [name]);
+  return related.get(name);
+};
+const rivalsOf = (song) => [...new Set(franchiseNames(song).flatMap(relatedNames).flatMap((n) => [...(franchises.get(n) ?? [])]))]
+  .filter((s) => baseTitle(s.title) !== baseTitle(song.title))
+  .map((s) => ({ title: s.title, artist: s.artist, anime: s.anime, animeJp: s.animeJp, year: s.year, anilistId: s.anilistId, kind: s.kind, number: s.number }));
 console.log(`Dated ${dated.filter((song, i) => song !== all[i]).length} later themes by when they aired`);
 // Merge reused songs to their original show first, so a 1979 song a 1985 film reuses
 // stays in the 1970s chart.

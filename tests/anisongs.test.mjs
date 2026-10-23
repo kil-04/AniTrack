@@ -256,13 +256,13 @@ test("anisongs: YouTube views add up everyone's uploads of the song, and only th
   const [gurenge, zankyou, kakumei] = parseAniSongs([
     row({ annSongId: 52, songName: "Gurenge", songArtist: "LiSA", animeENName: "Demon Slayer: Kimetsu no Yaiba", animeVintage: "Spring 2019" }),
     row({ annSongId: 53, songName: "Zankyou Sanka", songArtist: "Aimer", animeENName: "Demon Slayer: Kimetsu no Yaiba Entertainment District Arc", animeVintage: "Winter 2022" }),
-    row({ annSongId: 54, songName: "Kakumei Douchuu", songArtist: "AiNA THE END", animeENName: "Dandadan", animeVintage: "Summer 2025" }),
+    row({ annSongId: 54, songName: "Kakumei Douchuu", songArtist: "AiNA THE END", animeENName: "Dandadan", animeVintage: "Summer 2025", linked_ids: { anilist: 185660 } }),
   ]);
   const slayer = [{ title: "Gurenge", artist: "LiSA", anime: "Demon Slayer: Kimetsu no Yaiba", year: 2019 }, { title: "Zankyou Sanka", artist: "Aimer", anime: "Demon Slayer: Kimetsu no Yaiba Entertainment District Arc", year: 2022 }];
   const slayerPage = parseYouTubeSearch(page(video("jjjjjjjjjj1", "Demon Slayer - Opening 1 | 4K Creditless", "Anicrad", "11,901,395 views", "1:30")));
   assert.equal(songYouTubeViews(slayerPage, gurenge, [], slayer), 11_901_395);
   assert.equal(songYouTubeViews(slayerPage, zankyou, [], slayer), 0);
-  const dandadan = [{ title: "Otonoke", artist: "Creepy Nuts", anime: "Dandadan", year: 2024 }];
+  const dandadan = [{ title: "Otonoke", artist: "Creepy Nuts", anime: "Dandadan", year: 2024, anilistId: 171018, kind: "OP", number: 1 }];
   const dandadanPage = parseYouTubeSearch(page(
     video("kkkkkkkkkk1", "DAN DA DAN Season 2 OP | On The Way by AiNA THE END | Netflix Anime", "Netflix Anime", "19,872,172 views", "1:30"),
     video("kkkkkkkkkk2", "DAN DA DAN | OPENING THEME ♪Otonoke by Creepy Nuts", "Netflix Anime", "100,000,000 views", "1:30"),
