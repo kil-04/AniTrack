@@ -15,7 +15,7 @@ export default function NovelDownloads() {
 
   return (
     <div className="mx-auto max-w-[1280px] px-8 pb-16 pt-8">
-      <PageHeader
+      <PageHeader scene="bedroom"
         icon={HardDriveDownload}
         title="Novel Downloads"
         subtitle={titles?.length ? `${chapters.toLocaleString()} chapters offline · ${humanBytes(total)}` : "Chapters you save read without a connection"}

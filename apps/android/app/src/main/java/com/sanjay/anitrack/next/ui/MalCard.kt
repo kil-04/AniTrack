@@ -7,7 +7,6 @@ import android.webkit.WebViewClient
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Login
@@ -129,7 +128,7 @@ fun MalCard(onProfileChanged: (connected: Boolean, username: String?) -> Unit = 
             properties = DialogProperties(usePlatformDefaultWidth = false),
         ) {
             Column(
-                Modifier.fillMaxSize().padding(12.dp).clip(RoundedCornerShape(16.dp)).background(AniColors.Surface),
+                Modifier.fillMaxSize().padding(12.dp).clip(aniShape(16.dp)).background(AniColors.Surface),
             ) {
                 Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 6.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("Sign in to MyAnimeList", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))

@@ -9,7 +9,6 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.FilterList
 import androidx.compose.material.icons.rounded.MenuBook
@@ -83,7 +82,7 @@ fun MangaSearchScreen(initialQuery: String = "", onOpen: (Manga) -> Unit) {
 
     Row(Modifier.fillMaxSize()) {
         Column(Modifier.weight(1f).padding(horizontal = 24.dp, vertical = 20.dp)) {
-            ScreenHeader("Browse manga", subtitle = "Filter AniList's manga, manhwa and manhua.", icon = Icons.Rounded.MenuBook)
+            ScreenHeader("Browse manga", scene = PixelScene.OBSERVATORY, subtitle = "Filter AniList's manga, manhwa and manhua.", icon = Icons.Rounded.MenuBook)
             Spacer(Modifier.height(18.dp))
             val filtered = query.isNotBlank() || genre != null || year != null || type != (null to null) ||
                 status != null || sort != "TRENDING_DESC"
@@ -119,7 +118,7 @@ fun MangaSearchScreen(initialQuery: String = "", onOpen: (Manga) -> Unit) {
             }
             Spacer(Modifier.height(16.dp))
             if (searching && results.isEmpty()) {
-                LinearProgressIndicator(Modifier.fillMaxWidth().clip(RoundedCornerShape(50)), color = AniColors.Accent, trackColor = AniColors.SurfaceHigh)
+                LinearProgressIndicator(Modifier.fillMaxWidth().clip(aniShape(50)), color = AniColors.Accent, trackColor = AniColors.SurfaceHigh)
             } else if (!searching && results.isEmpty()) {
                 EmptyState(Icons.Rounded.SearchOff, "No results", "Nothing matches these filters. Try removing one or searching another title.")
             }

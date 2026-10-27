@@ -19,10 +19,10 @@ export default function BrandMark({ size = 30, className = "" }: { size?: number
   );
 }
 
-/** "AniTrack" set in Outfit, "Track" in the accent gradient. */
+/** "AniTrack" set in Outfit, "Track" in the accent gradient (in Pixel mode, the pixel font: index.css). */
 export function Wordmark({ className = "" }: { className?: string }) {
   return (
-    <span className={`font-extrabold tracking-tight text-white ${className}`}>
+    <span className={`wordmark font-extrabold tracking-tight text-white ${className}`}>
       Ani
       <span className="bg-accent-gradient bg-clip-text text-transparent">Track</span>
     </span>

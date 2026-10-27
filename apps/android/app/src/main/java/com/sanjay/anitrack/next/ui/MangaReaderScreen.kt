@@ -23,7 +23,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.FormatListBulleted
@@ -428,7 +427,7 @@ fun MangaReaderScreen(onBack: () -> Unit) {
         // A page the source refused: offer its browser check instead of failing page by page.
         AnimatedVisibility(blocked, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.TopCenter).padding(top = 76.dp)) {
             Row(
-                Modifier.padding(horizontal = 16.dp).clip(RoundedCornerShape(14.dp)).background(AniColors.Surface)
+                Modifier.padding(horizontal = 16.dp).clip(aniShape(14.dp)).background(AniColors.Surface)
                     .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -731,7 +730,7 @@ private fun ReaderPage(
 @Composable
 private fun PageRetry(index: Int, content: Color, onRetry: () -> Unit) {
     Row(
-        Modifier.clip(RoundedCornerShape(50)).background(content.copy(alpha = 0.08f)).clickable(onClick = onRetry)
+        Modifier.clip(aniShape(50)).background(content.copy(alpha = 0.08f)).clickable(onClick = onRetry)
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -770,7 +769,7 @@ private fun BoxScope.ReaderMessage(
 ) {
     Column(
         Modifier.align(Alignment.Center).padding(24.dp).widthIn(max = 520.dp)
-            .clip(RoundedCornerShape(16.dp)).background(content.copy(alpha = 0.06f)).padding(24.dp),
+            .clip(aniShape(16.dp)).background(content.copy(alpha = 0.06f)).padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(message, color = content.copy(alpha = 0.85f), style = MaterialTheme.typography.bodyLarge)
@@ -904,7 +903,7 @@ private fun ReaderSettings(
             Text("Reading mode", style = MaterialTheme.typography.labelLarge, color = AniColors.TextSecondary)
             ReaderMode.entries.forEach { option ->
                 Row(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { onMode(option) }.padding(vertical = 4.dp),
+                    Modifier.fillMaxWidth().clip(aniShape(12.dp)).clickable { onMode(option) }.padding(vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     RadioButton(selected = option == mode, onClick = { onMode(option) }, colors = RadioButtonDefaults.colors(selectedColor = ReaderAccent))
@@ -930,7 +929,7 @@ private fun ReaderSettings(
             )
             if (spread != ReaderSpread.Single) {
                 Row(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { onSpreadShift(!spreadShift) }.padding(vertical = 4.dp),
+                    Modifier.fillMaxWidth().clip(aniShape(12.dp)).clickable { onSpreadShift(!spreadShift) }.padding(vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
@@ -949,7 +948,7 @@ private fun ReaderSettings(
             PillTabs(ReaderBackground.entries.map { it.name to it.label }, background.name, { onBackground(ReaderBackground.valueOf(it)) })
             Spacer(Modifier.height(6.dp))
             Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { onVolumeKeys(!volumeKeys) }.padding(vertical = 4.dp),
+                Modifier.fillMaxWidth().clip(aniShape(12.dp)).clickable { onVolumeKeys(!volumeKeys) }.padding(vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {

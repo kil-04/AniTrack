@@ -31,8 +31,9 @@ fun SettingsScreen(onMalProfileChanged: (connected: Boolean, username: String?) 
                 .padding(horizontal = 24.dp, vertical = 20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            ScreenHeader("Settings", subtitle = "Accounts, sync and app updates.", icon = Icons.Rounded.Settings)
+            ScreenHeader("Settings", scene = PixelScene.TERMINAL, subtitle = "Appearance, accounts, sync and app updates.", icon = Icons.Rounded.Settings)
             Spacer(Modifier.height(4.dp))
+            AppearanceCard()
             MalCard(onProfileChanged = onMalProfileChanged)
             SyncCard()
             NotificationsCard()

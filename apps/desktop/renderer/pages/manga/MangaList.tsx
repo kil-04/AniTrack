@@ -22,7 +22,7 @@ export default function MangaList() {
 
   return (
     <div className="mx-auto max-w-[1680px] px-8 pb-16 pt-8">
-      <PageHeader
+      <PageHeader scene="library"
         icon={BookMarked}
         title="My Manga"
         subtitle={total > 0 ? `${total} title${total === 1 ? "" : "s"} on your shelf` : "Everything you read, by status"}

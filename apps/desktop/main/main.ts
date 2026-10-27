@@ -18,6 +18,7 @@ import { flushDirty } from "./services/mal";
 import { repairAndNotify } from "./services/list-repair";
 import { serveTrack } from "./services/music";
 import { registerMusicIpc } from "./ipc/music";
+import { registerCityPopIpc } from "./ipc/city-pop";
 import {
   getPaheBaseUrl,
   getAuthorizedPaheRequestHeaders,
@@ -189,6 +190,7 @@ protocol.registerSchemesAsPrivileged([
   { scheme: "anitrack-manga", privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
   // Background music the user imported (userData/music).
   { scheme: "anitrack-music", privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
+  { scheme: "anitrack-city-pop", privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
 ]);
 
 function createWindow() {
@@ -453,6 +455,7 @@ function registerIpc() {
   registerMangaIpc(getMainWindow);
   registerNovelIpc(getMainWindow);
   registerMusicIpc(getMainWindow);
+  registerCityPopIpc(getMainWindow);
 
   ipcMain.handle(IPC.PROVIDERS_MEDIA_ACCESS_STATUS, (event, mediaAccessId: string) => {
     if (event.sender !== mainWindow?.webContents) throw new Error("Media access status is only available to AniTrack's player.");

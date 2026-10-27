@@ -1,20 +1,36 @@
 import type { ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
+import type { PixelSceneId } from "../../../../packages/shared/pixel-scenes";
+import { useSkin } from "../lib/skin";
+import { PixelBanner } from "./PixelScene";
 
-/** A page's title block: a large accent icon tile, the title, a subtitle line and actions on the right. */
+/**
+ * A page's title block: a large accent icon tile, the title, a subtitle line and actions on the right.
+ * In Pixel mode the title sits on a pixel-art [scene] banner, the actions under it.
+ */
 export default function PageHeader({
   icon: Icon,
   title,
   subtitle,
   children,
   className = "",
+  scene = "neon-city",
 }: {
   icon?: LucideIcon;
   title: string;
   subtitle?: ReactNode;
   children?: ReactNode;
   className?: string;
+  scene?: PixelSceneId;
 }) {
+  if (useSkin() === "pixel") {
+    return (
+      <header className={`mb-8 ${className}`}>
+        <PixelBanner scene={scene} icon={Icon} title={title} subtitle={subtitle} />
+        {children && <div className="mt-4 flex flex-wrap items-center justify-end gap-2">{children}</div>}
+      </header>
+    );
+  }
   return (
     <header className={`mb-8 flex flex-wrap items-center justify-between gap-4 ${className}`}>
       <div className="flex min-w-0 items-center gap-4">

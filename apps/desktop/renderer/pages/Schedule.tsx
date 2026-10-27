@@ -71,7 +71,7 @@ export default function Schedule() {
 
   return (
     <div className="mx-auto max-w-4xl px-8 py-8">
-      <PageHeader
+      <PageHeader scene="station"
         icon={CalendarClock}
         title="Schedule"
         subtitle="Upcoming episodes for shows you're watching or planning to watch"

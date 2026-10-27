@@ -72,7 +72,7 @@ export default function Downloads() {
 
   return (
     <div className="mx-auto max-w-4xl px-8 py-8">
-      <PageHeader icon={Download} title="Downloads" subtitle="Watch downloaded episodes offline, in the app">
+      <PageHeader scene="bedroom" icon={Download} title="Downloads" subtitle="Watch downloaded episodes offline, in the app">
         {doneAll.length > 0 && (
           <span className="chip h-8 text-[13px]">
             {doneAll.length} episode{doneAll.length === 1 ? "" : "s"}

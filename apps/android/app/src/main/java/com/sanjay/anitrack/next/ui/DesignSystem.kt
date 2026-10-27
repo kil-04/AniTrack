@@ -13,7 +13,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Image
@@ -33,13 +32,16 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -63,7 +65,7 @@ import com.sanjay.anitrack.next.R
  */
 @Composable
 fun AniLogo(modifier: Modifier = Modifier, size: Dp = 28.dp) {
-    val shape = RoundedCornerShape(size * 0.28f)
+    val shape = aniShape(size * 0.28f)
     Image(
         painter = painterResource(R.drawable.brand_logo),
         contentDescription = null,
@@ -78,7 +80,7 @@ fun AniWordmark(modifier: Modifier = Modifier, compact: Boolean = false) {
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
         AniLogo(size = if (compact) 26.dp else 30.dp)
         Spacer(Modifier.width(if (compact) 7.dp else 9.dp))
-        Text(
+        if (AniColors.pixelMode.value) PixelWordmarkText(compact) else Text(
             buildAnnotatedString {
                 withStyle(SpanStyle(color = AniColors.Text)) { append("Ani") }
                 withStyle(SpanStyle(brush = AniColors.BrandGradient)) { append("Track") }
@@ -99,7 +101,7 @@ fun IconTile(
     background: Color = AniColors.AccentSoft,
     size: Dp = 44.dp,
 ) {
-    val shape = RoundedCornerShape(size * 0.28f)
+    val shape = aniShape(size * 0.28f)
     Box(
         modifier.size(size).clip(shape).background(background).border(1.dp, tint.copy(alpha = 0.22f), shape),
         contentAlignment = Alignment.Center,
@@ -115,8 +117,31 @@ fun ScreenHeader(
     modifier: Modifier = Modifier,
     subtitle: String? = null,
     icon: ImageVector? = null,
+    /** Pixel mode's banner picture (PixelScene); [pixelBanner] false keeps the plain header there too. */
+    scene: String = PixelScene.NEON_CITY,
+    pixelBanner: Boolean = true,
     trailing: @Composable RowScope.() -> Unit = {},
 ) {
+    if (pixelBanner && AniColors.pixelMode.value) {
+        Column(modifier.fillMaxWidth()) {
+            PixelBanner(scene, title, subtitle, icon)
+            // The actions go under the banner; with none, no gap is left.
+            Row(
+                Modifier.fillMaxWidth().layout { measurable, constraints ->
+                    val placeable = measurable.measure(constraints)
+                    if (placeable.height == 0) layout(placeable.width, 0) {}
+                    else {
+                        val gap = 8.dp.roundToPx()
+                        layout(placeable.width, placeable.height + gap) { placeable.place(0, gap) }
+                    }
+                },
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically,
+                content = trailing,
+            )
+        }
+        return
+    }
     Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         if (icon != null) {
             IconTile(icon, size = 50.dp)
@@ -139,6 +164,18 @@ fun ScreenHeader(
     }
 }
 
+/** Pixel mode's row marker: three accent blocks stepping down, like a sprite's stairs. */
+@Composable
+private fun PixelStairs() {
+    Canvas(Modifier.size(width = 15.dp, height = 18.dp)) {
+        val cell = 5.dp.toPx()
+        drawRect(AniColors.AccentBright, Offset(0f, 0f), Size(cell, cell))
+        drawRect(AniColors.Accent, Offset(cell, cell), Size(cell, cell))
+        drawRect(AniColors.AccentDeep, Offset(cell * 2, cell * 2), Size(cell, cell))
+        drawRect(AniColors.Accent, Offset(0f, cell), Size(cell, cell * 2.6f))
+    }
+}
+
 /** Row title with the brand bar; [onClick] adds a "See all" affordance. */
 @Composable
 internal fun SectionHeader(
@@ -152,10 +189,15 @@ internal fun SectionHeader(
         modifier.fillMaxWidth().padding(start = 16.dp, end = 10.dp, top = 18.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
+        if (AniColors.pixelMode.value) {
+            // The row's own sprite ("Continue Watching": the TV) or the stairs.
+            val context = LocalContext.current
+            val sprite = remember(title) { com.sanjay.anitrack.next.data.PixelSprites.load(context).forSection(title) }
+            if (sprite != null) PixelSprite(sprite, width = 26.dp) else PixelStairs()
+        } else Box(
             Modifier.width(4.dp).height(22.dp)
-                .shadow(6.dp, RoundedCornerShape(2.dp), ambientColor = AniColors.Accent, spotColor = AniColors.Accent)
-                .clip(RoundedCornerShape(2.dp)).background(AniColors.BrandGradient),
+                .shadow(6.dp, aniShape(2.dp), ambientColor = AniColors.Accent, spotColor = AniColors.Accent)
+                .clip(aniShape(2.dp)).background(AniColors.BrandGradient),
         )
         Spacer(Modifier.width(10.dp))
         Text(
@@ -168,7 +210,7 @@ internal fun SectionHeader(
         trailing?.invoke(this)
         if (onClick != null) {
             Row(
-                Modifier.clip(RoundedCornerShape(50)).clickable(onClick = onClick)
+                Modifier.clip(aniShape(50)).clickable(onClick = onClick)
                     .padding(start = 12.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -193,8 +235,10 @@ fun EmptyState(
         modifier.fillMaxWidth().padding(vertical = 48.dp, horizontal = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        val tile = RoundedCornerShape(24.dp)
-        Box(
+        val tile = aniShape(24.dp)
+        // Pixel mode draws a sprite for the occasion (pixelSpriteForIcon) instead of the icon.
+        if (AniColors.pixelMode.value) BobbingSprite(pixelSpriteForIcon(icon.name), 72.dp)
+        else Box(
             Modifier.size(76.dp).clip(tile).background(AniColors.Accent.copy(alpha = 0.13f))
                 .border(1.dp, AniColors.Accent.copy(alpha = 0.25f), tile),
             contentAlignment = Alignment.Center,
@@ -237,7 +281,7 @@ fun Tag(
         TagTone.Info -> AniColors.Info.copy(alpha = 0.16f) to AniColors.Info
         TagTone.Outline -> Color.Transparent to AniColors.TextSecondary
     }
-    val shape = RoundedCornerShape(6.dp)
+    val shape = aniShape(6.dp)
     Row(
         modifier.clip(shape)
             .then(if (tone == TagTone.Accent) Modifier.background(AniColors.BrandGradient) else Modifier.background(bg))
@@ -268,7 +312,7 @@ fun aniScore(score: Int?): String? =
 fun ScoreBadge(text: String?, modifier: Modifier = Modifier, onImage: Boolean = false) {
     if (text.isNullOrBlank()) return
     Row(
-        modifier.clip(RoundedCornerShape(6.dp))
+        modifier.clip(aniShape(6.dp))
             .background(if (onImage) Color.Black.copy(alpha = 0.62f) else Color.Transparent)
             .padding(horizontal = if (onImage) 6.dp else 0.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -310,7 +354,7 @@ fun Modifier.shimmer(): Modifier = composed {
 /** A loading placeholder block. */
 @Composable
 fun SkeletonBox(modifier: Modifier = Modifier, corner: Dp = 12.dp) {
-    Box(modifier.clip(RoundedCornerShape(corner)).background(AniColors.SurfaceHigh).shimmer())
+    Box(modifier.clip(aniShape(corner)).background(AniColors.SurfaceHigh).shimmer())
 }
 
 /** Cover / banner art: crossfades in over a shimmering placeholder. */
@@ -321,11 +365,21 @@ fun PosterImage(
     modifier: Modifier = Modifier,
     alignment: Alignment = Alignment.Center,
     contentScale: ContentScale = ContentScale.Crop,
+    /** In Pixel mode, decode the image this coarse and scale it up crisp (the Home hero); null keeps it sharp. */
+    pixelCell: Dp? = null,
 ) {
     val context = LocalContext.current
     var loading by remember(model) { mutableStateOf(model != null) }
-    val request = remember(model) { ImageRequest.Builder(context).data(model).crossfade(220).build() }
-    Box(modifier.background(AniColors.SurfaceHigh).then(if (loading) Modifier.shimmer() else Modifier)) {
+    val pixel = AniColors.pixelMode.value && pixelCell != null
+    BoxWithConstraints(modifier.background(AniColors.SurfaceHigh).then(if (loading) Modifier.shimmer() else Modifier)) {
+    val cellPx = with(LocalDensity.current) { (pixelCell ?: 1.dp).toPx() }.coerceAtLeast(1f)
+    val pixelSize = if (pixel && constraints.hasBoundedWidth && constraints.hasBoundedHeight && constraints.maxWidth > 0 && constraints.maxHeight > 0)
+        coil.size.Size((constraints.maxWidth / cellPx).toInt().coerceAtLeast(8), (constraints.maxHeight / cellPx).toInt().coerceAtLeast(8)) else null
+    val request = remember(model, pixelSize) {
+        ImageRequest.Builder(context).data(model).crossfade(220).apply {
+            if (pixelSize != null) size(pixelSize).scale(coil.size.Scale.FILL).precision(coil.size.Precision.EXACT)
+        }.build()
+    }
         if (model == null) {
             Icon(
                 Icons.Rounded.Image, null, tint = AniColors.TextTertiary,
@@ -339,6 +393,7 @@ fun PosterImage(
                 alignment = alignment,
                 onSuccess = { loading = false },
                 onError = { loading = false },
+                filterQuality = if (pixelSize != null) FilterQuality.None else FilterQuality.Low,
                 modifier = Modifier.matchParentSize(),
             )
         }
@@ -368,7 +423,7 @@ fun PillButton(
         PillStyle.Ghost -> Color.Transparent to AniColors.TextSecondary
     }
     val alpha = if (enabled) 1f else 0.45f
-    val shape = RoundedCornerShape(if (compact) 12.dp else 14.dp)
+    val shape = aniShape(if (compact) 12.dp else 14.dp)
     val gradient = style == PillStyle.Primary || style == PillStyle.Light
     Row(
         modifier.height(if (compact) 36.dp else 46.dp)
@@ -429,7 +484,7 @@ fun PillTabs(
         items(options.size) { i ->
             val (key, label) = options[i]
             val on = key == selected
-            val shape = RoundedCornerShape(50)
+            val shape = aniShape(50)
             Row(
                 Modifier.height(if (compact) 32.dp else 38.dp).clip(shape)
                     .background(if (on) AniColors.AccentSoft else AniColors.SurfaceHigh)
@@ -486,10 +541,10 @@ fun ProgressStrip(
     color: Color = AniColors.Accent,
     track: Color = Color.White.copy(alpha = 0.22f),
 ) {
-    Box(modifier.height(height).clip(RoundedCornerShape(50)).background(track)) {
+    Box(modifier.height(height).clip(aniShape(50)).background(track)) {
         Box(
             Modifier.fillMaxWidth(fraction.coerceIn(0f, 1f)).fillMaxHeight()
-                .clip(RoundedCornerShape(50))
+                .clip(aniShape(50))
                 .then(
                     if (color == AniColors.Accent) Modifier.background(Brush.horizontalGradient(listOf(AniColors.AccentBright, AniColors.Accent)))
                     else Modifier.background(color),
@@ -505,7 +560,7 @@ fun AniCard(
     padding: PaddingValues = PaddingValues(18.dp),
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val shape = RoundedCornerShape(18.dp)
+    val shape = aniShape(18.dp)
     Column(
         modifier.fillMaxWidth().clip(shape)
             .background(Brush.verticalGradient(listOf(AniColors.SurfaceHigh, AniColors.Surface)))

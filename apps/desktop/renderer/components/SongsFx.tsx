@@ -52,7 +52,7 @@ export function Vinyl({ cover, spinning, onClick, onScratch, title }: {
   return (
     <button
       title={title}
-      className="group relative h-52 w-52 flex-shrink-0 cursor-grab touch-none rounded-full shadow-[0_20px_60px_rgba(0,0,0,.6)] active:cursor-grabbing"
+      className="pixel-round group relative h-52 w-52 flex-shrink-0 cursor-grab touch-none rounded-full shadow-[0_20px_60px_rgba(0,0,0,.6)] active:cursor-grabbing"
       onPointerDown={(e) => {
         e.currentTarget.setPointerCapture(e.pointerId);
         motion.current.drag = { last: angleAt(e), moved: 0, at: performance.now(), scratched: 0 };
@@ -79,22 +79,22 @@ export function Vinyl({ cover, spinning, onClick, onScratch, title }: {
       }}
       onPointerCancel={() => { motion.current.drag = null; }}
     >
-      <div ref={disc} className="absolute inset-0 rounded-full" style={{ background: "repeating-radial-gradient(circle at center, #111 0 2px, #1c1c1c 2px 4px)" }}>
-        <div className="absolute inset-[30%] overflow-hidden rounded-full border-4 border-black/60 bg-accent">
+      <div ref={disc} className="pixel-round absolute inset-0 rounded-full" style={{ background: "repeating-radial-gradient(circle at center, #111 0 2px, #1c1c1c 2px 4px)" }}>
+        <div className="pixel-round absolute inset-[30%] overflow-hidden rounded-full border-4 border-black/60 bg-accent">
           {cover && <img src={cover} alt="" draggable={false} className="h-full w-full object-cover" />}
         </div>
-        <div className="absolute left-1/2 top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-black" />
+        <div className="pixel-round absolute left-1/2 top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-black" />
       </div>
       {/* The light stays put while the grooves turn under it. */}
-      <div className="pointer-events-none absolute inset-0 rounded-full bg-[conic-gradient(from_0deg,transparent_0deg,rgba(255,255,255,.09)_40deg,transparent_80deg,transparent_180deg,rgba(255,255,255,.07)_220deg,transparent_260deg)]" />
+      <div className="pixel-round pointer-events-none absolute inset-0 rounded-full bg-[conic-gradient(from_0deg,transparent_0deg,rgba(255,255,255,.09)_40deg,transparent_80deg,transparent_180deg,rgba(255,255,255,.07)_220deg,transparent_260deg)]" />
       {/* Tonearm: swings onto the record while it plays. */}
       <div className="pointer-events-none absolute -right-3 -top-2 h-40 w-10 origin-[50%_12px] transition-transform duration-700 ease-[cubic-bezier(.3,1.4,.5,1)]"
         style={{ transform: `rotate(${spinning ? 24 : -6}deg)` }}>
-        <div className="absolute left-1/2 top-0 h-6 w-6 -translate-x-1/2 rounded-full border-2 border-white/40 bg-zinc-700 shadow-lg" />
+        <div className="pixel-round absolute left-1/2 top-0 h-6 w-6 -translate-x-1/2 rounded-full border-2 border-white/40 bg-zinc-700 shadow-lg" />
         <div className="absolute left-1/2 top-3 h-32 w-1.5 -translate-x-1/2 rounded-full bg-gradient-to-b from-zinc-300 to-zinc-500" />
         <div className="absolute bottom-0 left-1/2 h-5 w-3.5 -translate-x-1/2 rounded-sm bg-zinc-200" />
       </div>
-      <span className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-full bg-black/40 opacity-0 transition group-hover:opacity-100"><Play size={40} fill="white" /></span>
+      <span className="pixel-round pointer-events-none absolute inset-0 flex items-center justify-center rounded-full bg-black/40 opacity-0 transition group-hover:opacity-100"><Play size={40} fill="white" /></span>
     </button>
   );
 }

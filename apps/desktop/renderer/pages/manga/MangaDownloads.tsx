@@ -102,7 +102,7 @@ export default function MangaDownloads() {
 
   return (
     <div className="mx-auto max-w-4xl px-8 pb-16 pt-8">
-      <PageHeader
+      <PageHeader scene="bedroom"
         icon={HardDriveDownload}
         title="Downloads"
         subtitle={

@@ -4,7 +4,11 @@ import { HashRouter } from "react-router-dom";
 import App from "./App";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { lastMode, modeHome } from "./lib/manga-api";
+import { applySkin } from "./lib/skin";
 import "./index.css";
+
+// Pixel mode (or not) before the first paint, so the app never flashes the other look.
+applySkin();
 
 function renderApp() {
   ReactDOM.createRoot(document.getElementById("root")!).render(

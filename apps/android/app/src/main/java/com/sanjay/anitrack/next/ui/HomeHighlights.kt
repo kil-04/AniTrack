@@ -4,7 +4,6 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -24,11 +23,11 @@ import com.sanjay.anitrack.next.data.Anime
 /** Landscape "Latest Episodes" card with an EP badge. */
 @Composable
 internal fun LatestCard(anime: Anime, episode: Int, onOpen: (Anime) -> Unit, modifier: Modifier = Modifier.width(232.dp)) {
-    Column(modifier.clip(RoundedCornerShape(12.dp)).clickable { onOpen(anime) }) {
+    Column(modifier.clip(aniShape(12.dp)).clickable { onOpen(anime) }) {
         Box {
             PosterImage(
                 anime.banner ?: anime.cover, anime.title,
-                Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp)),
+                Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(aniShape(12.dp)),
             )
             Tag("EP $episode", Modifier.align(Alignment.TopStart).padding(8.dp), tone = TagTone.Accent)
             ScoreBadge(aniScore(anime.score), Modifier.align(Alignment.TopEnd).padding(8.dp), onImage = true)
@@ -61,7 +60,7 @@ internal fun RankRow(
     detail: String? = null,
 ) {
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick)
+        Modifier.fillMaxWidth().clip(aniShape(12.dp)).clickable(onClick = onClick)
             .padding(horizontal = 4.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -72,7 +71,7 @@ internal fun RankRow(
             fontWeight = FontWeight.ExtraBold,
             color = if (rank <= 3) AniColors.Accent else AniColors.TextTertiary,
         )
-        PosterImage(cover, title, Modifier.width(46.dp).height(64.dp).clip(RoundedCornerShape(8.dp)))
+        PosterImage(cover, title, Modifier.width(46.dp).height(64.dp).clip(aniShape(8.dp)))
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -127,7 +126,7 @@ internal fun HeroDots(count: Int, current: Int, modifier: Modifier = Modifier) {
         for (i in 0 until count) {
             Box(
                 Modifier.animateContentSize().height(6.dp).width(if (i == current) 22.dp else 6.dp)
-                    .clip(RoundedCornerShape(50))
+                    .clip(aniShape(50))
                     .background(if (i == current) AniColors.Accent else Color.White.copy(alpha = 0.35f)),
             )
         }
@@ -167,7 +166,9 @@ internal fun HeroBanner(anime: Anime, rank: Int, onOpen: (Anime) -> Unit) {
             anime.banner ?: anime.cover, anime.title,
             Modifier.fillMaxSize(),
             alignment = Alignment.TopCenter,   // favour the top of the art, not the middle
+            pixelCell = 4.dp,                  // Pixel mode turns the art itself into chunky pixel art
         )
+        if (AniColors.pixelMode.value) PixelScreen(Modifier.fillMaxSize())
         HeroScrims()
         Column(
             Modifier.align(Alignment.BottomStart).padding(start = 24.dp, end = 24.dp, bottom = 34.dp)

@@ -6,6 +6,8 @@ import { chapterLabel, isFinished, mangaKind, publishLabel, type MangaFeed, type
 import { MangaRow } from "../../components/manga/MangaCards";
 import { mangaApi } from "../../lib/manga-api";
 import { forgetMangaReading, onMangaSync, syncMangaReading } from "../../lib/manga-sync";
+import { useSkin } from "../../lib/skin";
+import { PixelInterlude } from "../../components/PixelScene";
 
 const FEED_KEY = "anitrack.manga.feed.v1";
 const FEED_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -25,6 +27,7 @@ function saveFeed(feed: MangaFeed) {
 }
 
 export default function MangaHome() {
+  const pixel = useSkin() === "pixel";
   const [feed, setFeed] = useState<MangaFeed | null>(savedFeed);
   const [failed, setFailed] = useState(false);
   const [reading, setReading] = useState<ReadingRow[]>([]);
@@ -143,6 +146,7 @@ export default function MangaHome() {
         <>
           <MangaRow title="Trending now" items={feed.trending} />
           <MangaRow title="Publishing now" items={feed.publishing} />
+          {pixel && <PixelInterlude scene="library" title="Your shelf" subtitle="Every manga you follow, in one place" to="/manga/list" />}
           <MangaRow title="All-time popular" items={feed.popular} />
           <MangaRow title="Top rated" items={feed.topRated} />
           <MangaRow title="Trending manhwa" items={feed.manhwa} />

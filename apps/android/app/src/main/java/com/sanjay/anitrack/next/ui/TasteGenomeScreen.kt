@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -123,7 +122,7 @@ fun TasteGenomeScreen(onOpen: (Int) -> Unit, onOpenTimeMachine: () -> Unit) {
                     LazyRow(contentPadding = PaddingValues(horizontal = 24.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         items(signalTitles, key = { it.animeId }) { row ->
                             Column(Modifier.width(126.dp).clickable { onOpen(row.animeId) }) {
-                                AsyncImage(row.cover, row.title, Modifier.width(126.dp).height(180.dp).clip(RoundedCornerShape(10.dp)).background(Color.White.copy(alpha = 0.05f)), contentScale = ContentScale.Crop)
+                                AsyncImage(row.cover, row.title, Modifier.width(126.dp).height(180.dp).clip(aniShape(10.dp)).background(Color.White.copy(alpha = 0.05f)), contentScale = ContentScale.Crop)
                                 Spacer(Modifier.height(6.dp))
                                 Text(row.title, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
                                 ScoreBadge(row.score?.toString())
@@ -138,7 +137,7 @@ fun TasteGenomeScreen(onOpen: (Int) -> Unit, onOpenTimeMachine: () -> Unit) {
 
 @Composable
 private fun GenomeStat(value: String, label: String, modifier: Modifier) {
-    Column(modifier.clip(RoundedCornerShape(11.dp)).background(Color.White.copy(alpha = 0.045f)).padding(12.dp)) {
+    Column(modifier.clip(aniShape(11.dp)).background(Color.White.copy(alpha = 0.045f)).padding(12.dp)) {
         Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
         Text(label, fontSize = 8.sp, letterSpacing = 0.8.sp, color = Color.White.copy(alpha = 0.35f), maxLines = 1)
     }
@@ -159,7 +158,7 @@ private fun GenomeSignals(title: String, items: List<TasteAffinity>, color: Colo
                 progress = { item.strength / 100f },
                 color = color,
                 trackColor = Color.White.copy(alpha = 0.06f),
-                modifier = Modifier.fillMaxWidth().height(5.dp).clip(RoundedCornerShape(50)),
+                modifier = Modifier.fillMaxWidth().height(5.dp).clip(aniShape(50)),
             )
             Spacer(Modifier.height(13.dp))
         }

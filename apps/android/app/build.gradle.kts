@@ -83,6 +83,9 @@ android {
         buildConfig = true
     }
 
+    // Both apps ship the same optional curated expansion catalog.
+    sourceSets.getByName("main").assets.srcDir("../../../packages/catalogs")
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

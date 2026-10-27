@@ -18,4 +18,9 @@ class BackupTest {
         assertEquals("1 watched episode, 2 anime list entries, 3 settings", Backup.Summary(1, 2, 0, 0, 3).describe())
         assertEquals("nothing new", Backup.Summary(0, 0, 0, 0, 0).describe())
     }
+
+    @Test fun carriesCityPopChoicesWithoutBroadeningTheAllowlist() {
+        listOf("city_pop_enabled", "city_pop_favorites", "city_pop_saved_tracks").forEach { assertTrue(it, Backup.isBackedUpPref(it)) }
+        listOf("city_pop_token", "city_pop_session", "city_pop_archive_downloads").forEach { assertFalse(it, Backup.isBackedUpPref(it)) }
+    }
 }

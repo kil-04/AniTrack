@@ -17,7 +17,6 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material3.Icon
@@ -67,10 +66,11 @@ import kotlin.math.roundToInt
 
 /**
  * Turns while music plays. Drag it round to spin it by hand ([onScratch] fires as it
- * scratches); let go and it coasts back to its playing speed. A tap plays it.
+ * scratches); let go and it coasts back to its playing speed. A tap plays it. [scale] draws
+ * the same record smaller (beside the title on a phone).
  */
 @Composable
-internal fun SpinVinyl(cover: String?, spinning: Boolean, enabled: Boolean, onClick: () -> Unit, onScratch: () -> Unit) {
+internal fun SpinVinyl(cover: String?, spinning: Boolean, enabled: Boolean, onClick: () -> Unit, onScratch: () -> Unit, scale: Float = 1f) {
     var angle by remember { mutableFloatStateOf(0f) }
     var speed by remember { mutableFloatStateOf(0f) }
     var dragging by remember { mutableStateOf(false) }
@@ -94,7 +94,8 @@ internal fun SpinVinyl(cover: String?, spinning: Boolean, enabled: Boolean, onCl
         }
     }
     val arm by animateFloatAsState(if (spinning) 24f else -6f, spring(dampingRatio = 0.45f, stiffness = 120f), label = "tonearm")
-    Box(Modifier.size(190.dp)) {
+    // Laid out full size, then drawn [scale] times as big in a box that size.
+    Box(Modifier.size(190.dp * scale).requiredSize(190.dp).graphicsLayer { scaleX = scale; scaleY = scale }) {
         Box(
             Modifier.size(170.dp).align(Alignment.BottomStart).clip(CircleShape)
                 .pointerInput(enabled) {
@@ -295,7 +296,7 @@ internal fun RouletteDialog(items: List<Pair<String?, String>>, target: Int, onT
                         Box(
                             Modifier.offset { IntOffset(x.roundToInt(), 10) }.size(cardWidth, 216.dp)
                                 .graphicsLayer { if (i == stop) { scaleX = pop; scaleY = pop } }
-                                .clip(RoundedCornerShape(18.dp)).background(AniColors.SurfaceHigh),
+                                .clip(aniShape(18.dp)).background(AniColors.SurfaceHigh),
                         ) {
                             if (cover != null) AsyncImage(cover, null, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize())
                             else Icon(Icons.Rounded.Album, null, tint = AniColors.TextTertiary, modifier = Modifier.align(Alignment.Center).size(48.dp))

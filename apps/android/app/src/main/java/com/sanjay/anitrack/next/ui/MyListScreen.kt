@@ -5,7 +5,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.BookmarkBorder
 import androidx.compose.material.icons.rounded.Bookmarks
@@ -49,7 +48,7 @@ fun MyListScreen(onOpen: (Int) -> Unit, onBrowse: () -> Unit = {}) {
 
     Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 20.dp)) {
         ScreenHeader(
-            "My List",
+            "My List", scene = PixelScene.SAKURA,
             subtitle = if (total == 0) "Shows you track appear here." else "$total ${if (total == 1) "show" else "shows"} tracked",
             icon = Icons.Rounded.Bookmarks,
         )
@@ -104,7 +103,7 @@ internal fun ListPosterCard(
 ) {
     Box(
         Modifier.fillMaxWidth().aspectRatio(2f / 3f)
-            .clip(RoundedCornerShape(14.dp)).background(AniColors.Surface)
+            .clip(aniShape(14.dp)).background(AniColors.Surface)
             .clickable(onClick = onClick),
     ) {
         PosterImage(cover, title, Modifier.fillMaxSize())

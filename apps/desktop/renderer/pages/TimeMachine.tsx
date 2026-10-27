@@ -17,6 +17,9 @@ import {
   type TimeMachineSeason,
 } from "../../../../packages/shared/time-machine";
 import { rejectOversizedImage, safeImageSrc } from "../lib/image-guard";
+import { pixelSceneForYear } from "../../../../packages/shared/pixel-scenes";
+import { PixelSceneCanvas } from "../components/PixelScene";
+import { useSkin } from "../lib/skin";
 
 const VISITED_KEY = "anitrack.timeMachine.visited";
 const YEAR_KEY = "anitrack.timeMachine.year";
@@ -133,6 +136,7 @@ function TitleRow({ icon, title, subtitle, items, period, expandable = false }: 
 }
 
 export default function TimeMachine() {
+  const pixel = useSkin() === "pixel";
   const navigate = useNavigate();
   const [year, setYear] = useState(readLastYear);
   const [season, setSeason] = useState<TimeMachineSeason>("ALL");
@@ -222,8 +226,9 @@ export default function TimeMachine() {
 
   return (
     <div className="min-h-full pb-16">
-      <section className="relative mx-8 mt-6 min-h-[390px] overflow-hidden rounded-[28px] bg-surface-1 shadow-pop ring-1 ring-white/[0.07]">
-        {safeImageSrc(banner) && (
+      <section className={`relative isolate mx-8 mt-6 min-h-[390px] overflow-hidden rounded-[28px] bg-surface-1 shadow-pop ring-1 ring-white/[0.07] ${pixel ? "pixel-era" : ""}`}>
+        {/* Pixel mode travels through pixel worlds: the decade's scene instead of the year's art. */}
+        {pixel ? <PixelSceneCanvas scene={pixelSceneForYear(year)} /> : safeImageSrc(banner) && (
           <img src={safeImageSrc(banner)} alt="" className="absolute inset-0 h-full w-full object-cover opacity-40" onLoad={(event) => rejectOversizedImage(event)} />
         )}
         <div className="absolute inset-0 bg-gradient-to-r from-bg via-bg/85 to-bg/20" />
@@ -235,7 +240,7 @@ export default function TimeMachine() {
           <div className="flex flex-wrap items-end gap-5">
             <div className="flex items-center gap-3">
               <button aria-label="Previous year" onClick={() => travel(year - 1)} disabled={year <= 1960} className="grid h-12 w-12 place-items-center rounded-2xl border border-white/10 bg-white/[0.07] text-white backdrop-blur-md transition hover:border-white/20 hover:bg-white/[0.14] disabled:opacity-25"><ChevronLeft size={26} /></button>
-              <span className="text-[clamp(5rem,13vw,11rem)] font-black leading-[0.72] tracking-[-0.08em] text-white">{year}</span>
+              <span className="pixel-year text-[clamp(5rem,13vw,11rem)] font-black leading-[0.72] tracking-[-0.08em] text-white">{year}</span>
               <button aria-label="Next year" onClick={() => travel(year + 1)} disabled={year >= LAST_YEAR} className="grid h-12 w-12 place-items-center rounded-2xl border border-white/10 bg-white/[0.07] text-white backdrop-blur-md transition hover:border-white/20 hover:bg-white/[0.14] disabled:opacity-25"><ChevronRight size={26} /></button>
             </div>
             <div className="max-w-xl pb-1">

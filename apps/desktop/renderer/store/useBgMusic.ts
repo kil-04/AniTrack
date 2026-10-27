@@ -19,7 +19,7 @@ import { useThemePlayer } from "./useThemePlayer";
  * It steps aside for anything else that makes sound: episodes, the player
  * screen, theme songs, and a minimized or hidden window. Settings are per device.
  */
-export type BgHold = "episode" | "player" | "theme" | "hidden";
+export type BgHold = "episode" | "player" | "theme" | "hidden" | "city-pop";
 
 interface Saved {
   /** Background music is on: it plays whenever nothing holds it and it is not paused. */
@@ -292,6 +292,23 @@ let started = false;
 export function startBgMusic(): void {
   if (started || !window.api.music) return;
   started = true;
+  let cityPopActive = false;
+  let cityPopRevision = 0;
+  const cityPop = window.api.cityPop;
+  if (cityPop) {
+    cityPop.onPlaybackChanged((active) => {
+      cityPopRevision++;
+      cityPopActive = active;
+      if (active) useThemePlayer.getState().pause();
+      setHold("city-pop", active);
+    });
+    const revision = cityPopRevision;
+    void cityPop.status().then((active) => {
+      if (revision !== cityPopRevision) return;
+      cityPopActive = active;
+      setHold("city-pop", active);
+    }).catch(() => {});
+  }
   // A video removed mid-play never reports its pause here, so look again while one holds.
   let videoCheck: ReturnType<typeof setInterval> | null = null;
   const checkVideos = () => {
@@ -302,9 +319,13 @@ export function startBgMusic(): void {
   };
   const onMedia = (event: Event) => {
     if (event.target instanceof HTMLVideoElement) checkVideos();
+    if (event.type === "play" && cityPopActive && event.target instanceof HTMLVideoElement) void cityPop?.close();
   };
   for (const type of ["play", "playing", "pause", "ended", "emptied"]) document.addEventListener(type, onMedia, true);
-  useThemePlayer.subscribe((state) => setHold("theme", state.playing));
+  useThemePlayer.subscribe((state) => {
+    setHold("theme", state.playing);
+    if (state.playing && cityPopActive) void cityPop?.close();
+  });
   const onVisibility = () => setHold("hidden", document.visibilityState === "hidden");
   document.addEventListener("visibilitychange", onVisibility);
   onVisibility();

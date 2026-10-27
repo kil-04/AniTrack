@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -163,7 +162,7 @@ fun NovelReaderScreen(onBack: () -> Unit, onOpenTitle: (com.sanjay.anitrack.next
             }
             when {
                 error != null -> item(key = "error") {
-                    Column(Modifier.widthIn(max = prefs.width.dp).fillMaxWidth().border(1.dp, theme.rule, RoundedCornerShape(16.dp)).padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Column(Modifier.widthIn(max = prefs.width.dp).fillMaxWidth().border(1.dp, theme.rule, aniShape(16.dp)).padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(error!!, color = theme.muted, textAlign = TextAlign.Center)
                         Spacer(Modifier.height(12.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -173,7 +172,7 @@ fun NovelReaderScreen(onBack: () -> Unit, onOpenTitle: (com.sanjay.anitrack.next
                     }
                 }
                 t == null -> items(8) {
-                    Box(Modifier.widthIn(max = prefs.width.dp).fillMaxWidth().padding(vertical = 8.dp).height(16.dp).clip(RoundedCornerShape(4.dp)).background(theme.rule))
+                    Box(Modifier.widthIn(max = prefs.width.dp).fillMaxWidth().padding(vertical = 8.dp).height(16.dp).clip(aniShape(4.dp)).background(theme.rule))
                 }
                 else -> {
                     itemsIndexed(t.paragraphs, key = { i, _ -> i }) { _, p ->
@@ -216,7 +215,7 @@ fun NovelReaderScreen(onBack: () -> Unit, onOpenTitle: (com.sanjay.anitrack.next
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back", tint = theme.text) }
-                Column(Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).clickable(onClickLabel = "Open the title page", onClick = openTitle).padding(vertical = 2.dp)) {
+                Column(Modifier.weight(1f).clip(aniShape(8.dp)).clickable(onClickLabel = "Open the title page", onClick = openTitle).padding(vertical = 2.dp)) {
                     Text(session.detail.card.title, color = theme.text, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text("${chapter.label} · ${session.index + 1} of ${session.chapters.size}", color = theme.muted, style = MaterialTheme.typography.labelSmall, maxLines = 1)
                 }
@@ -239,7 +238,7 @@ fun NovelReaderScreen(onBack: () -> Unit, onOpenTitle: (com.sanjay.anitrack.next
             val chapterList = rememberLazyListState(initialFirstVisibleItemIndex = (session.index - 5).coerceAtLeast(0))
             Column(
                 Modifier.align(Alignment.TopEnd).padding(top = 66.dp, end = 12.dp, bottom = 12.dp).width(320.dp).fillMaxHeight()
-                    .clip(RoundedCornerShape(18.dp)).background(theme.chrome).border(1.dp, theme.rule, RoundedCornerShape(18.dp)),
+                    .clip(aniShape(18.dp)).background(theme.chrome).border(1.dp, theme.rule, aniShape(18.dp)),
             ) {
                 Text("${chapters.size} chapters", color = theme.muted, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(16.dp))
                 LazyColumn(state = chapterList) {
@@ -262,14 +261,14 @@ fun NovelReaderScreen(onBack: () -> Unit, onOpenTitle: (com.sanjay.anitrack.next
 @Composable
 private fun TypePanel(prefs: NovelPrefs, theme: ReaderTheme, modifier: Modifier) {
     Column(
-        modifier.width(300.dp).clip(RoundedCornerShape(18.dp)).background(theme.chrome).border(1.dp, theme.rule, RoundedCornerShape(18.dp)).padding(14.dp),
+        modifier.width(300.dp).clip(aniShape(18.dp)).background(theme.chrome).border(1.dp, theme.rule, aniShape(18.dp)).padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             READER_THEMES.forEach { (key, t) ->
                 Box(
-                    Modifier.weight(1f).height(40.dp).clip(RoundedCornerShape(12.dp)).background(t.bg)
-                        .border(if (prefs.theme == key) 2.dp else 1.dp, if (prefs.theme == key) AniColors.Accent else t.rule, RoundedCornerShape(12.dp))
+                    Modifier.weight(1f).height(40.dp).clip(aniShape(12.dp)).background(t.bg)
+                        .border(if (prefs.theme == key) 2.dp else 1.dp, if (prefs.theme == key) AniColors.Accent else t.rule, aniShape(12.dp))
                         .clickable { prefs.theme = key; prefs.save() },
                     contentAlignment = Alignment.Center,
                 ) { Text(t.label, color = t.text, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold) }
@@ -278,8 +277,8 @@ private fun TypePanel(prefs: NovelPrefs, theme: ReaderTheme, modifier: Modifier)
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             listOf(true to "Serif", false to "Sans").forEach { (serif, label) ->
                 Box(
-                    Modifier.weight(1f).height(38.dp).clip(RoundedCornerShape(12.dp))
-                        .border(if (prefs.serif == serif) 2.dp else 1.dp, if (prefs.serif == serif) AniColors.Accent else theme.rule, RoundedCornerShape(12.dp))
+                    Modifier.weight(1f).height(38.dp).clip(aniShape(12.dp))
+                        .border(if (prefs.serif == serif) 2.dp else 1.dp, if (prefs.serif == serif) AniColors.Accent else theme.rule, aniShape(12.dp))
                         .clickable { prefs.serif = serif; prefs.save() },
                     contentAlignment = Alignment.Center,
                 ) { Text(label, color = theme.text, fontFamily = if (serif) FontFamily.Serif else FontFamily.SansSerif) }
@@ -295,8 +294,8 @@ private fun TypePanel(prefs: NovelPrefs, theme: ReaderTheme, modifier: Modifier)
 private fun Stepper(label: String, value: String, theme: ReaderTheme, onMinus: () -> Unit, onPlus: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(label, color = theme.muted, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
-        IconButton(onClick = onMinus, modifier = Modifier.size(34.dp).border(1.dp, theme.rule, RoundedCornerShape(10.dp))) { Icon(Icons.Rounded.Remove, "Less", tint = theme.text) }
+        IconButton(onClick = onMinus, modifier = Modifier.size(34.dp).border(1.dp, theme.rule, aniShape(10.dp))) { Icon(Icons.Rounded.Remove, "Less", tint = theme.text) }
         Text(value, color = theme.text, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, modifier = Modifier.width(52.dp))
-        IconButton(onClick = onPlus, modifier = Modifier.size(34.dp).border(1.dp, theme.rule, RoundedCornerShape(10.dp))) { Icon(Icons.Rounded.Add, "More", tint = theme.text) }
+        IconButton(onClick = onPlus, modifier = Modifier.size(34.dp).border(1.dp, theme.rule, aniShape(10.dp))) { Icon(Icons.Rounded.Add, "More", tint = theme.text) }
     }
 }

@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.GraphicEq
@@ -177,9 +176,9 @@ internal fun BackgroundMusicCard() {
             listOf(Mode.ALL, Mode.ONE, Mode.SHUFFLE).forEach { m ->
                 val selected = mode == m
                 Row(
-                    Modifier.height(34.dp).clip(RoundedCornerShape(50))
+                    Modifier.height(34.dp).clip(aniShape(50))
                         .background(if (selected) AniColors.AccentSoft else Color.White.copy(alpha = 0.05f))
-                        .border(1.dp, if (selected) AniColors.Accent.copy(alpha = 0.5f) else AniColors.BorderSoft, RoundedCornerShape(50))
+                        .border(1.dp, if (selected) AniColors.Accent.copy(alpha = 0.5f) else AniColors.BorderSoft, aniShape(50))
                         .clickable(role = Role.RadioButton) { BackgroundMusic.setMode(m) }
                         .padding(horizontal = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -228,14 +227,14 @@ internal fun BackgroundMusicCard() {
             )
         } else {
             LazyColumn(
-                Modifier.fillMaxWidth().heightIn(max = 360.dp).clip(RoundedCornerShape(12.dp))
-                    .border(1.dp, AniColors.BorderSoft, RoundedCornerShape(12.dp)).padding(4.dp),
+                Modifier.fillMaxWidth().heightIn(max = 360.dp).clip(aniShape(12.dp))
+                    .border(1.dp, AniColors.BorderSoft, aniShape(12.dp)).padding(4.dp),
             ) {
                 items(tracks, key = { it.id }) { track ->
                     val isCurrent = track.id == current?.id
                     val isDefault = track.id == defaultId
                     Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                        Modifier.fillMaxWidth().clip(aniShape(8.dp))
                             .background(if (isCurrent) AniColors.AccentSoft else Color.Transparent)
                             .clickable { if (isCurrent) BackgroundMusic.togglePlay() else BackgroundMusic.select(track.id) }
                             .padding(start = 8.dp, end = 2.dp, top = 2.dp, bottom = 2.dp),
@@ -294,7 +293,8 @@ internal fun BackgroundMusicCard() {
 /**
  * The music controls floating under the top bar, styled like Home's Anime | Manga
  * switch: a Music segment (on/off; long-press for Settings), then Previous,
- * Play/Pause, Next and Repeat while it is on. [compact] (phones) drops the label and Repeat.
+ * Play/Pause, Next and Repeat while it is on. [compact] drops the label and Repeat. (A phone
+ * shows [BackgroundMusicButton] in its top bar instead.)
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -307,7 +307,7 @@ fun BackgroundMusicBar(compact: Boolean, onOpenSettings: () -> Unit, modifier: M
     if (tracks.isEmpty()) return
     val status = musicStatus()
     val on = enabled && !paused
-    val shape = RoundedCornerShape(50)
+    val shape = aniShape(50)
     val labelColor = if (enabled) Color.White else Color.White.copy(alpha = 0.7f)
     Row(
         modifier
@@ -349,6 +349,35 @@ fun BackgroundMusicBar(compact: Boolean, onOpenSettings: () -> Unit, modifier: M
             PillIcon(Icons.Rounded.SkipNext, "Next track") { BackgroundMusic.next() }
             if (!compact) PillIcon(modeIcon(mode), "Playback order: ${modeLabel(mode)}") { BackgroundMusic.cycleMode() }
         }
+    }
+}
+
+/**
+ * A phone's Music switch: one round button in the top bar (on/off; long-press for Settings,
+ * where the full controls are), so nothing floats over the top of each page.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun BackgroundMusicButton(onOpenSettings: () -> Unit, modifier: Modifier = Modifier) {
+    val tracks by BackgroundMusic.tracks
+    val enabled by BackgroundMusic.enabled
+    val paused by BackgroundMusic.paused
+    val playing by BackgroundMusic.isPlaying
+    if (tracks.isEmpty()) return
+    val status = musicStatus()
+    Box(
+        modifier.size(40.dp).clip(CircleShape)
+            .then(if (enabled) Modifier.background(AniColors.BrandGradient) else Modifier.background(AniColors.SurfaceHigh))
+            .border(1.dp, if (enabled) Color.Transparent else AniColors.BorderSoft, CircleShape)
+            .combinedClickable(role = Role.Switch, onLongClick = onOpenSettings) { BackgroundMusic.toggle() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            if (enabled && !paused && playing) Icons.Rounded.GraphicEq else Icons.Rounded.MusicNote,
+            contentDescription = if (enabled) "Background music on: $status. Tap to turn off." else "Turn background music on",
+            tint = if (enabled) Color.White else AniColors.TextSecondary,
+            modifier = Modifier.size(19.dp),
+        )
     }
 }
 

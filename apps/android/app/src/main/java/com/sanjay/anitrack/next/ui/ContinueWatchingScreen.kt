@@ -3,7 +3,6 @@ package com.sanjay.anitrack.next.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -47,7 +46,7 @@ fun ContinueWatchingScreen(onPlay: () -> Unit) {
 
     Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 20.dp)) {
         ScreenHeader(
-            "Continue Watching",
+            "Continue Watching", scene = PixelScene.CINEMA,
             subtitle = if (allRows.isEmpty()) "Pick up where you left off." else "${allRows.size} in progress",
             icon = Icons.Rounded.History,
         )
@@ -62,7 +61,7 @@ fun ContinueWatchingScreen(onPlay: () -> Unit) {
                 Column {
                     Box(
                         Modifier.fillMaxWidth().aspectRatio(2f / 3f)
-                            .clip(RoundedCornerShape(14.dp)).background(AniColors.Surface)
+                            .clip(aniShape(14.dp)).background(AniColors.Surface)
                             .clickable {
                                 if (resumingId != null) return@clickable
                                 resumingId = row.animeId

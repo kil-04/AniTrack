@@ -37,7 +37,7 @@ fun MangaListScreen(onOpen: (Int) -> Unit, onBrowse: () -> Unit = {}) {
 
     Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 20.dp)) {
         ScreenHeader(
-            "My Manga",
+            "My Manga", scene = PixelScene.LIBRARY,
             subtitle = if (rows.isEmpty()) "Manga you track appear here." else "${rows.size} ${if (rows.size == 1) "title" else "titles"} tracked",
             icon = Icons.Rounded.Bookmarks,
         )

@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -43,16 +42,16 @@ internal fun HomeModeToggle(mode: HomeMode, onChange: (HomeMode) -> Unit, modifi
     Column(modifier, horizontalAlignment = Alignment.Start) {
         Row(
             Modifier
-                .clip(RoundedCornerShape(50))
+                .clip(aniShape(50))
                 .background(Color.Black.copy(alpha = 0.62f))
-                .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(50))
+                .border(1.dp, Color.White.copy(alpha = 0.12f), aniShape(50))
                 .padding(4.dp),
         ) {
             listOf(HomeMode.Anime to "Anime", HomeMode.Manga to "Manga").forEach { (option, label) ->
                 val selected = if (option == HomeMode.Anime) mode == HomeMode.Anime else mode != HomeMode.Anime
                 Row(
                     Modifier
-                        .clip(RoundedCornerShape(50))
+                        .clip(aniShape(50))
                         .then(if (selected) Modifier.background(AniColors.BrandGradient) else Modifier)
                         .clickable(enabled = !selected) { onChange(option) }
                         .padding(horizontal = 14.dp, vertical = 7.dp),
@@ -78,7 +77,7 @@ internal fun HomeModeToggle(mode: HomeMode, onChange: (HomeMode) -> Unit, modifi
             Spacer(Modifier.height(6.dp))
             Row(
                 Modifier
-                    .clip(RoundedCornerShape(50))
+                    .clip(aniShape(50))
                     .background(Color.Black.copy(alpha = 0.5f))
                     .padding(3.dp),
             ) {
@@ -90,7 +89,7 @@ internal fun HomeModeToggle(mode: HomeMode, onChange: (HomeMode) -> Unit, modifi
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                         modifier = Modifier
-                            .clip(RoundedCornerShape(50))
+                            .clip(aniShape(50))
                             .then(if (selected) Modifier.background(Color.White.copy(alpha = 0.14f)) else Modifier)
                             .clickable(enabled = !selected) { onChange(option) }
                             .padding(horizontal = 12.dp, vertical = 5.dp),
@@ -103,7 +102,7 @@ internal fun HomeModeToggle(mode: HomeMode, onChange: (HomeMode) -> Unit, modifi
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun MangaHomeScreen(onOpen: (Manga) -> Unit, onOpenId: (Int) -> Unit, toggle: @Composable (Modifier) -> Unit) {
+fun MangaHomeScreen(onOpen: (Manga) -> Unit, onOpenId: (Int) -> Unit, toggle: @Composable (Modifier) -> Unit, onGo: (String) -> Unit = {}) {
     var feed by remember { mutableStateOf<AniList.MangaFeed?>(null) }
     var reading by remember { mutableStateOf<List<com.sanjay.anitrack.next.data.Db.ReadRow>>(emptyList()) }
     val scope = rememberCoroutineScope()
@@ -175,6 +174,9 @@ fun MangaHomeScreen(onOpen: (Manga) -> Unit, onOpenId: (Int) -> Unit, toggle: @C
         } else {
             mangaSection("Trending Manga", f.trending, onOpen)
             mangaSection("Publishing Now", f.publishing, onOpen)
+            if (AniColors.pixelMode.value) item(key = "interlude-shelf") {
+                PixelInterlude(PixelScene.LIBRARY, "Your shelf", "Every manga you follow, in one place", { onGo("manga-list") })
+            }
             mangaSection("Popular Manhwa", f.manhwa, onOpen)
             mangaSection("Top Rated", f.topRated, onOpen)
             mangaSection("All-Time Popular", f.popular, onOpen)
@@ -202,13 +204,13 @@ private fun ContinueReadingCard(
     onOpen: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    Column(Modifier.width(POSTER_WIDTH.dp).clip(RoundedCornerShape(12.dp)).clickable(onClick = onOpen)) {
+    Column(Modifier.width(POSTER_WIDTH.dp).clip(aniShape(12.dp)).clickable(onClick = onOpen)) {
         Box {
             PosterImage(
                 row.cover, row.title,
-                Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).clip(RoundedCornerShape(12.dp)),
+                Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).clip(aniShape(12.dp)),
             )
-            Box(Modifier.matchParentSize().clip(RoundedCornerShape(12.dp)).background(BottomScrim))
+            Box(Modifier.matchParentSize().clip(aniShape(12.dp)).background(BottomScrim))
             Tag(
                 "CH ${com.sanjay.anitrack.next.data.manga.MangaChapters.label(row.chapter)}",
                 Modifier.align(Alignment.TopStart).padding(8.dp),
@@ -234,11 +236,11 @@ private fun ContinueReadingCard(
 @Composable
 fun MangaCard(manga: Manga, onClick: (Manga) -> Unit, width: Int? = POSTER_WIDTH) {
     val outer = if (width != null) Modifier.width(width.dp) else Modifier.fillMaxWidth()
-    Column(outer.clip(RoundedCornerShape(12.dp)).clickable { onClick(manga) }) {
+    Column(outer.clip(aniShape(12.dp)).clickable { onClick(manga) }) {
         Box {
             PosterImage(
                 manga.cover, manga.title,
-                Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).clip(RoundedCornerShape(12.dp)),
+                Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).clip(aniShape(12.dp)),
             )
             manga.kind?.takeIf { it != "Manga" }?.let { kind ->
                 Tag(kind, Modifier.align(Alignment.TopStart).padding(6.dp), tone = TagTone.Glass)

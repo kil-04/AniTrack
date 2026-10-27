@@ -2,9 +2,11 @@ import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { Capacitor } from "@capacitor/core";
 import { useAppStore } from "../store/useAppStore";
-import { BookMarked, Cloud, DownloadCloud, Github, Globe, Info, Library, Music2, RefreshCcw, ShieldCheck, type LucideIcon } from "lucide-react";
+import { BookMarked, Cloud, DownloadCloud, Github, Globe, Info, Library, Music2, Palette, RefreshCcw, Settings as SettingsIcon, ShieldCheck, type LucideIcon } from "lucide-react";
 import BrandMark from "../components/BrandMark";
 import { BackgroundMusicSettings } from "../components/BackgroundMusic";
+import { PixelBanner, PixelSceneCanvas } from "../components/PixelScene";
+import { setMotion, setPalette, setSkin, useMotion, usePalette, useSkin, type PixelPalette } from "../lib/skin";
 import type { AniListAuthState } from "../../../../packages/shared/types";
 import type { RuntimeConfigStatus } from "../../../../packages/shared/runtime-config";
 import { getSyncConfig, setSyncConfig, clearSyncConfig, pullAndMerge, pushAllProgress } from "../lib/supabase-sync";
@@ -12,6 +14,7 @@ import { syncMangaReading } from "../lib/manga-sync";
 import { syncNovelReading } from "../lib/novel-sync";
 
 const SECTIONS: { id: string; label: string; icon: LucideIcon }[] = [
+  { id: "appearance", label: "Appearance", icon: Palette },
   { id: "mal", label: "MyAnimeList", icon: BookMarked },
   { id: "anilist", label: "AniList", icon: Library },
   { id: "pahe", label: "AnimePahe URL", icon: Globe },
@@ -31,7 +34,62 @@ function SettingsHead({ icon: Icon, title }: { icon: LucideIcon; title: string }
   );
 }
 
+/** Pixel mode: retrowave pixel art across the app, with a preview of its banner. */
+function AppearanceSettings() {
+  const pixel = useSkin() === "pixel";
+  const palette = usePalette();
+  const motion = useMotion();
+  return (
+    <div className="flex flex-wrap items-center gap-5">
+      <div className="pixel-preview" aria-hidden="true"><PixelSceneCanvas scene="sakura" pixel={2} /></div>
+      <div className="min-w-0 flex-1">
+        <button
+          role="switch"
+          aria-checked={pixel}
+          onClick={() => setSkin(pixel ? "default" : "pixel")}
+          className="flex items-center gap-3 text-sm font-semibold text-white"
+        >
+          <span className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${pixel ? "bg-accent" : "bg-white/20"}`}>
+            <span className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow transition-all ${pixel ? "left-6" : "left-1"}`} />
+          </span>
+          Pixel mode
+        </button>
+        <p className="mt-2 max-w-xl text-sm leading-relaxed text-ink-3">
+          Retrowave pixel art across the app: square corners, a pixel font for headings and a pixel-art banner on
+          every page, in neon colours or a retrowave AniTrack blue. Saved on this device.
+        </p>
+        {pixel && (
+          <div className="mt-3 flex flex-wrap items-center gap-2" role="radiogroup" aria-label="Pixel mode colours">
+            <span className="mr-1 text-xs text-ink-3">Colours</span>
+            {([["neon", "Neon"], ["blue", "AniTrack blue"]] as [PixelPalette, string][]).map(([id, label]) => (
+              <button key={id} role="radio" aria-checked={palette === id} onClick={() => setPalette(id)} className={`chip ${palette === id ? "chip-active" : ""}`}>
+                <span className={`h-2.5 w-2.5 ${id === "neon" ? "bg-[#ff2a9d]" : "bg-[#3d8bff]"}`} />
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+        {pixel && (
+          <button
+            role="switch"
+            aria-checked={motion}
+            onClick={() => setMotion(!motion)}
+            className="mt-4 flex items-center gap-3 text-sm font-semibold text-white"
+            title="Twinkling stars, a blinking skyline, a passing cat and shooting stars behind the pages"
+          >
+            <span className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${motion ? "bg-accent" : "bg-white/20"}`}>
+              <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${motion ? "left-[18px]" : "left-0.5"}`} />
+            </span>
+            Animated background
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function Settings() {
+  const pixel = useSkin() === "pixel";
   const mal = useAppStore((s) => s.mal);
   const al = useAppStore((s) => s.al);
   const refreshAll = useAppStore((s) => s.refreshAll);
@@ -245,13 +303,22 @@ export default function Settings() {
         ))}
       </nav>
       <div className="min-w-0 flex-1 space-y-6">
-      <header className="mb-2 flex items-center gap-4">
-        <BrandMark size={52} />
-        <div>
-          <h1 className="text-[32px] font-extrabold leading-tight tracking-tight">Settings</h1>
-          <p className="text-sm text-ink-3">Accounts, sync, providers, music and updates</p>
-        </div>
-      </header>
+      {pixel ? (
+        <header className="mb-2"><PixelBanner scene="terminal" icon={SettingsIcon} title="Settings" subtitle="Appearance, accounts, sync, providers, music and updates" /></header>
+      ) : (
+        <header className="mb-2 flex items-center gap-4">
+          <BrandMark size={52} />
+          <div>
+            <h1 className="text-[32px] font-extrabold leading-tight tracking-tight">Settings</h1>
+            <p className="text-sm text-ink-3">Appearance, accounts, sync, providers, music and updates</p>
+          </div>
+        </header>
+      )}
+
+      <section id="appearance" className="panel scroll-mt-6 p-6">
+        <SettingsHead icon={Palette} title="Appearance" />
+        <AppearanceSettings />
+      </section>
 
       <section id="mal" className="panel scroll-mt-6 p-6">
         <SettingsHead icon={BookMarked} title="MyAnimeList" />

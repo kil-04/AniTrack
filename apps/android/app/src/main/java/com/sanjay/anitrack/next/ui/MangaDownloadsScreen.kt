@@ -88,7 +88,7 @@ fun MangaDownloadsScreen(onOpenManga: (Int) -> Unit, onRead: () -> Unit) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         Column(Modifier.widthIn(max = 860.dp).fillMaxWidth().padding(horizontal = 24.dp, vertical = 20.dp)) {
             ScreenHeader(
-                "Manga downloads",
+                "Manga downloads", scene = PixelScene.BEDROOM,
                 subtitle = if (done.isEmpty()) "Read downloaded chapters offline, in the app."
                 else metaLine("${done.size} chapter${if (done.size == 1) "" else "s"}", MangaDownloads.humanSize(totalSize).ifEmpty { null }, "available offline"),
                 icon = Icons.Rounded.DownloadForOffline,

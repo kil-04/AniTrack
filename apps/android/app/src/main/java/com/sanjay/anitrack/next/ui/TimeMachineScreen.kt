@@ -9,7 +9,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
@@ -153,11 +152,15 @@ fun TimeMachineScreen(
     val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 820
     val yours = history[requestedYear].orEmpty()
 
-    LazyColumn(Modifier.fillMaxSize().background(Color.Black)) {
+    // Pixel mode travels through pixel worlds: the decade's scene behind the year, on the theme's night.
+    val pixel = AniColors.pixelMode.value
+    val night = if (pixel) AniColors.Bg else Color.Black
+    LazyColumn(Modifier.fillMaxSize().background(night)) {
         // ── The year ────────────────────────────────────────────────────────
         item {
             Box(Modifier.fillMaxWidth().heightIn(min = 340.dp)) {
-                banner?.let {
+                if (pixel) PixelSceneArt(com.sanjay.anitrack.next.data.PixelScenes.forYear(year), Modifier.matchParentSize())
+                else banner?.let {
                     AsyncImage(
                         model = it,
                         contentDescription = null,
@@ -166,8 +169,8 @@ fun TimeMachineScreen(
                         alpha = 0.42f,
                     )
                 }
-                Box(Modifier.matchParentSize().background(Brush.horizontalGradient(listOf(Color.Black, Color.Black.copy(alpha = 0.82f), Color.Transparent))))
-                Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black))))
+                Box(Modifier.matchParentSize().background(Brush.horizontalGradient(listOf(night, night.copy(alpha = 0.82f), Color.Transparent))))
+                Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(Color.Transparent, night))))
                 Column(Modifier.align(Alignment.BottomStart).padding(24.dp)) {
                     Text(
                         TimeMachineArchive.yearInDecade(year).uppercase(),
@@ -178,7 +181,12 @@ fun TimeMachineScreen(
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         YearStep(Icons.AutoMirrored.Rounded.KeyboardArrowLeft, "Previous year", enabled = year > 1960) { travel(year - 1) }
-                        Text(year.toString(), fontSize = 82.sp, lineHeight = 82.sp, fontWeight = FontWeight.Black, modifier = Modifier.padding(horizontal = 6.dp))
+                        if (pixel) Text(
+                            year.toString(), fontFamily = CityPopPixelFont, fontWeight = FontWeight.Normal, fontSize = 64.sp, lineHeight = 70.sp,
+                            style = androidx.compose.ui.text.TextStyle(shadow = androidx.compose.ui.graphics.Shadow(AniColors.AccentDeep, androidx.compose.ui.geometry.Offset(6f, 6f), 0f)),
+                            modifier = Modifier.padding(horizontal = 8.dp),
+                        )
+                        else Text(year.toString(), fontSize = 82.sp, lineHeight = 82.sp, fontWeight = FontWeight.Black, modifier = Modifier.padding(horizontal = 6.dp))
                         YearStep(Icons.AutoMirrored.Rounded.KeyboardArrowRight, "Next year", enabled = year < lastYear) { travel(year + 1) }
                     }
                     Text(era.headline, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold)
@@ -241,7 +249,7 @@ fun TimeMachineScreen(
                         val selected = era.start == decade.start
                         val decadeAccent = Color(decade.accent)
                         Box(
-                            Modifier.clip(RoundedCornerShape(50))
+                            Modifier.clip(aniShape(50))
                                 .background(if (selected) decadeAccent else Color.White.copy(alpha = 0.07f))
                                 .clickable { travel(decade.start + 5) }
                                 .padding(horizontal = 14.dp, vertical = 8.dp),
@@ -291,7 +299,7 @@ fun TimeMachineScreen(
         when {
             failed -> item {
                 Row(
-                    Modifier.padding(horizontal = 24.dp, vertical = 20.dp).fillMaxWidth().clip(RoundedCornerShape(14.dp))
+                    Modifier.padding(horizontal = 24.dp, vertical = 20.dp).fillMaxWidth().clip(aniShape(14.dp))
                         .background(Color(0x22FF5252)).padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -358,7 +366,7 @@ fun TimeMachineScreen(
                                 style = MaterialTheme.typography.labelLarge,
                                 fontWeight = FontWeight.Black,
                                 modifier = Modifier.align(Alignment.TopStart).padding(8.dp)
-                                    .clip(RoundedCornerShape(50)).background(yearAccent)
+                                    .clip(aniShape(50)).background(yearAccent)
                                     .clickable { travel(premiered) }.padding(horizontal = 10.dp, vertical = 3.dp),
                             )
                         }
@@ -373,7 +381,17 @@ fun TimeMachineScreen(
 @Composable
 private fun TitleRow(title: String, subtitle: String, items: List<Anime>, onOpen: (Anime) -> Unit) {
     Column(Modifier.padding(top = 24.dp)) {
-        Text(title, modifier = Modifier.padding(horizontal = 24.dp), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
+        Row(Modifier.padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
+            // Pixel mode's row sprite ("Hidden gems": the gem).
+            if (AniColors.pixelMode.value) {
+                val context = androidx.compose.ui.platform.LocalContext.current
+                remember(title) { com.sanjay.anitrack.next.data.PixelSprites.load(context).forSection(title) }?.let {
+                    PixelSprite(it, width = 28.dp)
+                    Spacer(Modifier.width(10.dp))
+                }
+            }
+            Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
+        }
         Text(
             "$subtitle · ${titleCount(items.size, "title")}",
             modifier = Modifier.padding(horizontal = 24.dp),
@@ -391,7 +409,7 @@ private fun TitleRow(title: String, subtitle: String, items: List<Anime>, onOpen
 private fun Note(text: String) {
     Text(
         text,
-        modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp).fillMaxWidth().clip(RoundedCornerShape(14.dp))
+        modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp).fillMaxWidth().clip(aniShape(14.dp))
             .background(Color.White.copy(alpha = 0.045f)).padding(16.dp),
         color = Color.White.copy(alpha = 0.6f),
         style = MaterialTheme.typography.bodyMedium,
@@ -414,13 +432,13 @@ private fun YearPanel(
         PillTabs(SEASONS, season, onSeason, compact = true)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("New shows" to view.newShows.size, "Films" to view.films.size, "Sequels" to view.sequels.size).forEach { (label, count) ->
-                Column(Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha = 0.045f)).padding(14.dp)) {
+                Column(Modifier.weight(1f).clip(aniShape(12.dp)).background(Color.White.copy(alpha = 0.045f)).padding(14.dp)) {
                     Text(if (loading) "–" else count.toString(), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
                     Text(label.uppercase(), fontSize = 9.sp, letterSpacing = 1.sp, color = Color.White.copy(alpha = 0.38f))
                 }
             }
         }
-        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha = 0.045f)).padding(14.dp)) {
+        Column(Modifier.fillMaxWidth().clip(aniShape(12.dp)).background(Color.White.copy(alpha = 0.045f)).padding(14.dp)) {
             Text("${period.uppercase()} AT A GLANCE", color = accent, fontSize = 9.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(6.dp))
             val stats = view.stats
@@ -485,7 +503,7 @@ private fun Passport(
 ) {
     val total = lastYear - 1960 + 1
     val explored = visited.count { it in 1960..lastYear }
-    Column(modifier.clip(RoundedCornerShape(16.dp)).background(Color.White.copy(alpha = 0.035f)).padding(16.dp)) {
+    Column(modifier.clip(aniShape(16.dp)).background(Color.White.copy(alpha = 0.035f)).padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("YOUR PASSPORT", color = Color(0xFFFFD180), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
@@ -501,9 +519,9 @@ private fun Passport(
                 (decade.start..minOf(decade.end, lastYear)).forEach { y ->
                     val seen = y in visited
                     Box(
-                        Modifier.padding(end = 4.dp).size(28.dp).clip(RoundedCornerShape(7.dp))
+                        Modifier.padding(end = 4.dp).size(28.dp).clip(aniShape(7.dp))
                             .background(if (seen) tint.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.06f))
-                            .then(if (y == current) Modifier.border(2.dp, Color.White, RoundedCornerShape(7.dp)) else Modifier)
+                            .then(if (y == current) Modifier.border(2.dp, Color.White, aniShape(7.dp)) else Modifier)
                             .clickable { onTravel(y) },
                         contentAlignment = Alignment.Center,
                     ) {

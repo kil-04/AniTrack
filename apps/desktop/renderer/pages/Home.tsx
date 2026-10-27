@@ -15,8 +15,12 @@ import RecommendationCard from "../components/RecommendationCard";
 import { ThemeRadioButton } from "../components/ThemeSongs";
 import { providerClient } from "../lib/provider-api";
 import { rejectOversizedImage, safeImageSrc } from "../lib/image-guard";
+import { useSkin } from "../lib/skin";
+import { PixelSprite } from "../components/PixelSprite";
+import { PixelInterlude } from "../components/PixelScene";
 
 export default function Home() {
+  const pixel = useSkin() === "pixel";
   const trending = useAppStore((s) => s.trending);
   const recommendations = useAppStore((s) => s.recommendations);
   const latestEpisodes = useAppStore((s) => s.latestEpisodes);
@@ -266,8 +270,10 @@ export default function Home() {
                 decoding="async"
                 fetchPriority={idx === heroIndex ? "high" : "low"}
                 onLoad={(event) => rejectOversizedImage(event, anime.coverImage)}
-                className={`absolute inset-0 h-full w-full object-cover transition-transform duration-[9000ms] ease-out ${idx === heroIndex ? 'scale-[1.06]' : 'scale-100'}`}
+                className={`hero-art absolute inset-0 h-full w-full object-cover transition-transform duration-[9000ms] ease-out ${idx === heroIndex ? 'scale-[1.06]' : 'scale-100'}`}
               />
+              {/* Pixel mode: the art turns to pixels (index.css) under a CRT screen. */}
+              <div className="pixel-screen absolute inset-0" aria-hidden="true"><span className="pixel-roll" /></div>
               <div className="absolute inset-0 bg-scrim-l" />
               <div className="absolute inset-0 bg-scrim-b" />
               <div className="absolute inset-0 bg-[radial-gradient(70%_65%_at_0%_100%,rgb(var(--accent)/0.24),transparent_70%)]" />
@@ -435,6 +441,9 @@ export default function Home() {
         )}
       </section>
 
+      {/* Pixel mode's interludes: scenes between the rows that open other parts of the app. */}
+      {pixel && <PixelInterlude scene="station" title="Tonight's line-up" subtitle="Episodes airing this week, in your time zone" to="/schedule" />}
+
       {/* Discovery sections + Top 10 sidebar (Anikoto-style) */}
       <div className="flex gap-4">
         <div className="min-w-0 flex-1">
@@ -448,7 +457,9 @@ export default function Home() {
               {trendingCards}
             </Row>
           )}
+          {pixel && <PixelInterlude scene="jukebox" title="On the jukebox" subtitle="Openings and endings, chart by chart" to="/songs" />}
           <DiscoverRow title="Top Airing" filters={{ status: "RELEASING", sort: "POPULARITY_DESC" }} />
+          {pixel && <PixelInterlude scene="starlight" title="Explore every era" subtitle="The Time Machine, 1960 to today" to="/time-machine" />}
           <DiscoverRow title="Most Popular" filters={{ sort: "POPULARITY_DESC" }} />
           <DiscoverRow title="Top Movies" filters={{ format: "MOVIE", sort: "POPULARITY_DESC" }} />
           <DiscoverRow title="Highest Rated" filters={{ sort: "SCORE_DESC" }} />
@@ -459,6 +470,17 @@ export default function Home() {
           </div>
         </aside>
       </div>
+      {/* Pixel mode ends Home on a little scene, as the Android app does. */}
+      {pixel && (
+        <footer className="pixel-footer" aria-hidden="true">
+          <div className="flex items-end justify-center gap-6">
+            <span className="pixel-bob"><PixelSprite id="tv" scale={3} /></span>
+            <span className="pixel-bob pixel-bob-late"><PixelSprite id="cat" scale={3} /></span>
+            <span className="pixel-bob"><PixelSprite id="ramen" scale={3} /></span>
+          </div>
+          <p>Save point ✦ See you next episode</p>
+        </footer>
+      )}
 
     </div>
   );

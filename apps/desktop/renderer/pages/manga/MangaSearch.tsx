@@ -81,7 +81,7 @@ export default function MangaSearch() {
   const thisYear = new Date().getFullYear();
   return (
     <div className="mx-auto max-w-[1680px] px-8 pb-16 pt-8">
-      <PageHeader icon={Search} title="Search Manga" subtitle="Manga, manhwa and manhua from AniList" />
+      <PageHeader scene="observatory" icon={Search} title="Search Manga" subtitle="Manga, manhwa and manhua from AniList" />
       <div className="panel relative z-20 mb-10 p-4">
         <form
           onSubmit={(event) => { event.preventDefault(); set("q", draft.trim()); }}

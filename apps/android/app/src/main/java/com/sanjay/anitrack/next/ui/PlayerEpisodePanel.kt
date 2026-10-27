@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -116,7 +115,7 @@ internal fun PlayerEpisodePanel(
                         onClick = { serverMenuOpen = true },
                         enabled = !switching,
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp),
+                        shape = aniShape(8.dp),
                     ) {
                         Text(
                             selected?.label ?: "Choose a server",
@@ -191,9 +190,9 @@ internal fun PlayerEpisodePanel(
             }
             Box(
                 Modifier.width(110.dp).height(34.dp)
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(aniShape(6.dp))
                     .background(Color.White.copy(alpha = 0.05f))
-                    .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(6.dp))
+                    .border(1.dp, Color.White.copy(alpha = 0.15f), aniShape(6.dp))
                     .padding(horizontal = 10.dp),
                 contentAlignment = Alignment.CenterStart,
             ) {

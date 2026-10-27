@@ -3,7 +3,6 @@ package com.sanjay.anitrack.next.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowUpward
@@ -109,7 +108,7 @@ internal fun ContinueCardWide(
     val ep = if (shown % 1f == 0f) "${shown.toInt()}" else "$shown"
     Box(
         Modifier.width(300.dp).aspectRatio(16f / 9f)
-            .clip(RoundedCornerShape(14.dp))
+            .clip(aniShape(14.dp))
             .background(AniColors.Surface)
             .clickable { onResume() },
     ) {

@@ -1,5 +1,6 @@
 package com.sanjay.anitrack.next
 
+import com.sanjay.anitrack.next.ui.aniShape
 import android.os.Bundle
 import android.content.res.Configuration
 import androidx.activity.ComponentActivity
@@ -8,7 +9,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -52,7 +52,7 @@ import androidx.navigation.navArgument
 
 // The app background and bars share the theme's near-black (AniColors.Bg);
 // the bars are separated from content by a hairline.
-private val Bg = com.sanjay.anitrack.next.ui.AniColors.Bg
+private val Bg: androidx.compose.ui.graphics.Color get() = com.sanjay.anitrack.next.ui.AniColors.Bg
 private val Accent: androidx.compose.ui.graphics.Color get() = com.sanjay.anitrack.next.ui.AniColors.Accent
 
 object PipState {
@@ -120,7 +120,12 @@ class MainActivity : ComponentActivity() {
         hideSystemBars()
         // The first frame already needs the saved mode's accent: the shell's SideEffect only
         // syncs it after that frame, which left the top bar in anime blue on a manga launch.
-        val savedMode = getSharedPreferences("anitrack_next", android.content.Context.MODE_PRIVATE).getString("home_mode", null)
+        val shellPrefs = getSharedPreferences("anitrack_next", android.content.Context.MODE_PRIVATE)
+        val savedMode = shellPrefs.getString("home_mode", null)
+        // Pixel mode too, so the first frame is already drawn in it.
+        com.sanjay.anitrack.next.ui.AniColors.pixelMode.value = shellPrefs.getBoolean(com.sanjay.anitrack.next.ui.AniColors.PIXEL_MODE_PREF, false)
+        com.sanjay.anitrack.next.ui.AniColors.pixelBlue.value = shellPrefs.getBoolean(com.sanjay.anitrack.next.ui.AniColors.PIXEL_BLUE_PREF, false)
+        com.sanjay.anitrack.next.ui.AniColors.pixelMotion.value = shellPrefs.getBoolean(com.sanjay.anitrack.next.ui.AniColors.PIXEL_MOTION_PREF, true)
         com.sanjay.anitrack.next.ui.AniColors.mangaMode.value =
             savedMode == com.sanjay.anitrack.next.ui.HomeMode.Manga.name || savedMode == com.sanjay.anitrack.next.ui.HomeMode.Novel.name
         setContent {
@@ -278,6 +283,8 @@ fun AppShell() {
         }
     }
     val currentTab = current?.substringBefore('?')
+    // City Pop opens from Songs, so the Songs tab stays lit there.
+    val tabSelected: (Dest) -> Boolean = { d -> currentTab == d.route || (d.route == "songs" && currentTab == "city-pop") }
 
     Surface(color = Bg, modifier = Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
@@ -289,12 +296,12 @@ fun AppShell() {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     com.sanjay.anitrack.next.ui.AniWordmark(
-                        Modifier.clip(RoundedCornerShape(10.dp)).clickable { go("home") }.padding(4.dp),
+                        Modifier.clip(aniShape(10.dp)).clickable { go("home") }.padding(4.dp),
                     )
                     Spacer(Modifier.width(18.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
                         tabs.filter { it.route != "settings" }.forEach { d ->
-                            NavTab(d, selected = currentTab == d.route, showLabel = labelsFit || currentTab == d.route) { go(d.route) }
+                            NavTab(d, selected = tabSelected(d), showLabel = labelsFit || tabSelected(d)) { go(d.route) }
                         }
                     }
                     // Inline search with a live results dropdown (desktop-style).
@@ -330,8 +337,8 @@ fun AppShell() {
                     Spacer(Modifier.width(12.dp))
                     Row(
                         Modifier.weight(1f).height(40.dp)
-                            .clip(RoundedCornerShape(50)).background(com.sanjay.anitrack.next.ui.AniColors.SurfaceHigh)
-                            .border(1.dp, com.sanjay.anitrack.next.ui.AniColors.BorderSoft, RoundedCornerShape(50))
+                            .clip(aniShape(50)).background(com.sanjay.anitrack.next.ui.AniColors.SurfaceHigh)
+                            .border(1.dp, com.sanjay.anitrack.next.ui.AniColors.BorderSoft, aniShape(50))
                             .clickable { nav.navigate("quicksearch") { launchSingleTop = true } }
                             .padding(horizontal = 14.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -345,6 +352,11 @@ fun AppShell() {
                             maxLines = 1,
                         )
                     }
+                    // Music sits in the bar on a phone, so nothing floats over the top of each page.
+                    if (com.sanjay.anitrack.next.data.BackgroundMusic.tracks.value.isNotEmpty()) {
+                        Spacer(Modifier.width(10.dp))
+                        com.sanjay.anitrack.next.ui.BackgroundMusicButton(onOpenSettings = { go("settings") })
+                    }
                     Spacer(Modifier.width(10.dp))
                     MalProfileButton(
                         connected = malConnected,
@@ -357,6 +369,11 @@ fun AppShell() {
                 HorizontalDivider(color = com.sanjay.anitrack.next.ui.AniColors.BorderSoft)
             }
             Box(Modifier.weight(1f)) {
+                // Pixel mode's animated night behind every page without a background of its own;
+                // it holds still while the player or a reader is in front.
+                if (com.sanjay.anitrack.next.ui.AniColors.pixelMode.value) {
+                    com.sanjay.anitrack.next.ui.PixelAmbient(Modifier.matchParentSize(), animate = !hideChrome)
+                }
                 NavHost(nav, startDestination = "home") {
                     composable("home") {
                         com.sanjay.anitrack.next.ui.HomeScreen(
@@ -372,6 +389,7 @@ fun AppShell() {
                             onOpenNovel = openNovel,
                             onReadNovel = { nav.navigate("novel-reader") },
                             onBrowseNovelGenre = { genre -> go("novel-search?genre=${android.net.Uri.encode(genre)}") },
+                            onGo = go,
                         )
                     }
                     composable("novel/{source}/{id}") { entry ->
@@ -424,8 +442,9 @@ fun AppShell() {
                         androidx.compose.runtime.key(q) { com.sanjay.anitrack.next.ui.SearchScreen(openDetail, initialQuery = q) }
                     }
                     composable("songs") {
-                        com.sanjay.anitrack.next.ui.SongsScreen(onOpenAnime = { id -> nav.navigate("anime/$id") })
+                        com.sanjay.anitrack.next.ui.SongsScreen(onOpenAnime = { id -> nav.navigate("anime/$id") }, onOpenCityPop = { nav.navigate("city-pop") })
                     }
+                    composable("city-pop") { com.sanjay.anitrack.next.ui.CityPopScreen() }
                     composable("time-machine") {
                         com.sanjay.anitrack.next.ui.TimeMachineScreen(
                             openDetail,
@@ -524,29 +543,37 @@ fun AppShell() {
                         )
                     }
                 }
-                // Background music floats just under the top bar, beneath the profile button:
-                // the mirror of Home's Anime | Manga switch, so the tabs and search keep their room.
-                if (!hideChrome) {
+                // Wide screens: background music floats just under the top bar, beneath the profile
+                // button (the mirror of Home's Anime | Manga switch, so the tabs and search keep their
+                // room). A phone has it in the top bar, where it covers nothing.
+                if (!hideChrome && wideLayout) {
                     com.sanjay.anitrack.next.ui.BackgroundMusicBar(
-                        compact = !wideLayout,
+                        compact = false,
                         onOpenSettings = { go("settings") },
-                        modifier = Modifier.align(Alignment.TopEnd).padding(if (wideLayout) 16.dp else 12.dp),
+                        modifier = Modifier.align(Alignment.TopEnd).padding(16.dp),
                     )
                 }
             }
             // Phones: bottom nav bar (Settings lives behind the profile button).
             if (!wideLayout && !hideChrome) {
                 val barTabs = tabs.filter { it.route != "settings" }
+                // More than five tabs: only the open tab is named, and its name may run under its
+                // unnamed neighbours instead of being cut short (staying on screen at either end).
+                val crowded = barTabs.size > 5
                 HorizontalDivider(color = com.sanjay.anitrack.next.ui.AniColors.BorderSoft)
                 NavigationBar(containerColor = Bg, tonalElevation = 0.dp) {
-                    barTabs.forEach { d ->
-                        val selected = currentTab == d.route
+                    barTabs.forEachIndexed { i, d ->
+                        val selected = tabSelected(d)
+                        val align = when (i) { 0 -> Alignment.Start; barTabs.lastIndex -> Alignment.End; else -> Alignment.CenterHorizontally }
                         NavigationBarItem(
                             selected = selected,
                             onClick = { go(d.route) },
                             icon = { Icon(if (selected) d.selectedIcon else d.icon, d.label) },
-                            label = { Text(d.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                            alwaysShowLabel = barTabs.size <= 5,
+                            label = {
+                                if (crowded) Text(d.label, maxLines = 1, softWrap = false, modifier = Modifier.wrapContentWidth(align, unbounded = true))
+                                else Text(d.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            },
+                            alwaysShowLabel = !crowded,
                             colors = NavigationBarItemDefaults.colors(
                                 selectedIconColor = Color.White,
                                 selectedTextColor = Color.White,
@@ -567,9 +594,9 @@ fun AppShell() {
 private fun NavTab(d: Dest, selected: Boolean, showLabel: Boolean, onClick: () -> Unit) {
     val colors = com.sanjay.anitrack.next.ui.AniColors
     Row(
-        Modifier.height(40.dp).clip(RoundedCornerShape(12.dp))
+        Modifier.height(40.dp).clip(aniShape(12.dp))
             .background(if (selected) colors.AccentSoft else Color.Transparent)
-            .border(1.dp, if (selected) Accent.copy(alpha = 0.3f) else Color.Transparent, RoundedCornerShape(12.dp))
+            .border(1.dp, if (selected) Accent.copy(alpha = 0.3f) else Color.Transparent, aniShape(12.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = if (showLabel) 14.dp else 11.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -606,9 +633,9 @@ private fun MalProfileButton(
     val initial = username?.trim()?.firstOrNull()?.uppercaseChar()?.toString()
 
     Row(
-        Modifier.clip(RoundedCornerShape(50))
+        Modifier.clip(aniShape(50))
             .background(if (showUsername || selected) colors.SurfaceHigh else Color.Transparent)
-            .border(1.dp, if (showUsername || selected) colors.BorderSoft else Color.Transparent, RoundedCornerShape(50))
+            .border(1.dp, if (showUsername || selected) colors.BorderSoft else Color.Transparent, aniShape(50))
             .clickable(onClick = onClick)
             .padding(start = 4.dp, end = if (showUsername) 14.dp else 4.dp, top = 4.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,

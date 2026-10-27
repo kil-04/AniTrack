@@ -65,7 +65,7 @@ export default function LatestEpisodes() {
 
   return (
     <div ref={top} className="mx-auto max-w-[1500px] scroll-mt-6 px-8 py-8">
-      <PageHeader icon={Sparkles} title="Latest Episodes" subtitle="Recently aired episodes across AniList, newest first">
+      <PageHeader scene="tower" icon={Sparkles} title="Latest Episodes" subtitle="Recently aired episodes across AniList, newest first">
         <button onClick={refresh} disabled={busy} className="btn btn-ghost btn-sm">
           <RefreshCw size={13} className={busy ? "animate-spin" : ""} />
           Refresh

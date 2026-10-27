@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import {
   CalendarDays, ChevronLeft, ChevronRight, Dices, Disc3, ExternalLink, Flower2, Headphones, Layers, Leaf, ListMusic, Mic2, Music2, Play, Search, Trophy, X,
-  Snowflake, Sparkles, Sun, Tv, Volume2, VolumeX, Waves,
+  Snowflake, Sparkles, Sun, Sunset, Tv, Volume2, VolumeX, Waves,
 } from "lucide-react";
 import {
   ANISONGS,
@@ -30,6 +30,10 @@ import { useThemePlayer } from "../store/useThemePlayer";
 import { VideoPlayer, type VideoItem } from "../components/VideoPlayer";
 import { FlipText, FX_KEYFRAMES, Roulette, Slider, Tilt, Vinyl } from "../components/SongsFx";
 import { safeImageSrc } from "../lib/image-guard";
+import { PixelSceneCanvas } from "../components/PixelScene";
+import { pixelSongScene } from "../../../../packages/shared/pixel-scenes";
+import { PixelSprite } from "../components/PixelSprite";
+import { useSkin } from "../lib/skin";
 
 /**
  * Songs as a jukebox: a spinning record for the chart's #1, a radio-style dial from 1960
@@ -157,6 +161,8 @@ function playAudio(songs: AniSong[], start: number, label: string) {
 }
 
 export default function Songs() {
+  const pixel = useSkin() === "pixel";
+  const navigate = useNavigate();
   const [charts, setCharts] = useState<SongCharts | null>(null);
   const [scope, setScope] = useState<Scope>(readScope);
   const [kind, setKind] = useState<SongKind>("OP");
@@ -239,8 +245,10 @@ export default function Songs() {
       `}</style>
 
       {/* Jukebox */}
-      <section className="relative mb-5 overflow-hidden rounded-3xl border border-white/10 bg-surface-1">
-        {lead?.cover && <img src={safeImageSrc(lead.cover)} alt="" className="absolute inset-0 h-full w-full scale-110 object-cover opacity-20 blur-2xl" />}
+      <section className={`relative isolate mb-5 overflow-hidden rounded-3xl border border-white/10 bg-surface-1 ${pixel ? "pixel-era" : ""}`}>
+        {/* Pixel mode sets each chart in its own scene: the jukebox for all time, a scene for each decade. */}
+        {pixel ? <PixelSceneCanvas scene={pixelSongScene(scope.type === "all" ? null : scope.value)} />
+          : lead?.cover && <img src={safeImageSrc(lead.cover)} alt="" className="absolute inset-0 h-full w-full scale-110 object-cover opacity-20 blur-2xl" />}
         <div className="absolute inset-0 bg-gradient-to-r from-black/80 via-black/50 to-transparent" />
         {/* A soft pulse behind the record while music plays. */}
         {playing && <div className="pointer-events-none absolute -left-20 top-1/2 h-96 w-96 -translate-y-1/2 rounded-full bg-accent/30 blur-3xl" style={{ animation: "fx-beat .55s ease-in-out infinite alternate" }} />}
@@ -248,7 +256,7 @@ export default function Songs() {
           {/* Docked player: the record steps aside until the window is wide. */}
           <div className={docked ? "hidden 2xl:block" : ""}><Vinyl cover={safeImageSrc(lead?.cover ?? undefined)} spinning={playing} title={lead ? `Watch ${lead.title} · drag to spin` : undefined} onScratch={() => sfx("scratch")} onClick={() => lead && watch(chart, 0, label)} /></div>
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.2em] text-accent"><Music2 size={14} /> AniTrack Jukebox</div>
+            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.2em] text-accent">{pixel ? <PixelSprite id="cassette" scale={2} /> : <Music2 size={14} />} AniTrack Jukebox</div>
             <h1 className="mt-1 text-5xl font-black tracking-tight"><FlipText text={scopeTitle(scope)} /></h1>
             <p className="mt-1 text-sm text-white/55">{scope.type === "all" ? "Sixty years of openings and endings." : ERA_NOTE[decadeOf(scope.value)]}</p>
             {lead && (
@@ -285,6 +293,8 @@ export default function Songs() {
           idle="px-5 py-2 text-sm font-bold text-white/60 hover:text-white"
           active="px-5 py-2 text-sm font-bold text-white"
         />
+        {/* City Pop is part of Songs: its own page, opened from here. */}
+        <button type="button" onClick={() => { sfx("tab"); navigate("/songs/city-pop"); }} title="Japanese city pop: Internet Archive and YouTube classics" className="ml-1 flex items-center gap-2 rounded-full px-5 py-2 text-sm font-bold text-pink-300 transition hover:bg-pink-400/10 hover:text-pink-200"><Sunset size={15} />City Pop</button>
         <span className="ml-auto text-xs text-white/35">{previews ? "Hover a song to hear it" : "Previews off"}</span>
       </div>
 

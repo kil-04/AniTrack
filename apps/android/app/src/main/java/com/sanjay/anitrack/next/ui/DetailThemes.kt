@@ -4,7 +4,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.GraphicEq
@@ -126,7 +125,7 @@ private fun ThemeRow(song: ThemeSong, modifier: Modifier, onPlay: () -> Unit, on
     val current = ThemePlayer.isCurrent(song)
     val playing = current && ThemePlayer.isPlaying.value
     val tone = if (song.isOpening) OpeningTone else EndingTone
-    val shape = RoundedCornerShape(14.dp)
+    val shape = aniShape(14.dp)
     Row(
         modifier.clip(shape)
             .background(if (current) tone.copy(alpha = 0.12f) else AniColors.Surface)
@@ -136,7 +135,7 @@ private fun ThemeRow(song: ThemeSong, modifier: Modifier, onPlay: () -> Unit, on
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
-            Modifier.size(46.dp).clip(RoundedCornerShape(10.dp)).background(tone.copy(alpha = 0.16f)),
+            Modifier.size(46.dp).clip(aniShape(10.dp)).background(tone.copy(alpha = 0.16f)),
             contentAlignment = Alignment.Center,
         ) {
             if (current) {
@@ -191,7 +190,7 @@ internal fun ThemeBar(modifier: Modifier = Modifier, onOpenAnime: (Int) -> Unit)
         }
     }
     val tone = if (song.isOpening) OpeningTone else EndingTone
-    val shape = RoundedCornerShape(16.dp)
+    val shape = aniShape(16.dp)
     Column(
         modifier.clip(shape).background(AniColors.SurfaceHigh).border(1.dp, AniColors.Border, shape),
     ) {
@@ -199,7 +198,7 @@ internal fun ThemeBar(modifier: Modifier = Modifier, onOpenAnime: (Int) -> Unit)
             Modifier.clickable { onOpenAnime(song.animeId) }.padding(start = 10.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            PosterImage(song.cover, song.animeTitle, Modifier.size(44.dp).clip(RoundedCornerShape(8.dp)))
+            PosterImage(song.cover, song.animeTitle, Modifier.size(44.dp).clip(aniShape(8.dp)))
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(

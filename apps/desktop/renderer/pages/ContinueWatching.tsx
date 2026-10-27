@@ -39,7 +39,7 @@ export default function ContinueWatching() {
 
   return (
     <div className="mx-auto max-w-[1680px] px-8 pb-16 pt-8">
-      <PageHeader
+      <PageHeader scene="cinema"
         icon={History}
         title="Continue Watching"
         subtitle={total > 0 ? `${total} show${total === 1 ? "" : "s"} in progress` : "Pick up right where you left off"}

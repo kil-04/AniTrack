@@ -5,7 +5,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.CalendarMonth
@@ -81,7 +80,7 @@ fun ScheduleScreen(onOpen: (Int) -> Unit) {
     ) {
         item {
             ScreenHeader(
-                "Schedule",
+                "Schedule", scene = PixelScene.STATION,
                 subtitle = "Episodes airing over the next 7 days, in your time zone.",
                 icon = Icons.Rounded.CalendarMonth,
             )
@@ -129,7 +128,7 @@ fun ScheduleScreen(onOpen: (Int) -> Unit) {
             val a = shown[i]
             val listed = a.anime.id in onList
             val mine = listed || a.anime.id in watching
-            val shape = RoundedCornerShape(14.dp)
+            val shape = aniShape(14.dp)
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -153,7 +152,7 @@ fun ScheduleScreen(onOpen: (Int) -> Unit) {
                         color = if (a.airingAt <= now) AniColors.Success else AniColors.TextTertiary,
                     )
                 }
-                PosterImage(a.anime.cover, a.anime.title, Modifier.width(44.dp).height(62.dp).clip(RoundedCornerShape(8.dp)))
+                PosterImage(a.anime.cover, a.anime.title, Modifier.width(44.dp).height(62.dp).clip(aniShape(8.dp)))
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
                     Text(a.anime.title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)

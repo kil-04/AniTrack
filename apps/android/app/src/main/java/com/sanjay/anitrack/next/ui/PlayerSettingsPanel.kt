@@ -4,7 +4,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronLeft
@@ -111,7 +110,7 @@ internal fun PlayerSettingsPanel(
     fun Chip(label: String, selected: Boolean, minWidth: Dp = 44.dp, onClick: () -> Unit) {
         Box(
             Modifier.sizeIn(minWidth = minWidth, minHeight = 34.dp)
-                .clip(RoundedCornerShape(6.dp))
+                .clip(aniShape(6.dp))
                 .background(if (selected) Accent else Color.White.copy(alpha = 0.08f))
                 .clickable { onClick() }
                 .padding(horizontal = 12.dp),
@@ -120,7 +119,7 @@ internal fun PlayerSettingsPanel(
     }
 
     Column(
-        Modifier.width(300.dp).clip(RoundedCornerShape(12.dp)).background(panelBg).padding(vertical = 6.dp),
+        Modifier.width(300.dp).clip(aniShape(12.dp)).background(panelBg).padding(vertical = 6.dp),
     ) {
         when (menu) {
             "sleep" -> {
@@ -215,11 +214,11 @@ internal fun PlayerSettingsPanel(
                         0xFF5BC4D9.toInt(),
                     ).forEach { c ->
                         Box(
-                            Modifier.size(34.dp).clip(RoundedCornerShape(50))
+                            Modifier.size(34.dp).clip(aniShape(50))
                                 .background(Color(c))
                                 .then(
-                                    if (capColor == c) Modifier.border(3.dp, Accent, RoundedCornerShape(50))
-                                    else Modifier.border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(50)),
+                                    if (capColor == c) Modifier.border(3.dp, Accent, aniShape(50))
+                                    else Modifier.border(1.dp, Color.White.copy(alpha = 0.2f), aniShape(50)),
                                 )
                                 .clickable { onCapColor(c) },
                         )

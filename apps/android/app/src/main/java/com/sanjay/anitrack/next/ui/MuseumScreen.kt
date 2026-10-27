@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -116,7 +115,7 @@ fun MuseumScreen(
                 exhibit.facts.chunked(3).forEach { row ->
                     Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         row.forEach { fact ->
-                            Column(Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha = 0.045f)).padding(14.dp)) {
+                            Column(Modifier.weight(1f).clip(aniShape(12.dp)).background(Color.White.copy(alpha = 0.045f)).padding(14.dp)) {
                                 Text(fact.label.uppercase(), color = Color.White.copy(alpha = 0.32f), fontSize = 9.sp, letterSpacing = 1.sp)
                                 Text(fact.value, fontWeight = FontWeight.Black, style = MaterialTheme.typography.titleMedium)
                             }
@@ -128,7 +127,7 @@ fun MuseumScreen(
         }
 
         item {
-            Column(Modifier.padding(horizontal = 24.dp).clip(RoundedCornerShape(16.dp)).background(Color.White.copy(alpha = 0.04f)).padding(20.dp)) {
+            Column(Modifier.padding(horizontal = 24.dp).clip(aniShape(16.dp)).background(Color.White.copy(alpha = 0.04f)).padding(20.dp)) {
                 Text("CURATOR'S TRANSCRIPT", color = accent, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
                 Text(exhibit.room, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
                 Spacer(Modifier.height(10.dp))
@@ -136,7 +135,7 @@ fun MuseumScreen(
                 if (exhibit.tags.isNotEmpty()) {
                     Spacer(Modifier.height(16.dp))
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(exhibit.tags) { tag -> Text(tag, Modifier.clip(RoundedCornerShape(50)).background(Color.White.copy(alpha = 0.07f)).padding(horizontal = 12.dp, vertical = 7.dp), color = Color.White.copy(alpha = 0.66f), style = MaterialTheme.typography.labelMedium) }
+                        items(exhibit.tags) { tag -> Text(tag, Modifier.clip(aniShape(50)).background(Color.White.copy(alpha = 0.07f)).padding(horizontal = 12.dp, vertical = 7.dp), color = Color.White.copy(alpha = 0.66f), style = MaterialTheme.typography.labelMedium) }
                     }
                 }
             }

@@ -30,12 +30,14 @@ fun HomeScreen(
     onOpenNovel: (com.sanjay.anitrack.next.data.novel.NovelSourceId, String) -> Unit = { _, _ -> },
     onReadNovel: () -> Unit = {},
     onBrowseNovelGenre: (String) -> Unit = {},
+    /** Opens a tab by route (Pixel mode's interludes: "schedule", "songs", "time-machine", the reading lists). */
+    onGo: (String) -> Unit = {},
 ) {
     val toggle: @Composable (Modifier) -> Unit = { modifier -> HomeModeToggle(mode, onModeChange, modifier) }
     when (mode) {
-        HomeMode.Manga -> MangaHomeScreen(onOpenManga, onOpenMangaId, toggle)
-        HomeMode.Novel -> NovelHomeScreen(onOpenNovel, onReadNovel, onBrowseNovelGenre, toggle)
-        HomeMode.Anime -> AnimeHome(onOpen, onPlay, onOpenContinue, onOpenLatest, toggle)
+        HomeMode.Manga -> MangaHomeScreen(onOpenManga, onOpenMangaId, toggle, onGo)
+        HomeMode.Novel -> NovelHomeScreen(onOpenNovel, onReadNovel, onBrowseNovelGenre, toggle, onGo)
+        HomeMode.Anime -> AnimeHome(onOpen, onPlay, onOpenContinue, onOpenLatest, toggle, onGo)
     }
 }
 
@@ -47,6 +49,7 @@ private fun AnimeHome(
     onOpenContinue: () -> Unit,
     onOpenLatest: () -> Unit,
     toggle: @Composable (Modifier) -> Unit,
+    onGo: (String) -> Unit,
 ) {
     var trending by remember { mutableStateOf<List<Anime>>(emptyList()) }
     var latest by remember { mutableStateOf<List<com.sanjay.anitrack.next.data.AniList.Airing>>(emptyList()) }
@@ -212,6 +215,11 @@ private fun AnimeHome(
                 }
             }
         }
+        // Pixel mode's interludes: scenes between the rows that open other parts of the app.
+        val pixel = AniColors.pixelMode.value
+        if (pixel && !loading) item(key = "interlude-schedule") {
+            PixelInterlude(PixelScene.STATION, "Tonight's line-up", "Episodes airing this week, in your time zone", { onGo("schedule") })
+        }
         if (recommendations.isNotEmpty()) {
             item(key = "for-you-header") { SectionHeader("For You") }
             item(key = "for-you-row") {
@@ -230,6 +238,9 @@ private fun AnimeHome(
             if (loading && trending.isEmpty()) RowPlaceholder()
             else AnimeRow(trending, onOpen)
         }
+        if (pixel && !loading) item(key = "interlude-songs") {
+            PixelInterlude(PixelScene.JUKEBOX, "On the jukebox", "Openings and endings, chart by chart", { onGo("songs") })
+        }
         if (anikotoTop.values.any { it.isNotEmpty() }) {
             item { AnikotoTop10(anikotoTop, onOpenTitle = { openByTitle(it) }) }
         }
@@ -237,9 +248,15 @@ private fun AnimeHome(
             item { SectionHeader("Top Airing") }
             item { AnimeRow(topAiring, onOpen) }
         }
+        if (pixel && !loading) item(key = "interlude-time-machine") {
+            PixelInterlude(PixelScene.STARLIGHT, "Explore every era", "The Time Machine, 1960 to today", { onGo("time-machine") })
+        }
         if (popular.isNotEmpty()) {
             item { SectionHeader("Most Popular") }
             item { AnimeRow(popular, onOpen) }
+        }
+        if (AniColors.pixelMode.value && !loading) {
+            item(key = "pixel-footer") { PixelFooter(listOf("tv", "cat", "ramen"), "SAVE POINT ✦ SEE YOU NEXT EPISODE") }
         }
     }
 }

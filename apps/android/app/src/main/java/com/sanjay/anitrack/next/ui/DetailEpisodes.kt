@@ -7,7 +7,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.DoneAll
@@ -313,7 +312,7 @@ internal fun EpisodesSection(
                     for (ep in current) key(ep.number) {
                         val pct = watched[ep.number] ?: 0
                         val dl = dls.firstOrNull { it.id == com.sanjay.anitrack.next.data.Downloads.idOf(anime.id, ep.number) }
-                        val shape = RoundedCornerShape(14.dp)
+                        val shape = aniShape(14.dp)
                         var menu by remember { mutableStateOf(false) }
                         Box {
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -337,7 +336,7 @@ internal fun EpisodesSection(
                                 .padding(10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Box(Modifier.width(128.dp).aspectRatio(16f / 9f).clip(RoundedCornerShape(10.dp))) {
+                            Box(Modifier.width(128.dp).aspectRatio(16f / 9f).clip(aniShape(10.dp))) {
                                 PosterImage(ep.snapshot ?: anime.banner ?: anime.cover, null, Modifier.fillMaxSize())
                                 Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.28f)))
                                 Icon(

@@ -10,6 +10,7 @@ import type {
 import type { AnimeInfo, ExternalIds, ProviderApi } from "../../../packages/shared/provider-types";
 
 interface ApiBridge {
+  cityPop?: import("../../../packages/shared/city-pop-api").CityPopApi;
   al: {
     beginAuth(): Promise<{ ok: boolean; reason?: string }>;
     state(): Promise<AniListAuthState>;

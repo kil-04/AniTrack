@@ -4,7 +4,6 @@ import androidx.annotation.OptIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.OpenInFull
@@ -85,7 +84,7 @@ fun MiniPlayer(onExpand: () -> Unit, onClose: () -> Unit) {
         Modifier
             .width(300.dp)
             .aspectRatio(16f / 9f)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(aniShape(12.dp))
             .background(Color.Black)
             // A failed stream opens the full player, which resolves it again.
             .clickable { if (failed) onExpand() else controls = !controls },

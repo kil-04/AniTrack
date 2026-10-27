@@ -6,7 +6,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -63,7 +62,7 @@ internal fun NovelDownloadDialog(
             Text("Saved chapters open without a connection.", style = MaterialTheme.typography.bodySmall, color = AniColors.TextTertiary)
             Spacer(Modifier.height(12.dp))
             if (busy) {
-                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(AniColors.AccentSoft).padding(12.dp)) {
+                Column(Modifier.fillMaxWidth().clip(aniShape(14.dp)).background(AniColors.AccentSoft).padding(12.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(state!!.current?.let { "Saving $it" } ?: "Waiting…", color = AniColors.Text, style = MaterialTheme.typography.bodyMedium,
                             maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
@@ -84,7 +83,7 @@ internal fun NovelDownloadDialog(
                 "Every chapter" to unsaved(chapters),
             ).forEach { (label, list) ->
                 Row(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(enabled = list.isNotEmpty()) { onDownload(list) }.padding(horizontal = 10.dp, vertical = 12.dp),
+                    Modifier.fillMaxWidth().clip(aniShape(12.dp)).clickable(enabled = list.isNotEmpty()) { onDownload(list) }.padding(horizontal = 10.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(label, color = if (list.isEmpty()) AniColors.TextTertiary else AniColors.Text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
@@ -117,8 +116,8 @@ internal fun NovelDownloadDialog(
 @Composable
 private fun NumberBox(value: String, onChange: (String) -> Unit) {
     Box(
-        Modifier.width(84.dp).height(40.dp).clip(RoundedCornerShape(10.dp)).background(AniColors.SurfaceHigh)
-            .border(1.dp, AniColors.BorderSoft, RoundedCornerShape(10.dp)),
+        Modifier.width(84.dp).height(40.dp).clip(aniShape(10.dp)).background(AniColors.SurfaceHigh)
+            .border(1.dp, AniColors.BorderSoft, aniShape(10.dp)),
         contentAlignment = Alignment.Center,
     ) {
         BasicTextField(
@@ -141,7 +140,7 @@ fun NovelDownloadsScreen(onOpen: OpenNovel, onBrowse: () -> Unit) {
     var confirm by remember { mutableStateOf<NovelDownloads.Title?>(null) }
     Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 20.dp)) {
         ScreenHeader(
-            "Novel Downloads",
+            "Novel Downloads", scene = PixelScene.BEDROOM,
             subtitle = if (titles.isEmpty()) "Chapters you save read without a connection."
             else "%,d chapters offline · %s".format(titles.sumOf { it.saved }, NovelDownloads.humanSize(titles.sumOf { it.sizeBytes })),
             icon = Icons.Rounded.DownloadForOffline,
@@ -159,7 +158,7 @@ fun NovelDownloadsScreen(onOpen: OpenNovel, onBrowse: () -> Unit) {
                 val busy = t.queued > 0
                 AniCard(padding = PaddingValues(14.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        NovelCover(t.cover, t.title, Modifier.width(64.dp).aspectRatio(1f / POSTER_RATIO).clip(RoundedCornerShape(10.dp)).clickable { onOpen(t.source, t.titleId) })
+                        NovelCover(t.cover, t.title, Modifier.width(64.dp).aspectRatio(1f / POSTER_RATIO).clip(aniShape(10.dp)).clickable { onOpen(t.source, t.titleId) })
                         Spacer(Modifier.width(16.dp))
                         Column(Modifier.weight(1f)) {
                             Text(t.title, style = MaterialTheme.typography.titleSmall, color = AniColors.Text, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,

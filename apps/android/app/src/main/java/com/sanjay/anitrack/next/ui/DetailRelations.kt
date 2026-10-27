@@ -6,7 +6,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -41,11 +40,11 @@ internal fun RelatedSection(anime: Anime, onOpenAnime: (Int) -> Unit) {
         LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             items(related.size) { i ->
                 val r = related[i]
-                Column(Modifier.width(128.dp).clip(RoundedCornerShape(12.dp)).clickable { onOpenAnime(r.anime.id) }) {
+                Column(Modifier.width(128.dp).clip(aniShape(12.dp)).clickable { onOpenAnime(r.anime.id) }) {
                     Box {
                         PosterImage(
                             r.anime.cover, r.anime.title,
-                            Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).clip(RoundedCornerShape(12.dp)),
+                            Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).clip(aniShape(12.dp)),
                         )
                         // Relation label (desktop's "Side Story" tag).
                         Tag(
@@ -109,12 +108,12 @@ internal fun WatchOrderSection(anime: Anime, onOpenAnime: (Int) -> Unit) {
             items(chain.size) { i ->
                 val m = chain[i]
                 val isHere = m.id == anime.id
-                Column(Modifier.width(128.dp).clip(RoundedCornerShape(12.dp)).clickable(enabled = !isHere) { onOpenAnime(m.id) }) {
+                Column(Modifier.width(128.dp).clip(aniShape(12.dp)).clickable(enabled = !isHere) { onOpenAnime(m.id) }) {
                     Box {
                         PosterImage(
                             m.cover, m.title,
-                            Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).clip(RoundedCornerShape(12.dp))
-                                .then(if (isHere) Modifier.border(2.dp, AniColors.Accent, RoundedCornerShape(12.dp)) else Modifier),
+                            Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).clip(aniShape(12.dp))
+                                .then(if (isHere) Modifier.border(2.dp, AniColors.Accent, aniShape(12.dp)) else Modifier),
                         )
                         // Position in the franchise.
                         Box(

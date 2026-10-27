@@ -4,7 +4,6 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.DeleteOutline
@@ -50,7 +49,7 @@ fun DownloadsScreen(onPlay: () -> Unit, onOpenAnime: (Int) -> Unit = {}) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         Column(Modifier.widthIn(max = 860.dp).fillMaxWidth().padding(horizontal = 24.dp, vertical = 20.dp)) {
             ScreenHeader(
-                "Downloads",
+                "Downloads", scene = PixelScene.BEDROOM,
                 subtitle = if (done.isEmpty()) "Watch downloaded episodes offline, in the app."
                 else metaLine("${done.size} episode${if (done.size == 1) "" else "s"}", Downloads.humanSize(totalSize).ifEmpty { null }, "available offline"),
                 icon = Icons.Rounded.DownloadForOffline,
@@ -145,7 +144,7 @@ internal fun DownloadGroupCard(
         ) {
             PosterImage(
                 cover, title,
-                Modifier.width(44.dp).height(62.dp).clip(RoundedCornerShape(8.dp))
+                Modifier.width(44.dp).height(62.dp).clip(aniShape(8.dp))
                     .then(if (onOpenSeries != null) Modifier.clickable(onClick = onOpenSeries) else Modifier),
             )
             Spacer(Modifier.width(14.dp))

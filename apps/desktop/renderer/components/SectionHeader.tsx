@@ -1,8 +1,11 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { ChevronRight, type LucideIcon } from "lucide-react";
+import { pixelSpriteForSection } from "../../../../packages/shared/pixel-sprites";
+import { useSkin } from "../lib/skin";
+import { PixelSprite } from "./PixelSprite";
 
-/** A section's title row: accent icon tile, title (optionally a link) and actions on the right. */
+/** A section's title row: accent icon tile (Pixel mode: the row's sprite), title (optionally a link) and actions on the right. */
 export default function SectionHeader({
   icon: Icon,
   title,
@@ -18,9 +21,10 @@ export default function SectionHeader({
   children?: ReactNode;
   className?: string;
 }) {
+  const sprite = useSkin() === "pixel" ? pixelSpriteForSection(title) : null;
   const heading = (
     <span className="flex min-w-0 items-center gap-3">
-      {Icon && (
+      {sprite ? <PixelSprite id={sprite} scale={2} /> : Icon && (
         <span className="icon-tile h-8 w-8 rounded-lg">
           <Icon size={16} strokeWidth={2.2} />
         </span>

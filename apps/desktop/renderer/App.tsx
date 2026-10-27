@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect } from "react";
-import { Route, Routes, useLocation } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import TopBar from "./components/TopBar";
 import AppSidebar from "./components/AppSidebar";
 import BottomNav from "./components/BottomNav";
@@ -10,6 +10,9 @@ import { usePlayerStore } from "./store/usePlayerStore";
 import { useMediaQuery } from "./hooks/useMediaQuery";
 import { ThemeBar } from "./components/ThemeSongs";
 import { modeForPath, rememberMode } from "./lib/manga-api";
+import { useMotion, useSkin } from "./lib/skin";
+import { PixelFilters } from "./components/PixelScene";
+import PixelAmbient from "./components/PixelAmbient";
 import { isCapacitor } from "./lib/platform";
 import { subscribeDownloads } from "./lib/downloads";
 import { deleteAnimeProgress } from "./lib/supabase-sync";
@@ -44,6 +47,7 @@ const LatestEpisodes   = lazy(() => import("./pages/LatestEpisodes"));
 const Downloads        = lazy(() => import("./pages/Downloads"));
 const TimeMachine      = lazy(() => import("./pages/TimeMachine"));
 const Songs            = lazy(() => import("./pages/Songs"));
+const CityPop          = lazy(() => import("./pages/CityPop"));
 const TasteGenome      = lazy(() => import("./pages/TasteGenome"));
 const Museum           = lazy(() => import("./pages/Museum"));
 const MangaHome        = lazy(() => import("./pages/manga/MangaHome"));
@@ -79,6 +83,8 @@ export default function App() {
   const setMal        = useAppStore((s) => s.setMal);
   const location      = useLocation();
   const isTablet      = useMediaQuery(TABLET_LANDSCAPE);
+  const skin          = useSkin();
+  const motion        = useMotion();
 
   const inStreaming   = location.pathname === "/stream";
   const inReader      = location.pathname === "/manga/read";
@@ -238,8 +244,11 @@ export default function App() {
 
   return (
     <div className="app-ambient flex h-screen w-screen overflow-hidden text-white">
+      {skin === "pixel" && <PixelFilters />}
       {showTopBar && <AppSidebar />}
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="relative isolate flex min-w-0 flex-1 flex-col">
+      {/* Pixel mode's animated night, behind the pages; still while the player is open. */}
+      {skin === "pixel" && <PixelAmbient motion={motion && !isPlayerRoute} />}
       <UpdateBanner />
       {showTopBar && <TopBar />}
       <main className="thin-scrollbar flex-1 overflow-y-auto">
@@ -258,6 +267,9 @@ export default function App() {
               <Route path="/downloads"          element={<PageTransition><Downloads /></PageTransition>} />
               <Route path="/time-machine"       element={<PageTransition><TimeMachine /></PageTransition>} />
               <Route path="/songs"              element={<PageTransition><Songs /></PageTransition>} />
+              {/* City Pop opens from Songs; the old address still leads there. */}
+              <Route path="/songs/city-pop"     element={<PageTransition><CityPop /></PageTransition>} />
+              <Route path="/city-pop"           element={<Navigate to="/songs/city-pop" replace />} />
               <Route path="/taste-genome"       element={<PageTransition><TasteGenome /></PageTransition>} />
               <Route path="/museum/:id"         element={<PageTransition><Museum /></PageTransition>} />
               <Route path="/manga"              element={<PageTransition><MangaHome /></PageTransition>} />

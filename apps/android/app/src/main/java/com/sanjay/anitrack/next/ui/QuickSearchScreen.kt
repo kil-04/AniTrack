@@ -3,7 +3,6 @@ package com.sanjay.anitrack.next.ui
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Close
@@ -66,7 +65,7 @@ fun QuickSearchScreen(
                 value = query, onValueChange = { query = it },
                 placeholder = { Text(if (novel) "Search novels…" else if (manga) "Search manga…" else "Search anime…", color = AniColors.TextTertiary) },
                 singleLine = true,
-                shape = RoundedCornerShape(50),
+                shape = aniShape(50),
                 leadingIcon = { Icon(Icons.Rounded.Search, null, tint = AniColors.TextTertiary) },
                 trailingIcon = if (query.isEmpty()) null else {
                     { IconButton(onClick = { query = "" }) { Icon(Icons.Rounded.Close, "Clear", tint = AniColors.TextSecondary) } }
@@ -83,7 +82,7 @@ fun QuickSearchScreen(
         }
         Spacer(Modifier.height(10.dp))
         if (searching && results.isEmpty()) {
-            LinearProgressIndicator(Modifier.fillMaxWidth().clip(RoundedCornerShape(50)), color = AniColors.Accent, trackColor = AniColors.SurfaceHigh)
+            LinearProgressIndicator(Modifier.fillMaxWidth().clip(aniShape(50)), color = AniColors.Accent, trackColor = AniColors.SurfaceHigh)
         }
         when {
             query.isBlank() && recent.isNotEmpty() -> Column {
@@ -95,7 +94,7 @@ fun QuickSearchScreen(
                 }
                 recent.forEach { past ->
                     Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { query = past }
+                        Modifier.fillMaxWidth().clip(aniShape(12.dp)).clickable { query = past }
                             .padding(horizontal = 12.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -120,7 +119,7 @@ fun QuickSearchScreen(
             items(results.size) { i ->
                 val hit = results[i]
                 Box(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                    Modifier.fillMaxWidth().clip(aniShape(12.dp))
                         .clickable { SearchHistory.remember(context, history, query); hit.open() }
                         .padding(horizontal = 8.dp, vertical = 8.dp),
                 ) { SearchHitRow(hit) }

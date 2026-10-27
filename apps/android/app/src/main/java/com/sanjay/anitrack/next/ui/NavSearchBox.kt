@@ -3,7 +3,6 @@ package com.sanjay.anitrack.next.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -143,7 +142,7 @@ fun NavSearchBox(
                 val q = query.trim()
                 if (q.isNotEmpty()) { leave(); onViewAll(q) }
             }),
-            shape = RoundedCornerShape(50),   // pill, like the desktop header
+            shape = aniShape(50),   // pill, like the desktop header
             leadingIcon = { Icon(Icons.Rounded.Search, null, tint = AniColors.TextTertiary) },
             // No trailing slot while empty, so the placeholder gets the full width.
             trailingIcon = if (query.isEmpty()) null else {
@@ -167,10 +166,10 @@ fun NavSearchBox(
             onDismissRequest = { open = false },
             properties = androidx.compose.ui.window.PopupProperties(focusable = false),
             offset = androidx.compose.ui.unit.DpOffset(0.dp, 6.dp),
-            shape = RoundedCornerShape(16.dp),
+            shape = aniShape(16.dp),
             containerColor = AniColors.Surface,
             modifier = Modifier.width(360.dp).heightIn(max = menuMax)
-                .border(1.dp, AniColors.Border, RoundedCornerShape(16.dp)),
+                .border(1.dp, AniColors.Border, aniShape(16.dp)),
         ) {
             results.take(9).forEach { hit ->
                 DropdownMenuItem(
@@ -196,10 +195,10 @@ fun NavSearchBox(
             onDismissRequest = { focus.clearFocus() },
             properties = androidx.compose.ui.window.PopupProperties(focusable = false),
             offset = androidx.compose.ui.unit.DpOffset(0.dp, 6.dp),
-            shape = RoundedCornerShape(16.dp),
+            shape = aniShape(16.dp),
             containerColor = AniColors.Surface,
             modifier = Modifier.width(360.dp).heightIn(max = menuMax)
-                .border(1.dp, AniColors.Border, RoundedCornerShape(16.dp)),
+                .border(1.dp, AniColors.Border, aniShape(16.dp)),
         ) {
             Text(
                 "Recent searches",
@@ -227,7 +226,7 @@ fun NavSearchBox(
 @Composable
 internal fun SearchHitRow(hit: SearchHit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        val cover = Modifier.width(40.dp).height(56.dp).clip(RoundedCornerShape(6.dp))
+        val cover = Modifier.width(40.dp).height(56.dp).clip(aniShape(6.dp))
         if (hit.novel != null) NovelCover(hit.cover, "", cover) else PosterImage(hit.cover, hit.title, cover)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {

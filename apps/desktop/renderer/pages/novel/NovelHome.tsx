@@ -13,6 +13,8 @@ import {
 import { NovelCover, NovelRow } from "../../components/novel/NovelCards";
 import { novelApi, novelReaderPath, novelTitlePath, unwrap } from "../../lib/novel-api";
 import { novelRemoved, onNovelSync, syncNovelReading } from "../../lib/novel-sync";
+import { useSkin } from "../../lib/skin";
+import { PixelInterlude } from "../../components/PixelScene";
 
 const FEED_KEY = "anitrack.novel.feed.v2";
 const FEED_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -36,6 +38,7 @@ function saveFeed(feed: Feed) {
 }
 
 export default function NovelHome() {
+  const pixel = useSkin() === "pixel";
   const [feed, setFeed] = useState<Feed | null>(savedFeed);
   const [failed, setFailed] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -156,6 +159,7 @@ export default function NovelHome() {
         </section>
       )}
 
+      {pixel && <PixelInterlude scene="library" title="Your reading list" subtitle="The novels you follow, chapter by chapter" to="/novels/list" />}
       <section className="mb-10 px-8">
         <SectionHeader icon={Shapes} title="Browse by genre" to="/novels/search" />
         <div className="flex flex-wrap gap-2 pt-1">

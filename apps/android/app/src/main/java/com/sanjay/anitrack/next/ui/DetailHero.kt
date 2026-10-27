@@ -5,7 +5,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
@@ -60,8 +59,8 @@ internal fun DetailHero(
             PosterImage(
                 cover, title,
                 Modifier.width(posterWidth).aspectRatio(1f / POSTER_RATIO)
-                    .clip(RoundedCornerShape(16.dp))
-                    .border(1.dp, AniColors.Border, RoundedCornerShape(16.dp)),
+                    .clip(aniShape(16.dp))
+                    .border(1.dp, AniColors.Border, aniShape(16.dp)),
             )
             Spacer(Modifier.width(if (wide) 24.dp else 16.dp))
             Column(Modifier.weight(1f).padding(top = if (wide) 70.dp else 44.dp)) {
@@ -114,7 +113,7 @@ internal fun ExpandableSynopsis(text: String?, modifier: Modifier = Modifier, co
         )
         if (overflows || expanded) {
             Row(
-                Modifier.padding(top = 4.dp).clip(RoundedCornerShape(50)).clickable { expanded = !expanded }
+                Modifier.padding(top = 4.dp).clip(aniShape(50)).clickable { expanded = !expanded }
                     .padding(horizontal = 4.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {

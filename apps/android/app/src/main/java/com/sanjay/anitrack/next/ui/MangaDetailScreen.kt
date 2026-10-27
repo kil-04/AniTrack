@@ -3,7 +3,6 @@ package com.sanjay.anitrack.next.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -440,8 +439,8 @@ private fun GroupFilter(groups: List<Pair<String, Int>>, choice: String?, allLab
     var open by remember { mutableStateOf(false) }
     Box {
         Row(
-            Modifier.height(44.dp).clip(RoundedCornerShape(10.dp))
-                .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+            Modifier.height(44.dp).clip(aniShape(10.dp))
+                .border(1.dp, Color.White.copy(alpha = 0.12f), aniShape(10.dp))
                 .clickable { open = true }
                 .padding(horizontal = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -486,8 +485,8 @@ private fun GroupMenuItem(name: String, detail: String?, selected: Boolean, onCl
 @Composable
 private fun ChapterSearch(value: String, onChange: (String) -> Unit, modifier: Modifier) {
     Row(
-        modifier.height(44.dp).clip(RoundedCornerShape(10.dp))
-            .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+        modifier.height(44.dp).clip(aniShape(10.dp))
+            .border(1.dp, Color.White.copy(alpha = 0.12f), aniShape(10.dp))
             .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -508,7 +507,7 @@ private fun ChapterSearch(value: String, onChange: (String) -> Unit, modifier: M
         if (value.isNotEmpty()) {
             Icon(
                 Icons.Rounded.Close, "Clear", tint = AniColors.TextSecondary,
-                modifier = Modifier.clip(RoundedCornerShape(50)).clickable { onChange("") }.padding(4.dp).size(18.dp),
+                modifier = Modifier.clip(aniShape(50)).clickable { onChange("") }.padding(4.dp).size(18.dp),
             )
         }
     }
@@ -517,14 +516,14 @@ private fun ChapterSearch(value: String, onChange: (String) -> Unit, modifier: M
 @Composable
 private fun NewestOldest(newestFirst: Boolean, onChange: (Boolean) -> Unit) {
     Row(
-        Modifier.height(44.dp).clip(RoundedCornerShape(10.dp))
-            .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+        Modifier.height(44.dp).clip(aniShape(10.dp))
+            .border(1.dp, Color.White.copy(alpha = 0.12f), aniShape(10.dp))
             .padding(4.dp),
     ) {
         listOf(true to "Newest", false to "Oldest").forEach { (value, label) ->
             val selected = value == newestFirst
             Box(
-                Modifier.fillMaxHeight().clip(RoundedCornerShape(8.dp))
+                Modifier.fillMaxHeight().clip(aniShape(8.dp))
                     .background(if (selected) AniColors.AccentSoft else Color.Transparent)
                     .clickable(enabled = !selected) { onChange(value) }
                     .padding(horizontal = 14.dp),
@@ -556,9 +555,9 @@ private fun ChapterRow(
     val read = state?.finished == true
     val label = MangaChapters.label(chapter.number)
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+        Modifier.fillMaxWidth().clip(aniShape(10.dp))
             .background(Color.White.copy(alpha = if (read) 0.02f else 0.045f))
-            .border(1.dp, Color.White.copy(alpha = 0.07f), RoundedCornerShape(10.dp))
+            .border(1.dp, Color.White.copy(alpha = 0.07f), aniShape(10.dp))
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -712,7 +711,7 @@ private fun DownloadRangeDialog(
                             label,
                             color = if (chosen) Color.White else Color.White.copy(alpha = 0.8f),
                             style = MaterialTheme.typography.labelLarge,
-                            modifier = Modifier.clip(RoundedCornerShape(50))
+                            modifier = Modifier.clip(aniShape(50))
                                 .background(if (chosen) AniColors.AccentSoft else Color.White.copy(alpha = 0.08f))
                                 .clickable {
                                     fromText = MangaChapters.label(low)
@@ -744,7 +743,7 @@ private fun DownloadRangeDialog(
                 }
                 if (group != null && gaps.isNotEmpty()) {
                     Row(
-                        Modifier.clip(RoundedCornerShape(8.dp)).clickable { fillGaps = !fillGaps }.padding(end = 10.dp),
+                        Modifier.clip(aniShape(8.dp)).clickable { fillGaps = !fillGaps }.padding(end = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Checkbox(

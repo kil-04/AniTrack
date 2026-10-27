@@ -40,6 +40,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
@@ -48,7 +50,6 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -60,6 +61,7 @@ import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Casino
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.WbTwilight
 import androidx.compose.material.icons.rounded.Eco
 import androidx.compose.material.icons.rounded.Headphones
 import androidx.compose.material.icons.rounded.LocalFlorist
@@ -87,12 +89,14 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -106,6 +110,7 @@ import coil.compose.AsyncImage
 import com.sanjay.anitrack.next.data.AniSong
 import com.sanjay.anitrack.next.data.AniSongs
 import com.sanjay.anitrack.next.data.BackgroundMusic
+import com.sanjay.anitrack.next.data.PixelScenes
 import com.sanjay.anitrack.next.data.PlayerHolder
 import com.sanjay.anitrack.next.data.SongCharts
 import com.sanjay.anitrack.next.data.ThemePlayer
@@ -191,7 +196,7 @@ private object SongPreview {
 }
 
 @Composable
-fun SongsScreen(onOpenAnime: (Int) -> Unit) {
+fun SongsScreen(onOpenAnime: (Int) -> Unit, onOpenCityPop: () -> Unit = {}) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences(SONGS_PREFS, Context.MODE_PRIVATE) }
     val thisYear = remember { java.time.Year.now().value }
@@ -270,11 +275,14 @@ fun SongsScreen(onOpenAnime: (Int) -> Unit) {
     val canDock = maxWidth >= 900.dp
     val docked = video != null && canDock && !full
     BackHandler(enabled = docked) { close() }
+    // A phone in portrait stacks what sits side by side on a tablet.
+    val narrow = maxWidth < 600.dp
+    CompositionLocalProvider(LocalNarrow provides narrow) {
     Row(Modifier.fillMaxSize()) {
     LazyColumn(
         state = listState,
         modifier = Modifier.weight(1f).fillMaxHeight(),
-        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 120.dp),
+        contentPadding = PaddingValues(start = if (narrow) 14.dp else 20.dp, end = if (narrow) 14.dp else 20.dp, top = 16.dp, bottom = 120.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         item {
@@ -290,16 +298,25 @@ fun SongsScreen(onOpenAnime: (Int) -> Unit) {
                 onOpenLead = { chart.firstOrNull()?.let { actions.open(it, chart, label) } },
             )
         }
-        item {
+        item { Column {
+            val hint = if (previews) "Long-press a song to hear it" else "Previews off"
             Row(Modifier.padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 val tabs = listOf(Triple("chart", "Chart", Icons.AutoMirrored.Rounded.QueueMusic), Triple("seasons", "Seasons", Icons.Rounded.AutoAwesome), Triple("search", "Search", Icons.Rounded.Search))
                 SlidingRow(tabs, tabs.first { it.first == tab }, { click(); tab = it.first }, pill = AniColors.Accent) { (_, text, icon), chosen ->
-                    PillTab(text, icon, chosen)
+                    PillTab(text, icon, chosen, tight = narrow)
                 }
-                Spacer(Modifier.weight(1f))
-                Text(if (previews) "Long-press a song to hear it" else "Previews off", color = AniColors.TextTertiary, fontSize = 12.sp)
+                if (!narrow) {
+                    CityPopTab { click(); onOpenCityPop() }
+                    Spacer(Modifier.weight(1f))
+                    Text(hint, color = AniColors.TextTertiary, fontSize = 12.sp)
+                }
             }
-        }
+            // A phone has no room beside the tabs: City Pop goes on the hint's line.
+            if (narrow) Row(Modifier.fillMaxWidth().padding(bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(hint, color = AniColors.TextTertiary, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                CityPopTab { click(); onOpenCityPop() }
+            }
+        } }
         when (tab) {
             "chart" -> when {
                 chartsFailed -> item { Note("The charts couldn't be read.") }
@@ -347,7 +364,11 @@ fun SongsScreen(onOpenAnime: (Int) -> Unit) {
         SongFullPlayer(video, onDock = if (canDock) ({ click(); full = false }) else null, onClose = ::close, onStep = ::step, onJump = { at -> tick(); video.jump(at) })
     }
     }
+    }
 }
+
+/** Phone width (under 600 dp, a phone in portrait): the page stacks what sits side by side on a tablet. */
+private val LocalNarrow = staticCompositionLocalOf { false }
 
 private class SongActions(
     val watch: (List<AniSong>, Int, String) -> Unit,
@@ -376,49 +397,83 @@ private fun Jukebox(
     onOrder: (String) -> Unit, onKind: (String) -> Unit, onSounds: () -> Unit, onPreviews: () -> Unit,
     onScope: (Scope) -> Unit, onTick: () -> Unit, onClick: () -> Unit, onOpenLead: () -> Unit = {},
 ) {
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(24.dp)).background(AniColors.Surface)) {
+    Column(Modifier.fillMaxWidth().clip(aniShape(24.dp)).border(1.dp, Color.White.copy(alpha = 0.08f), aniShape(24.dp)).background(AniColors.Surface)) {
         Box {
-            lead?.cover?.let { AsyncImage(it, null, contentScale = ContentScale.Crop, alpha = 0.22f, modifier = Modifier.matchParentSize().blur(24.dp)) }
+            // Pixel mode sets each chart in its own scene: the jukebox for all time, a scene for each decade.
+            if (AniColors.pixelMode.value) {
+                PixelSceneArt(PixelScenes.forSongs(if (scope.type == "all") null else scope.value), Modifier.matchParentSize())
+            } else lead?.cover?.let { AsyncImage(it, null, contentScale = ContentScale.Crop, alpha = 0.22f, modifier = Modifier.matchParentSize().blur(24.dp)) }
             Box(Modifier.matchParentSize().background(Brush.horizontalGradient(listOf(Color.Black.copy(alpha = 0.85f), Color.Black.copy(alpha = 0.4f), Color.Transparent))))
+            val narrow = LocalNarrow.current
             // A soft pulse behind the record while music plays.
-            if (spinning && !compact) BeatGlow(Modifier.padding(start = 10.dp).size(240.dp).align(Alignment.CenterStart))
-            Row(Modifier.padding(22.dp), verticalAlignment = Alignment.CenterVertically) {
-                // Beside the docked player the record steps aside to leave room for the buttons.
-                AnimatedVisibility(!compact) {
-                    Row { SpinVinyl(lead?.cover, spinning, lead != null, onWatch, onScratch = onTick); Spacer(Modifier.width(24.dp)) }
+            if (spinning && !compact) BeatGlow(
+                if (narrow) Modifier.padding(top = 4.dp, end = 4.dp).size(140.dp).align(Alignment.TopEnd)
+                else Modifier.padding(start = 10.dp).size(240.dp).align(Alignment.CenterStart),
+            )
+            val vinyl: @Composable (Float) -> Unit = { scale -> SpinVinyl(lead?.cover, spinning, lead != null, onWatch, onScratch = onTick, scale = scale) }
+            val heading: @Composable () -> Unit = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (AniColors.pixelMode.value) PixelSprite("cassette", width = 24.dp)
+                    else Icon(Icons.Rounded.MusicNote, null, tint = AniColors.Accent, modifier = Modifier.size(14.dp))
+                    Text(" ANITRACK JUKEBOX", color = AniColors.Accent, fontSize = 11.sp, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
                 }
-                Column(Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Rounded.MusicNote, null, tint = AniColors.Accent, modifier = Modifier.size(14.dp))
-                        Text(" ANITRACK JUKEBOX", color = AniColors.Accent, fontSize = 11.sp, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
-                    }
-                    FlipTitle(scope.title, androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = 44.sp, fontWeight = FontWeight.Black))
-                    Text(
-                        if (scope.type == "all") "Sixty years of openings and endings." else ERA_NOTE[AniSongs.decadeOf(scope.value)].orEmpty(),
-                        color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp,
-                    )
-                    lead?.let {
-                        Spacer(Modifier.height(10.dp))
-                        Text("#1 ${it.title} · ${it.artist} · ${it.anime}", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onOpenLead))
-                    }
-                    Spacer(Modifier.height(14.dp))
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = onWatch, enabled = hasChart, colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black)) {
-                            Icon(Icons.Rounded.OndemandVideo, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Watch all", fontWeight = FontWeight.Bold)
-                        }
-                        FilledTonalButton(onClick = onListen, enabled = hasChart) { Icon(Icons.Rounded.Headphones, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Listen") }
-                        FilledTonalButton(onClick = onSurprise, enabled = hasChart) { Icon(Icons.Rounded.Casino, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Surprise me") }
-                    }
+                FlipTitle(
+                    scope.title,
+                    if (AniColors.pixelMode.value) androidx.compose.ui.text.TextStyle(
+                        color = Color.White, fontSize = if (narrow) 26.sp else 36.sp, fontFamily = CityPopPixelFont, fontWeight = FontWeight.Normal,
+                        shadow = androidx.compose.ui.graphics.Shadow(AniColors.AccentDeep, androidx.compose.ui.geometry.Offset(4f, 4f), 0f),
+                    ) else androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = if (narrow) 32.sp else 44.sp, fontWeight = FontWeight.Black),
+                )
+                Text(
+                    if (scope.type == "all") "Sixty years of openings and endings." else ERA_NOTE[AniSongs.decadeOf(scope.value)].orEmpty(),
+                    color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp,
+                )
+            }
+            // A phone keeps the jukebox short so the chart starts on the first screen: #1 waits on the
+            // podium just below, Surprise me and the two switches become icons.
+            val controls: @Composable () -> Unit = {
+                if (!narrow) lead?.let {
                     Spacer(Modifier.height(10.dp))
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Segments(listOf("best" to "Best", "known" to "Most known"), order, onOrder)
-                        Segments(listOf("OP" to "Openings", "ED" to "Endings", "IN" to "Inserts"), kind, onKind)
-                        // Here rather than top-right, where the app's Music button floats.
+                    Text("#1 ${it.title} · ${it.artist} · ${it.anime}", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.clip(aniShape(6.dp)).clickable(onClick = onOpenLead))
+                }
+                Spacer(Modifier.height(14.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onWatch, enabled = hasChart, colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black)) {
+                        Icon(Icons.Rounded.OndemandVideo, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Watch all", fontWeight = FontWeight.Bold)
+                    }
+                    FilledTonalButton(onClick = onListen, enabled = hasChart) { Icon(Icons.Rounded.Headphones, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Listen") }
+                    if (narrow) FilledTonalIconButton(onClick = onSurprise, enabled = hasChart) { Icon(Icons.Rounded.Casino, "Surprise me", Modifier.size(20.dp)) }
+                    else FilledTonalButton(onClick = onSurprise, enabled = hasChart) { Icon(Icons.Rounded.Casino, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Surprise me") }
+                }
+                Spacer(Modifier.height(10.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Segments(listOf("best" to "Best", "known" to "Most known"), order, onOrder)
+                    if (narrow) {
+                        SwitchIcon(sounds, if (sounds) Icons.AutoMirrored.Rounded.VolumeUp else Icons.AutoMirrored.Rounded.VolumeOff, if (sounds) "Sounds on" else "Sounds off", onSounds)
+                        SwitchIcon(previews, Icons.Rounded.GraphicEq, if (previews) "Previews on" else "Previews off", onPreviews)
+                    }
+                    Segments(listOf("OP" to "Openings", "ED" to "Endings", "IN" to "Inserts"), kind, onKind)
+                    // Here rather than top-right, where the app's Music button floats on a tablet.
+                    if (!narrow) {
                         SwitchChip("Sounds", sounds, if (sounds) Icons.AutoMirrored.Rounded.VolumeUp else Icons.AutoMirrored.Rounded.VolumeOff, onSounds)
                         SwitchChip("Previews", previews, Icons.Rounded.GraphicEq, onPreviews)
                     }
                 }
+            }
+            // A phone: the title beside a smaller record, then the full width for the buttons and toggles.
+            if (narrow) Column(Modifier.padding(18.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) { heading() }
+                    if (!compact) vinyl(0.55f)
+                }
+                controls()
+            } else Row(Modifier.padding(22.dp), verticalAlignment = Alignment.CenterVertically) {
+                // Beside the docked player the record steps aside to leave room for the buttons.
+                AnimatedVisibility(!compact) {
+                    Row { vinyl(1f); Spacer(Modifier.width(24.dp)) }
+                }
+                Column(Modifier.weight(1f)) { heading(); controls() }
             }
         }
         YearDial(scope, thisYear, onScope, onTick, onClick)
@@ -498,7 +553,7 @@ private fun YearDial(scope: Scope, thisYear: Int, onScope: (Scope) -> Unit, onTi
                 val x = maxWidth * ((scope.value + 0.5f - AniSongs.FIRST_YEAR) / years) - 20.dp
                 Text(
                     "${scope.value}", color = Color.White, fontWeight = FontWeight.Black, fontSize = 12.sp,
-                    modifier = Modifier.offset(x = x.coerceIn(0.dp, maxWidth - 40.dp), y = (-2).dp).clip(RoundedCornerShape(6.dp)).background(accent).padding(horizontal = 6.dp, vertical = 1.dp),
+                    modifier = Modifier.offset(x = x.coerceIn(0.dp, maxWidth - 40.dp), y = (-2).dp).clip(aniShape(6.dp)).background(accent).padding(horizontal = 6.dp, vertical = 1.dp),
                 )
             }
         }
@@ -521,12 +576,32 @@ private fun SwitchChip(text: String, on: Boolean, icon: ImageVector, onClick: ()
     FilterChip(selected = on, onClick = onClick, label = { Text(text) }, leadingIcon = { Icon(icon, null, Modifier.size(16.dp)) })
 }
 
+/** A phone's SwitchChip: the icon alone, lit while on. */
 @Composable
-private fun PillTab(text: String, icon: ImageVector, selected: Boolean) {
+private fun SwitchIcon(on: Boolean, icon: ImageVector, description: String, onClick: () -> Unit) {
+    FilledTonalIconToggleButton(checked = on, onCheckedChange = { onClick() }) { Icon(icon, description, Modifier.size(18.dp)) }
+}
+
+/** City Pop is part of Songs: its own page, opened from beside the tabs. */
+@Composable
+private fun CityPopTab(onClick: () -> Unit) {
+    val pink = Color(0xFFFF7AC6)
+    Row(
+        Modifier.clip(CircleShape).clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Rounded.WbTwilight, null, tint = pink, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(6.dp))
+        Text("City Pop", color = pink, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun PillTab(text: String, icon: ImageVector, selected: Boolean, tight: Boolean = false) {
     val tint by androidx.compose.animation.animateColorAsState(if (selected) Color.White else AniColors.TextSecondary, label = "tab")
-    Row(Modifier.padding(horizontal = 18.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.padding(horizontal = if (tight) 12.dp else 18.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         Icon(icon, null, tint = tint, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(8.dp))
+        Spacer(Modifier.width(if (tight) 6.dp else 8.dp))
         Text(text, color = tint, fontWeight = FontWeight.Bold)
     }
 }
@@ -552,15 +627,22 @@ private fun Equalizer() {
 
 private fun androidx.compose.foundation.lazy.LazyListScope.chartItems(chart: List<AniSong>, order: String, label: String, actions: SongActions, playingId: Int?) {
     item(key = "podium") {
-        Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Bottom) {
-            listOf(1, 0, 2).forEachIndexed { slot, i ->
-                chart.getOrNull(i)?.let { song ->
-                    // Number one lands first, then two and three.
-                    Box(Modifier.weight(1f).popIn(chart, listOf(110, 0, 220)[slot], from = 0.85f).pressTilt()) {
-                        PodiumCard(song, i + 1, order, playingId == song.id, { actions.open(song, chart, label) }, { actions.preview(song) })
-                    }
-                }
+        @Composable fun place(i: Int, delayMs: Int, modifier: Modifier) {
+            val song = chart.getOrNull(i) ?: return
+            // Number one lands first, then two and three.
+            Box(modifier.popIn(chart, delayMs, from = 0.85f).pressTilt()) {
+                PodiumCard(song, i + 1, order, playingId == song.id, { actions.open(song, chart, label) }, { actions.preview(song) })
             }
+        }
+        // A phone: number one across the width, two and three side by side under it.
+        if (LocalNarrow.current) Column(Modifier.fillMaxWidth().padding(bottom = 10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            place(0, 0, Modifier.fillMaxWidth())
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                place(1, 110, Modifier.weight(1f))
+                place(2, 220, Modifier.weight(1f))
+            }
+        } else Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Bottom) {
+            listOf(1, 0, 2).forEachIndexed { slot, i -> place(i, listOf(110, 0, 220)[slot], Modifier.weight(1f)) }
         }
     }
     item(key = "rest") { ChartRest(chart, order, label, actions, playingId) }
@@ -582,9 +664,10 @@ private fun ChartRest(chart: List<AniSong>, order: String, label: String, action
 private fun PodiumCard(song: AniSong, rank: Int, order: String, onScreen: Boolean, onWatch: () -> Unit, onPreview: () -> Unit) {
     val color = PODIUM[rank - 1]
     val playing = SongPreview.playingId == song.id || onScreen
+    val narrow = LocalNarrow.current
     Box(
-        Modifier.fillMaxWidth().height(if (rank == 1) 240.dp else 200.dp).clip(RoundedCornerShape(18.dp))
-            .border(if (playing) 3.dp else 1.dp, color.copy(alpha = if (playing) 0.9f else 0.45f), RoundedCornerShape(18.dp))
+        Modifier.fillMaxWidth().height(if (rank == 1) (if (narrow) 200.dp else 240.dp) else if (narrow) 170.dp else 200.dp).clip(aniShape(18.dp))
+            .border(if (playing) 3.dp else 1.dp, color.copy(alpha = if (playing) 0.9f else 0.45f), aniShape(18.dp))
             .combinedClickable(onClick = onWatch, onLongClick = onPreview),
     ) {
         if (song.cover != null) AsyncImage(song.cover, null, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize())
@@ -606,11 +689,11 @@ private fun PodiumCard(song: AniSong, rank: Int, order: String, onScreen: Boolea
 }
 
 @Composable
-private fun Score(song: AniSong, order: String?, compact: Boolean = false) {
+private fun Score(song: AniSong, order: String?, compact: Boolean = false, bar: Boolean = !compact) {
     when (order) {
         "best" -> if (song.licensed) Text("not counted", color = Color.White.copy(alpha = 0.4f), fontSize = 11.sp) else Row(verticalAlignment = Alignment.CenterVertically) {
             // The number that decided the rank, with a bar of the score so the order reads at a glance.
-            if (!compact) { ScoreBar(AniSongs.bestScore(song) ?: 0.0); Spacer(Modifier.width(6.dp)) }
+            if (bar) { ScoreBar(AniSongs.bestScore(song) ?: 0.0); Spacer(Modifier.width(6.dp)) }
             val text = when (AniSongs.bestSource(song)) {
                 "views" -> "▶ ${compactCount(song.views!!)}${if (compact) "" else " views"}"
                 "listeners" -> "♫ ${compactCount(song.listeners!!)}${if (compact) "" else " listeners"}"
@@ -618,7 +701,7 @@ private fun Score(song: AniSong, order: String?, compact: Boolean = false) {
             }
             Text(text, color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
             // A Kids show's song counts 60%, so it can sit below a song with fewer views: say so.
-            if (song.kids) Text("KIDS", color = Color.White.copy(alpha = 0.5f), fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp).clip(RoundedCornerShape(4.dp)).background(Color.White.copy(alpha = 0.1f)).padding(horizontal = 4.dp))
+            if (song.kids) Text("KIDS", color = Color.White.copy(alpha = 0.5f), fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp).clip(aniShape(4.dp)).background(Color.White.copy(alpha = 0.1f)).padding(horizontal = 4.dp))
         }
         "known" -> song.recognition?.let { Text("${it.toInt()}%${if (compact) "" else " know it"}", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp, fontWeight = FontWeight.SemiBold) }
         else -> {}
@@ -634,14 +717,15 @@ private fun SongRow(
 ) {
     val playing = SongPreview.playingId == song.id || playing
     val index = list.indexOf(song).coerceAtLeast(0)
+    val narrow = LocalNarrow.current
     Row(
-        modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(if (playing) AniColors.AccentSoft else Color.Transparent)
+        modifier.fillMaxWidth().clip(aniShape(12.dp)).background(if (playing) AniColors.AccentSoft else Color.Transparent)
             .combinedClickable(onClick = { actions.open(song, list, label) }, onLongClick = { actions.preview(song) }).padding(horizontal = 6.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (rank != null) Text("$rank", modifier = Modifier.width(32.dp), fontWeight = FontWeight.Black, color = AniColors.TextTertiary, fontSize = 14.sp)
+        if (rank != null) Text("$rank", modifier = Modifier.width(if (narrow) 26.dp else 32.dp), fontWeight = FontWeight.Black, color = AniColors.TextTertiary, fontSize = 14.sp)
         Box(
-            Modifier.size(52.dp).clip(RoundedCornerShape(10.dp)).background(AniColors.SurfaceHighest)
+            Modifier.size(if (narrow) 46.dp else 52.dp).clip(aniShape(10.dp)).background(AniColors.SurfaceHighest)
                 .clickable(enabled = song.video != null) { actions.watch(list, index, label) },
             contentAlignment = Alignment.Center,
         ) {
@@ -651,37 +735,74 @@ private fun SongRow(
                 if (playing) Equalizer() else if (song.video != null) Icon(Icons.Rounded.PlayArrow, "Watch", tint = Color.White, modifier = Modifier.size(22.dp))
             }
         }
-        Spacer(Modifier.width(12.dp))
+        Spacer(Modifier.width(if (narrow) 10.dp else 12.dp))
         Column(Modifier.weight(1f)) {
             Text(song.title, color = AniColors.Text, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                JumpText(song.artist) { actions.search(song.artist, "artist", null) }
+            val artist = @Composable { JumpText(song.artist) { actions.search(song.artist, "artist", null) } }
+            val anime = @Composable { m: Modifier -> JumpText(song.anime, m) { actions.search(song.anime, "anime", song.malId) } }
+            // A phone: the artist and show get a line of their own, then the score, part and year
+            // (the score column has no room beside the names). They're plain words there: links that
+            // small are easy to miss, and the row's card has big buttons for the artist, show and year.
+            if (narrow) {
+                val plain = @Composable { text: String -> Text(text, color = AniColors.TextSecondary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(vertical = 2.dp)) }
+                NamePair({ plain(song.artist) }, { plain(song.anime) })
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (order != null) { Score(song, order, compact = true, bar = true); Dot() }
+                    Text(AniSongs.slug(song), color = AniColors.TextSecondary, fontSize = 12.sp)
+                    song.year?.let { year -> Dot(); Text("$year", color = AniColors.TextSecondary, fontSize = 12.sp) }
+                }
+            } else Row(verticalAlignment = Alignment.CenterVertically) {
+                artist()
                 Dot()
-                JumpText(song.anime, Modifier.weight(1f, fill = false)) { actions.search(song.anime, "anime", song.malId) }
+                anime(Modifier.weight(1f, fill = false))
                 Dot()
                 Text(AniSongs.slug(song), color = AniColors.TextSecondary, fontSize = 12.sp)
                 song.year?.let { year -> Dot(); JumpText(song.season ?: "$year") { actions.year(year, null, song.kind) } }
             }
         }
-        Box(Modifier.width(110.dp).padding(end = 6.dp), contentAlignment = Alignment.CenterEnd) { Score(song, order) }
+        if (!narrow) Box(Modifier.width(110.dp).padding(end = 6.dp), contentAlignment = Alignment.CenterEnd) { Score(song, order) }
         IconButton(onClick = { actions.listen(list, index, label) }, enabled = song.audio != null) { Icon(Icons.Rounded.Headphones, "Listen", tint = AniColors.TextSecondary) }
     }
 }
 
-/** A bit of a row's text that takes you somewhere. */
+/** A bit of a row's text that takes you somewhere; padded so a finger can find it. */
 @Composable
 private fun JumpText(text: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Text(
         text, color = AniColors.TextSecondary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-        modifier = modifier.clip(RoundedCornerShape(4.dp)).clickable(onClick = onClick).padding(horizontal = 2.dp, vertical = 2.dp),
+        modifier = modifier.clip(aniShape(6.dp)).clickable(onClick = onClick).padding(horizontal = 4.dp, vertical = 7.dp),
     )
 }
 
 @Composable private fun Dot() = Text(" · ", color = AniColors.TextTertiary, fontSize = 12.sp)
 
+/**
+ * "Artist · Show" on one line. When both don't fit, the shorter keeps its whole name and the
+ * longer is cut; when both are long, each gets half.
+ */
+@Composable
+private fun NamePair(first: @Composable () -> Unit, second: @Composable () -> Unit) {
+    Layout({ first(); Dot(); second() }) { (a, dot, b), constraints ->
+        val dotPlaced = dot.measure(Constraints())
+        val room = (constraints.maxWidth - dotPlaced.width).coerceAtLeast(0)
+        val wantA = a.maxIntrinsicWidth(constraints.maxHeight)
+        val wantB = b.maxIntrinsicWidth(constraints.maxHeight)
+        val widthA = if (wantA + wantB <= room) wantA else minOf(wantA, maxOf(room / 2, room - wantB))
+        val aPlaced = a.measure(Constraints(maxWidth = widthA))
+        val bPlaced = b.measure(Constraints(maxWidth = (room - aPlaced.width).coerceAtLeast(0)))
+        val height = maxOf(aPlaced.height, dotPlaced.height, bPlaced.height)
+        layout(aPlaced.width + dotPlaced.width + bPlaced.width, height) {
+            aPlaced.place(0, (height - aPlaced.height) / 2)
+            dotPlaced.place(aPlaced.width, (height - dotPlaced.height) / 2)
+            bPlaced.place(aPlaced.width + dotPlaced.width, (height - bPlaced.height) / 2)
+        }
+    }
+}
+
 // ── Seasons ───────────────────────────────────────────────────────────────
 
 /** One season of the dial's year (or the newest one), fetched live and ranked by quiz score. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SeasonsView(startYear: Int, kind: String, thisYear: Int, actions: SongActions, onClick: () -> Unit) {
     var year by remember(startYear) { mutableIntStateOf(startYear) }
@@ -710,7 +831,8 @@ private fun SeasonsView(startYear: Int, kind: String, thisYear: Int, actions: So
         "Summer" to (Icons.Rounded.WbSunny to Color(0xFFFBBF24)), "Fall" to (Icons.Rounded.Eco to Color(0xFFEA580C)),
     )
     Column {
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        // Five across on a tablet; three to a row on a phone, where five squeeze their names letter by letter.
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp), maxItemsInEachRow = if (LocalNarrow.current) 3 else 5) {
             SeasonCard("Latest", "Newest songs", Icons.Rounded.AutoAwesome, AniColors.Accent, season == "latest", Modifier.weight(1f)) { onClick(); season = "latest" }
             AniSongs.SEASONS.forEach { s ->
                 val (icon, tint) = looks.getValue(s)
@@ -745,8 +867,8 @@ private fun SeasonsView(startYear: Int, kind: String, thisYear: Int, actions: So
 @Composable
 private fun SeasonCard(title: String, sub: String, icon: ImageVector, tint: Color, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
     Column(
-        modifier.clip(RoundedCornerShape(18.dp))
-            .border(1.dp, if (selected) tint else Color.White.copy(alpha = 0.1f), RoundedCornerShape(18.dp))
+        modifier.clip(aniShape(18.dp))
+            .border(1.dp, if (selected) tint else Color.White.copy(alpha = 0.1f), aniShape(18.dp))
             .background(Brush.linearGradient(listOf(tint.copy(alpha = if (selected) 0.35f else 0.18f), Color.Transparent)))
             .clickable(onClick = onClick).padding(14.dp),
     ) {
@@ -787,11 +909,11 @@ private fun SearchView(actions: SongActions, seed: SearchSeed?) {
         OutlinedTextField(
             value = query, onValueChange = { query = it }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = CircleShape,
             leadingIcon = { Icon(Icons.Rounded.Search, null) },
-            placeholder = { Text(when (by) { "artist" -> "Artist, e.g. LiSA"; "anime" -> "Anime, e.g. Cowboy Bebop"; else -> "Song title, e.g. Tank!" }) },
+            placeholder = { Text(when (by) { "artist" -> "Artist, e.g. LiSA"; "anime" -> "Anime, e.g. Cowboy Bebop"; else -> "Song title, e.g. Tank!" }, maxLines = 1, overflow = TextOverflow.Ellipsis) },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = { if (query.trim().length >= 2) submitted = query.trim() to by }),
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 10.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 10.dp)) {
             Segments(listOf("song" to "Song", "artist" to "Artist", "anime" to "Anime"), by) { by = it }
             Button(onClick = { if (query.trim().length >= 2) submitted = query.trim() to by }) { Text("Search") }
         }
@@ -866,44 +988,49 @@ private fun SongCardDialog(song: AniSong, actions: SongActions, onClose: () -> U
         Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.7f)).clickable(onClick = onClose), contentAlignment = Alignment.Center) {
             Box(
                 Modifier.widthIn(max = 760.dp).fillMaxWidth(0.92f).popIn(song, 0, from = 0.9f)
-                    .clip(RoundedCornerShape(28.dp)).background(AniColors.Surface).clickable(enabled = false) {},
+                    .clip(aniShape(28.dp)).background(AniColors.Surface).clickable(enabled = false) {},
             ) {
                 song.cover?.let { AsyncImage(it, null, contentScale = ContentScale.Crop, alpha = 0.25f, modifier = Modifier.matchParentSize().blur(40.dp)) }
-                Column(Modifier.padding(24.dp)) {
+                // A phone: a smaller cover, the numbers under the header, two tiles to a row, and room to scroll.
+                val narrow = LocalNarrow.current
+                val chips: @Composable () -> Unit = {
+                    // The numbers lead to the charts they rank in.
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        val y = song.year
+                        song.views?.let { CardChip("▶ ${compactCount(it)} views") { y?.let { actions.year(it, "best", song.kind) } } }
+                        song.listeners?.let { CardChip("♫ ${compactCount(it)} listeners") { y?.let { actions.year(it, "best", song.kind) } } }
+                        song.recognition?.let { CardChip("${it.toInt()}% know it") { y?.let { actions.year(it, "known", song.kind) } } }
+                        if (song.kids) CardChip("Kids", null)
+                    }
+                }
+                Column(Modifier.verticalScroll(rememberScrollState()).padding(if (narrow) 18.dp else 24.dp)) {
                     Row {
-                        Box(Modifier.size(150.dp).clip(RoundedCornerShape(20.dp)).background(AniColors.SurfaceHighest).clickable(enabled = song.video != null, onClick = onWatch), contentAlignment = Alignment.Center) {
+                        Box(Modifier.size(if (narrow) 96.dp else 150.dp).clip(aniShape(20.dp)).background(AniColors.SurfaceHighest).clickable(enabled = song.video != null, onClick = onWatch), contentAlignment = Alignment.Center) {
                             if (song.cover != null) AsyncImage(song.cover, null, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize())
                             if (song.video != null) Box(Modifier.size(52.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.5f)), contentAlignment = Alignment.Center) { Icon(Icons.Rounded.PlayArrow, "Watch", tint = Color.White, modifier = Modifier.size(32.dp)) }
                         }
-                        Spacer(Modifier.width(20.dp))
+                        Spacer(Modifier.width(if (narrow) 14.dp else 20.dp))
                         Column(Modifier.weight(1f)) {
                             Text("${when (song.kind) { "OP" -> "OPENING"; "ED" -> "ENDING"; else -> "INSERT SONG" }} ${song.number ?: ""} · ${song.format ?: "TV"}", color = AniColors.Accent, fontSize = 11.sp, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
-                            Text(song.title, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text(song.title, color = Color.White, fontSize = if (narrow) 22.sp else 26.sp, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             Text(song.artist, color = Color.White.copy(alpha = 0.75f))
                             Text(listOfNotNull(song.anime, song.season).joinToString(" · "), color = Color.White.copy(alpha = 0.5f), fontSize = 13.sp)
-                            Spacer(Modifier.height(12.dp))
-                            // The numbers lead to the charts they rank in.
-                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                val y = song.year
-                                song.views?.let { CardChip("▶ ${compactCount(it)} views") { y?.let { actions.year(it, "best", song.kind) } } }
-                                song.listeners?.let { CardChip("♫ ${compactCount(it)} listeners") { y?.let { actions.year(it, "best", song.kind) } } }
-                                song.recognition?.let { CardChip("${it.toInt()}% know it") { y?.let { actions.year(it, "known", song.kind) } } }
-                                if (song.kids) CardChip("Kids", null)
-                            }
+                            if (!narrow) { Spacer(Modifier.height(12.dp)); chips() }
                         }
                         IconButton(onClick = onClose) { Icon(Icons.Rounded.Close, "Close", tint = Color.White) }
                     }
-                    Spacer(Modifier.height(20.dp))
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp), maxItemsInEachRow = 4) {
+                    if (narrow) { Spacer(Modifier.height(12.dp)); chips() }
+                    Spacer(Modifier.height(if (narrow) 16.dp else 20.dp))
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp), maxItemsInEachRow = if (narrow) 2 else 4) {
                         tiles.forEachIndexed { i, tile ->
                             val enabled = tile.onClick != null
                             Column(
-                                Modifier.weight(1f).popIn(song, 80 + i * 45, from = 0.92f).pressTilt(6f).clip(RoundedCornerShape(18.dp))
-                                    .background(Color.Black.copy(alpha = 0.3f)).border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(18.dp))
+                                Modifier.weight(1f).popIn(song, 80 + i * 45, from = 0.92f).pressTilt(6f).clip(aniShape(18.dp))
+                                    .background(Color.Black.copy(alpha = 0.3f)).border(1.dp, Color.White.copy(alpha = 0.08f), aniShape(18.dp))
                                     .clickable(enabled = enabled) { tile.onClick?.invoke() }.padding(14.dp)
                                     .graphicsLayer { alpha = if (enabled) 1f else 0.35f },
                             ) {
-                                Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(tile.tint.copy(alpha = 0.16f)), contentAlignment = Alignment.Center) {
+                                Box(Modifier.size(40.dp).clip(aniShape(12.dp)).background(tile.tint.copy(alpha = 0.16f)), contentAlignment = Alignment.Center) {
                                     Icon(tile.icon, null, tint = tile.tint, modifier = Modifier.size(22.dp))
                                 }
                                 Spacer(Modifier.height(10.dp))

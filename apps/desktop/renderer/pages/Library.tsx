@@ -51,7 +51,7 @@ export default function Library() {
 
   return (
     <div className="mx-auto max-w-[1680px] px-8 py-8">
-      <PageHeader
+      <PageHeader scene="sakura"
         icon={Bookmark}
         title="My List"
         subtitle={total > 0 ? `${total} title${total === 1 ? "" : "s"} tracked` : "Everything you track, by status"}

@@ -78,6 +78,7 @@ export default function AppSidebar() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const mal = useAppStore((s) => s.mal);
+  // City Pop lives under Songs (/songs/city-pop), so Songs stays lit there.
   const mode = modeForPath(pathname);
   const groups = mode === "manga" ? MANGA : mode === "novel" ? NOVEL : ANIME;
   const narrow = useMediaQuery("(max-width: 1279px)");

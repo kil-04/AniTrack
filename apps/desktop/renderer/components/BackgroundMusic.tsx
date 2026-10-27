@@ -34,6 +34,7 @@ const HOLD_LABELS: Record<BgHold, string> = {
   player: "Paused while the player is open",
   theme: "Paused while a theme song plays",
   hidden: "Paused while AniTrack is hidden",
+  "city-pop": "Paused while City Pop is open",
 };
 
 function useMusic() {

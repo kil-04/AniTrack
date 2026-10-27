@@ -7,7 +7,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -119,7 +118,7 @@ internal fun PlayerGestureLayer(
             Box(
                 Modifier.align(if (forward) Alignment.CenterEnd else Alignment.CenterStart)
                     .padding(horizontal = 48.dp)
-                    .clip(RoundedCornerShape(24.dp))
+                    .clip(aniShape(24.dp))
                     .background(Color.Black.copy(alpha = 0.6f))
                     .padding(horizontal = 20.dp, vertical = 12.dp),
             ) {
@@ -129,7 +128,7 @@ internal fun PlayerGestureLayer(
         if (speedActive) {
             Box(
                 Modifier.align(Alignment.TopCenter).padding(top = 24.dp)
-                    .clip(RoundedCornerShape(50)).background(Color.Black.copy(alpha = 0.6f))
+                    .clip(aniShape(50)).background(Color.Black.copy(alpha = 0.6f))
                     .padding(horizontal = 16.dp, vertical = 6.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -142,7 +141,7 @@ internal fun PlayerGestureLayer(
         volumeFeedback?.let { value ->
             Box(
                 Modifier.align(Alignment.Center)
-                    .clip(RoundedCornerShape(16.dp)).background(Color.Black.copy(alpha = 0.6f))
+                    .clip(aniShape(16.dp)).background(Color.Black.copy(alpha = 0.6f))
                     .padding(horizontal = 18.dp, vertical = 10.dp),
             ) { Text("Vol ${(value * 100).toInt()}%", color = Color.White, style = MaterialTheme.typography.labelLarge) }
         }

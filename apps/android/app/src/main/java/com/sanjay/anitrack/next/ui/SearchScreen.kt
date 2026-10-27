@@ -9,7 +9,6 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
@@ -88,7 +87,7 @@ fun SearchScreen(onOpen: (Anime) -> Unit, initialQuery: String = "") {
 
     Row(Modifier.fillMaxSize()) {
         Column(Modifier.weight(1f).padding(horizontal = 24.dp, vertical = 20.dp)) {
-            ScreenHeader("Browse anime", subtitle = "Filter AniList by genre, season, year and more.", icon = Icons.Rounded.TravelExplore)
+            ScreenHeader("Browse anime", scene = PixelScene.OBSERVATORY, subtitle = "Filter AniList by genre, season, year and more.", icon = Icons.Rounded.TravelExplore)
             Spacer(Modifier.height(18.dp))
             // Filter panel: search plus dropdowns, applied with the Filter button.
             val apply: () -> Unit = { page = 1; reload++ }
@@ -118,7 +117,7 @@ fun SearchScreen(onOpen: (Anime) -> Unit, initialQuery: String = "") {
             }
             Spacer(Modifier.height(16.dp))
             if (searching && results.isEmpty()) {
-                LinearProgressIndicator(Modifier.fillMaxWidth().clip(RoundedCornerShape(50)), color = AniColors.Accent, trackColor = AniColors.SurfaceHigh)
+                LinearProgressIndicator(Modifier.fillMaxWidth().clip(aniShape(50)), color = AniColors.Accent, trackColor = AniColors.SurfaceHigh)
             } else if (!searching && results.isEmpty()) {
                 EmptyState(Icons.Rounded.SearchOff, "No results", "Nothing matches these filters. Try removing one or searching another title.")
             }
@@ -166,8 +165,8 @@ internal fun PageControls(page: Int, hasNext: Boolean, onPrevious: () -> Unit, o
 internal fun FilterSearchField(value: String, onChange: (String) -> Unit, placeholder: String, onSearch: () -> Unit) {
     Row(
         Modifier.width(260.dp).height(44.dp)
-            .clip(RoundedCornerShape(12.dp)).background(AniColors.SurfaceHigh)
-            .border(1.dp, AniColors.BorderSoft, RoundedCornerShape(12.dp))
+            .clip(aniShape(12.dp)).background(AniColors.SurfaceHigh)
+            .border(1.dp, AniColors.BorderSoft, aniShape(12.dp))
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -195,9 +194,9 @@ internal fun <T> FilterDropdown(placeholder: String, current: String?, options: 
     Box {
         Row(
             Modifier.height(44.dp)
-                .clip(RoundedCornerShape(12.dp))
+                .clip(aniShape(12.dp))
                 .background(if (active) AniColors.AccentSoft else AniColors.SurfaceHigh)
-                .border(1.dp, if (active) AniColors.Accent.copy(alpha = 0.55f) else AniColors.BorderSoft, RoundedCornerShape(12.dp))
+                .border(1.dp, if (active) AniColors.Accent.copy(alpha = 0.55f) else AniColors.BorderSoft, aniShape(12.dp))
                 .clickable { open = true }
                 .padding(start = 14.dp, end = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -213,7 +212,7 @@ internal fun <T> FilterDropdown(placeholder: String, current: String?, options: 
         }
         DropdownMenu(
             expanded = open, onDismissRequest = { open = false },
-            shape = RoundedCornerShape(14.dp), containerColor = AniColors.Surface,
+            shape = aniShape(14.dp), containerColor = AniColors.Surface,
             modifier = Modifier.heightIn(max = 420.dp),
         ) {
             options.forEach { (name, value) ->

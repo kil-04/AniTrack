@@ -90,7 +90,7 @@ export default function MangaUpdates() {
 
   return (
     <div className="mx-auto max-w-4xl px-8 pb-16 pt-8">
-      <PageHeader icon={Sparkles} title="Updates" subtitle="Newest chapters for manga in your list and reading history">
+      <PageHeader scene="tower" icon={Sparkles} title="Updates" subtitle="Newest chapters for manga in your list and reading history">
         {loading ? (
           <span className="chip h-8 text-[13px]">
             <Loader2 size={14} className="animate-spin text-accent" /> Checking sources…

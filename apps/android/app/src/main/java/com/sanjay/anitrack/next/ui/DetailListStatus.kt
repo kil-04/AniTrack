@@ -3,7 +3,6 @@ package com.sanjay.anitrack.next.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.BookmarkAdded
@@ -132,7 +131,7 @@ internal fun ListStatusButton(anime: Anime, compact: Boolean = false) {
 /** Metadata chip on detail pages; [subtle] is the outlined genre style. */
 @Composable
 internal fun Chip(text: String, subtle: Boolean = false) {
-    val shape = RoundedCornerShape(50)
+    val shape = aniShape(50)
     Box(
         Modifier
             .clip(shape)

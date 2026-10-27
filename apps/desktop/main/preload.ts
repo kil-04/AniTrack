@@ -6,6 +6,25 @@ import type { MediaAccessRejection, ProviderApi, ProviderFeed } from "../../../p
 
 // Thin, typed-ish bridge. Renderer never touches Node directly.
 contextBridge.exposeInMainWorld("api", {
+  cityPop: {
+    open: (ids: string[], mode: "listen" | "watch", saved?: unknown[]) => ipcRenderer.invoke(IPC.CITY_POP_OPEN, ids, mode, saved),
+    close: () => ipcRenderer.invoke(IPC.CITY_POP_CLOSE),
+    status: () => ipcRenderer.invoke(IPC.CITY_POP_STATUS),
+    search: (query: string) => ipcRenderer.invoke(IPC.CITY_POP_SEARCH, query),
+    onPlaybackChanged: (fn: (active: boolean) => void) => {
+      const listener = (_event: unknown, active: boolean) => fn(active === true);
+      ipcRenderer.on(IPC.CITY_POP_PLAYBACK_CHANGED, listener);
+      return () => ipcRenderer.removeListener(IPC.CITY_POP_PLAYBACK_CHANGED, listener);
+    },
+    archiveSearch: (query: string, page = 1, media: "all" | "audio" | "video" = "all") => ipcRenderer.invoke(IPC.CITY_POP_ARCHIVE_SEARCH, query, page, media),
+    archiveItem: (id: string) => ipcRenderer.invoke(IPC.CITY_POP_ARCHIVE_ITEM, id),
+    playArchive: (id: string, files: string[], start: number, mode: "listen" | "watch") => ipcRenderer.invoke(IPC.CITY_POP_ARCHIVE_PLAY, id, files, start, mode),
+    downloadArchive: (id: string, file: string) => ipcRenderer.invoke(IPC.CITY_POP_ARCHIVE_DOWNLOAD, id, file),
+    downloads: () => ipcRenderer.invoke(IPC.CITY_POP_DOWNLOADS),
+    cancelDownload: (key: string) => ipcRenderer.invoke(IPC.CITY_POP_DOWNLOAD_CANCEL, key),
+    removeDownload: (key: string) => ipcRenderer.invoke(IPC.CITY_POP_DOWNLOAD_REMOVE, key),
+    playDownload: (key: string, mode: "listen" | "watch") => ipcRenderer.invoke(IPC.CITY_POP_DOWNLOAD_PLAY, key, mode),
+  },
   mal: {
     beginAuth: () => ipcRenderer.invoke(IPC.MAL_BEGIN_AUTH),
     state: () => ipcRenderer.invoke(IPC.MAL_STATE),

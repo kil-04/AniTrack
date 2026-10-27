@@ -48,7 +48,6 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -280,7 +279,7 @@ internal fun SongSidePlayer(video: SongVideo, onFull: () -> Unit, onClose: () ->
     Column(
         // Starts below the app's floating Music button.
         Modifier.width(400.dp).fillMaxHeight().padding(end = 16.dp, top = 64.dp, bottom = 16.dp)
-            .clip(RoundedCornerShape(22.dp)).border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(22.dp)).background(AniColors.Surface),
+            .clip(aniShape(22.dp)).border(1.dp, Color.White.copy(alpha = 0.08f), aniShape(22.dp)).background(AniColors.Surface),
     ) {
         Row(Modifier.padding(start = 16.dp, end = 10.dp, top = 14.dp, bottom = 10.dp), verticalAlignment = Alignment.Top) {
             NowPlaying(video, big = false, modifier = Modifier.weight(1f))
@@ -297,10 +296,10 @@ internal fun SongSidePlayer(video: SongVideo, onFull: () -> Unit, onClose: () ->
             items(video.upNext(20), key = { video.queue.items[it].key }) { at ->
                 val next = video.queue.items[at]
                 Row(
-                    Modifier.animateItem().fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { onJump(at) }.padding(6.dp),
+                    Modifier.animateItem().fillMaxWidth().clip(aniShape(12.dp)).clickable { onJump(at) }.padding(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Box(Modifier.size(46.dp).clip(RoundedCornerShape(10.dp)).background(AniColors.SurfaceHighest), contentAlignment = Alignment.Center) {
+                    Box(Modifier.size(46.dp).clip(aniShape(10.dp)).background(AniColors.SurfaceHighest), contentAlignment = Alignment.Center) {
                         if (next.cover != null) AsyncImage(next.cover, null, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize())
                         else Icon(Icons.Rounded.Album, null, tint = AniColors.TextTertiary)
                     }
@@ -320,34 +319,51 @@ internal fun SongSidePlayer(video: SongVideo, onFull: () -> Unit, onClose: () ->
 @Composable
 internal fun SongFullPlayer(video: SongVideo, onDock: (() -> Unit)?, onClose: () -> Unit, onStep: (Int) -> Unit, onJump: (Int) -> Unit) {
     Dialog(onDismissRequest = onDock ?: onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Box(Modifier.fillMaxSize().background(Color.Black)) {
+        BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
             SongVideoSurface(video, Modifier.fillMaxSize(), onSwipe = onStep)
-            NowPlaying(video, big = true, modifier = Modifier.align(Alignment.TopStart).padding(20.dp).fillMaxWidth(0.6f))
-            Column(Modifier.align(Alignment.TopEnd).padding(16.dp), horizontalAlignment = Alignment.End) {
+            val buttons = @Composable {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     GlassIconButton(Icons.Rounded.SkipPrevious, "Previous", { onStep(-1) }, size = 40.dp)
                     GlassIconButton(Icons.Rounded.SkipNext, "Next", { onStep(1) }, size = 40.dp)
                     if (onDock != null) GlassIconButton(Icons.Rounded.FullscreenExit, "Side player", onDock, size = 40.dp)
                     GlassIconButton(Icons.Rounded.Close, "Close", onClose, size = 40.dp)
                 }
-                // Up next, one tap away.
-                video.upNext(1).firstOrNull()?.let { at ->
-                    val next = video.queue.items[at]
-                    AnimatedContent(next, label = "up-next", transitionSpec = { (fadeIn() + slideInVertically { -it / 2 }).togetherWith(fadeOut()) }) { song ->
-                        Row(
-                            Modifier.padding(top = 12.dp).widthIn(max = 320.dp).clip(RoundedCornerShape(14.dp)).background(Color.Black.copy(alpha = 0.55f))
-                                .clickable { onJump(at) }.padding(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            if (song.cover != null) AsyncImage(song.cover, null, contentScale = ContentScale.Crop, modifier = Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)))
-                            Spacer(Modifier.width(10.dp))
-                            Column(Modifier.weight(1f, fill = false)) {
-                                Text("UP NEXT", color = AniColors.AccentBright, fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.sp)
-                                Text(song.title, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
-                        }
-                    }
+            }
+            // A phone held upright: the title gets the width under the buttons, and up next
+            // waits at the bottom, clear of the video.
+            if (maxHeight > maxWidth) {
+                Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                    Box(Modifier.align(Alignment.End)) { buttons() }
+                    NowPlaying(video, big = true, modifier = Modifier.padding(start = 4.dp, top = 14.dp))
                 }
+                UpNext(video, onJump, Modifier.align(Alignment.BottomStart).padding(16.dp))
+            } else {
+                NowPlaying(video, big = true, modifier = Modifier.align(Alignment.TopStart).padding(20.dp).fillMaxWidth(0.6f))
+                Column(Modifier.align(Alignment.TopEnd).padding(16.dp), horizontalAlignment = Alignment.End) {
+                    buttons()
+                    UpNext(video, onJump, Modifier.padding(top = 12.dp))
+                }
+            }
+        }
+    }
+}
+
+/** Up next, one tap away. */
+@Composable
+private fun UpNext(video: SongVideo, onJump: (Int) -> Unit, modifier: Modifier = Modifier) {
+    val at = video.upNext(1).firstOrNull() ?: return
+    val next = video.queue.items[at]
+    AnimatedContent(next, modifier = modifier, label = "up-next", transitionSpec = { (fadeIn() + slideInVertically { -it / 2 }).togetherWith(fadeOut()) }) { song ->
+        Row(
+            Modifier.widthIn(max = 320.dp).clip(aniShape(14.dp)).background(Color.Black.copy(alpha = 0.55f))
+                .clickable { onJump(at) }.padding(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (song.cover != null) AsyncImage(song.cover, null, contentScale = ContentScale.Crop, modifier = Modifier.size(40.dp).clip(aniShape(8.dp)))
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f, fill = false)) {
+                Text("UP NEXT", color = AniColors.AccentBright, fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.sp)
+                Text(song.title, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }

@@ -5,7 +5,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoStories
 import androidx.compose.material.icons.rounded.Info
@@ -100,7 +99,7 @@ internal fun StorySection(anime: Anime, onOpenManga: (Int) -> Unit) {
         else -> "The story retold as a manga${book.chapters?.let { " in $it chapters" } ?: ""}."
     }
     val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 820
-    val shape = RoundedCornerShape(18.dp)
+    val shape = aniShape(18.dp)
     Row(
         Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
             .then(if (wide) Modifier.widthIn(max = 760.dp) else Modifier)
@@ -114,7 +113,7 @@ internal fun StorySection(anime: Anime, onOpenManga: (Int) -> Unit) {
     ) {
         PosterImage(
             book.cover, book.title,
-            Modifier.width(if (wide) 96.dp else 78.dp).aspectRatio(1f / POSTER_RATIO).clip(RoundedCornerShape(10.dp)),
+            Modifier.width(if (wide) 96.dp else 78.dp).aspectRatio(1f / POSTER_RATIO).clip(aniShape(10.dp)),
         )
         Spacer(Modifier.width(16.dp))
         Column(Modifier.weight(1f)) {
@@ -189,11 +188,11 @@ internal fun MoreInPrintSection(anime: Anime, onOpenManga: (Int) -> Unit) {
             items(more.size) { i ->
                 val link = more[i]
                 val book = link.manga
-                Column(Modifier.width(118.dp).clip(RoundedCornerShape(12.dp)).clickable { onOpenManga(book.id) }) {
+                Column(Modifier.width(118.dp).clip(aniShape(12.dp)).clickable { onOpenManga(book.id) }) {
                     Box {
                         PosterImage(
                             book.cover, book.title,
-                            Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).clip(RoundedCornerShape(12.dp)),
+                            Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).clip(aniShape(12.dp)),
                         )
                         Tag(
                             printRelationLabels[link.type] ?: link.type.lowercase().replaceFirstChar { it.uppercase() },
@@ -242,11 +241,11 @@ internal fun AdaptationsSection(manga: Manga, onOpenAnime: (Int) -> Unit) {
         LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             items(shows.size) { i ->
                 val show = shows[i]
-                Column(Modifier.width(128.dp).clip(RoundedCornerShape(12.dp)).clickable { onOpenAnime(show.id) }) {
+                Column(Modifier.width(128.dp).clip(aniShape(12.dp)).clickable { onOpenAnime(show.id) }) {
                     Box {
                         PosterImage(
                             show.cover, show.title,
-                            Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).clip(RoundedCornerShape(12.dp)),
+                            Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).clip(aniShape(12.dp)),
                         )
                         formatLabel(show.format)?.let {
                             Tag(it, Modifier.align(Alignment.TopStart).padding(8.dp), tone = TagTone.Glass)

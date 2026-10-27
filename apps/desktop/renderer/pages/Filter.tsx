@@ -357,7 +357,7 @@ export default function Filter() {
   return (
     <div className="mx-auto flex max-w-[1680px] gap-8 px-8 py-8">
       <div className="min-w-0 flex-1">
-        <PageHeader icon={Search} title="Search" subtitle="Find any anime by name, genre, season, format and more" />
+        <PageHeader scene="observatory" icon={Search} title="Search" subtitle="Find any anime by name, genre, season, format and more" />
 
         <form onSubmit={handleFilter} className="panel relative z-20 mb-10 p-4">
           <div className="flex gap-3">

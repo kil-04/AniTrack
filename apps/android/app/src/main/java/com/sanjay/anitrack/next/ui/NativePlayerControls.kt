@@ -4,7 +4,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
@@ -106,13 +105,13 @@ internal fun NativePlayerControls(
         ) {
             val width = maxWidth
             val bar = if (isSeeking) 5.dp else 3.dp
-            Box(Modifier.align(Alignment.CenterStart).fillMaxWidth().height(bar).clip(RoundedCornerShape(2.dp)).background(Color.White.copy(alpha = 0.25f)))
-            Box(Modifier.align(Alignment.CenterStart).fillMaxWidth(buffered).height(bar).clip(RoundedCornerShape(2.dp)).background(Color.White.copy(alpha = 0.4f)))
-            Box(Modifier.align(Alignment.CenterStart).fillMaxWidth(progress).height(bar).clip(RoundedCornerShape(2.dp)).background(ControlsAccent))
+            Box(Modifier.align(Alignment.CenterStart).fillMaxWidth().height(bar).clip(aniShape(2.dp)).background(Color.White.copy(alpha = 0.25f)))
+            Box(Modifier.align(Alignment.CenterStart).fillMaxWidth(buffered).height(bar).clip(aniShape(2.dp)).background(Color.White.copy(alpha = 0.4f)))
+            Box(Modifier.align(Alignment.CenterStart).fillMaxWidth(progress).height(bar).clip(aniShape(2.dp)).background(ControlsAccent))
             val thumb = if (isSeeking) 20.dp else 14.dp
             Box(
                 Modifier.align(Alignment.CenterStart).offset(x = width * progress - thumb / 2)
-                    .size(thumb).clip(RoundedCornerShape(50)).background(ControlsAccent),
+                    .size(thumb).clip(aniShape(50)).background(ControlsAccent),
             )
             if (isSeeking) {
                 // Where the drag will land, above the thumb.
@@ -123,7 +122,7 @@ internal fun NativePlayerControls(
                     modifier = Modifier.align(Alignment.TopStart)
                         .offset(x = (width * progress - 32.dp).coerceIn(0.dp, (width - 64.dp).coerceAtLeast(0.dp)), y = (-30).dp)
                         .width(64.dp)
-                        .clip(RoundedCornerShape(8.dp))
+                        .clip(aniShape(8.dp))
                         .background(Color.Black.copy(alpha = 0.8f))
                         .padding(vertical = 4.dp),
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,

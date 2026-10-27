@@ -9,7 +9,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Link
@@ -155,7 +154,7 @@ fun MangaUpdatesScreen(onOpen: (Int) -> Unit) {
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 24.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
             ScreenHeader(
-                "Updates",
+                "Updates", scene = PixelScene.TOWER,
                 subtitle = "Newest chapters for manga in your list and reading history.",
                 icon = Icons.Rounded.NewReleases,
             ) {
@@ -216,7 +215,7 @@ fun MangaUpdatesScreen(onOpen: (Int) -> Unit) {
         items(shown.size, key = { shown[it].mangaId }) { i ->
             val entry = shown[i]
             val newCount = entry.newCount ?: 0
-            val shape = RoundedCornerShape(14.dp)
+            val shape = aniShape(14.dp)
             Row(
                 Modifier.fillMaxWidth().clip(shape)
                     .background(AniColors.Surface)
@@ -225,7 +224,7 @@ fun MangaUpdatesScreen(onOpen: (Int) -> Unit) {
                     .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                PosterImage(entry.cover, entry.title, Modifier.width(46.dp).height(64.dp).clip(RoundedCornerShape(8.dp)))
+                PosterImage(entry.cover, entry.title, Modifier.width(46.dp).height(64.dp).clip(aniShape(8.dp)))
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
                     Text(entry.title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)

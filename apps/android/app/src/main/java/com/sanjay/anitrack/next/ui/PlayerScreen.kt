@@ -18,7 +18,6 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.ClosedCaption
@@ -605,7 +604,7 @@ fun PlayerScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Row(
-                    Modifier.clip(RoundedCornerShape(8.dp)).clickable { onHome() }
+                    Modifier.clip(aniShape(8.dp)).clickable { onHome() }
                         .padding(horizontal = 8.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -615,7 +614,7 @@ fun PlayerScreen(
                 }
                 Spacer(Modifier.width(10.dp))
                 Row(
-                    Modifier.weight(1f).clip(RoundedCornerShape(8.dp))
+                    Modifier.weight(1f).clip(aniShape(8.dp))
                         .clickable(enabled = PlaySession.animeId > 0) { onOpenDetail(PlaySession.animeId) }
                         .padding(horizontal = 6.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -884,9 +883,9 @@ fun PlayerScreen(
                 val next = PlaySession.episodeNumber(index + 1)
                 Row(
                     Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 96.dp)
-                        .clip(RoundedCornerShape(14.dp))
+                        .clip(aniShape(14.dp))
                         .background(Color.Black.copy(alpha = 0.8f))
-                        .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
+                        .border(1.dp, Color.White.copy(alpha = 0.12f), aniShape(14.dp))
                         .padding(start = 16.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -919,7 +918,7 @@ fun PlayerScreen(
                     color = Color.White,
                     style = MaterialTheme.typography.labelLarge,
                     modifier = Modifier.align(Alignment.TopCenter).padding(top = 20.dp)
-                        .clip(RoundedCornerShape(50)).background(Color.Black.copy(alpha = 0.75f))
+                        .clip(aniShape(50)).background(Color.Black.copy(alpha = 0.75f))
                         .padding(horizontal = 16.dp, vertical = 8.dp),
                 )
             }
@@ -946,7 +945,7 @@ fun PlayerScreen(
                     Modifier
                         .padding(24.dp)
                         .widthIn(max = 440.dp)
-                        .clip(RoundedCornerShape(18.dp))
+                        .clip(aniShape(18.dp))
                         .background(Color.Black.copy(alpha = 0.72f))
                         .padding(horizontal = 22.dp, vertical = 20.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,

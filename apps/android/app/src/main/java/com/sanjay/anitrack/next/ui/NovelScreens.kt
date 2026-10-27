@@ -13,7 +13,6 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
@@ -82,9 +81,9 @@ internal fun NovelCover(cover: String?, title: String, modifier: Modifier = Modi
 @Composable
 fun NovelCardView(novel: NovelCard, onOpen: OpenNovel, width: Int? = POSTER_WIDTH, badge: String? = null) {
     val outer = if (width != null) Modifier.width(width.dp) else Modifier.fillMaxWidth()
-    Column(outer.clip(RoundedCornerShape(12.dp)).clickable { onOpen(novel.source, novel.id) }) {
+    Column(outer.clip(aniShape(12.dp)).clickable { onOpen(novel.source, novel.id) }) {
         Box {
-            NovelCover(novel.cover, novel.title, Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).clip(RoundedCornerShape(12.dp)))
+            NovelCover(novel.cover, novel.title, Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).clip(aniShape(12.dp)))
             if (novel.status == "completed") Tag("Complete", Modifier.align(Alignment.TopStart).padding(6.dp), tone = TagTone.Glass)
             if (novel.mtl) Tag("MTL", Modifier.align(Alignment.TopStart).padding(6.dp), tone = TagTone.Glass)
             novel.rating?.let { ScoreBadge("%.1f".format(it), Modifier.align(Alignment.TopEnd).padding(6.dp), onImage = true) }
@@ -106,7 +105,7 @@ fun NovelCardView(novel: NovelCard, onOpen: OpenNovel, width: Int? = POSTER_WIDT
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun NovelHomeScreen(onOpen: OpenNovel, onRead: () -> Unit, onBrowseGenre: (String) -> Unit, toggle: @Composable (Modifier) -> Unit) {
+fun NovelHomeScreen(onOpen: OpenNovel, onRead: () -> Unit, onBrowseGenre: (String) -> Unit, toggle: @Composable (Modifier) -> Unit, onGo: (String) -> Unit = {}) {
     var home by remember { mutableStateOf<NovelHome?>(null) }
     var failed by remember { mutableStateOf<String?>(null) }
     var attempt by remember { mutableIntStateOf(0) }
@@ -161,10 +160,10 @@ fun NovelHomeScreen(onOpen: OpenNovel, onRead: () -> Unit, onBrowseGenre: (Strin
                 LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     items(reading, key = { "${it.source.key}:${it.titleId}" }) { row ->
                         val fresh = updates.firstOrNull { it.source == row.source && it.titleId == row.titleId }?.newCount ?: 0
-                        Column(Modifier.width(POSTER_WIDTH.dp).clip(RoundedCornerShape(12.dp)).clickable { resume(row) }) {
+                        Column(Modifier.width(POSTER_WIDTH.dp).clip(aniShape(12.dp)).clickable { resume(row) }) {
                             Box {
-                                NovelCover(row.cover, row.title, Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).clip(RoundedCornerShape(12.dp)))
-                                Box(Modifier.matchParentSize().clip(RoundedCornerShape(12.dp)).background(BottomScrim))
+                                NovelCover(row.cover, row.title, Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).clip(aniShape(12.dp)))
+                                Box(Modifier.matchParentSize().clip(aniShape(12.dp)).background(BottomScrim))
                                 if (fresh > 0) Tag("+$fresh NEW", Modifier.align(Alignment.TopStart).padding(8.dp), tone = TagTone.SuccessSolid)
                                 else Tag(row.chapterLabel.uppercase(), Modifier.align(Alignment.TopStart).padding(8.dp), tone = TagTone.Accent)
                                 GlassIconButton(Icons.Rounded.Close, "Remove from Continue Reading", {
@@ -188,6 +187,9 @@ fun NovelHomeScreen(onOpen: OpenNovel, onRead: () -> Unit, onBrowseGenre: (Strin
                 }
             }
         }
+        if (AniColors.pixelMode.value) item(key = "interlude-shelf") {
+            PixelInterlude(PixelScene.LIBRARY, "Your reading list", "The novels you follow, chapter by chapter", { onGo("novel-list") })
+        }
         item(key = "genres") {
             Column {
                 SectionHeader("Browse by genre")
@@ -202,8 +204,8 @@ fun NovelHomeScreen(onOpen: OpenNovel, onRead: () -> Unit, onBrowseGenre: (Strin
                             color = AniColors.TextSecondary,
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.clip(RoundedCornerShape(50)).background(Color.White.copy(alpha = 0.05f))
-                                .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(50))
+                            modifier = Modifier.clip(aniShape(50)).background(Color.White.copy(alpha = 0.05f))
+                                .border(1.dp, Color.White.copy(alpha = 0.08f), aniShape(50))
                                 .clickable { onBrowseGenre(genre) }.padding(horizontal = 16.dp, vertical = 9.dp),
                         )
                     }
@@ -287,7 +289,7 @@ private fun NovelHeroCarousel(
                     }
                     if (wide) {
                         Spacer(Modifier.width(32.dp))
-                        NovelCover(hero.cover, hero.title, Modifier.padding(bottom = 18.dp).width(190.dp).aspectRatio(1f / POSTER_RATIO).rotate(2f).clip(RoundedCornerShape(16.dp)))
+                        NovelCover(hero.cover, hero.title, Modifier.padding(bottom = 18.dp).width(190.dp).aspectRatio(1f / POSTER_RATIO).rotate(2f).clip(aniShape(16.dp)))
                     }
                 }
             }
@@ -309,7 +311,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.novelSection(title: S
 /** A source is down and something else is shown in its place: says so above the content. */
 @Composable
 internal fun SourceNotice(text: String, modifier: Modifier = Modifier) {
-    val shape = RoundedCornerShape(16.dp)
+    val shape = aniShape(16.dp)
     Row(
         modifier.fillMaxWidth().clip(shape).background(Color(0xFFFCD34D).copy(alpha = 0.08f))
             .border(1.dp, Color(0xFFFCD34D).copy(alpha = 0.22f), shape).padding(horizontal = 14.dp, vertical = 12.dp),
@@ -370,7 +372,7 @@ fun NovelSearchScreen(initialQuery: String = "", initialGenre: String? = null, o
     val mtlCount = results.count { it.mtl }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 20.dp)) {
-        ScreenHeader("Browse novels", subtitle = "${source.label}: ${source.blurb}", icon = Icons.Rounded.MenuBook)
+        ScreenHeader("Browse novels", scene = PixelScene.OBSERVATORY, subtitle = "${source.label}: ${source.blurb}", icon = Icons.Rounded.MenuBook)
         Spacer(Modifier.height(14.dp))
         PillTabs(
             NovelSourceId.entries.map { it.key to it.label },
@@ -396,7 +398,7 @@ fun NovelSearchScreen(initialQuery: String = "", initialGenre: String? = null, o
         Spacer(Modifier.height(16.dp))
         when {
             searching && results.isEmpty() ->
-                LinearProgressIndicator(Modifier.fillMaxWidth().clip(RoundedCornerShape(50)), color = AniColors.Accent, trackColor = AniColors.SurfaceHigh)
+                LinearProgressIndicator(Modifier.fillMaxWidth().clip(aniShape(50)), color = AniColors.Accent, trackColor = AniColors.SurfaceHigh)
             error != null -> EmptyState(Icons.Rounded.CloudOff, "${source.label} didn't answer", "$error NovelBuddy and NovelArchive both failed to answer. Check your connection, then try again.", actionLabel = "Retry", onAction = apply)
             !searching && shown.isEmpty() -> EmptyState(Icons.Rounded.SearchOff, "No results", "Nothing matches on ${answered.label}. Try fewer filters, another spelling, or the other source.")
         }
@@ -431,7 +433,7 @@ fun NovelListScreen(onOpen: OpenNovel, onBrowse: () -> Unit) {
     val shown = if (tab == "all") rows else rows.filter { it.status == tab }
     Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 20.dp)) {
         ScreenHeader(
-            "My Novels",
+            "My Novels", scene = PixelScene.LIBRARY,
             subtitle = if (rows.isEmpty()) "Novels you track appear here." else "${rows.size} ${if (rows.size == 1) "title" else "titles"} tracked",
             icon = Icons.Rounded.Bookmarks,
         )
@@ -594,7 +596,7 @@ fun NovelDetailScreen(source: NovelSourceId, titleId: String, onRead: () -> Unit
                 PosterImage(d.card.cover, null, Modifier.fillMaxWidth().height(280.dp).blur(32.dp))
                 Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.45f), AniColors.Bg))))
                 Row(Modifier.padding(start = 24.dp, end = 24.dp, top = 40.dp), verticalAlignment = Alignment.Bottom) {
-                    NovelCover(d.card.cover, d.card.title, Modifier.width(if (wide) 170.dp else 120.dp).aspectRatio(1f / POSTER_RATIO).clip(RoundedCornerShape(14.dp)))
+                    NovelCover(d.card.cover, d.card.title, Modifier.width(if (wide) 170.dp else 120.dp).aspectRatio(1f / POSTER_RATIO).clip(aniShape(14.dp)))
                     Spacer(Modifier.width(20.dp))
                     Column(Modifier.weight(1f)) {
                         Text(d.card.title, style = MaterialTheme.typography.headlineMedium, color = Color.White, maxLines = 3, overflow = TextOverflow.Ellipsis)
@@ -664,9 +666,9 @@ fun NovelDetailScreen(source: NovelSourceId, titleId: String, onRead: () -> Unit
                             val linked = on || group.any { it.source == s }
                             val busy = (finding as? Finding.Searching)?.target == s
                             Row(
-                                Modifier.clip(RoundedCornerShape(50))
+                                Modifier.clip(aniShape(50))
                                     .background(if (on) AniColors.AccentSoft else Color.White.copy(alpha = 0.05f))
-                                    .border(1.dp, if (on) AniColors.Accent.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.08f), RoundedCornerShape(50))
+                                    .border(1.dp, if (on) AniColors.Accent.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.08f), aniShape(50))
                                     .clickable(enabled = !on) { switchTo(s) }
                                     .padding(horizontal = 12.dp, vertical = 7.dp),
                                 verticalAlignment = Alignment.CenterVertically,
@@ -680,7 +682,7 @@ fun NovelDetailScreen(source: NovelSourceId, titleId: String, onRead: () -> Unit
                         if (group.size > 1) {
                             Text(
                                 "Unlink", style = MaterialTheme.typography.labelMedium, color = AniColors.TextTertiary,
-                                modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable {
+                                modifier = Modifier.clip(aniShape(8.dp)).clickable {
                                     scope.launch {
                                         NovelStore.unlink(source, titleId)
                                         com.sanjay.anitrack.next.data.GistSync.novelReadingChanged()
@@ -742,7 +744,7 @@ fun NovelDetailScreen(source: NovelSourceId, titleId: String, onRead: () -> Unit
             val current = state != null && !done
             val here = current && state!!.source == source && state.chapterId == chapter.id
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 18.dp).clip(RoundedCornerShape(10.dp))
+                Modifier.fillMaxWidth().padding(horizontal = 18.dp).clip(aniShape(10.dp))
                     .clickable {
                         open(chapter, if (here) state!!.paragraph else 0,
                             if (current && !here && state!!.paragraphCount > 0) state.paragraph.toFloat() / state.paragraphCount else null)

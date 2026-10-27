@@ -29,7 +29,7 @@ fun LatestScreen(onOpen: (Anime) -> Unit) {
         loading = false
     }
     Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 20.dp)) {
-        ScreenHeader("Latest Episodes", subtitle = "Recently aired episodes across AniList.", icon = Icons.Rounded.NewReleases)
+        ScreenHeader("Latest Episodes", scene = PixelScene.TOWER, subtitle = "Recently aired episodes across AniList.", icon = Icons.Rounded.NewReleases)
         Spacer(Modifier.height(18.dp))
         LazyVerticalGrid(
             columns = GridCells.Adaptive(220.dp),
