@@ -111,12 +111,19 @@ internal object MangaBallParser {
     }
 
     /**
-     * `POST /chapter/chapter-listing-by-title-id` → every English upload of a title. It
-     * answers newest first; this returns the paged listing's order (chapter number, then
-     * upload time), which ties between groups and a group's re-uploads are decided by.
+     * Rows asked for in each page of the chapter listing. Up to 100 come back in a few
+     * seconds, bigger pages far more slowly (27 Oct 2026, Solo Leveling's 728 uploads: 200
+     * rows took 33 s, 500 took 68 s, and the one-call listing 105 s), past the 25 s a
+     * request may take.
      */
-    fun allChapters(json: JSONObject): List<MangaChapter> =
-        chapters(json).chapters.sortedWith(compareBy<MangaChapter>({ it.number }, { it.uploadedAt ?: 0L }))
+    const val LIST_PAGE = 100
+
+    /** Listing pages read at most: 10,000 uploads. */
+    const val MAX_LIST_PAGES = 100
+
+    /** One page of a title's English uploads, oldest first (a path under [API]). */
+    fun listingPath(titleId: String, page: Int): String =
+        "/title/chapter-listing?title_id=$titleId&page=$page&limit=$LIST_PAGE&group_by=flat&sort_order=asc&language=en&search="
 
     /**
      * A newest-first `/title/chapter-listing` page → the newest English chapter and

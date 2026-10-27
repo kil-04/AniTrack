@@ -22,10 +22,12 @@ import {
   rangeStartGroup,
   trackedTitles,
   withUpload,
-  mangaBallAllChapters,
+  MANGABALL_LIST_PAGE,
+  MANGABALL_MAX_LIST_PAGES,
   mangaBallChapters,
   mangaBallDetail,
   mangaBallLatest,
+  mangaBallListingUrl,
   mangaBallPages,
   mangaBallSearch,
   mangaDotChapters,
@@ -192,17 +194,14 @@ test("latest chapter fields from both sources' detail endpoints", () => {
   assert.equal(none.latestAt, null);
 });
 
-test("MangaBall's single-call chapter listing comes back in the paged listing's order", () => {
-  // POST /chapter/chapter-listing-by-title-id: every upload at once, newest first, no pagination block.
-  const uploads = mangaBallAllChapters({ status: "success", data: [
-    { id: "6ac87738052042d762e1fa61", title_id: "68515540702284f8341784c8", lang: "en", name: "Chapter 1195", number: 1195, status: "published",
-      created_at: "2026-10-09T05:10:16.119000", chapter_number: 1195, group: { id: "6a4f73cf8ecdd020b95469d2", _id: "6a4f73cf8ecdd020b95469d2", name: "Meganium", slug: "meganium" } },
-    { id: "6ac87738052042d762e1fa60", lang: "en", name: "Chapter 1195", number: 1195, status: "published", created_at: "2026-10-09T02:53:26.916000", group: { name: "Ho-oh" } },
-    { id: "6ac87738052042d762e1fa62", lang: "en", name: "Chapter 1194: Title", number: 1194, status: "published", created_at: "2026-10-02T05:10:16.119000", group: { name: "Swampert" } },
-  ] });
-  // Chapter number, then upload time: the older of two uploads of a number comes first.
-  assert.deepEqual(uploads.map((c) => [c.number, c.group, c.title]), [[1194, "Swampert", "Title"], [1195, "Ho-oh", null], [1195, "Meganium", null]]);
-  assert.deepEqual(mangaBallAllChapters({ status: "success", data: [] }), []);
+test("MangaBall's chapters are listed a hundred to a page", () => {
+  // Bigger pages took 33 s (200 rows) and 68 s (500) on 27 Oct 2026, past the 25 s limit.
+  assert.equal(
+    mangaBallListingUrl("685158ff702284f834178c9b", 3),
+    "https://api.mangaball.com/api/v1/title/chapter-listing?title_id=685158ff702284f834178c9b&page=3&limit=100&group_by=flat&sort_order=asc&language=en&search=",
+  );
+  // Android's MangaBallParser.listingPath asks for the same (MangaBallParserTest.kt); 10,000 uploads at most.
+  assert.equal(MANGABALL_LIST_PAGE * MANGABALL_MAX_LIST_PAGES, 10_000);
 });
 
 test("MangaBall's newest chapter comes from its newest English uploads", () => {

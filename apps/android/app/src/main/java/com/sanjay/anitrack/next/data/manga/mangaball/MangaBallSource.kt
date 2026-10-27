@@ -28,8 +28,6 @@ object MangaBallSource : MangaSource {
 
     private const val API = MangaBallParser.API
     private const val MAX_JSON = 16 * 1024 * 1024
-    private const val PAGE_SIZE = 500
-    private const val MAX_LIST_PAGES = 20
     private const val MATCH_TTL_MS = 6 * 60 * 60 * 1000L
     private const val MISS_TTL_MS = 10 * 60 * 1000L
     private const val CHAPTERS_TTL_MS = 5 * 60 * 1000L
@@ -111,31 +109,12 @@ object MangaBallSource : MangaSource {
             if (System.currentTimeMillis() - at < CHAPTERS_TTL_MS) return list
         }
         val chapters = ArrayList<MangaChapter>()
-        // Every English upload in one request: the listing MangaBall's own site code calls
-        // (found with REA in its bundle). One Piece's 4,720 uploads took 3.5 s, where the
-        // paged listing took ~2.2 s for each of its 10 pages. The paged listing stays as
-        // the fallback should this endpoint change.
-        try {
-            val body = http.postJson(
-                "$API/chapter/chapter-listing-by-title-id",
-                JSONObject().put("title_id", title.id).put("user_id", "demo_user").put("lang", "en").toString(),
-                "application/json",
-                MAX_JSON,
-            )
-            chapters += parse { MangaBallParser.allChapters(JSONObject(body)) }
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            if (e is MangaSourceException && e.status == 429) throw e // Limited: don't double the load with the fallback.
-            // Failed or unreadable: the paged listing below answers instead.
-            android.util.Log.w("MangaBall", "Single-call chapter listing failed, using the paged listing: ${e.message}")
-        }
-        var page = if (chapters.isEmpty()) 1 else MAX_LIST_PAGES + 1
-        while (page <= MAX_LIST_PAGES) {
-            val body = get(
-                "/title/chapter-listing?title_id=${title.id}&page=$page&limit=$PAGE_SIZE&group_by=flat&sort_order=asc&language=en&search=",
-                MAX_JSON,
-            )
+        // Every English upload, a hundred to a page: bigger pages and the one-call listing
+        // (`POST /chapter/chapter-listing-by-title-id`) now take longer than a request may
+        // (MangaBallParser.LIST_PAGE).
+        var page = 1
+        while (page <= MangaBallParser.MAX_LIST_PAGES) {
+            val body = get(MangaBallParser.listingPath(title.id, page), MAX_JSON)
             // Long series list thousands of uploads: parse off the UI thread.
             val result = parse { MangaBallParser.chapters(JSONObject(body)) }
             chapters += result.chapters

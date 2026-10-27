@@ -208,7 +208,18 @@ check; requests carry AniTrack's honest user agent, spaced 250 ms apart.
     returns `{data:[{id, name, is18plus,…}]}`. Ids are 24-hex.
   - `GET /title/detail/{id}` returns `{data:{name, alternateName, links:{myanimelist},
     date_published, originalLanguage, is18plus, latest_chapter_number, updated_at}}`.
-  - `POST /chapter/chapter-listing-by-title-id` with JSON
+  - **27 Oct 2026: chapters "couldn't be reached" in both apps.** The API had
+    slowed down: the one-call listing below took 105 s for Solo Leveling's 728
+    uploads, and paged listings 33 s at 200 rows and 68 s at 500, while pages of
+    up to 100 rows answered in 1.5–15 s. Requests may take 25 s, so both apps now
+    read only the paged listing, 100 rows a page (`mangaBallListingUrl` /
+    `MangaBallParser.listingPath`), up to 100 pages. Solo Leveling lists in about
+    40 s; a very long series (One Piece, ~48 pages) takes minutes, and one slow
+    page can still fail the attempt (Retry). The same day the image CDN put a
+    Cloudflare managed challenge in front of non-browser clients: Node's fetch is
+    always challenged, but desktop's `net.fetch` (Chromium) and Android's OkHttp
+    still get the images (checked on the tablet: Chapter 202, 110 pages).
+  - `POST /chapter/chapter-listing-by-title-id` (no longer used, see above) with JSON
     `{title_id, user_id:"demo_user", lang:"en"}` returns every English upload of
     the title at once, `{data:[{id, number, name, lang, status, group:{name},
     created_at}]}` with no pagination. It is the listing mangaball.com's own

@@ -3,10 +3,11 @@ import {
   isMangaBallId,
   isMangaDotPage,
   MANGABALL,
-  mangaBallAllChapters,
+  MANGABALL_MAX_LIST_PAGES,
   mangaBallChapters,
   mangaBallDetail,
   mangaBallLatest,
+  mangaBallListingUrl,
   mangaBallPages,
   mangaBallSearch,
   MANGADOT,
@@ -325,28 +326,12 @@ const mangaBall: Source = {
     if (!isMangaBallId(title.id)) throw new MangaSourceError("Unrecognised MangaBall title.");
     const hit = ballChapters.get(title.id);
     if (hit && Date.now() - hit.at < CHAPTERS_TTL_MS) return hit.list;
-    // Every English upload in one request: the listing MangaBall's own site code calls
-    // (found with REA in its bundle). One Piece's 4,720 uploads took 3.5 s, where the
-    // paged listing took ~2.2 s for each of its 10 pages. The paged listing stays as
-    // the fallback should this endpoint change.
-    let all: MangaChapter[] = [];
-    try {
-      const body = await ballHttp.post(
-        `${MANGABALL.API}/chapter/chapter-listing-by-title-id`,
-        { title_id: title.id, user_id: "demo_user", lang: "en" },
-        32 * 1024 * 1024,
-      );
-      all = mangaBallAllChapters(parseJson(body));
-    } catch (error) {
-      if (error instanceof MangaSourceError && error.status === 429) throw error; // Don't double the load when limited.
-      console.warn("[MangaBall] single-call chapter listing failed, using the paged listing", error);
-    }
-    const paged = !all.length;
-    for (let page = 1; paged && page <= 20; page++) {
-      const body = await ballHttp.get(
-        `${MANGABALL.API}/title/chapter-listing?title_id=${title.id}&page=${page}&limit=500&group_by=flat&sort_order=asc&language=en&search=`,
-        16 * 1024 * 1024,
-      );
+    // Every English upload, a hundred to a page: bigger pages and the one-call listing
+    // (`POST /chapter/chapter-listing-by-title-id`) now take longer than a request may
+    // (MANGABALL_LIST_PAGE).
+    const all: MangaChapter[] = [];
+    for (let page = 1; page <= MANGABALL_MAX_LIST_PAGES; page++) {
+      const body = await ballHttp.get(mangaBallListingUrl(title.id, page), 16 * 1024 * 1024);
       const result = mangaBallChapters(parseJson(body));
       all.push(...result.chapters);
       if (page >= result.totalPages || all.length >= MAX_CHAPTERS) break;

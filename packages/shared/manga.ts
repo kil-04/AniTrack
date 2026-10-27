@@ -618,13 +618,19 @@ export function mangaBallChapters(json: unknown): { chapters: MangaChapter[]; to
 }
 
 /**
- * `POST /chapter/chapter-listing-by-title-id`: every English upload of a title. It
- * answers newest first; this returns the paged listing's order (chapter number, then
- * upload time), which ties between groups and a group's re-uploads are decided by.
+ * Rows asked for in each page of MangaBall's chapter listing. Up to 100 come back in a
+ * few seconds, bigger pages far more slowly (27 Oct 2026, Solo Leveling's 728 uploads:
+ * 200 rows took 33 s, 500 took 68 s, and the one-call listing 105 s), past the 25 s a
+ * request may take.
  */
-export function mangaBallAllChapters(json: unknown): MangaChapter[] {
-  return mangaBallChapters(json).chapters.sort((a, b) => a.number - b.number || (a.uploadedAt ?? 0) - (b.uploadedAt ?? 0));
-}
+export const MANGABALL_LIST_PAGE = 100;
+
+/** Listing pages read at most: 10,000 uploads. */
+export const MANGABALL_MAX_LIST_PAGES = 100;
+
+/** One page of a title's English uploads, oldest first. */
+export const mangaBallListingUrl = (titleId: string, page: number) =>
+  `${MANGABALL.API}/title/chapter-listing?title_id=${titleId}&page=${page}&limit=${MANGABALL_LIST_PAGE}&group_by=flat&sort_order=asc&language=en&search=`;
 
 /**
  * The newest English chapter in a newest-first `/title/chapter-listing` page, and

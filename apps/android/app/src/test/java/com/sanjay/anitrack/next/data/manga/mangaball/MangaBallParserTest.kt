@@ -61,24 +61,14 @@ class MangaBallParserTest {
         assertNull(MangaBallParser.latest(JSONObject("""{"data":[]}""")))
     }
 
-    @Test fun readsTheSingleCallListingInPagedOrder() {
-        // POST /chapter/chapter-listing-by-title-id: every upload at once, newest first, no pagination block.
-        val json = JSONObject(
-            """{"status":"success","data":[
-            {"id":"6ac87738052042d762e1fa61","title_id":"68515540702284f8341784c8","lang":"en","name":"Chapter 1195","number":1195,
-             "status":"published","created_at":"2026-10-09T05:10:16.119000","chapter_number":1195,
-             "group":{"id":"6a4f73cf8ecdd020b95469d2","_id":"6a4f73cf8ecdd020b95469d2","name":"Meganium","slug":"meganium"}},
-            {"id":"6ac87738052042d762e1fa60","lang":"en","name":"Chapter 1195","number":1195,"status":"published",
-             "created_at":"2026-10-09T02:53:26.916000","group":{"name":"Ho-oh"}},
-            {"id":"6ac87738052042d762e1fa62","lang":"en","name":"Chapter 1194: Title","number":1194,"status":"published",
-             "created_at":"2026-10-02T05:10:16.119000","group":{"name":"Swampert"}}]}""",
+    @Test fun listsChaptersAHundredToAPage() {
+        // Bigger pages took 33 s (200 rows) and 68 s (500) on 27 Oct 2026, past the 25 s limit.
+        assertEquals(
+            "/title/chapter-listing?title_id=685158ff702284f834178c9b&page=3&limit=100&group_by=flat&sort_order=asc&language=en&search=",
+            MangaBallParser.listingPath("685158ff702284f834178c9b", 3),
         )
-        // Chapter number, then upload time: the older of two uploads of a number comes first.
-        val uploads = MangaBallParser.allChapters(json)
-        assertEquals(listOf(1194f, 1195f, 1195f), uploads.map { it.number })
-        assertEquals(listOf("Swampert", "Ho-oh", "Meganium"), uploads.map { it.group })
-        assertEquals(listOf("Title", null, null), uploads.map { it.title })
-        assertTrue(MangaBallParser.allChapters(JSONObject("""{"status":"success","data":[]}""")).isEmpty())
+        // Desktop's mangaBallListingUrl asks for the same (tests/manga.test.mjs); 10,000 uploads at most.
+        assertEquals(10_000, MangaBallParser.LIST_PAGE * MangaBallParser.MAX_LIST_PAGES)
     }
 
     @Test fun matchesByMyAnimeListAndRejectsConflictsAndAdultTitles() {
