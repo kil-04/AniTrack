@@ -118,6 +118,12 @@ async function probeAnimePahe(config, baseUrl) {
 async function probeShonen(config, baseUrl) {
   try {
     const search = await probe(baseUrl + expandRoute(config.routes.search, { query: "one piece" }));
+    // Since 21 Oct 2026 Cloudflare refuses GitHub's runners (403) while home connections
+    // pass search, sources and playlist: a refusal page is the runner's problem, not an outage.
+    if ([403, 429, 503].includes(search.status) &&
+        /cloudflare|just a moment|verify (?:you are )?human|attention required|you have been blocked/i.test(search.body)) {
+      return result("shonen", baseUrl, "challenge", "reachable; GitHub runner received an anti-bot challenge", search.status, search.finalUrl);
+    }
     if (search.status < 200 || search.status >= 300) {
       return result("shonen", baseUrl, "failed", `search HTTP ${search.status}`, search.status, search.finalUrl);
     }
