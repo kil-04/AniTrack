@@ -13,7 +13,7 @@ interface Props {
 }
 
 // AniList MediaFormat -> short label shown on the card's type badge.
-function formatLabel(f?: string | null): string | null {
+export function formatLabel(f?: string | null): string | null {
   if (!f) return null;
   switch (f) {
     case "TV": return "TV";

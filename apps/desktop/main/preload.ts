@@ -47,6 +47,7 @@ contextBridge.exposeInMainWorld("api", {
     trending: () => ipcRenderer.invoke(IPC.ANILIST_TRENDING),
     airing: (ids: number[]) => ipcRenderer.invoke(IPC.ANILIST_AIRING, ids),
     recent: (page = 1) => ipcRenderer.invoke(IPC.ANILIST_RECENT, page),
+    airingBetween: (from: number, to: number) => ipcRenderer.invoke(IPC.ANILIST_AIRING_BETWEEN, from, to),
     recommendations: (seedIds: number[], excludedIds: number[]) =>
       ipcRenderer.invoke(IPC.ANILIST_RECOMMENDATIONS, seedIds, excludedIds),
     get: (id: number) => ipcRenderer.invoke(IPC.ANILIST_GET, id),

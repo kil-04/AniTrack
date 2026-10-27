@@ -423,6 +423,27 @@ export async function installCapacitorApiBridge() {
           hasNextPage: data.Page?.pageInfo?.hasNextPage ?? false,
         };
       },
+      async airingBetween(from: number, to: number) {
+        const out: import("../../../../packages/shared/types").RecentEpisode[] = [];
+        for (let page = 1; page <= 3; page++) {
+          const data = await alGql<any>(`
+            query($from: Int, $to: Int, $page: Int) {
+              Page(page: $page, perPage: 50) {
+                pageInfo { hasNextPage }
+                airingSchedules(airingAt_greater: $from, airingAt_lesser: $to, sort: TIME) {
+                  airingAt episode
+                  media { ${MEDIA_FIELDS} isAdult }
+                }
+              }
+            }`, { from, to, page }, "high");
+          for (const schedule of data.Page?.airingSchedules ?? []) {
+            if (!schedule.media || schedule.media.isAdult) continue;
+            out.push({ anime: mapMedia(schedule.media), episode: schedule.episode, airingAt: schedule.airingAt });
+          }
+          if (!data.Page?.pageInfo?.hasNextPage) break;
+        }
+        return out;
+      },
       async recommendations(seedIds: number[], excludedIds: number[]) {
         const seeds = Array.from(new Set((seedIds ?? []).filter((id) => Number.isInteger(id) && id > 0))).slice(0, 8);
         if (seeds.length === 0) return [];

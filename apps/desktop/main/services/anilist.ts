@@ -2,7 +2,7 @@ import { app } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { fetchAniListResponse } from "./anilist-request";
-import type { AnimeMeta, AnimeRecommendation, RecentEpisodesPage, RelatedAnime } from "../../../../packages/shared/types";
+import type { AnimeMeta, AnimeRecommendation, RecentEpisode, RecentEpisodesPage, RelatedAnime } from "../../../../packages/shared/types";
 import { classicEraBoost, classicEraLabel } from "../../../../packages/shared/recommendations";
 import { planStory, type PrintMeta, type StoryPlan } from "../../../../packages/shared/story-bridge";
 import {
@@ -394,6 +394,46 @@ export async function recentEpisodes(page = 1, priority: "high" | "low" = "high"
   cacheSet(key, result);
   if (priority === "high") warmNextRecent(result);
   return result;
+}
+
+/**
+ * Every episode airing between [from] and [to] (unix seconds), soonest first: one
+ * day of the Schedule. Mirrors Android's AniList.airingBetween (pages of 50, three
+ * at most, adult titles left out).
+ */
+export async function airingBetween(from: number, to: number): Promise<RecentEpisode[]> {
+  const key = `airing-between:${from}:${to}`;
+  const hit = cacheGet<RecentEpisode[]>(key);
+  if (hit) return hit;
+  const out: RecentEpisode[] = [];
+  for (let page = 1; page <= 3; page++) {
+    const data = await gql<{
+      Page: {
+        pageInfo: { hasNextPage: boolean };
+        airingSchedules: Array<{ airingAt: number; episode: number; media: MediaNode | null }>;
+      };
+    }>(
+      `query($from: Int, $to: Int, $page: Int) {
+        Page(page: $page, perPage: 50) {
+          pageInfo { hasNextPage }
+          airingSchedules(airingAt_greater: $from, airingAt_lesser: $to, sort: TIME) {
+            airingAt
+            episode
+            media { ${MEDIA_FIELDS} }
+          }
+        }
+      }`,
+      { from, to, page },
+      "high",
+    );
+    for (const schedule of data.Page.airingSchedules) {
+      if (!schedule.media || schedule.media.isAdult) continue;
+      out.push({ anime: toAnime(schedule.media), episode: schedule.episode, airingAt: schedule.airingAt });
+    }
+    if (!data.Page.pageInfo.hasNextPage) break;
+  }
+  cacheSet(key, out);
+  return out;
 }
 
 /** Fetches the page after [shown] in the background, so paging on is instant. */

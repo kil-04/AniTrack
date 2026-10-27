@@ -183,6 +183,7 @@ export const IPC = {
   ANILIST_TRENDING: "anilist:trending",
   ANILIST_GET: "anilist:get",
   ANILIST_AIRING: "anilist:airing",
+  ANILIST_AIRING_BETWEEN: "anilist:airing-between",
   ANILIST_RECENT: "anilist:recent",
   ANILIST_RECOMMENDATIONS: "anilist:recommendations",
   ANILIST_PREMIERED_ON: "anilist:premiered-on",

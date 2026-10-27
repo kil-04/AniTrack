@@ -10,7 +10,7 @@ import {
   pullList,
   setMalClientId,
 } from "../services/mal";
-import { getById, getRelations, searchAnime, advancedSearchAnime, trending, getAiringFor, recentEpisodes, recommendations, premieredOn, getStory, timeMachineYear } from "../services/anilist";
+import { getById, getRelations, searchAnime, advancedSearchAnime, trending, getAiringFor, airingBetween, recentEpisodes,recommendations, premieredOn, getStory, timeMachineYear } from "../services/anilist";
 import { themeRadio, themesForAnime } from "../services/animethemes";
 import { searchSongs, seasonSongs, showSongs, songCharts } from "../services/anisongs";
 import {
@@ -76,6 +76,13 @@ export function registerAuthIpc(getMainWindow: () => BrowserWindow | null) {
   ipcMain.handle(IPC.ANILIST_TRENDING, () => trending());
   ipcMain.handle(IPC.ANILIST_AIRING, (_e, ids: number[]) => getAiringFor(ids));
   ipcMain.handle(IPC.ANILIST_RECENT, (_e, page = 1) => recentEpisodes(page));
+  // One Schedule day: whole unix seconds, at most two days apart (a day can run 25 h).
+  ipcMain.handle(IPC.ANILIST_AIRING_BETWEEN, (_e, from: unknown, to: unknown) => {
+    if (!Number.isInteger(from) || !Number.isInteger(to)) throw new Error("Invalid airing range.");
+    const start = from as number, end = to as number;
+    if (start <= 0 || end <= start || end - start > 2 * 86_400) throw new Error("Invalid airing range.");
+    return airingBetween(start, end);
+  });
   ipcMain.handle(IPC.ANILIST_RECOMMENDATIONS, (_e, seedIds: number[], excludedIds: number[]) =>
     recommendations(seedIds, excludedIds));
   ipcMain.handle(IPC.ANILIST_RELATIONS, (_e, id: number) => getRelations(id));
