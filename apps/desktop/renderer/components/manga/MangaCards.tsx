@@ -43,13 +43,13 @@ export function MangaRow({ title, items, action }: { title: string; items: Manga
         {action}
       </div>
       <div className="group/row relative">
-        <button onClick={() => scroll(-1)} className="absolute left-2 top-1/2 z-10 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full glass shadow-pop transition hover:scale-105 group-hover/row:flex" aria-label="Scroll left">
+        <button onClick={() => scroll(-1)} aria-label="Scroll left" className="absolute left-2 top-1/2 z-30 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full glass shadow-pop transition hover:scale-105 group-hover/row:flex" aria-label="Scroll left">
           <ChevronLeft size={26} />
         </button>
         <div ref={scroller} className="no-scrollbar flex gap-4 overflow-x-auto px-8 pb-4 pt-2">
           {items.map((manga) => <MangaCard key={manga.id} manga={manga} size="row" />)}
         </div>
-        <button onClick={() => scroll(1)} className="absolute right-2 top-1/2 z-10 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full glass shadow-pop transition hover:scale-105 group-hover/row:flex" aria-label="Scroll right">
+        <button onClick={() => scroll(1)} aria-label="Scroll right" className="absolute right-2 top-1/2 z-30 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full glass shadow-pop transition hover:scale-105 group-hover/row:flex" aria-label="Scroll right">
           <ChevronRight size={26} />
         </button>
       </div>

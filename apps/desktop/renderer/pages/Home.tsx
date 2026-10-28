@@ -383,7 +383,9 @@ export default function Home() {
             {cwCanScrollLeft && (
               <button
                 onClick={() => cwScroll("left")}
-                className="absolute left-2 top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full glass shadow-pop opacity-0 transition hover:scale-105 group-hover/cwrow:opacity-100"
+                aria-label="Scroll left"
+                // Above the cards, whose hovered layer rises to z-10 and its remove button to z-20.
+                className="absolute left-2 top-1/2 z-30 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full glass shadow-pop opacity-0 transition hover:scale-105 group-hover/cwrow:opacity-100"
               >
                 <ChevronLeft size={18} />
               </button>
@@ -391,7 +393,8 @@ export default function Home() {
             {cwCanScrollRight && (
               <button
                 onClick={() => cwScroll("right")}
-                className="absolute right-2 top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full glass shadow-pop opacity-0 transition hover:scale-105 group-hover/cwrow:opacity-100"
+                aria-label="Scroll right"
+                className="absolute right-2 top-1/2 z-30 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full glass shadow-pop opacity-0 transition hover:scale-105 group-hover/cwrow:opacity-100"
               >
                 <ChevronRight size={18} />
               </button>

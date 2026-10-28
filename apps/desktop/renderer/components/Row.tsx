@@ -25,13 +25,16 @@ const Row = React.memo(function Row({ title, children }: Props) {
       <div className="relative">
         <button
           onClick={() => scroll(-1)}
-          className="absolute left-2 top-1/2 z-10 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full glass shadow-pop transition hover:scale-105 group-hover/row:flex"
+          aria-label="Scroll left"
+          // Above the cards, whose hovered layer rises to z-10.
+          className="absolute left-2 top-1/2 z-30 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full glass shadow-pop transition hover:scale-105 group-hover/row:flex"
         >
           <ChevronLeft />
         </button>
         <button
           onClick={() => scroll(1)}
-          className="absolute right-2 top-1/2 z-10 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full glass shadow-pop transition hover:scale-105 group-hover/row:flex"
+          aria-label="Scroll right"
+          className="absolute right-2 top-1/2 z-30 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full glass shadow-pop transition hover:scale-105 group-hover/row:flex"
         >
           <ChevronRight />
         </button>
