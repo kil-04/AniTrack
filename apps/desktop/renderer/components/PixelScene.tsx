@@ -1,18 +1,21 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import type { LucideIcon } from "lucide-react";
-import { pixelScene, type PixelSceneId } from "../../../../packages/shared/pixel-scenes";
+import { pixelActorAt, pixelSceneParts, type PixelActor, type PixelSceneId } from "../../../../packages/shared/pixel-scenes";
 
 /**
  * A pixel-art scene (packages/shared/pixel-scenes.ts, the same pictures Android draws) filling
- * its box: drawn at art-pixel size and scaled up crisp, redrawn when the box changes size.
+ * its box: drawn at art-pixel size and scaled up crisp, redrawn when the box changes size. Its
+ * moving parts are small canvases on top, moved and shown by CSS animations of `transform` and
+ * `opacity` in steps, which the compositor runs (still under reduced motion or with motion off).
  */
 export function PixelSceneCanvas({ scene, pixel = 3 }: { scene: PixelSceneId; pixel?: number }) {
   const canvas = useRef<HTMLCanvasElement>(null);
+  const layer = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const element = canvas.current;
+    const element = canvas.current, actors = layer.current;
     const box = element?.parentElement;
-    if (!element || !box) return;
+    if (!element || !box || !actors) return;
     let drawn = "";
     const draw = () => {
       const width = Math.max(16, Math.ceil(box.clientWidth / pixel));
@@ -23,17 +26,77 @@ export function PixelSceneCanvas({ scene, pixel = 3 }: { scene: PixelSceneId; pi
       element.height = height;
       const context = element.getContext("2d");
       if (!context) return;
-      for (const p of pixelScene(scene, width, height)) {
+      const parts = pixelSceneParts(scene, width, height);
+      for (const p of parts.rects) {
         context.fillStyle = p.color;
         context.fillRect(p.x, p.y, p.w, p.h);
       }
+      actors.replaceChildren(...parts.actors.map((actor) => actorCanvas(actor, width, height)));
     };
     draw();
     const observer = new ResizeObserver(draw);
     observer.observe(box);
     return () => observer.disconnect();
   }, [scene, pixel]);
-  return <canvas ref={canvas} className="pixel-scene" aria-hidden="true" />;
+  return (
+    <>
+      <canvas ref={canvas} className="pixel-scene" aria-hidden="true" />
+      <div ref={layer} className="pixel-actors" aria-hidden="true" />
+    </>
+  );
+}
+
+/** One moving part: its own canvas, placed in percent of the scene so it scales with it. */
+function actorCanvas(actor: PixelActor, width: number, height: number): HTMLCanvasElement {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of actor.rects) {
+    minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x + p.w); maxY = Math.max(maxY, p.y + p.h);
+  }
+  const bw = maxX - minX, bh = maxY - minY;
+  const element = document.createElement("canvas");
+  element.width = bw;
+  element.height = bh;
+  const context = element.getContext("2d");
+  if (context) {
+    for (const p of actor.rects) {
+      context.fillStyle = p.color;
+      context.fillRect(p.x - minX, p.y - minY, p.w, p.h);
+    }
+  }
+  const style = element.style;
+  style.left = `${(minX / width) * 100}%`;
+  style.top = `${(minY / height) * 100}%`;
+  style.width = `${(bw / width) * 100}%`;
+  style.height = `${(bh / height) * 100}%`;
+  // Where it rests when nothing moves; the animations override this while they run.
+  const rest = pixelActorAt(actor, actor.rest);
+  style.transform = `translate(${(rest.x / bw) * 100}%, ${(rest.y / bh) * 100}%)`;
+  style.opacity = rest.shown ? "1" : "0";
+  const seconds = actor.period / 10, start = -actor.delay / 10;
+  const animations: string[] = [];
+  if (actor.dx || actor.dy) {
+    style.setProperty("--dx", `${(actor.dx / bw) * 100}%`);
+    style.setProperty("--dy", `${(actor.dy / bh) * 100}%`);
+    animations.push(`pixel-actor-move ${seconds}s steps(${Math.max(1, Math.abs(actor.dx), Math.abs(actor.dy))}, end) ${start}s infinite`);
+  }
+  if (actor.on < actor.period) animations.push(`${shownFor(actor.on / actor.period)} ${seconds}s step-end ${start}s infinite`);
+  style.animation = animations.join(", ");
+  return element;
+}
+
+/** A keyframes rule that shows a part for the first [share] of its cycle (made once per share). */
+const shares = new Set<number>();
+function shownFor(share: number): string {
+  const percent = Math.min(99, Math.max(1, Math.round(share * 100)));
+  const name = `pixel-actor-on-${percent}`;
+  if (!shares.has(percent)) {
+    shares.add(percent);
+    const sheet = document.createElement("style");
+    sheet.textContent = `@keyframes ${name} { 0% { opacity: 1; } ${percent}% { opacity: 0; } 100% { opacity: 0; } }`;
+    document.head.appendChild(sheet);
+  }
+  return name;
 }
 
 /** Pixel mode's page banner: a scene under scanlines, with the page's icon, title and subtitle. */

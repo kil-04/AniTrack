@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -64,8 +65,11 @@ object PixelTime {
     const val STAR_PERIOD = 130
     const val STAR_TICKS = 9
 
+    /** Scenes with moving parts now on screen (PixelSceneArt): while any are, the clock ticks fast. */
+    var movers = 0
+
     internal fun busy(t: Int, blue: Boolean): Boolean =
-        blue || t % CAT_PERIOD <= CAT_WALK || t % STAR_PERIOD <= STAR_TICKS || t % STAR_PERIOD >= STAR_PERIOD - 2
+        movers > 0 || blue || t % CAT_PERIOD <= CAT_WALK || t % STAR_PERIOD <= STAR_TICKS || t % STAR_PERIOD >= STAR_PERIOD - 2
 }
 
 /** The blue palette's title glitch: a quick jump, in dp, once every 7 s. */
@@ -235,7 +239,7 @@ fun PixelSprite(id: String, modifier: Modifier = Modifier, width: Dp = 32.dp) {
  * every 2¼ minutes. The clock is read only while drawing the cat's own small layer.
  */
 @Composable
-private fun WalkingCat(modifier: Modifier, cell: Dp) {
+private fun WalkingCat(modifier: Modifier, cell: Dp, period: Int = PixelTime.CAT_PERIOD, walk: Int = PixelTime.CAT_WALK) {
     val context = LocalContext.current
     val sheet = remember { PixelSprites.load(context) }
     val frames = remember {
@@ -245,13 +249,44 @@ private fun WalkingCat(modifier: Modifier, cell: Dp) {
     BoxWithConstraints(modifier) {
         val width = constraints.maxWidth.toFloat()
         Canvas(Modifier.fillMaxWidth().height(cell * rows).graphicsLayer()) {
-            val phase = PixelTime.tick.intValue % PixelTime.CAT_PERIOD
-            if (phase >= PixelTime.CAT_WALK) return@Canvas
+            val phase = PixelTime.tick.intValue % period
+            if (phase >= walk) return@Canvas
             val px = floor(cell.toPx()).coerceAtLeast(1f)
             val sprite = 16 * px
-            val left = floor((-sprite + (width + sprite * 2) * phase / PixelTime.CAT_WALK) / px) * px
+            val left = floor((-sprite + (width + sprite * 2) * phase / walk) / px) * px
             for ((p, color) in frames[(phase / 3) % 2]) drawRect(color, Offset(left + p.x * px, p.y * px), Size(p.w * px, p.h * px))
         }
+    }
+}
+
+/**
+ * A cat wandering across the gap between two of Home's rows: 20 s across, once a minute (desktop's
+ * .pixel-walker). Gone with motion off; while it's on screen the clock ticks fast.
+ */
+@Composable
+internal fun RowWalker(modifier: Modifier = Modifier) {
+    if (!pixelMotion()) return
+    DisposableEffect(Unit) {
+        PixelTime.movers++
+        onDispose { PixelTime.movers-- }
+    }
+    WalkingCat(modifier.fillMaxWidth(), 2.dp, period = 600, walk = 200)
+}
+
+/** Pixel mode's dog, sitting by the Top 10 tabs and wagging its tail on the clock (desktop's .pixel-dog). */
+@Composable
+internal fun PixelDog(modifier: Modifier = Modifier, width: Dp = 32.dp) {
+    val context = LocalContext.current
+    val sheet = remember { PixelSprites.load(context) }
+    val frames = remember {
+        listOf("dog-sit-1", "dog-sit-2").map { id -> sheet.rects(id).map { it to Color(android.graphics.Color.parseColor(it.color)) } }
+    }
+    val rows = sheet.height("dog-sit-1").coerceAtLeast(1)
+    val motion = pixelMotion()
+    Canvas(modifier.size(width, width * rows / 16).graphicsLayer()) {
+        val frame = if (motion) (PixelTime.tick.intValue / 8) % 2 else 0
+        val cell = max(1f, floor(size.width / 16))
+        for ((p, color) in frames[frame]) drawRect(color, Offset(p.x * cell, p.y * cell), Size(p.w * cell, p.h * cell))
     }
 }
 

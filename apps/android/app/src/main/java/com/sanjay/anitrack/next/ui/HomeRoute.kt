@@ -238,6 +238,8 @@ private fun AnimeHome(
             if (loading && trending.isEmpty()) RowPlaceholder()
             else AnimeRow(trending, onOpen)
         }
+        // Pixel mode: now and then a cat wanders across between the rows.
+        if (pixel) item(key = "row-walker") { RowWalker(Modifier.padding(top = 4.dp)) }
         if (pixel && !loading) item(key = "interlude-songs") {
             PixelInterlude(PixelScene.JUKEBOX, "On the jukebox", "Openings and endings, chart by chart", { onGo("songs") })
         }

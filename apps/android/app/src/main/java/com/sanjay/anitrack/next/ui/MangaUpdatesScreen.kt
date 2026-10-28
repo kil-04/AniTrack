@@ -154,7 +154,7 @@ fun MangaUpdatesScreen(onOpen: (Int) -> Unit) {
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 24.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
             ScreenHeader(
-                "Updates", scene = PixelScene.TOWER,
+                "Updates", scene = PixelScene.DUSK_LINE,
                 subtitle = "Newest chapters for manga in your list and reading history.",
                 icon = Icons.Rounded.NewReleases,
             ) {

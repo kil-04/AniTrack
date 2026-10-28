@@ -16,6 +16,7 @@ object PixelScenes {
         "sunset", "neon-city", "fuji", "sakura", "shinkansen", "starlight", "library", "ramen-stand", "arcade",
         "bedroom", "cinema", "tower", "observatory", "station", "terminal", "stage",
         "jukebox", "radio", "hifi", "night-drive", "karaoke", "rooftop-band", "hologram",
+        "manga-street", "moon-bench", "dusk-line", "green-shop",
     )
 
     private val STARS = listOf("#fff6d6", "#ff9be6", "#bff8ff")
@@ -72,6 +73,8 @@ object PixelScenes {
         intArrayOf(40, 40, 10, 14, 1), intArrayOf(86, 10, 12, 22, 2), intArrayOf(88, 46, 10, 16, 3),
     )
     private val GLOW_STICKS = listOf("#2ee6ff", "#2ee6ff", "#7fe8ff", "#ff7ad9")
+    private val SHOP_SIGNS = listOf("#ffd36b", "#ff5a5a", "#5ce1e6", "#ff9fd0", "#9be15c", "#ffb35a")
+    private val TOWN_LIGHTS = listOf("#ffb35a", "#ffd27a", "#ff8a4a")
     /** A cat sitting under the lamp ('#' fur, 'o' eyes). */
     private val CAT = listOf("#...#....", "##.##....", "#####....", "#o#o#....", "#####...#", ".####...#", ".######.#", ".#######.", ".#######.")
 
@@ -88,12 +91,34 @@ object PixelScenes {
         return r
     }
 
+    /**
+     * A part of a scene that moves or blinks over the still picture. Its pixels are where it starts;
+     * each [period] (tenths of a second) it slides by ([dx], [dy]) and is shown for the first [on]
+     * tenths. [delay] shifts its phase, and [rest] is the time shown when nothing moves.
+     */
+    data class Actor(val rects: List<CityPopPixel>, val dx: Int, val dy: Int, val period: Int, val delay: Int, val on: Int, val rest: Int)
+
+    /** A scene's still picture and its moving parts. */
+    data class Parts(val rects: List<CityPopPixel>, val actors: List<Actor>)
+
+    /** Where [actor] is at [t] tenths of a second (whole art pixels from its start) and whether it shows. */
+    fun actorAt(actor: Actor, t: Int): Triple<Int, Int, Boolean> {
+        val phase = ((t + actor.delay) % actor.period + actor.period) % actor.period
+        return Triple(actor.dx * phase / actor.period, actor.dy * phase / actor.period, phase < actor.on)
+    }
+
     /** The art-pixel grid a scene draws on. */
-    private class Grid(val w: Int, val h: Int) {
-        val out = ArrayList<CityPopPixel>(4096)
+    private class Grid(val w: Int, val h: Int, val clip: Boolean = true) {
+        val out = ArrayList<CityPopPixel>(if (clip) 4096 else 16)
+        /** The scene's moving parts ([actor]). */
+        val actors = ArrayList<Actor>()
 
         /** A rectangle, clipped to the grid. */
         fun px(x: Int, y: Int, rw: Int, rh: Int, color: String) {
+            if (!clip) {
+                if (rw > 0 && rh > 0) out.add(CityPopPixel(x, y, rw, rh, color))
+                return
+            }
             val left = max(0, x); val top = max(0, y); val right = min(w, x + rw); val bottom = min(h, y + rh)
             if (right > left && bottom > top) out.add(CityPopPixel(left, top, right - left, bottom - top, color))
         }
@@ -162,6 +187,13 @@ object PixelScenes {
             }
         }
 
+        /** A part that moves or blinks over the still picture ([Actor]), drawn by [draw] where it starts. */
+        fun actor(dx: Int = 0, dy: Int = 0, period: Int, delay: Int = 0, on: Int = period, rest: Int = 0, draw: (Grid) -> Unit) {
+            val a = Grid(w, h, false)
+            draw(a)
+            if (a.out.isNotEmpty()) actors.add(Actor(a.out, dx, dy, max(1, period), delay, on, rest))
+        }
+
         /** Seeded stars between rows [top] and [bottom]; every eleventh one is a small cross. */
         fun stars(top: Int, bottom: Int, count: Int, seed: Int, colors: List<String> = STARS) {
             val span = max(1, bottom - top)
@@ -175,10 +207,13 @@ object PixelScenes {
     }
 
     /** A scene at [width] × [height] art pixels. */
-    fun scene(id: String, width: Int, height: Int): List<CityPopPixel> {
+    fun scene(id: String, width: Int, height: Int): List<CityPopPixel> = sceneParts(id, width, height).rects
+
+    /** A scene and its moving parts at [width] × [height] art pixels. */
+    fun sceneParts(id: String, width: Int, height: Int): Parts {
         val g = Grid(max(16, width), max(12, height))
         when (id) {
-            "sunset" -> return CityPopScene.scene(g.w, g.h, horizon = 680, sunX = 760, sun = 170)
+            "sunset" -> return Parts(CityPopScene.scene(g.w, g.h, horizon = 680, sunX = 760, sun = 170), emptyList())
             "neon-city" -> neonCity(g)
             "fuji" -> fuji(g)
             "sakura" -> sakura(g)
@@ -201,8 +236,41 @@ object PixelScenes {
             "karaoke" -> karaoke(g)
             "rooftop-band" -> rooftopBand(g)
             "hologram" -> hologram(g)
+            "manga-street" -> mangaStreet(g)
+            "moon-bench" -> moonBench(g)
+            "dusk-line" -> duskLine(g)
+            "green-shop" -> greenShop(g)
         }
-        return g.out
+        return Parts(g.out, g.actors)
+    }
+
+    /** A layer that drifts by ([dx], [dy]) every period without end: drawn twice, the copy one step behind, so it wraps unseen. */
+    private fun drift(g: Grid, dx: Int, dy: Int, period: Int, draw: (Grid, Int, Int) -> Unit) {
+        g.actor(dx = dx, dy = dy, period = period) { a -> draw(a, 0, 0); draw(a, -dx, -dy) }
+    }
+
+    /** Stars that come and go inside a box: two sets taking turns. */
+    private fun twinkle(g: Grid, left: Int, top: Int, right: Int, bottom: Int, count: Int, seed: Int, color: String = "#ffffff") {
+        val across = max(1, right - left); val span = max(1, bottom - top)
+        for (k in 0 until 2) {
+            g.actor(period = 30, delay = k * 15, on = 15) { a ->
+                var i = k
+                while (i < count) { a.px(left + mod(seed + i * 3 + 1, across), top + mod(seed + i * 3 + 2, span), 1, 1, color); i += 2 }
+            }
+        }
+    }
+
+    /** Two frames taking turns, [period] tenths for the pair (the first shows when nothing moves). */
+    private fun frames(g: Grid, period: Int, first: (Grid) -> Unit, second: (Grid) -> Unit) {
+        g.actor(period = period, on = period / 2, draw = first)
+        g.actor(period = period, delay = period / 2, on = period / 2, draw = second)
+    }
+
+    /** A bird in flight, three pixels wide. */
+    private fun bird(a: Grid, x: Int, y: Int, color: String) {
+        a.px(x, y, 1, 1, color)
+        a.px(x + 1, y + 1, 1, 1, color)
+        a.px(x + 2, y, 1, 1, color)
     }
 
     /** A city at night in the rain: a full moon, lit towers, neon signs shining on the wet street. */
@@ -263,14 +331,19 @@ object PixelScenes {
                     g.px(sx, sy, 3, sh, color)
                     var gy = sy + 1
                     while (gy < sy + sh - 1) { g.px(sx + 1, gy, 1, 1, "#12051f"); gy += 2 }
+                    if (mod(8800 + i, 2) == 0) g.actor(period = 50 + mod(8900 + i, 40), delay = mod(9000 + i, 50), on = 2, rest = 40) { a -> a.px(sx, sy, 3, sh, "#12051f") }
                     var ry = street + 1
                     while (ry < h) { g.px(sx + mod(ry * 5 + sx * 3, 3), ry, 1, 1, color); ry += 2 }
                 }
                 x += bw; i++
             }
         }
-        val drops = w * h / 70
-        for (i in 0 until drops) g.px(mod(20000 + i * 2, w), mod(20001 + i * 2, h), 1, 2 + mod(20000 + i * 5, 2), "#5866c4")
+        // The rain falls past, a little slanted; a sign blinks out now and then.
+        val drops = w * h / 70; val slant = h / 4
+        drift(g, -slant, h, 9) { a, ox, oy ->
+            for (i in 0 until drops) a.px(mod(20000 + i * 2, w + slant) + ox, mod(20001 + i * 2, h) + oy, 1, 2 + mod(20000 + i * 5, 2), "#5866c4")
+        }
+        twinkle(g, 0, 0, w, street * 45 / 100, w * street / 700, 150)
     }
 
     /** Mount Fuji at dawn over a still lake, a torii gate standing in the water. */
@@ -285,15 +358,7 @@ object PixelScenes {
             val half = isqrt(sr * sr - (y - sy) * (y - sy))
             g.px(sx - half, y, half * 2 + 1, 1, SUNRISE[min(SUNRISE.size - 1, (y - sy + sr) * SUNRISE.size / (sr * 2))])
         }
-        for (k in 0 until 3) {
-            val cy = horizon * (34 + k * 16) / 100
-            val cw = w * (16 + mod(9100 + k, 12)) / 100
-            val cx = mod(9000 + k, w)
-            for (r in 0 until 3) {
-                val rw = cw * (2 + r) / 4
-                g.px(cx - rw / 2, cy + r, rw, 1, CLOUD[r])
-            }
-        }
+        twinkle(g, 0, 0, w, horizon * 30 / 100, w * horizon / 900, 350)
         // The mountain: a broad cone with a flat crater, its right face in shade, a snow cap with a ragged hem.
         val peakX = w * 66 / 100; val peakY = h * 14 / 100
         val snow = peakY + (horizon - peakY) * 30 / 100
@@ -341,11 +406,20 @@ object PixelScenes {
         g.px(tx + 9 * s, tTop - s, s, s, "#ff3d3d")
         g.px(tx - s, tTop + 2 * s, 10 * s, s, "#d92f2f")
         g.px(tx + 3 * s, tTop + s, 2 * s, s, "#d92f2f")
-        for (i in 0 until 3) {
-            val bx = w * (50 + i * 5) / 100; val by = horizon * (18 + mod(9600 + i, 12)) / 100
-            g.px(bx, by, 1, 1, "#2a1650")
-            g.px(bx + 1, by + 1, 1, 1, "#2a1650")
-            g.px(bx + 2, by, 1, 1, "#2a1650")
+        // Clouds drifting across the dawn, birds flying the other way.
+        for (k in 0 until 3) {
+            val cy = horizon * (34 + k * 16) / 100
+            val cw = w * (16 + mod(9100 + k, 12)) / 100
+            val cx = mod(9000 + k, w)
+            drift(g, w, 0, 600 + k * 170) { a, ox, _ ->
+                for (r in 0 until 3) {
+                    val rw = cw * (2 + r) / 4
+                    a.px(cx - rw / 2 + ox, cy + r, rw, 1, CLOUD[r])
+                }
+            }
+        }
+        drift(g, -w, 0, 260) { a, ox, _ ->
+            for (i in 0 until 3) bird(a, w * (50 + i * 5) / 100 + ox, horizon * (18 + mod(9600 + i, 12)) / 100, "#2a1650")
         }
     }
 
@@ -401,10 +475,14 @@ object PixelScenes {
                 }
             }
         }
-        val petals = w * h / 320
-        for (i in 0 until petals) {
-            g.px(mod(30000 + i * 2, w), mod(30001 + i * 2, h), if (i % 4 == 0) 2 else 1, 1, if (i % 3 == 0) "#ffb3de" else "#ff7ac6")
+        // Petals drifting down and across.
+        val petals = w * h / 320; val across = h / 2
+        drift(g, across, h, 70) { a, ox, oy ->
+            for (i in 0 until petals) {
+                a.px(mod(30000 + i * 2, w + across) - across + ox, mod(30001 + i * 2, h) + oy, if (i % 4 == 0) 2 else 1, 1, if (i % 3 == 0) "#ffb3de" else "#ff7ac6")
+            }
         }
+        twinkle(g, 0, 0, w, h * 60 / 100, w * h / 500, 450)
     }
 
     /** A bullet train crossing a sea bridge at sunset. */
@@ -444,22 +522,27 @@ object PixelScenes {
         run { var x = span / 2; while (x < w) { g.px(x, deck, 2 * s, h - deck, "#120526"); x += span } }
         g.px(0, deck, w, 2 * s, "#120526")
         g.px(0, deck - s, w, 1, "#2a0f45")
-        // The train: white cars with a blue stripe, windows, a long sloping nose and a headlight.
+        // The train: white cars with a blue stripe, windows, a long sloping nose and a headlight. It
+        // crosses the bridge, then the sea is empty a while; still, it stands where it was drawn.
         val th = max(4, h * 14 / 100)
         val ty = deck - th
         val length = w * 58 / 100
-        val x0 = w * 6 / 100
         val nose = th * 3
-        g.px(x0, ty, length, th, "#f4f2ff")
-        for (i in 0 until th) g.px(x0 + length, ty + i, nose * (i + 1) / th, 1, "#f4f2ff")
-        g.px(x0, ty + th * 62 / 100, length + nose, max(1, th / 5), "#2e6bff")
-        val wy = ty + max(1, th * 22 / 100); val wh = max(1, th / 5)
-        run { var x = x0 + 2; while (x < x0 + length - 2) { g.px(x, wy, 2, wh, if (mod(x * 7 + 11, 5) == 0) "#ffd36b" else "#1b2a5a"); x += 3 } }
-        val car = max(14, length / 4)
-        run { var x = x0 + car; while (x < x0 + length) { g.px(x, ty, 1, th, "#b9b4d9"); x += car } }
-        g.px(x0 + length + 1, wy, max(1, nose * (wy - ty + 1) / th - 2), wh, "#1b2a5a")
-        g.px(x0 + length + nose - 3, ty + th - 2, 2, 1, "#fff27a")
-        for (i in 0 until 6) g.px(x0 - 4 - mod(31300 + i, max(1, w / 12)), ty + mod(31400 + i, th), 3 + mod(31500 + i, 6), 1, "#ff8fb1")
+        val whole = length + nose; val travel = 2 * (w + whole); val period = 300
+        g.actor(dx = travel, period = period, rest = period * (w * 6 / 100 + whole) / travel) { a ->
+            val x0 = -whole
+            a.px(x0, ty, length, th, "#f4f2ff")
+            for (i in 0 until th) a.px(x0 + length, ty + i, nose * (i + 1) / th, 1, "#f4f2ff")
+            a.px(x0, ty + th * 62 / 100, length + nose, max(1, th / 5), "#2e6bff")
+            val wy = ty + max(1, th * 22 / 100); val wh = max(1, th / 5)
+            run { var x = x0 + 2; while (x < x0 + length - 2) { a.px(x, wy, 2, wh, if (mod(x - x0 + 11, 5) == 0) "#ffd36b" else "#1b2a5a"); x += 3 } }
+            val car = max(14, length / 4)
+            run { var x = x0 + car; while (x < x0 + length) { a.px(x, ty, 1, th, "#b9b4d9"); x += car } }
+            a.px(x0 + length + 1, wy, max(1, nose * (wy - ty + 1) / th - 2), wh, "#1b2a5a")
+            a.px(x0 + length + nose - 3, ty + th - 2, 2, 1, "#fff27a")
+            for (i in 0 until 6) a.px(x0 - 4 - mod(31300 + i, max(1, w / 12)), ty + mod(31400 + i, th), 3 + mod(31500 + i, 6), 1, "#ff8fb1")
+        }
+        twinkle(g, 0, 0, w, sea * 35 / 100, w * sea / 800, 550)
     }
 
     /** Deep space: nebulae, a ringed planet, a small moon and a shooting star. */
@@ -495,6 +578,18 @@ object PixelScenes {
         val tail = max(6, w * 12 / 100)
         val hx = w * 52 / 100; val hy = h * 30 / 100
         for (t in 0..tail) g.px(hx + t, hy - t / 3, 1, 1, if (t < 2) "#ffffff" else if (t < tail / 2) "#2ee6ff" else "#1a6f8f")
+        shootingStar(g, 61000)
+        twinkle(g, 0, 0, w, h, w * h / 160, 650)
+    }
+
+    /** Now and then a short streak crosses the upper sky. */
+    private fun shootingStar(g: Grid, seed: Int) {
+        val w = g.w; val h = g.h
+        val length = max(4, w * 4 / 100)
+        val x0 = w * (8 + mod(seed, 30)) / 100; val y0 = h * (6 + mod(seed + 1, 14)) / 100
+        g.actor(dx = w * 26 / 100, dy = h * 13 / 100, period = 120 + mod(seed + 2, 60), on = 7, rest = 60) { a ->
+            for (t in 0 until length) a.px(x0 + t, y0 + t / 2, 1, 1, if (t > length - 3) "#ffffff" else if (t > length / 2) "#bff8ff" else "#4f7cff")
+        }
     }
 
     /** A bookshop at night: full shelves, a window on the city, a lamp's warm light and a cat. */
@@ -567,6 +662,10 @@ object PixelScenes {
                 if (c != '.') g.px(catX + x * s, catY + y * s, s, s, if (c == 'o') "#ffd319" else "#07010f")
             }
         }
+        g.actor(period = 45, delay = 30, on = 2) { a ->
+            for (y in CAT.indices) for (x in CAT[y].indices) if (CAT[y][x] == 'o') a.px(catX + x * s, catY + y * s, s, s, "#07010f")
+        }
+        twinkle(g, wx, wy, wx + ww, wy + wh - wh / 4, ww * wh / 60, 52000)
     }
 
     /** A ramen stall at night: power lines, a glowing vending machine, red lanterns, steam and warm light on the street. */
@@ -576,6 +675,7 @@ object PixelScenes {
         val ground = h - max(3, h * 20 / 100)
         g.gradient(0, ground, listOf("#0b0420", "#120632", "#1a0a40", "#24104d", "#2f1258"))
         g.stars(0, ground * 50 / 100, w * ground / 200, 700)
+        twinkle(g, 0, 0, w, ground * 50 / 100, w * ground / 700, 750)
         val mr = max(3, h * 9 / 100)
         g.disc(w * 90 / 100, h * 10 / 100 + mr, mr, "#fff2c7")
         // Houses behind, a few windows still lit.
@@ -652,7 +752,9 @@ object PixelScenes {
         // A pot with its steam curling up past the curtain.
         val potX = stX + 2 * s
         g.px(potX, counterY - 2 * s, 3 * s, 2 * s, "#7d7896")
-        for (t in 0 until 4) g.px(potX + (t % 2) * s, counterY - 3 * s - t * 2 * s, s, s, "#c9c3d9")
+        frames(g, 12,
+            { a -> for (t in 0 until 4) a.px(potX + (t % 2) * s, counterY - 3 * s - t * 2 * s, s, s, "#c9c3d9") },
+            { a -> for (t in 0 until 4) a.px(potX + ((t + 1) % 2) * s, counterY - 4 * s - t * 2 * s, s, s, "#c9c3d9") })
         // Red lanterns at the corners of the roof.
         for (lx in intArrayOf(stX - 2 * s, stX + stW + s)) {
             val r = max(2, 2 * s)
@@ -661,6 +763,7 @@ object PixelScenes {
             g.disc(lx, top + r, r, "#ff3d3d")
             g.disc(lx, top + r, max(1, r - s), "#ff7a59")
             g.px(lx - s, top + 2 * r + 1, 2 * s + 1, s, "#140726")
+            g.actor(period = 23 + mod(lx, 9), on = 3) { a -> a.disc(lx, top + r, max(1, r - s), "#ffb38a") }
         }
         // Stools before the counter.
         for (k in 0 until 3) {
@@ -706,9 +809,13 @@ object PixelScenes {
                 g.px(x + s, top + s, cabW - 2 * s, mqH, accent)
                 val scY = top + s + mqH + s; val scH = max(4, cabH * 34 / 100)
                 g.px(x + 2 * s, scY, cabW - 4 * s, scH, "#0a1840")
-                for (k in 0 until 6) {
-                    g.px(x + 3 * s + mod(74000 + i * 7 + k, max(1, cabW - 6 * s)), scY + 1 + mod(75000 + i * 7 + k, max(1, scH - 2)), 1, 1, SCREEN_DOTS[k % 3])
+                val cabX = x; val cab = i
+                val dots = { a: Grid, from: Int ->
+                    for (k in from until from + 6) {
+                        a.px(cabX + 3 * s + mod(74000 + cab * 7 + k, max(1, cabW - 6 * s)), scY + 1 + mod(75000 + cab * 7 + k, max(1, scH - 2)), 1, 1, SCREEN_DOTS[k % 3])
+                    }
                 }
+                frames(g, 6 + mod(73100 + i, 5), { a -> dots(a, 0) }, { a -> dots(a, 50) })
                 val cpY = scY + scH + s
                 g.px(x - s, cpY, cabW + 2 * s, 2 * s, "#2a1650")
                 g.px(x + 3 * s, cpY - s, s, s, "#ff3d3d")
@@ -729,6 +836,10 @@ object PixelScenes {
             for (y in rows.indices) {
                 for (x in rows[y].indices) if (rows[y][x] == '#') g.px(signX + c * letter + x * s, signY + y * s, s, s, "#ff2a9d")
             }
+        }
+        g.actor(period = 70, delay = 20, on = 3) { a ->
+            val rows = GAME[1]
+            for (y in rows.indices) for (x in rows[y].indices) if (rows[y][x] == '#') a.px(signX + letter + x * s, signY + y * s, s, s, "#5a1040")
         }
     }
 
@@ -793,6 +904,8 @@ object PixelScenes {
         g.disc(tvX + 2 * s + scW / 2, tvY + 2 * s + scH / 2, max(1, scH / 4), "#ffd319")
         g.px(tvX + 2 * s, tvY + 2 * s + scH / 2, scW, scH - scH / 2, "#2e6bff")
         g.px(tvX + 2 * s, tvY + 2 * s + scH / 2, scW, s, "#bff8ff")
+        g.actor(dy = max(1, scH - s), period = 40, on = 40) { a -> a.px(tvX + 2 * s, tvY + 2 * s, scW, max(1, s / 2), "#fff6e8") }
+        twinkle(g, wx, wy, wx + ww, wy + lower, ww * wh / 70, 80500)
         g.px(tvX + tvW - 3 * s, tvY + 2 * s, 2 * s, s, "#ff2a9d")
         g.px(tvX + tvW - 3 * s, tvY + 4 * s, 2 * s, s, "#ffd319")
         for (t in 1..4 * s) {
@@ -847,6 +960,14 @@ object PixelScenes {
             val top = by + (sy - by) * t / reach; val bottom = by + (sy + sh - by) * t / reach
             for (y in top..bottom) if (((x + y) and 1) == 0 && mod(x * 3 + y, 4) == 0) g.px(x, y, 1, 1, "#4a3f7a")
         }
+        val beam = { a: Grid, pick: Int ->
+            for (x in bx until sx) {
+                val t = x - bx
+                val top = by + (sy - by) * t / reach; val bottom = by + (sy + sh - by) * t / reach
+                for (y in top..bottom) if (((x + y) and 1) == 0 && mod(x * 3 + y, 4) == pick) a.px(x, y, 1, 1, "#6a5fa0")
+            }
+        }
+        frames(g, 4, { a -> beam(a, 1) }, { a -> beam(a, 2) })
         g.px(bx - 2 * s, by - s, 3 * s, 2 * s, "#d7d0e8")
         // Rows of seats, a few heads watching.
         val rowH = max(3, h * 10 / 100)
@@ -894,17 +1015,22 @@ object PixelScenes {
         val antenna = max(3, h * 9 / 100)
         g.px(cx, top - antenna, s, antenna, "#d7d0e8")
         g.px(cx, top - antenna - s, s, s, "#ff3d3d")
+        // The waves going out, one ring after another; the warning light blinks.
         for (k in 1..3) {
             val r = k * 4 * s
             val reach = r * 6 / 10
-            for (dy in -reach..reach) {
-                val dx = isqrt(r * r - dy * dy)
-                if (((dy + k) and 1) == 0) {
-                    g.px(cx + dx, top - antenna + dy, 1, 1, "#2ee6ff")
-                    g.px(cx - dx, top - antenna + dy, 1, 1, "#2ee6ff")
+            g.actor(period = 24, delay = (24 - (k - 1) * 8) % 24, on = 14) { a ->
+                for (dy in -reach..reach) {
+                    val dx = isqrt(r * r - dy * dy)
+                    if (((dy + k) and 1) == 0) {
+                        a.px(cx + dx, top - antenna + dy, 1, 1, "#2ee6ff")
+                        a.px(cx - dx, top - antenna + dy, 1, 1, "#2ee6ff")
+                    }
                 }
             }
         }
+        g.actor(period = 16, on = 8, rest = 8) { a -> a.px(cx, top - antenna - s, s, s, "#5a1a2a") }
+        twinkle(g, 0, 0, w, ground * 60 / 100, w * ground / 600, 850)
         // The town in front, its windows lit.
         run {
             var x = 0; var i = 0
@@ -964,6 +1090,8 @@ object PixelScenes {
         }
         g.px(peakX - s, by - r, 2 * s, r, "#14102e")
         for (t in 0 until max(4, r * 3 / 2)) g.px(peakX - t, by - r / 2 - t, 2 * s, 2 * s, "#7d7896")
+        shootingStar(g, 91000)
+        twinkle(g, 0, 0, w, h * 60 / 100, w * h / 200, 950)
     }
 
     /** A station at night: the departure board's next trains, the clock, the yellow line, the town across the tracks. */
@@ -1035,6 +1163,16 @@ object PixelScenes {
         g.px(benchX, platform - 3 * s, 8 * s, s, "#9a5a35")
         g.px(benchX + s, platform - 2 * s, s, 2 * s, "#5a2d1a")
         g.px(benchX + 6 * s, platform - 2 * s, s, 2 * s, "#5a2d1a")
+        // A train through the station now and then, right to left, its windows lit.
+        val trainH = max(4, h * 18 / 100); val trainY = platform - s - trainH; val trainL = w * 70 / 100
+        g.actor(dx = -2 * (w + trainL), period = 260, delay = 130) { a ->
+            a.px(w, trainY, trainL, trainH, "#c9d3e8")
+            a.px(w, trainY + trainH - 2 * s, trainL, s, "#2e6bff")
+            run { var x = w + 2 * s; while (x < w + trainL - 2 * s) { a.px(x, trainY + s, 2 * s, max(1, trainH / 3), "#ffd36b"); x += 4 * s } }
+            run { var x = w + trainL / 4; while (x < w + trainL) { a.px(x, trainY, 1, trainH, "#8f9ab8"); x += trainL / 4 } }
+            a.px(w, trainY + trainH / 2, s, s, "#fff27a")
+        }
+        g.actor(period = 12, on = 4, rest = 6) { a -> a.px(bx + 2 * s, by + 2 * s, 5 * s, s, "#07040f") }
     }
 
     /** A desk at night: a beige computer's green prompt, the keyboard, a lamp, a mug, books and floppies on the shelf. */
@@ -1082,7 +1220,7 @@ object PixelScenes {
                 r++
             }
         }
-        g.px(min(lastEnd + s, scX + scW - 2 * s), lastY, s, s, "#bff8ff")
+        g.actor(period = 10, on = 5) { a -> a.px(min(lastEnd + s, scX + scW - 2 * s), lastY, s, s, "#bff8ff") }
         g.px(mx + mw / 2 - 2 * s, my + mh, 4 * s, 2 * s, "#b0a690")
         // The keyboard.
         g.px(mx - 2 * s, desk + s, mw + 4 * s, 2 * s, "#d8cdb8")
@@ -1104,7 +1242,9 @@ object PixelScenes {
         val cupX = mx - 6 * s
         g.px(cupX, desk - 3 * s, 3 * s, 3 * s, "#ff2a9d")
         g.px(cupX + 3 * s, desk - 2 * s, s, s, "#ff2a9d")
-        for (t in 0 until 3) g.px(cupX + s + (t % 2) * s, desk - 4 * s - t * 2 * s, s, s, "#8f88ad")
+        frames(g, 12,
+            { a -> for (t in 0 until 3) a.px(cupX + s + (t % 2) * s, desk - 4 * s - t * 2 * s, s, s, "#8f88ad") },
+            { a -> for (t in 0 until 3) a.px(cupX + s + ((t + 1) % 2) * s, desk - 5 * s - t * 2 * s, s, s, "#8f88ad") })
     }
 
     /** A concert stage: spotlights, an equalizer glowing behind the band, light sticks up in the crowd. */
@@ -1130,6 +1270,7 @@ object PixelScenes {
         // The equalizer down to the deck: columns of segments, pink at the bottom to cyan at the top.
         val ex = w * 38 / 100; val eTop = h * 12 / 100; val eBottom = deckY - s
         val eSpan = max(1, eBottom - eTop)
+        val peaks = listOf(ArrayList<IntArray>(), ArrayList<IntArray>())
         run {
             var x = ex; var i = 0
             while (x + 2 * s <= w - 2 * s) {
@@ -1139,9 +1280,15 @@ object PixelScenes {
                     g.px(x, y, 2 * s, s, EQUALIZER[min(EQUALIZER.size - 1, (eBottom - y) * EQUALIZER.size / eSpan)])
                     y += 2 * s
                 }
+                peaks[i % 2].add(intArrayOf(x, eBottom - tall))
                 x += 3 * s; i++
             }
         }
+        // The bars bounce: every other one jumps two segments, then the rest.
+        val bounce = { a: Grid, set: List<IntArray> ->
+            for ((x, top) in set) for (k in 1..2) if (top - 2 * s * k >= eTop - 2 * s) a.px(x, top - 2 * s * k, 2 * s, s, EQUALIZER[EQUALIZER.size - 1])
+        }
+        frames(g, 6, { a -> bounce(a, peaks[0]) }, { a -> bounce(a, peaks[1]) })
         // The deck, its footlights, an amp at each side.
         g.px(stageX, deckY, w - stageX, deckH, "#2a1650")
         g.px(stageX, deckY, w - stageX, s, "#4a2a7a")
@@ -1195,7 +1342,9 @@ object PixelScenes {
     private fun notes(g: Grid, x: Int, y: Int, count: Int, s: Int, seed: Int) {
         for (k in 0 until count) {
             val color = NOTE_COLORS[mod(seed + k, NOTE_COLORS.size)]
-            g.sprite(NOTE, x - k * 7 * s - mod(seed + 10 + k, 4) * s, y - k * 5 * s - mod(seed + 20 + k, 3) * s, s, mapOf('#' to color))
+            val nx = x - k * 7 * s - mod(seed + 10 + k, 4) * s; val ny = y - k * 5 * s - mod(seed + 20 + k, 3) * s
+            // Each rises a little and goes, one after another.
+            g.actor(dy = -3 * s, period = 30, delay = k * 10, on = 24) { a -> a.sprite(NOTE, nx, ny, s, mapOf('#' to color)) }
         }
     }
 
@@ -1380,8 +1529,10 @@ object PixelScenes {
         g.px(fcx, fcy, fr / 2 + 1, 1, "#2a1420")
         val pendTop = fcy + fr + s
         g.px(clx + s, pendTop, cw - 2 * s, cly + ch - s - pendTop, "#2a1420")
-        g.px(fcx, pendTop, 1, max(1, cly + ch - 3 * s - pendTop), "#c9a070")
-        g.disc(fcx, cly + ch - 3 * s, max(1, s), "#ffd36b")
+        val bobY = cly + ch - 3 * s; val swing = max(1, s)
+        frames(g, 20,
+            { a -> a.line(fcx, pendTop, fcx - swing, bobY, "#c9a070"); a.disc(fcx - swing, bobY, max(1, s), "#ffd36b") },
+            { a -> a.line(fcx, pendTop, fcx + swing, bobY, "#c9a070"); a.disc(fcx + swing, bobY, max(1, s), "#ffd36b") })
         notes(g, rx - 2 * s, ry - 2 * s, 3, s, 92300)
     }
 
@@ -1441,8 +1592,9 @@ object PixelScenes {
             val half = s + (y - (boardY - lh)) * s / max(1, lh)
             g.px(lx + 2 * s - half, y, half * 2, 1, "#ff7f3f")
         }
-        g.disc(lx + 2 * s, boardY - lh * 2 / 3, s, "#ffd319")
-        g.disc(lx + 2 * s, boardY - lh / 3, max(1, s + s / 2), "#ff2a9d")
+        frames(g, 40,
+            { a -> a.disc(lx + 2 * s, boardY - lh * 2 / 3, s, "#ffd319"); a.disc(lx + 2 * s, boardY - lh / 3, max(1, s + s / 2), "#ff2a9d") },
+            { a -> a.disc(lx + 2 * s, boardY - lh * 2 / 5, s, "#ffd319"); a.disc(lx + 2 * s, boardY - lh * 3 / 5, max(1, s), "#ff2a9d") })
         g.px(lx + s, boardY - lh - s, 2 * s, 2 * s, "#c9c3d9")
         // A crate of records on the floor, their sleeves in every colour.
         val crateX = w * 40 / 100; val crateW = max(12, w * 10 / 100); val crateH = max(5, h * 14 / 100)
@@ -1462,6 +1614,7 @@ object PixelScenes {
         val horizon = h * 44 / 100
         g.gradient(0, horizon, NIGHT_SKY)
         g.stars(0, horizon * 2 / 3, max(4, w * horizon / 260), 93000)
+        twinkle(g, 0, 0, w, horizon * 2 / 3, w * horizon / 800, 93050)
         g.disc(w * 66 / 100, h * 16 / 100, max(2, h * 7 / 100), "#ffe9c8")
         // The city ahead, its windows lit.
         val tallest = max(2 * s, horizon - h * 16 / 100)
@@ -1484,6 +1637,7 @@ object PixelScenes {
         }
         // The highway: lane marks dashed by distance, lamps along both sides, a car's tail lights ahead.
         val vx = w / 2; val depth = max(1, dash - horizon)
+        val marks = listOf(ArrayList<IntArray>(), ArrayList<IntArray>())
         g.px(0, horizon, w, dash - horizon, "#0d0420")
         for (y in horizon until dash) {
             val dy = y - horizon + 1
@@ -1492,12 +1646,17 @@ object PixelScenes {
             val edge = max(1, half / 30)
             g.px(vx - half, y, edge, 1, "#ff7ad9")
             g.px(vx + half - edge, y, edge, 1, "#ff7ad9")
-            if ((depth * 24 / dy / 6) % 2 == 0) {
+            marks[(depth * 24 / dy / 6) % 2].add(intArrayOf(y, half))
+        }
+        // The lane marks rush past: their two sets take turns.
+        val lane = { a: Grid, set: List<IntArray> ->
+            for ((y, half) in set) {
                 val mark = max(1, half / 24)
-                g.px(vx - half / 3 - mark / 2, y, mark, 1, "#fff6e8")
-                g.px(vx + half / 3 - mark / 2, y, mark, 1, "#fff6e8")
+                a.px(vx - half / 3 - mark / 2, y, mark, 1, "#fff6e8")
+                a.px(vx + half / 3 - mark / 2, y, mark, 1, "#fff6e8")
             }
         }
+        frames(g, 4, { a -> lane(a, marks[0]) }, { a -> lane(a, marks[1]) })
         for (z in intArrayOf(26, 34, 46, 62, 86, 120, 170)) {
             val dy = max(1, depth * 24 / z); val y = horizon + dy - 1
             val half = dy * w * 7 / (depth * 10); val pole = dy * 3 / 2; val size = max(1, dy / 6)
@@ -1517,6 +1676,7 @@ object PixelScenes {
         g.px(cl, cy - ch + s, lamp, s, "#ff3d3d")
         g.px(cl + cw - lamp, cy - ch + s, lamp, s, "#ff3d3d")
         g.px(vx - lamp / 2, cy - ch / 2, lamp, s, "#c9c3d9")
+        g.actor(period = 47, delay = 20, on = 6) { a -> a.px(cl, cy - ch + s, lamp, s, "#ffb0b0"); a.px(cl + cw - lamp, cy - ch + s, lamp, s, "#ffb0b0") }
         // The windshield's frame, the mirror and the dice hanging from it.
         g.px(0, 0, w, 2 * s, "#07010f")
         for (y in 0 until dash) {
@@ -1624,6 +1784,10 @@ object PixelScenes {
             val color = NOTE_COLORS[mod(91000 + i, NOTE_COLORS.size)]
             g.px(mod(91100 + i, w), mod(91200 + i, floor), s, s, color)
         }
+        frames(g, 6,
+            { a -> for (y in by - br..by + br) { val half = isqrt(br * br - (y - by) * (y - by)); for (x in bx - half..bx + half) if (((x / s + y / s) and 1) == 1) a.px(x, y, 1, 1, "#d7d0e8") } },
+            { a -> for (y in by - br..by + br) { val half = isqrt(br * br - (y - by) * (y - by)); for (x in bx - half..bx + half) if (((x / s + y / s) and 1) == 0) a.px(x, y, 1, 1, "#7fe8ff") } })
+        twinkle(g, 0, 0, w, floor, w * h / 300, 91500, "#fff6e8")
         // A sofa on the left and the table of drinks.
         val sofaY = floor - h * 18 / 100
         g.px(0, sofaY, w * 34 / 100, floor - sofaY, "#8a1f3a")
@@ -1644,8 +1808,14 @@ object PixelScenes {
         g.disc(w * 20 / 100, h * 48 / 100, max(3, h * 16 / 100), "#ffe08a")
         for (k in 0 until 3) {
             val cx = w * (12 + k * 30 + mod(94300 + k, 10)) / 100; val cy = h * (10 + mod(94400 + k, 18)) / 100; val cw = w * (10 + mod(94500 + k, 8)) / 100
-            g.px(cx, cy, cw, s, "#ff9fb8")
-            g.px(cx + 2 * s, cy - s, cw - 6 * s, s, "#ffc3d0")
+            drift(g, w, 0, 700 + k * 200) { a, ox, _ ->
+                a.px(cx + ox, cy, cw, s, "#ff9fb8")
+                a.px(cx + 2 * s + ox, cy - s, cw - 6 * s, s, "#ffc3d0")
+            }
+        }
+        drift(g, -w, 0, 240) { a, ox, _ ->
+            bird(a, w * 60 / 100 + ox, h * 20 / 100, "#3a1a5a")
+            bird(a, w * 64 / 100 + ox, h * 24 / 100, "#3a1a5a")
         }
         // The town beyond the fence, its lights coming on.
         val townTop = roof - h * 24 / 100
@@ -1795,6 +1965,17 @@ object PixelScenes {
                 g.px(fx + c * cell + slip, fy + y, cell, 1, color)
             }
         }
+        // Now and then her head and shoulders slip sideways too.
+        g.actor(period = 43, delay = 15, on = 2) { a ->
+            for (y in 2 * cell until 7 * cell) {
+                if (y % 3 == 2) continue
+                val r = y / cell
+                for (c in IDOL[r].indices) {
+                    val color = IDOL_COLORS[IDOL[r][c]] ?: continue
+                    a.px(fx + c * cell - 2 * cell, fy + y, cell, 1, color)
+                }
+            }
+        }
         val padW = fw + 6 * s; val padX = cx - padW / 2
         val crowdTop = deckY + max(2, h * 6 / 100)
         g.px(0, deckY, w, h - deckY, "#0c1650")
@@ -1804,7 +1985,8 @@ object PixelScenes {
         g.px(padX + 2 * s, deckY - 2 * s, padW - 4 * s, s, "#7fe8ff")
         g.px(padX, deckY - s, padW, s, "#2ee6ff")
         g.px(padX + 2 * s, deckY, padW - 4 * s, s, "#1a6a9a")
-        // The crowd, light sticks up.
+        // The crowd, light sticks up and waving.
+        val tips = listOf(ArrayList<IntArray>(), ArrayList<IntArray>())
         run {
             var x = -s; var i = 0
             while (x < w) {
@@ -1814,8 +1996,350 @@ object PixelScenes {
                 if (mod(95100 + i, 2) == 0) {
                     g.px(x + 3 * s, hy - 4 * s, s, 4 * s, "#01020a")
                     g.px(x + 3 * s, hy - 8 * s, s, 4 * s, GLOW_STICKS[mod(95300 + i, GLOW_STICKS.size)])
+                    tips[if (i % 4 < 2) 0 else 1].add(intArrayOf(x + 3 * s, hy - 9 * s))
                 }
                 x += 4 * s; i++
+            }
+        }
+        val wave = { a: Grid, set: List<IntArray> -> for ((x, y) in set) a.px(x, y, s, s, "#e8fdff") }
+        frames(g, 8, { a -> wave(a, tips[0]) }, { a -> wave(a, tips[1]) })
+    }
+
+    /** A shopping street at night in the rain: lit signs, glowing shopfronts, wires overhead, the signs' colours on the wet road. */
+    private fun mangaStreet(g: Grid) {
+        val w = g.w; val h = g.h
+        val s = max(1, h / 40)
+        val road = h - max(4, h * 16 / 100)
+        g.gradient(0, road, listOf("#070b16", "#0c1322", "#111b2e", "#16233a", "#1b2b44"))
+        // Towers far off in the rain, a few windows lit.
+        run {
+            var x = 0; var i = 0
+            while (x < w) {
+                val bw = 4 + mod(96000 + i, 9)
+                val tall = road * (50 + mod(96100 + i, 40)) / 100
+                g.px(x, road - tall, bw, tall, "#151f33")
+                var wy = road - tall + 2
+                while (wy < road - 2) {
+                    var wx = x + 1
+                    while (wx < x + bw - 1) { if (mod(wx * 37 + wy * 11 + 3, 7) == 0) g.px(wx, wy, 1, 1, if (mod(wx + wy, 4) == 0) "#ffcf7a" else "#3b5478"); wx += 2 }
+                    wy += 3
+                }
+                x += bw; i++
+            }
+        }
+        // Poles, and the wires sagging between them.
+        val wireY = h * 10 / 100; val span = max(30, w * 30 / 100); val first = w * 6 / 100; val sag = max(2, h * 6 / 100)
+        for (k in 0 until 2) {
+            for (x in 0 until w) {
+                val t = ((x - first) % span + span) % span
+                g.px(x, wireY + k * 2 * s + 4 * sag * t * (span - t) / (span * span), 1, 1, "#0a101c")
+            }
+        }
+        run {
+            var px = first
+            while (px < w) {
+                g.px(px, wireY - 2 * s, s, road - wireY + 2 * s, "#0a101c")
+                g.px(px - 2 * s, wireY, 5 * s, s, "#0a101c")
+                px += span
+            }
+        }
+        // The shops: an upper floor, a lit sign, an awning, the glowing shopfront.
+        val shopTop = h * 34 / 100
+        val fronts = ArrayList<IntArray>()
+        run {
+            var x = -2 * s; var i = 0
+            while (x < w) {
+                val sw = max(16 * s, w * (11 + mod(96200 + i, 7)) / 100)
+                val top = shopTop + mod(96300 + i, max(1, h * 12 / 100))
+                g.px(x, top, sw, road - top, if (i % 2 == 0) "#1d2436" else "#241f33")
+                g.px(x, top, sw, s, "#2c3550")
+                val winY = top + 2 * s; val winH = max(2 * s, (road - top) / 6)
+                for (k in 0 until 2) {
+                    g.px(x + sw * (14 + k * 46) / 100, winY, max(2 * s, sw / 4), winH, if (mod(96400 + i * 2 + k, 3) == 0) "#ffcf7a" else "#2c3a55")
+                }
+                val ci = mod(96500 + i, SHOP_SIGNS.size)
+                val signY = winY + winH + 2 * s; val signH = max(3 * s, h * 8 / 100)
+                g.px(x + s, signY, sw - 2 * s, signH, SHOP_SIGNS[ci])
+                run { var gx = x + 3 * s; while (gx + 2 * s < x + sw - 2 * s) { g.px(gx, signY + s, 2 * s, max(1, signH - 2 * s), "#1a1020"); gx += 4 * s } }
+                if (mod(96700 + i, 3) == 0) {
+                    val vc = SHOP_SIGNS[(ci + 2) % SHOP_SIGNS.size]
+                    g.px(x + sw - 4 * s, top - 3 * s, 3 * s, signY - top + 3 * s, vc)
+                    run { var gy = top - 2 * s; while (gy + s < signY) { g.px(x + sw - 3 * s, gy, s, 2 * s, "#1a1020"); gy += 3 * s } }
+                }
+                val awnY = signY + signH + s
+                g.px(x, awnY, sw, 2 * s, if (mod(96600 + i, 2) == 0) "#7a2a3a" else "#2a5a5a")
+                run { var ax = x + s; while (ax < x + sw) { g.px(ax, awnY + s, s, s, "#e8d8c0"); ax += 3 * s } }
+                val frontY = awnY + 2 * s
+                g.px(x + s, frontY, sw - 2 * s, road - frontY, "#16121c")
+                val pane = (sw - 6 * s) / 2
+                for (px in intArrayOf(x + 2 * s, x + sw - 2 * s - pane)) {
+                    g.px(px, frontY + s, pane, road - frontY - 2 * s, "#d9a066")
+                    run { var fy = frontY + 3 * s; while (fy < road - 2 * s) { g.px(px + s, fy, pane - 2 * s, s, "#8a5a3a"); fy += 3 * s } }
+                }
+                fronts.add(intArrayOf(x, sw, signY, signH, ci))
+                x += sw; i++
+            }
+        }
+        // The wet road, the signs' colours streaked in it.
+        g.px(0, road, w, h - road, "#0a0f1a")
+        g.px(0, road, w, s, "#2a3550")
+        for (f in fronts) {
+            val x = f[0]; val sw = f[1]; val ci = f[4]
+            run { var ry = road + 2 * s; while (ry < h) { g.px(x + s + mod(ry * 7 + x + 99000, max(1, sw - 2 * s)), ry, max(1, sw / 5), 1, SHOP_SIGNS[ci]); ry += 2 } }
+        }
+        // Moving: two signs blink out now and then, someone walks by under an umbrella, the rain.
+        for (k in 0 until min(2, fronts.size)) {
+            val f = fronts[(k * 3 + 1) % fronts.size]
+            val x = f[0]; val sw = f[1]; val signY = f[2]; val signH = f[3]
+            g.actor(period = 60 + k * 23, delay = k * 31, on = 3, rest = 30) { a -> a.px(x + s, signY, sw - 2 * s, signH, "#2a1f2a") }
+        }
+        val r = max(2, 4 * s); val body = max(4, 6 * s)
+        val walk = w + 4 * r; val walkPeriod = 420
+        g.actor(dx = walk, period = walkPeriod, rest = walkPeriod * (w * 30 / 100 + 2 * r) / walk) { a ->
+            val cx = -2 * r; val top = road - body - r - 2 * s
+            for (y in 0..r) {
+                val half = isqrt(r * r - (r - y) * (r - y))
+                a.px(cx - half, top + y, half * 2 + 1, 1, if (y == 0) "#ff8a9a" else "#d94a5a")
+            }
+            a.px(cx, top + r, max(1, s / 2), 2 * s, "#c9c3d9")
+            a.px(cx - s, top + r + s, 2 * s + 1, body, "#06080f")
+        }
+        val drops = w * h / 60; val slant = h / 5
+        drift(g, -slant, h, 8) { a, ox, oy ->
+            for (i in 0 until drops) a.px(mod(98000 + i * 2, w + slant) + ox, mod(98001 + i * 2, h) + oy, 1, 2 + mod(98000 + i * 5, 2), "#4a6a9a")
+        }
+    }
+
+    /** A bench on a hill at night: someone sitting looking over the town's lights, the full moon in the clouds, wires overhead. */
+    private fun moonBench(g: Grid) {
+        val w = g.w; val h = g.h
+        val s = max(1, h / 40)
+        val ground = h * 84 / 100
+        g.gradient(0, h, listOf("#04060d", "#070c17", "#0b1322", "#10192c", "#141f35"))
+        g.stars(0, h * 50 / 100, w * h / 260, 97000, listOf("#dfe8ff", "#9fb4d9", "#ffffff"))
+        // The moon, a soft halo, its seas.
+        val mr = max(4, h * 17 / 100); val mx = w * 22 / 100; val my = h * 28 / 100
+        for (y in my - mr - 4..my + mr + 4) {
+            for (x in mx - mr - 4..mx + mr + 4) {
+                val d = (x - mx) * (x - mx) + (y - my) * (y - my)
+                if (d > mr * mr && d <= (mr + 4) * (mr + 4) && ((x + y) and 1) == 0) g.px(x, y, 1, 1, "#1d2a44")
+            }
+        }
+        g.disc(mx, my, mr, "#dfe8f5")
+        g.disc(mx - mr / 3, my - mr / 5, max(1, mr / 4), "#b9c6dc")
+        g.disc(mx + mr / 4, my + mr / 3, max(1, mr / 5), "#b9c6dc")
+        g.disc(mx + mr / 3, my - mr / 3, max(1, mr / 7), "#c9d4e6")
+        // The ridge across the valley, a mast on its peak; then the town's lights below it.
+        fun ridgeAt(x: Int): Int {
+            val k = x / 30
+            val a = 2 + mod(97100 + k, 9); val b = 2 + mod(97100 + k + 1, 9)
+            return h * 44 / 100 + a * s + (b - a) * s * (x - k * 30) / 30
+        }
+        var peakX = 0
+        for (x in 0 until w) {
+            val top = ridgeAt(x)
+            if (top < ridgeAt(peakX)) peakX = x
+            g.px(x, top, 1, ground - top, "#0a111e")
+        }
+        val mast = max(3, 4 * s); val peakY = ridgeAt(peakX)
+        g.px(peakX, peakY - mast, 1, mast, "#0a111e")
+        val lights = w * (ground - peakY) / 34
+        for (i in 0 until lights) {
+            val x = mod(97200 + i, w); val y = ridgeAt(x) + 2 + mod(97300 + i, max(1, ground - ridgeAt(x) - 2))
+            if (y < ground) g.px(x, y, 1, 1, TOWN_LIGHTS[mod(97400 + i, TOWN_LIGHTS.size)])
+        }
+        // The wires, then the ledge of grass and the bench with someone on it.
+        val sag = max(2, h * 8 / 100)
+        for (k in 0 until 2) for (x in 0 until w) g.px(x, h * 18 / 100 + k * 3 * s + 4 * sag * x * (w - x) / (w * w), 1, 1, "#1a2438")
+        g.px(0, ground, w, h - ground, "#05080e")
+        run { var x = 0; while (x < w) { g.px(x, ground - mod(97500 + x, 3), 1, 3, "#0a101a"); x += 2 } }
+        val bx = w * 52 / 100; val bw = max(16 * s, w * 16 / 100); val seat = ground - 5 * s
+        g.px(bx, seat, bw, s, "#2a2a3a")
+        g.px(bx, seat - 4 * s, bw, s, "#2a2a3a")
+        g.px(bx, seat - 2 * s, bw, s, "#1f1f2c")
+        for (lx in intArrayOf(bx + s, bx + bw - 2 * s)) g.px(lx, seat, s, ground - seat, "#1a1a26")
+        val pcx = bx + bw / 2 - s
+        g.px(pcx - 2 * s, seat - 8 * s, 6 * s, 8 * s, "#03050a")
+        g.disc(pcx + s, seat - 10 * s, max(1, 2 * s), "#03050a")
+        g.px(pcx - 2 * s, seat - 8 * s, s, 7 * s, "#24324c")
+        g.px(bx + bw - 4 * s, seat - 3 * s, s, 3 * s, "#3a6a5a")
+        // Moving: clouds pass the moon, the town's lights flicker, the mast's light blinks.
+        for (k in 0 until 2) {
+            val cy = h * (18 + k * 16) / 100; val cw = w * (20 + k * 8) / 100; val cx = mod(97600 + k, w)
+            drift(g, w, 0, 900 + k * 300) { a, ox, _ ->
+                for (r in 0 until 3 * s) {
+                    val rw = cw - cw * (3 * s - 1 - r) / (6 * s)
+                    for (x in 0 until rw) if (((x + r) and 1) == 0 || r > s) a.px(cx - rw / 2 + x + ox, cy + r, 1, 1, if (r == 0) "#2a3550" else "#1a2338")
+                }
+            }
+        }
+        twinkle(g, 0, peakY, w, ground, lights / 3, 97700, "#ffd27a")
+        g.actor(period = 20, on = 8) { a -> a.px(peakX, peakY - mast - 1, 1, 1, "#ff3d3d") }
+    }
+
+    /** Dusk over the city: towers against the evening sky, wires, the elevated line and a train heading home. */
+    private fun duskLine(g: Grid) {
+        val w = g.w; val h = g.h
+        val s = max(1, h / 40)
+        val deck = h * 74 / 100
+        g.gradient(0, deck, listOf("#2a4a72", "#3a628c", "#5f86a8", "#a6ae98", "#e8cf8e", "#ffc27a"))
+        g.disc(w * 46 / 100, h * 60 / 100, max(3, h * 7 / 100), "#fff1c4")
+        // Far towers in the haze.
+        run {
+            var x = 0; var i = 0
+            while (x < w) {
+                val bw = 5 + mod(98100 + i, 8)
+                val tall = deck * (25 + mod(98200 + i, 30)) / 100
+                g.px(x, deck - tall, bw, tall, "#7d93b0")
+                x += bw + mod(98300 + i, 4); i++
+            }
+        }
+        // Near towers: rows of lit windows, an antenna or two.
+        run {
+            var x = -s; var i = 0
+            while (x < w) {
+                val bw = max(8 * s, w * (6 + mod(98400 + i, 6)) / 100)
+                if (mod(98500 + i, 4) == 0) { x += bw; i++; continue }
+                val tall = deck * (35 + mod(98600 + i, 45)) / 100
+                val top = deck - tall
+                g.px(x, top, bw, tall, if (i % 2 == 0) "#34496c" else "#2c3f5e")
+                var wy = top + 2 * s
+                while (wy < deck - 2 * s) {
+                    var wx = x + s
+                    while (wx < x + bw - s) { if (mod(wx * 13 + wy * 7 + 98700, 5) < 2) g.px(wx, wy, s, s, if (mod(wx + wy, 3) == 0) "#ffe2a0" else "#9fc0e0"); wx += 2 * s }
+                    wy += 2 * s
+                }
+                if (mod(98800 + i, 3) == 0) g.px(x + bw / 2, top - 4 * s, max(1, s / 2), 4 * s, "#2c3f5e")
+                x += bw; i++
+            }
+        }
+        // Poles and wires over the line.
+        val wireY = h * 40 / 100
+        run { var px = w * 12 / 100; while (px < w) { g.px(px, wireY - 2 * s, s, deck - wireY + 2 * s, "#1c2a44"); px += max(30, w * 34 / 100) } }
+        for (k in 0 until 2) for (x in 0 until w) g.px(x, wireY + k * 2 * s + mod(x / 9 + 98900, 3) / 2, 1, 1, "#1c2a44")
+        // The elevated line: the deck, its railing, a signal.
+        g.px(0, deck, w, h - deck, "#18223a")
+        g.px(0, deck, w, s, "#3a4c70")
+        run { var y = deck + 3 * s; while (y < h) { g.px(0, y, w, 1, "#121a2e"); y += 3 * s } }
+        run { var x = 0; while (x < w) { g.px(x, deck + s, s, h - deck - s, "#121a2e"); x += 6 * s } }
+        val sigX = w * 86 / 100
+        g.px(sigX, deck - 8 * s, s, 8 * s, "#1c2a44")
+        g.px(sigX - s, deck - 9 * s, 3 * s, 2 * s, "#0c1220")
+        // Moving: the train goes home, clouds drift, the signal changes.
+        val th = max(4, h * 12 / 100); val length = w * 60 / 100; val travel = 2 * (w + length); val period = 320
+        g.actor(dx = travel, period = period, rest = period * (w * 20 / 100 + length) / travel) { a ->
+            val x0 = -length; val ty = deck - th
+            a.px(x0, ty, length, th, "#2f3e5c")
+            a.px(x0, ty, length, max(1, s / 2), "#5a6f96")
+            run { var x = x0 + s; while (x < x0 + length - 2 * s) { a.px(x, ty + th / 3, 2 * s, max(1, th / 3), "#ffd27a"); x += 3 * s } }
+            run { var x = x0 + length / 4; while (x < x0 + length) { a.px(x, ty, 1, th, "#1c2a44"); x += length / 4 } }
+            a.px(x0 + length - s, ty + th * 2 / 3, s, s, "#fff1c4")
+        }
+        for (k in 0 until 3) {
+            val cy = h * (8 + k * 13) / 100; val cw = w * (14 + mod(99100 + k, 10)) / 100; val cx = mod(99000 + k, w)
+            drift(g, w, 0, 800 + k * 250) { a, ox, _ ->
+                for (r in 0 until 3) {
+                    val rw = cw * (2 + r) / 4
+                    for (x in 0 until rw) if (r > 0 || (x and 1) == 0) a.px(cx - rw / 2 + x + ox, cy + r, 1, 1, if (r == 2) "#e8b8a8" else "#8a7fa8")
+                }
+            }
+        }
+        frames(g, 50, { a -> a.px(sigX, deck - 9 * s, s, s, "#ff4a4a") }, { a -> a.px(sigX + s, deck - 9 * s, s, s, "#5ce17a") })
+    }
+
+    /** A little green workshop on a quiet street: panels on the roof, a chimney tower, signs and a banner, a lamp in the shop window. */
+    private fun greenShop(g: Grid) {
+        val w = g.w; val h = g.h
+        val s = max(1, h / 40)
+        val ground = h - max(3, h * 10 / 100)
+        val ink = "#1e2b22"
+        g.gradient(0, ground, listOf("#7fb487", "#8cbe93", "#9ac99d", "#a6d2a6"))
+        g.px(0, ground, w, h - ground, "#86b48a")
+        g.px(0, ground, w, s, ink)
+        val bx = w * 38 / 100; val bw = max(30 * s, w * 34 / 100)
+        val top = h * 30 / 100; val roofH = max(4 * s, h * 12 / 100)
+        val mid = top + (ground - top) * 42 / 100
+        // The roof: a slanted band of panels, dark and light.
+        for (y in top - roofH until top) {
+            val inset = (top - y) * 2 / 3
+            g.px(bx + inset, y, bw - 2 * inset, 1, "#2f6a4f")
+            run {
+                var x = bx + inset
+                while (x < bx + bw - inset) {
+                    if ((((x - bx) / (4 * s) + (y - top + roofH) / (2 * s)) and 1) == 0) g.px(x, y, min(4 * s, bx + bw - inset - x), 1, "#4a8f6a")
+                    x += 4 * s
+                }
+            }
+        }
+        g.px(bx + roofH * 2 / 3, top - roofH - s, bw - roofH * 4 / 3, s, "#7a8a2a")
+        // The upper floor: three window boxes with fans, vents under them.
+        g.px(bx, top, bw, mid - top, "#55a578")
+        g.px(bx, top, s, ground - top, ink)
+        val winW = bw / 5; val winH = max(3 * s, (mid - top) * 50 / 100)
+        for (k in 0 until 3) {
+            val wx = bx + bw * (8 + k * 30) / 100; val wy = top + 2 * s
+            g.px(wx - s, wy - s, winW + 2 * s, winH + 2 * s, ink)
+            g.px(wx, wy, winW, winH, "#2d4a3a")
+            g.disc(wx + winW / 2, wy + winH / 2, max(1, min(winW, winH) / 3), "#a8c8a0")
+            g.px(wx + s, wy + winH + 2 * s, winW - 2 * s, s, "#7a8a2a")
+        }
+        g.px(bx - s, mid, bw + 2 * s, 2 * s, "#6b7a1a")
+        // The ground floor: the shop's opening with a lamp, screens and a counter; notices beside it.
+        g.px(bx, mid + 2 * s, bw, ground - mid - 2 * s, "#4f9a6e")
+        val ox = bx + bw * 10 / 100; val ow = bw * 48 / 100; val oy = mid + 4 * s
+        g.px(ox - s, oy - s, ow + 2 * s, ground - oy + s, ink)
+        g.px(ox, oy, ow, ground - oy, "#20261f")
+        run { var y = oy + 4 * s; while (y < ground - 3 * s) { g.px(ox + s, y, ow / 3, s, "#3a5a44"); y += 3 * s } }
+        g.px(ox + ow / 2, oy + 4 * s, 3 * s, 2 * s, "#7fc8a0")
+        g.px(ox + ow / 2 + 4 * s, oy + 4 * s, 3 * s, 2 * s, "#7fc8a0")
+        val lampX = ox + ow * 40 / 100; val lr = max(2, 3 * s)
+        g.px(lampX, oy, max(1, s / 2), 2 * s, "#9ab08a")
+        for (y in 0..lr) {
+            val half = isqrt(lr * lr - (lr - y) * (lr - y))
+            g.px(lampX - half, oy + 2 * s + y, half * 2 + 1, 1, "#c9dca0")
+        }
+        g.px(ox, ground - 3 * s, ow, 3 * s, "#3f7a5a")
+        for (k in 0 until 2) {
+            val nx = ox + ow + 3 * s + k * 5 * s; val ny = oy + 2 * s
+            g.px(nx, ny, 4 * s, 6 * s, "#c9d8a8")
+            run { var y = ny + s; while (y < ny + 5 * s) { g.px(nx + s, y, 2 * s, max(1, s / 2), ink); y += 2 * s } }
+        }
+        // The chimney tower on the right, under its little roof.
+        val tx = bx + bw - s; val tw = max(6 * s, w * 6 / 100); val ty = h * 12 / 100
+        g.px(tx, ty, tw, ground - ty, "#3f7a5a")
+        g.px(tx + tw - 2 * s, ty, 2 * s, ground - ty, "#2d5a44")
+        run { var y = ty + 4 * s; while (y < ground) { g.px(tx, y, tw, s, "#2d5a44"); y += 6 * s } }
+        for (y in 0 until 3 * s) g.px(tx - s - y, ty - 3 * s + y, tw + 2 * s + 2 * y, 1, "#7a5a1a")
+        g.px(tx, ty - 5 * s, tw, 2 * s, "#5a4a1a")
+        // A street lamp and a sign by the road, a little fence, boxes by the tower.
+        val lx = w * 18 / 100
+        g.px(lx, h * 34 / 100, s, ground - h * 34 / 100, ink)
+        g.px(lx - 2 * s, h * 34 / 100 - 2 * s, 5 * s, 2 * s, ink)
+        g.disc(lx - 4 * s, h * 50 / 100, max(2, 3 * s), ink)
+        g.disc(lx - 4 * s, h * 50 / 100, max(1, 2 * s), "#4f9a6e")
+        g.line(lx - 6 * s, h * 50 / 100 + 2 * s, lx - 2 * s, h * 50 / 100 - 2 * s, ink)
+        run { var x = w * 4 / 100; while (x < w * 30 / 100) { g.px(x, ground - 5 * s, s, 5 * s, "#3f7a5a"); x += 6 * s } }
+        g.px(w * 4 / 100, ground - 4 * s, w * 26 / 100, s, "#3f7a5a")
+        for (k in 0 until 2) g.px(tx + tw + s + k * s, ground - (4 + k * 3) * s, 5 * s - k * s, 3 * s, if (k == 0) "#5a7a64" else "#6a8a74")
+        // Moving: smoke from the chimney, the banner swaying, the shop's screens and lamp.
+        val smoke = { a: Grid, lift: Int ->
+            for (k in 0 until 3) a.disc(tx + tw / 2 + (k % 2) * 2 * s - s, ty - 7 * s - k * 3 * s - lift, max(1, s + k * s / 2), "#dfe8d8")
+        }
+        frames(g, 14, { a -> smoke(a, 0) }, { a -> smoke(a, s) })
+        val banner = { a: Grid, sway: Int ->
+            val bx2 = tx + tw + 3 * s + sway; val by2 = ty + 6 * s; val bh = max(6 * s, h * 28 / 100)
+            a.px(tx + tw, ty + 5 * s, 4 * s, s, ink)
+            a.px(bx2, by2, 4 * s, bh, "#c9d8a8")
+            run { var y = by2 + s; while (y < by2 + bh - s) { a.px(bx2 + s, y, 2 * s, s, ink); y += 3 * s } }
+            a.px(bx2, by2 + bh, s, s, ink)
+            a.px(bx2 + 3 * s, by2 + bh, s, s, ink)
+        }
+        frames(g, 30, { a -> banner(a, 0) }, { a -> banner(a, max(1, s / 2)) })
+        g.actor(period = 26, delay = 9, on = 9, rest = 13) { a -> a.px(ox + ow / 2, oy + 4 * s, 3 * s, 2 * s, "#2d4a3a") }
+        g.actor(period = 37, on = 2, rest = 10) { a ->
+            for (y in 0..lr) {
+                val half = isqrt(lr * lr - (lr - y) * (lr - y))
+                a.px(lampX - half, oy + 2 * s + y, half * 2 + 1, 1, "#f0f8c8")
             }
         }
     }

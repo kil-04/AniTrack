@@ -7,28 +7,32 @@ import org.junit.Test
 class PixelScenesTest {
     private val checksums = mapOf(
         "sunset" to (3983455783L to 689284172L),
-        "neon-city" to (890333625L to 2150705285L),
-        "fuji" to (2693223344L to 596089318L),
-        "sakura" to (2132904203L to 2822175471L),
-        "shinkansen" to (3785893167L to 249138501L),
+        "neon-city" to (3751162301L to 1694655822L),
+        "fuji" to (2235187136L to 4184302794L),
+        "sakura" to (1760840131L to 493047608L),
+        "shinkansen" to (3602053026L to 635608212L),
         "starlight" to (364579144L to 3853267797L),
         "library" to (3923208247L to 3367147208L),
-        "ramen-stand" to (2833917191L to 368533171L),
-        "arcade" to (1756015128L to 688910680L),
+        "ramen-stand" to (3623555654L to 718294855L),
+        "arcade" to (1030637147L to 1110591396L),
         "bedroom" to (3719754049L to 1829028358L),
         "cinema" to (4254042179L to 3318332427L),
-        "tower" to (828731159L to 2124205917L),
+        "tower" to (3912397822L to 2965689985L),
         "observatory" to (2797300941L to 1714709199L),
         "station" to (1299516121L to 2673488787L),
-        "terminal" to (3664655267L to 2610576800L),
+        "terminal" to (1127530421L to 1254410123L),
         "stage" to (3567191245L to 2104692273L),
-        "jukebox" to (3580116438L to 4191282131L),
-        "radio" to (2512797039L to 1801240239L),
-        "hifi" to (2637510729L to 3016147115L),
-        "night-drive" to (1694478858L to 3756449637L),
+        "jukebox" to (3464146703L to 1248485428L),
+        "radio" to (3212693734L to 238659376L),
+        "hifi" to (460228807L to 2757760491L),
+        "night-drive" to (1399552475L to 1790107267L),
         "karaoke" to (638356739L to 301354734L),
-        "rooftop-band" to (2881704570L to 3775540109L),
+        "rooftop-band" to (2033624042L to 1070236582L),
         "hologram" to (3336172354L to 1952171754L),
+        "manga-street" to (3106852768L to 4089046443L),
+        "moon-bench" to (2946658215L to 889182777L),
+        "dusk-line" to (1097479821L to 1596604861L),
+        "green-shop" to (3221283960L to 3873517376L),
     )
 
     @Test fun samePicturesAsDesktop() {
@@ -86,7 +90,7 @@ class PixelScenesTest {
         assertEquals("gem", sheet.forSection("Hidden gems"))
         assertEquals("star", sheet.forSection("New in the 1980s"))
         val all = sheet.sprites.keys.sorted().flatMap { sheet.rects(it) }
-        assertEquals(1831068148L, CityPopScene.checksum(all))
+        assertEquals(3773798882L, CityPopScene.checksum(all))
         assertEquals(
             listOf(CityPopPixel(1, 0, 1, 1, "#000001"), CityPopPixel(2, 0, 1, 1, "#000002"), CityPopPixel(0, 1, 2, 1, "#000002")),
             PixelScenes.spriteRects(listOf(".ab", "bb."), mapOf('a' to "#000001", 'b' to "#000002")),
@@ -107,5 +111,25 @@ class PixelScenesTest {
         assertEquals("star", PixelScenes.sectionSprite(sections, "New in 2015"))
         assertNull(PixelScenes.sectionSprite(sections, "New"))
         assertNull(PixelScenes.sectionSprite(sections, "Brand new in town"))
+    }
+
+    /** An actor's pixels, then its motion as one more entry (tests/pixel-scenes.test.mjs flattens the same way). */
+    private fun actorPixels(actors: List<PixelScenes.Actor>) = actors.flatMap { a -> a.rects + CityPopPixel(a.dx, a.dy, a.period, a.delay, "on${a.on}rest${a.rest}") }
+
+    @Test fun movingPartsMatchDesktop() {
+        assertEquals(4186961257L, CityPopScene.checksum(PixelScenes.IDS.flatMap { actorPixels(PixelScenes.sceneParts(it, 420, 64).actors) }))
+        assertEquals(635668932L, CityPopScene.checksum(PixelScenes.IDS.flatMap { actorPixels(PixelScenes.sceneParts(it, 120, 44).actors) }))
+        for (id in PixelScenes.IDS) for (a in PixelScenes.sceneParts(id, 120, 44).actors) {
+            assertTrue("$id: $a", a.rects.isNotEmpty() && a.period > 0 && a.on > 0 && a.on <= a.period)
+        }
+        assertEquals(listOf("sunset"), PixelScenes.IDS.filter { PixelScenes.sceneParts(it, 420, 64).actors.isEmpty() })
+    }
+
+    @Test fun actorPlaceAndVisibilityOverTime() {
+        val actor = PixelScenes.Actor(emptyList(), dx = 30, dy = 9, period = 10, delay = 4, on = 6, rest = 0)
+        assertEquals(Triple(12, 3, true), PixelScenes.actorAt(actor, 0))
+        assertEquals(Triple(18, 5, false), PixelScenes.actorAt(actor, 2))
+        assertEquals(Triple(0, 0, true), PixelScenes.actorAt(actor, 6))
+        assertEquals(Triple(3, 0, true), PixelScenes.actorAt(actor, -3))
     }
 }

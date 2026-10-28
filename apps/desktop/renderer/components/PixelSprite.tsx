@@ -19,6 +19,28 @@ export const PixelSprite = memo(function PixelSprite({ id, scale = 2, className 
   );
 });
 
+/** Pixel mode's dog, sitting on a panel's top edge and wagging its tail: two frames taking turns (Android: PixelDog). */
+export function PixelDog() {
+  return (
+    <span className="pixel-dog" aria-hidden="true">
+      <PixelSprite id="dog-sit-1" scale={2} />
+      <PixelSprite id="dog-sit-2" scale={2} className="pixel-frame-b" />
+    </span>
+  );
+}
+
+/** A cat wandering across the gap between two of Home's rows: 20 s across, once a minute (Android: RowWalker). */
+export function PixelWalker() {
+  return (
+    <div className="pixel-walker" aria-hidden="true">
+      <span className="pixel-walker-cat">
+        <PixelSprite id="cat-walk-1" scale={2} />
+        <PixelSprite id="cat-walk-2" scale={2} className="pixel-frame-b" />
+      </span>
+    </div>
+  );
+}
+
 /** Empty states' sprites in Pixel mode, by the icon the page chose (lucide names, as Android maps Material's). */
 const ICON_SPRITES: Readonly<Record<string, PixelSpriteId>> = {
   Play: "tv",

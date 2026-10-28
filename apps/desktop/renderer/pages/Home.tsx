@@ -16,7 +16,7 @@ import { ThemeRadioButton } from "../components/ThemeSongs";
 import { providerClient } from "../lib/provider-api";
 import { rejectOversizedImage, safeImageSrc } from "../lib/image-guard";
 import { useSkin } from "../lib/skin";
-import { PixelSprite } from "../components/PixelSprite";
+import { PixelSprite, PixelWalker } from "../components/PixelSprite";
 import { PixelInterlude } from "../components/PixelScene";
 
 export default function Home() {
@@ -457,6 +457,8 @@ export default function Home() {
               {trendingCards}
             </Row>
           )}
+          {/* Now and then a cat wanders across between the rows. */}
+          {pixel && <PixelWalker />}
           {pixel && <PixelInterlude scene="jukebox" title="On the jukebox" subtitle="Openings and endings, chart by chart" to="/songs" />}
           <DiscoverRow title="Top Airing" filters={{ status: "RELEASING", sort: "POPULARITY_DESC" }} />
           {pixel && <PixelInterlude scene="starlight" title="Explore every era" subtitle="The Time Machine, 1960 to today" to="/time-machine" />}

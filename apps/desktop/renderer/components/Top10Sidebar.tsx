@@ -3,9 +3,12 @@ import { useNavigate } from "react-router-dom";
 import { Captions, Mic } from "lucide-react";
 import { providerClient } from "../lib/provider-api";
 import type { ProviderFeedGroup, ProviderFeedItem } from "../../../../packages/shared/provider-types";
+import { useSkin } from "../lib/skin";
+import { PixelDog } from "./PixelSprite";
 
 export default function Top10Sidebar() {
   const navigate = useNavigate();
+  const pixel = useSkin() === "pixel";
   const [tab, setTab] = useState("day");
   const [groups, setGroups] = useState<ProviderFeedGroup[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -41,7 +44,9 @@ export default function Top10Sidebar() {
   const items = tabs.find((group) => group.id === tab)?.items ?? [];
 
   return (
-    <div className="panel p-4">
+    <div className="panel relative p-4">
+      {/* Pixel mode's dog keeps the chart company. */}
+      {pixel && <PixelDog />}
       <div className="mb-4 flex items-center justify-between">
         <h2 className="text-lg font-bold tracking-tight">Top 10</h2>
         <div className="flex rounded-lg border border-white/[0.07] bg-white/[0.04] p-0.5 text-[11px] font-semibold">

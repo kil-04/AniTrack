@@ -383,6 +383,33 @@ video::cue {
 
 /* The page banner. */
 .pixel-scene { position: absolute; inset: 0; z-index: -2; width: 100%; height: 100%; image-rendering: pixelated; }
+/* A scene's moving parts (PixelSceneCanvas): compositor-only animations in steps, still when motion is off. */
+.pixel-actors { position: absolute; inset: 0; z-index: -2; overflow: hidden; pointer-events: none; }
+.pixel-actors canvas { position: absolute; image-rendering: pixelated; will-change: transform, opacity; }
+@keyframes pixel-actor-move { from { transform: translate(0, 0); } to { transform: translate(var(--dx), var(--dy)); } }
+[data-motion="off"] .pixel-actors canvas { animation: none !important; }
+@media (prefers-reduced-motion: reduce) { .pixel-actors canvas { animation: none !important; } }
+
+/* Pixel mode's critters: a dog on the Top 10 panel, a cat crossing between Home's rows. Two frames
+   take turns by opacity in steps; the cat moves by transform, sized by its strip (container units). */
+.pixel-dog { position: absolute; right: 18px; bottom: calc(100% - 2px); width: 32px; height: 24px; pointer-events: none; }
+.pixel-dog > *, .pixel-walker-cat > * { position: absolute; left: 0; bottom: 0; }
+.pixel-frame-b { opacity: 0; }
+@keyframes pixel-frame-a { 0% { opacity: 1; } 50% { opacity: 0; } }
+@keyframes pixel-frame-b { 0% { opacity: 0; } 50% { opacity: 1; } 100% { opacity: 1; } }
+.pixel-dog > :first-child { animation: pixel-frame-a 1.6s step-end infinite; }
+.pixel-dog > .pixel-frame-b { animation: pixel-frame-b 1.6s step-end infinite; }
+.pixel-walker { position: relative; height: 0; margin: 0 2rem; container-type: inline-size; pointer-events: none; }
+.pixel-walker-cat { position: absolute; left: 0; bottom: 8px; width: 32px; height: 24px; transform: translateX(-48px); animation: pixel-walk 60s linear infinite; }
+@keyframes pixel-walk {
+  0% { transform: translateX(-48px); animation-timing-function: steps(200, end); }
+  33.3% { transform: translateX(calc(100cqw + 16px)); }
+  100% { transform: translateX(calc(100cqw + 16px)); }
+}
+.pixel-walker-cat > :first-child { animation: pixel-frame-a 0.6s step-end infinite; }
+.pixel-walker-cat > .pixel-frame-b { animation: pixel-frame-b 0.6s step-end infinite; }
+[data-motion="off"] .pixel-dog > *, [data-motion="off"] .pixel-walker-cat, [data-motion="off"] .pixel-walker-cat > * { animation: none !important; }
+@media (prefers-reduced-motion: reduce) { .pixel-dog > *, .pixel-walker-cat, .pixel-walker-cat > * { animation: none !important; } }
 .pixel-banner {
   position: relative;
   isolation: isolate;

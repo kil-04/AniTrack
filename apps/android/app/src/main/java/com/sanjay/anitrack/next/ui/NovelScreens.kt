@@ -188,7 +188,7 @@ fun NovelHomeScreen(onOpen: OpenNovel, onRead: () -> Unit, onBrowseGenre: (Strin
             }
         }
         if (AniColors.pixelMode.value) item(key = "interlude-shelf") {
-            PixelInterlude(PixelScene.LIBRARY, "Your reading list", "The novels you follow, chapter by chapter", { onGo("novel-list") })
+            PixelInterlude(PixelScene.MOON_BENCH, "Your reading list", "The novels you follow, chapter by chapter", { onGo("novel-list") })
         }
         item(key = "genres") {
             Column {
@@ -372,7 +372,7 @@ fun NovelSearchScreen(initialQuery: String = "", initialGenre: String? = null, o
     val mtlCount = results.count { it.mtl }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 20.dp)) {
-        ScreenHeader("Browse novels", scene = PixelScene.OBSERVATORY, subtitle = "${source.label}: ${source.blurb}", icon = Icons.Rounded.MenuBook)
+        ScreenHeader("Browse novels", scene = PixelScene.LIBRARY, subtitle = "${source.label}: ${source.blurb}", icon = Icons.Rounded.MenuBook)
         Spacer(Modifier.height(14.dp))
         PillTabs(
             NovelSourceId.entries.map { it.key to it.label },
@@ -433,7 +433,7 @@ fun NovelListScreen(onOpen: OpenNovel, onBrowse: () -> Unit) {
     val shown = if (tab == "all") rows else rows.filter { it.status == tab }
     Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 20.dp)) {
         ScreenHeader(
-            "My Novels", scene = PixelScene.LIBRARY,
+            "My Novels", scene = PixelScene.MOON_BENCH,
             subtitle = if (rows.isEmpty()) "Novels you track appear here." else "${rows.size} ${if (rows.size == 1) "title" else "titles"} tracked",
             icon = Icons.Rounded.Bookmarks,
         )

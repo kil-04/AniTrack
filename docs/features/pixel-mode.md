@@ -45,7 +45,7 @@ first frame (desktop `main.tsx`, Android `MainActivity.onCreate`).
 - **Interludes:** wide scene banners between Home's rows that open other parts
   of the app (`PixelInterlude` in both apps), each showing its page's scene: the
   station → Schedule, the jukebox → Songs, starlight → the Time Machine; the
-  bookshop → My Manga / My Novels on the reading homes.
+  rainy shop street → My Manga and the moonlit bench → My Novels on the reading homes.
 - **Sprites:** 16-wide pictures in `packages/catalogs/pixel-sprites.json` (one
   file: desktop imports it through `packages/shared/pixel-sprites.ts`, Android
   reads it as an asset through `data/PixelSprites.kt`). Row headers show the
@@ -56,6 +56,26 @@ first frame (desktop `main.tsx`, Android `MainActivity.onCreate`).
   in `components/PixelSprite.tsx`, `pixelSpriteForIcon` in `ui/PixelAmbient.kt`).
   Sprites are drafted with auto-outlines and previewed before they go in the
   file; `pixelSpriteRects` / `PixelScenes.spriteRects` turn rows into runs.
+
+## Moving scenes and critters
+
+Every scene but City Pop's sunset has moving parts (`PixelActor`): trains cross, rain and
+petals fall, clouds and birds drift, signs and screens flicker, notes rise, stars twinkle, a
+singer glitches. A scene function draws each part with `g.actor(draw, { dx, dy, period, delay,
+on, rest })` (Kotlin `g.actor(...) { }`): where it starts, how far it slides each period (tenths
+of a second), how long it shows, and the time it rests at when nothing moves. `drift` (a layer
+drawn twice so it wraps), `twinkle` and `frames` (two frames taking turns) build most of them;
+`pixelActorAt` / `PixelScenes.actorAt` is the one clock rule, pinned on both sides.
+
+- **Desktop** (`PixelSceneCanvas`): each part is a small canvas over the scene, moved by a CSS
+  `transform` animation in steps and shown by an `opacity` one (`.pixel-actors`); still at its
+  rest with motion off or under reduced motion.
+- **Android** (`PixelSceneArt`): the parts are bitmaps drawn on the scene's own canvas from
+  `PixelTime.tick`, read while drawing; a scene with parts on screen counts in `PixelTime.movers`,
+  which keeps the clock at its 150 ms tick (Home measured about 7 frames a second, 28% CPU).
+- **Critters:** a dog sits on the Top 10 panel wagging its tail (`dog-sit-1/2`; desktop
+  `PixelDog`, Android `PixelDog` by the tabs) and a cat wanders across between Home's Trending row
+  and the next, 20 s across once a minute (desktop `PixelWalker`, Android `RowWalker`).
 
 ## Animated background
 
@@ -83,7 +103,7 @@ reduced motion (desktop) or with Android's animations removed.
 
 ## Scenes
 
-`packages/shared/pixel-scenes.ts` draws twenty-three seeded, whole-number
+`packages/shared/pixel-scenes.ts` draws twenty-seven seeded, whole-number
 scenes; the Kotlin twin `data/PixelScenes.kt` mirrors it line for line, and
 `tests/pixel-scenes.test.mjs` and `PixelScenesTest.kt` pin the same checksums.
 Every page has its own picture: no page banner reuses one of the Time Machine's
@@ -108,12 +128,16 @@ decade scenes, and Songs has its own scene for all time and for each decade.
 | `hologram` | A virtual singer live as a hologram, floating screens, light sticks | Songs: 2020 on |
 | `bedroom` | A bedroom at night: an episode on the CRT, a cabinet of tapes | Downloads (anime, manga, novels) |
 | `cinema` | A little cinema: the projector's beam, an episode on screen | Continue Watching |
-| `tower` | A broadcast tower over the town, its waves going out | Latest Episodes, Manga Updates |
-| `observatory` | An observatory on a hill under the Milky Way | Search (anime, manga, novels) |
+| `tower` | A broadcast tower over the town, its waves going out | Latest Episodes |
+| `observatory` | An observatory on a hill under the Milky Way | Search (anime) |
 | `station` | A station: the departure board, the clock, the yellow line | Schedule; Home's Schedule interlude |
 | `terminal` | A desk at night: a beige computer's green prompt, a lamp | Settings |
 | `sakura` | A cherry tree in bloom under a full moon | My List; the Appearance preview |
-| `library` | A bookshop at night, a lamp and a cat | My Manga, My Novels; the reading homes' interludes |
+| `library` | A bookshop at night, a lamp and a cat | Novels search |
+| `manga-street` | A rainy shop street at night, someone walking under an umbrella | My Manga; Manga home's interlude |
+| `moon-bench` | Someone on a bench over the town's lights, the moon in the clouds | My Novels; Novels home's interlude |
+| `dusk-line` | Towers at dusk, an elevated line with a train going home | Manga Updates |
+| `green-shop` | A little green workshop with a smoking chimney and a banner | Manga search |
 
 Keep a scene's interesting parts right of about a third of its width: the
 banner shades its left side under the title. Songs' header also runs its text

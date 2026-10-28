@@ -159,7 +159,7 @@ export default function NovelHome() {
         </section>
       )}
 
-      {pixel && <PixelInterlude scene="library" title="Your reading list" subtitle="The novels you follow, chapter by chapter" to="/novels/list" />}
+      {pixel && <PixelInterlude scene="moon-bench" title="Your reading list" subtitle="The novels you follow, chapter by chapter" to="/novels/list" />}
       <section className="mb-10 px-8">
         <SectionHeader icon={Shapes} title="Browse by genre" to="/novels/search" />
         <div className="flex flex-wrap gap-2 pt-1">

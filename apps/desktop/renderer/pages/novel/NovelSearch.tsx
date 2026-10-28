@@ -94,7 +94,7 @@ export default function NovelSearch() {
 
   return (
     <div className="mx-auto max-w-[1680px] px-8 pb-16 pt-8">
-      <PageHeader scene="observatory" icon={Search} title="Search Novels" subtitle={`${source.label}: ${source.blurb}`} />
+      <PageHeader scene="library" icon={Search} title="Search Novels" subtitle={`${source.label}: ${source.blurb}`} />
       <div className="panel relative z-20 mb-10 p-4">
         <form onSubmit={(event) => { event.preventDefault(); set("q", draft.trim()); }} className="flex gap-3">
           <div className="relative flex-1">

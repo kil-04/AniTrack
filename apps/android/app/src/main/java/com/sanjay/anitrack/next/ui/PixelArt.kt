@@ -15,6 +15,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -36,6 +37,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -66,31 +68,72 @@ object PixelScene {
     const val KARAOKE = "karaoke"
     const val ROOFTOP_BAND = "rooftop-band"
     const val HOLOGRAM = "hologram"
+    const val MANGA_STREET = "manga-street"
+    const val MOON_BENCH = "moon-bench"
+    const val DUSK_LINE = "dusk-line"
+    const val GREEN_SHOP = "green-shop"
 }
 
-private fun renderPixelScene(scene: String, width: Int, height: Int): ImageBitmap {
-    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+/** [rects] drawn into a bitmap of their own, [left] and [top] art pixels from the scene's corner. */
+private class PixelLayer(val image: ImageBitmap, val left: Int, val top: Int, val actor: PixelScenes.Actor?)
+
+private fun renderPixels(rects: List<com.sanjay.anitrack.next.data.CityPopPixel>, actor: PixelScenes.Actor?, sceneW: Int, sceneH: Int): PixelLayer {
+    val left = if (actor == null) 0 else rects.minOf { it.x }
+    val top = if (actor == null) 0 else rects.minOf { it.y }
+    val width = if (actor == null) sceneW else rects.maxOf { it.x + it.w } - left
+    val height = if (actor == null) sceneH else rects.maxOf { it.y + it.h } - top
+    val bitmap = Bitmap.createBitmap(width.coerceAtLeast(1), height.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
     val canvas = android.graphics.Canvas(bitmap)
     val paint = android.graphics.Paint()
     val colors = HashMap<String, Int>()
-    for (p in PixelScenes.scene(scene, width, height)) {
+    for (p in rects) {
         paint.color = colors.getOrPut(p.color) { android.graphics.Color.parseColor(p.color) }
-        canvas.drawRect(p.x.toFloat(), p.y.toFloat(), (p.x + p.w).toFloat(), (p.y + p.h).toFloat(), paint)
+        canvas.drawRect((p.x - left).toFloat(), (p.y - top).toFloat(), (p.x - left + p.w).toFloat(), (p.y - top + p.h).toFloat(), paint)
     }
-    return bitmap.asImageBitmap()
+    return PixelLayer(bitmap.asImageBitmap(), left, top, actor)
 }
 
-/** A pixel-art scene filling its box: [cell]-sized art pixels, CRT scanlines over it (as on desktop). */
+/**
+ * A pixel-art scene filling its box: [cell]-sized art pixels, CRT scanlines over it (as on desktop).
+ * Its moving parts are drawn on the shared clock (PixelTime), read only while drawing, so a tick
+ * redraws this canvas and nothing else; with motion off they rest where each was drawn.
+ */
 @Composable
 fun PixelSceneArt(scene: String, modifier: Modifier = Modifier, cell: Dp = 3.dp) {
     BoxWithConstraints(modifier) {
         val px = with(LocalDensity.current) { cell.toPx() }
         val width = (constraints.maxWidth / px).toInt().coerceAtLeast(16)
         val height = (constraints.maxHeight / px).toInt().coerceAtLeast(12)
-        val image = remember(scene, width, height) { renderPixelScene(scene, width, height) }
+        val layers = remember(scene, width, height) {
+            val parts = PixelScenes.sceneParts(scene, width, height)
+            listOf(renderPixels(parts.rects, null, width, height)) + parts.actors.map { renderPixels(it.rects, it, width, height) }
+        }
+        val image = layers[0].image
+        val motion = pixelMotion()
+        val moving = motion && layers.size > 1
+        if (moving) {
+            DisposableEffect(Unit) {
+                PixelTime.movers++
+                onDispose { PixelTime.movers-- }
+            }
+        }
         val haze = AniColors.retroBlue
         Canvas(Modifier.fillMaxSize().graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)) {
             drawImage(image, dstSize = IntSize(size.width.toInt(), size.height.toInt()), filterQuality = FilterQuality.None)
+            val sx = size.width / width; val sy = size.height / height
+            val t = if (moving) PixelTime.tick.intValue else null
+            for (k in 1 until layers.size) {
+                val layer = layers[k]
+                val actor = layer.actor ?: continue
+                val (dx, dy, shown) = PixelScenes.actorAt(actor, t ?: actor.rest)
+                if (!shown) continue
+                drawImage(
+                    layer.image,
+                    dstOffset = IntOffset(((layer.left + dx) * sx).toInt(), ((layer.top + dy) * sy).toInt()),
+                    dstSize = IntSize((layer.image.width * sx).toInt().coerceAtLeast(1), (layer.image.height * sy).toInt().coerceAtLeast(1)),
+                    filterQuality = FilterQuality.None,
+                )
+            }
             // Blue Pixel mode drowns the scene in a cold haze (desktop's .pixel-banner::before).
             if (haze) drawRect(BLUE_HAZE, alpha = 0.62f, blendMode = BlendMode.Color)
             val gap = 2.dp.toPx()

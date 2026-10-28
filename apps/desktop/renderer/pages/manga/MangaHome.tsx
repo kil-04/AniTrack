@@ -146,7 +146,7 @@ export default function MangaHome() {
         <>
           <MangaRow title="Trending now" items={feed.trending} />
           <MangaRow title="Publishing now" items={feed.publishing} />
-          {pixel && <PixelInterlude scene="library" title="Your shelf" subtitle="Every manga you follow, in one place" to="/manga/list" />}
+          {pixel && <PixelInterlude scene="manga-street" title="Your shelf" subtitle="Every manga you follow, in one place" to="/manga/list" />}
           <MangaRow title="All-time popular" items={feed.popular} />
           <MangaRow title="Top rated" items={feed.topRated} />
           <MangaRow title="Trending manhwa" items={feed.manhwa} />

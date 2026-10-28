@@ -10,12 +10,14 @@ import { cityPopHash as hash, cityPopScene, type CityPopPixel } from "./city-pop
 export type PixelSceneId =
   | "sunset" | "neon-city" | "fuji" | "sakura" | "shinkansen" | "starlight" | "library" | "ramen-stand" | "arcade"
   | "bedroom" | "cinema" | "tower" | "observatory" | "station" | "terminal" | "stage"
-  | "jukebox" | "radio" | "hifi" | "night-drive" | "karaoke" | "rooftop-band" | "hologram";
+  | "jukebox" | "radio" | "hifi" | "night-drive" | "karaoke" | "rooftop-band" | "hologram"
+  | "manga-street" | "moon-bench" | "dusk-line" | "green-shop";
 
 export const PIXEL_SCENES: readonly PixelSceneId[] = [
   "sunset", "neon-city", "fuji", "sakura", "shinkansen", "starlight", "library", "ramen-stand", "arcade",
   "bedroom", "cinema", "tower", "observatory", "station", "terminal", "stage",
   "jukebox", "radio", "hifi", "night-drive", "karaoke", "rooftop-band", "hologram",
+  "manga-street", "moon-bench", "dusk-line", "green-shop",
 ];
 
 /** Integer division that rounds toward zero, as Kotlin's `/` does. */
@@ -83,18 +85,51 @@ const HEART = [".##.##.", "#######", "#######", ".#####.", "..###..", "...#..."]
 /** The hologram's floating screens: x, y, width and height (percent of the scene) and what each shows. */
 const PANELS = [[4, 10, 18, 24, 0], [10, 44, 12, 18, 1], [26, 20, 10, 14, 3], [40, 40, 10, 14, 1], [86, 10, 12, 22, 2], [88, 46, 10, 16, 3]] as const;
 const GLOW_STICKS = ["#2ee6ff", "#2ee6ff", "#7fe8ff", "#ff7ad9"] as const;
+const SHOP_SIGNS = ["#ffd36b", "#ff5a5a", "#5ce1e6", "#ff9fd0", "#9be15c", "#ffb35a"] as const;
+const TOWN_LIGHTS = ["#ffb35a", "#ffd27a", "#ff8a4a"] as const;
 /** A cat sitting under the lamp ('#' fur, 'o' eyes). */
 const CAT = ["#...#....", "##.##....", "#####....", "#o#o#....", "#####...#", ".####...#", ".######.#", ".#######.", ".#######."] as const;
+
+/**
+ * A part of a scene that moves or blinks over the still picture. Its pixels are where it starts;
+ * each [period] (tenths of a second) it slides by ([dx], [dy]) and is shown for the first [on]
+ * tenths. [delay] shifts its phase, and [rest] is the time shown when nothing moves.
+ */
+export interface PixelActor {
+  rects: CityPopPixel[];
+  dx: number;
+  dy: number;
+  period: number;
+  delay: number;
+  on: number;
+  rest: number;
+}
+
+interface ActorMotion { dx?: number; dy?: number; period: number; delay?: number; on?: number; rest?: number }
+
+/** Where an actor is at [t] tenths of a second (whole art pixels from its start) and whether it shows. */
+export function pixelActorAt(actor: PixelActor, t: number): { x: number; y: number; shown: boolean } {
+  const phase = (((t + actor.delay) % actor.period) + actor.period) % actor.period;
+  return { x: div(actor.dx * phase, actor.period), y: div(actor.dy * phase, actor.period), shown: phase < actor.on };
+}
 
 /** The art-pixel grid a scene draws on. */
 class Grid {
   readonly out: CityPopPixel[] = [];
+  /** The scene's moving parts ([actor]). */
+  readonly actors: PixelActor[] = [];
   readonly w: number;
   readonly h: number;
-  constructor(w: number, h: number) { this.w = w; this.h = h; }
+  /** False for an actor's own drawing, which may start outside the scene. */
+  readonly clip: boolean;
+  constructor(w: number, h: number, clip = true) { this.w = w; this.h = h; this.clip = clip; }
 
   /** A rectangle, clipped to the grid. */
   px(x: number, y: number, rw: number, rh: number, color: string) {
+    if (!this.clip) {
+      if (rw > 0 && rh > 0) this.out.push({ x, y, w: rw, h: rh, color });
+      return;
+    }
     const left = Math.max(0, x), top = Math.max(0, y), right = Math.min(this.w, x + rw), bottom = Math.min(this.h, y + rh);
     if (right > left && bottom > top) this.out.push({ x: left, y: top, w: right - left, h: bottom - top, color });
   }
@@ -162,6 +197,15 @@ class Grid {
     }
   }
 
+  /** A part that moves or blinks over the still picture ([PixelActor]), drawn by [draw] where it starts. */
+  actor(draw: (a: Grid) => void, m: ActorMotion) {
+    const a = new Grid(this.w, this.h, false);
+    draw(a);
+    if (a.out.length) {
+      this.actors.push({ rects: a.out, dx: m.dx ?? 0, dy: m.dy ?? 0, period: Math.max(1, m.period), delay: m.delay ?? 0, on: m.on ?? m.period, rest: m.rest ?? 0 });
+    }
+  }
+
   /** Seeded stars between rows [top] and [bottom]; every eleventh one is a small cross. */
   stars(top: number, bottom: number, count: number, seed: number, colors: readonly string[] = STARS) {
     const span = Math.max(1, bottom - top);
@@ -176,9 +220,14 @@ class Grid {
 
 /** A scene at [width] × [height] art pixels. */
 export function pixelScene(id: PixelSceneId, width: number, height: number): CityPopPixel[] {
+  return pixelSceneParts(id, width, height).rects;
+}
+
+/** A scene and its moving parts at [width] × [height] art pixels. */
+export function pixelSceneParts(id: PixelSceneId, width: number, height: number): { rects: CityPopPixel[]; actors: PixelActor[] } {
   const g = new Grid(Math.max(16, Math.floor(width)), Math.max(12, Math.floor(height)));
   switch (id) {
-    case "sunset": return cityPopScene(g.w, g.h, { horizon: 680, sunX: 760, sun: 170 });
+    case "sunset": return { rects: cityPopScene(g.w, g.h, { horizon: 680, sunX: 760, sun: 170 }), actors: [] };
     case "neon-city": neonCity(g); break;
     case "fuji": fuji(g); break;
     case "sakura": sakura(g); break;
@@ -201,8 +250,40 @@ export function pixelScene(id: PixelSceneId, width: number, height: number): Cit
     case "karaoke": karaoke(g); break;
     case "rooftop-band": rooftopBand(g); break;
     case "hologram": hologram(g); break;
+    case "manga-street": mangaStreet(g); break;
+    case "moon-bench": moonBench(g); break;
+    case "dusk-line": duskLine(g); break;
+    case "green-shop": greenShop(g); break;
   }
-  return g.out;
+  return { rects: g.out, actors: g.actors };
+}
+
+/** A layer that drifts by ([dx], [dy]) every period without end: drawn twice, the copy one step behind, so it wraps unseen. */
+function drift(g: Grid, dx: number, dy: number, period: number, draw: (a: Grid, ox: number, oy: number) => void) {
+  g.actor((a) => { draw(a, 0, 0); draw(a, -dx, -dy); }, { dx, dy, period });
+}
+
+/** Stars that come and go inside a box: two sets taking turns. */
+function twinkle(g: Grid, left: number, top: number, right: number, bottom: number, count: number, seed: number, color = "#ffffff") {
+  const across = Math.max(1, right - left), span = Math.max(1, bottom - top);
+  for (let k = 0; k < 2; k++) {
+    g.actor((a) => {
+      for (let i = k; i < count; i += 2) a.px(left + mod(seed + i * 3 + 1, across), top + mod(seed + i * 3 + 2, span), 1, 1, color);
+    }, { period: 30, delay: k * 15, on: 15 });
+  }
+}
+
+/** Two frames taking turns, [period] tenths for the pair (the first shows when nothing moves). */
+function frames(g: Grid, period: number, first: (a: Grid) => void, second: (a: Grid) => void) {
+  g.actor(first, { period, on: div(period, 2) });
+  g.actor(second, { period, delay: div(period, 2), on: div(period, 2) });
+}
+
+/** A bird in flight, three pixels wide. */
+function bird(a: Grid, x: number, y: number, color: string) {
+  a.px(x, y, 1, 1, color);
+  a.px(x + 1, y + 1, 1, 1, color);
+  a.px(x + 2, y, 1, 1, color);
 }
 
 /** A city at night in the rain: a full moon, lit towers, neon signs shining on the wet street. */
@@ -250,12 +331,17 @@ function neonCity(g: Grid) {
       const sh = Math.min(tall - 6, 6 + mod(8600 + i, 8));
       g.px(sx, sy, 3, sh, color);
       for (let gy = sy + 1; gy < sy + sh - 1; gy += 2) g.px(sx + 1, gy, 1, 1, "#12051f");
+      if (mod(8800 + i, 2) === 0) g.actor((a) => a.px(sx, sy, 3, sh, "#12051f"), { period: 50 + mod(8900 + i, 40), delay: mod(9000 + i, 50), on: 2, rest: 40 });
       for (let ry = street + 1; ry < h; ry += 2) g.px(sx + mod(ry * 5 + sx * 3, 3), ry, 1, 1, color);
     }
     x += bw;
   }
-  const drops = div(w * h, 70);
-  for (let i = 0; i < drops; i++) g.px(mod(20000 + i * 2, w), mod(20001 + i * 2, h), 1, 2 + mod(20000 + i * 5, 2), "#5866c4");
+  // The rain falls past, a little slanted; a sign blinks out now and then.
+  const drops = div(w * h, 70), slant = div(h, 4);
+  drift(g, -slant, h, 9, (a, ox, oy) => {
+    for (let i = 0; i < drops; i++) a.px(mod(20000 + i * 2, w + slant) + ox, mod(20001 + i * 2, h) + oy, 1, 2 + mod(20000 + i * 5, 2), "#5866c4");
+  });
+  twinkle(g, 0, 0, w, div(street * 45, 100), div(w * street, 700), 150);
 }
 
 /** Mount Fuji at dawn over a still lake, a torii gate standing in the water. */
@@ -270,15 +356,7 @@ function fuji(g: Grid) {
     const half = pixelIsqrt(sr * sr - (y - sy) * (y - sy));
     g.px(sx - half, y, half * 2 + 1, 1, SUNRISE[Math.min(SUNRISE.length - 1, div((y - sy + sr) * SUNRISE.length, sr * 2))]);
   }
-  for (let k = 0; k < 3; k++) {
-    const cy = div(horizon * (34 + k * 16), 100);
-    const cw = div(w * (16 + mod(9100 + k, 12)), 100);
-    const cx = mod(9000 + k, w);
-    for (let r = 0; r < 3; r++) {
-      const rw = div(cw * (2 + r), 4);
-      g.px(cx - div(rw, 2), cy + r, rw, 1, CLOUD[r]);
-    }
-  }
+  twinkle(g, 0, 0, w, div(horizon * 30, 100), div(w * horizon, 900), 350);
   // The mountain: a broad cone with a flat crater, its right face in shade, a snow cap with a ragged hem.
   const peakX = div(w * 66, 100), peakY = div(h * 14, 100);
   const snow = peakY + div((horizon - peakY) * 30, 100);
@@ -322,12 +400,21 @@ function fuji(g: Grid) {
   g.px(tx + 9 * s, tTop - s, s, s, "#ff3d3d");
   g.px(tx - s, tTop + 2 * s, 10 * s, s, "#d92f2f");
   g.px(tx + 3 * s, tTop + s, 2 * s, s, "#d92f2f");
-  for (let i = 0; i < 3; i++) {
-    const bx = div(w * (50 + i * 5), 100), by = div(horizon * (18 + mod(9600 + i, 12)), 100);
-    g.px(bx, by, 1, 1, "#2a1650");
-    g.px(bx + 1, by + 1, 1, 1, "#2a1650");
-    g.px(bx + 2, by, 1, 1, "#2a1650");
+  // Clouds drifting across the dawn, birds flying the other way.
+  for (let k = 0; k < 3; k++) {
+    const cy = div(horizon * (34 + k * 16), 100);
+    const cw = div(w * (16 + mod(9100 + k, 12)), 100);
+    const cx = mod(9000 + k, w);
+    drift(g, w, 0, 600 + k * 170, (a, ox) => {
+      for (let r = 0; r < 3; r++) {
+        const rw = div(cw * (2 + r), 4);
+        a.px(cx - div(rw, 2) + ox, cy + r, rw, 1, CLOUD[r]);
+      }
+    });
   }
+  drift(g, -w, 0, 260, (a, ox) => {
+    for (let i = 0; i < 3; i++) bird(a, div(w * (50 + i * 5), 100) + ox, div(horizon * (18 + mod(9600 + i, 12)), 100), "#2a1650");
+  });
 }
 
 /** A cherry tree in bloom under a full moon, petals drifting over the hills. */
@@ -380,10 +467,14 @@ function sakura(g: Grid) {
       else g.disc(topX + ox - 2, cy + oy - 2, Math.max(1, div(cr, 2)), "#ff9fd0");
     }
   }
-  const petals = div(w * h, 320);
-  for (let i = 0; i < petals; i++) {
-    g.px(mod(30000 + i * 2, w), mod(30001 + i * 2, h), i % 4 === 0 ? 2 : 1, 1, i % 3 === 0 ? "#ffb3de" : "#ff7ac6");
-  }
+  // Petals drifting down and across.
+  const petals = div(w * h, 320), across = div(h, 2);
+  drift(g, across, h, 70, (a, ox, oy) => {
+    for (let i = 0; i < petals; i++) {
+      a.px(mod(30000 + i * 2, w + across) - across + ox, mod(30001 + i * 2, h) + oy, i % 4 === 0 ? 2 : 1, 1, i % 3 === 0 ? "#ffb3de" : "#ff7ac6");
+    }
+  });
+  twinkle(g, 0, 0, w, div(h * 60, 100), div(w * h, 500), 450);
 }
 
 /** A bullet train crossing a sea bridge at sunset. */
@@ -419,22 +510,27 @@ function shinkansen(g: Grid) {
   for (let x = div(span, 2); x < w; x += span) g.px(x, deck, 2 * s, h - deck, "#120526");
   g.px(0, deck, w, 2 * s, "#120526");
   g.px(0, deck - s, w, 1, "#2a0f45");
-  // The train: white cars with a blue stripe, windows, a long sloping nose and a headlight.
+  // The train: white cars with a blue stripe, windows, a long sloping nose and a headlight. It
+  // crosses the bridge, then the sea is empty a while; still, it stands where it was drawn.
   const th = Math.max(4, div(h * 14, 100));
   const ty = deck - th;
   const length = div(w * 58, 100);
-  const x0 = div(w * 6, 100);
   const nose = th * 3;
-  g.px(x0, ty, length, th, "#f4f2ff");
-  for (let i = 0; i < th; i++) g.px(x0 + length, ty + i, div(nose * (i + 1), th), 1, "#f4f2ff");
-  g.px(x0, ty + div(th * 62, 100), length + nose, Math.max(1, div(th, 5)), "#2e6bff");
-  const wy = ty + Math.max(1, div(th * 22, 100)), wh = Math.max(1, div(th, 5));
-  for (let x = x0 + 2; x < x0 + length - 2; x += 3) g.px(x, wy, 2, wh, mod(x * 7 + 11, 5) === 0 ? "#ffd36b" : "#1b2a5a");
-  const car = Math.max(14, div(length, 4));
-  for (let x = x0 + car; x < x0 + length; x += car) g.px(x, ty, 1, th, "#b9b4d9");
-  g.px(x0 + length + 1, wy, Math.max(1, div(nose * (wy - ty + 1), th) - 2), wh, "#1b2a5a");
-  g.px(x0 + length + nose - 3, ty + th - 2, 2, 1, "#fff27a");
-  for (let i = 0; i < 6; i++) g.px(x0 - 4 - mod(31300 + i, Math.max(1, div(w, 12))), ty + mod(31400 + i, th), 3 + mod(31500 + i, 6), 1, "#ff8fb1");
+  const whole = length + nose, travel = 2 * (w + whole), period = 300;
+  g.actor((a) => {
+    const x0 = -whole;
+    a.px(x0, ty, length, th, "#f4f2ff");
+    for (let i = 0; i < th; i++) a.px(x0 + length, ty + i, div(nose * (i + 1), th), 1, "#f4f2ff");
+    a.px(x0, ty + div(th * 62, 100), length + nose, Math.max(1, div(th, 5)), "#2e6bff");
+    const wy = ty + Math.max(1, div(th * 22, 100)), wh = Math.max(1, div(th, 5));
+    for (let x = x0 + 2; x < x0 + length - 2; x += 3) a.px(x, wy, 2, wh, mod(x - x0 + 11, 5) === 0 ? "#ffd36b" : "#1b2a5a");
+    const car = Math.max(14, div(length, 4));
+    for (let x = x0 + car; x < x0 + length; x += car) a.px(x, ty, 1, th, "#b9b4d9");
+    a.px(x0 + length + 1, wy, Math.max(1, div(nose * (wy - ty + 1), th) - 2), wh, "#1b2a5a");
+    a.px(x0 + length + nose - 3, ty + th - 2, 2, 1, "#fff27a");
+    for (let i = 0; i < 6; i++) a.px(x0 - 4 - mod(31300 + i, Math.max(1, div(w, 12))), ty + mod(31400 + i, th), 3 + mod(31500 + i, 6), 1, "#ff8fb1");
+  }, { dx: travel, period, rest: div(period * (div(w * 6, 100) + whole), travel) });
+  twinkle(g, 0, 0, w, div(sea * 35, 100), div(w * sea, 800), 550);
 }
 
 /** Deep space: nebulae, a ringed planet, a small moon and a shooting star. */
@@ -470,6 +566,18 @@ function starlight(g: Grid) {
   const tail = Math.max(6, div(w * 12, 100));
   const hx = div(w * 52, 100), hy = div(h * 30, 100);
   for (let t = 0; t <= tail; t++) g.px(hx + t, hy - div(t, 3), 1, 1, t < 2 ? "#ffffff" : t < div(tail, 2) ? "#2ee6ff" : "#1a6f8f");
+  shootingStar(g, 61000);
+  twinkle(g, 0, 0, w, h, div(w * h, 160), 650);
+}
+
+/** Now and then a short streak crosses the upper sky. */
+function shootingStar(g: Grid, seed: number) {
+  const { w, h } = g;
+  const length = Math.max(4, div(w * 4, 100));
+  const x0 = div(w * (8 + mod(seed, 30)), 100), y0 = div(h * (6 + mod(seed + 1, 14)), 100);
+  g.actor((a) => {
+    for (let t = 0; t < length; t++) a.px(x0 + t, y0 + div(t, 2), 1, 1, t > length - 3 ? "#ffffff" : t > div(length, 2) ? "#bff8ff" : "#4f7cff");
+  }, { dx: div(w * 26, 100), dy: div(h * 13, 100), period: 120 + mod(seed + 2, 60), on: 7, rest: 60 });
 }
 
 /** A bookshop at night: full shelves, a window on the city, a lamp's warm light and a cat. */
@@ -537,6 +645,10 @@ function library(g: Grid) {
       if (c !== ".") g.px(catX + x * s, catY + y * s, s, s, c === "o" ? "#ffd319" : "#07010f");
     }
   }
+  g.actor((a) => {
+    for (let y = 0; y < CAT.length; y++) for (let x = 0; x < CAT[y].length; x++) if (CAT[y][x] === "o") a.px(catX + x * s, catY + y * s, s, s, "#07010f");
+  }, { period: 45, delay: 30, on: 2 });
+  twinkle(g, wx, wy, wx + ww, wy + wh - div(wh, 4), div(ww * wh, 60), 52000);
 }
 
 /** A ramen stall at night: power lines, a glowing vending machine, red lanterns, steam and warm light on the street. */
@@ -546,6 +658,7 @@ function ramenStand(g: Grid) {
   const ground = h - Math.max(3, div(h * 20, 100));
   g.gradient(0, ground, ["#0b0420", "#120632", "#1a0a40", "#24104d", "#2f1258"]);
   g.stars(0, div(ground * 50, 100), div(w * ground, 200), 700);
+  twinkle(g, 0, 0, w, div(ground * 50, 100), div(w * ground, 700), 750);
   const mr = Math.max(3, div(h * 9, 100));
   g.disc(div(w * 90, 100), div(h * 10, 100) + mr, mr, "#fff2c7");
   // Houses behind, a few windows still lit.
@@ -611,7 +724,9 @@ function ramenStand(g: Grid) {
   // A pot with its steam curling up past the curtain.
   const potX = stX + 2 * s;
   g.px(potX, counterY - 2 * s, 3 * s, 2 * s, "#7d7896");
-  for (let t = 0; t < 4; t++) g.px(potX + (t % 2) * s, counterY - 3 * s - t * 2 * s, s, s, "#c9c3d9");
+  frames(g, 12,
+    (a) => { for (let t = 0; t < 4; t++) a.px(potX + (t % 2) * s, counterY - 3 * s - t * 2 * s, s, s, "#c9c3d9"); },
+    (a) => { for (let t = 0; t < 4; t++) a.px(potX + ((t + 1) % 2) * s, counterY - 4 * s - t * 2 * s, s, s, "#c9c3d9"); });
   // Red lanterns at the corners of the roof.
   for (const lx of [stX - 2 * s, stX + stW + s]) {
     const r = Math.max(2, 2 * s);
@@ -620,6 +735,7 @@ function ramenStand(g: Grid) {
     g.disc(lx, top + r, r, "#ff3d3d");
     g.disc(lx, top + r, Math.max(1, r - s), "#ff7a59");
     g.px(lx - s, top + 2 * r + 1, 2 * s + 1, s, "#140726");
+    g.actor((a) => a.disc(lx, top + r, Math.max(1, r - s), "#ffb38a"), { period: 23 + mod(lx, 9), on: 3 });
   }
   // Stools before the counter.
   for (let k = 0; k < 3; k++) {
@@ -658,9 +774,12 @@ function arcade(g: Grid) {
     g.px(x + s, top + s, cabW - 2 * s, mqH, accent);
     const scY = top + s + mqH + s, scH = Math.max(4, div(cabH * 34, 100));
     g.px(x + 2 * s, scY, cabW - 4 * s, scH, "#0a1840");
-    for (let k = 0; k < 6; k++) {
-      g.px(x + 3 * s + mod(74000 + i * 7 + k, Math.max(1, cabW - 6 * s)), scY + 1 + mod(75000 + i * 7 + k, Math.max(1, scH - 2)), 1, 1, SCREEN_DOTS[k % 3]);
-    }
+    const dots = (a: Grid, from: number) => {
+      for (let k = from; k < from + 6; k++) {
+        a.px(x + 3 * s + mod(74000 + i * 7 + k, Math.max(1, cabW - 6 * s)), scY + 1 + mod(75000 + i * 7 + k, Math.max(1, scH - 2)), 1, 1, SCREEN_DOTS[k % 3]);
+      }
+    };
+    frames(g, 6 + mod(73100 + i, 5), (a) => dots(a, 0), (a) => dots(a, 50));
     const cpY = scY + scH + s;
     g.px(x - s, cpY, cabW + 2 * s, 2 * s, "#2a1650");
     g.px(x + 3 * s, cpY - s, s, s, "#ff3d3d");
@@ -680,6 +799,10 @@ function arcade(g: Grid) {
       for (let x = 0; x < rows[y].length; x++) if (rows[y][x] === "#") g.px(signX + c * letter + x * s, signY + y * s, s, s, "#ff2a9d");
     }
   }
+  g.actor((a) => {
+    const rows = GAME[1];
+    for (let y = 0; y < rows.length; y++) for (let x = 0; x < rows[y].length; x++) if (rows[y][x] === "#") a.px(signX + letter + x * s, signY + y * s, s, s, "#5a1040");
+  }, { period: 70, delay: 20, on: 3 });
 }
 
 /** A bedroom at night with everything saved for later: an episode on the CRT, a cabinet of tapes, floppies, the city outside. */
@@ -737,6 +860,8 @@ function bedroom(g: Grid) {
   g.disc(tvX + 2 * s + div(scW, 2), tvY + 2 * s + div(scH, 2), Math.max(1, div(scH, 4)), "#ffd319");
   g.px(tvX + 2 * s, tvY + 2 * s + div(scH, 2), scW, scH - div(scH, 2), "#2e6bff");
   g.px(tvX + 2 * s, tvY + 2 * s + div(scH, 2), scW, s, "#bff8ff");
+  g.actor((a) => a.px(tvX + 2 * s, tvY + 2 * s, scW, Math.max(1, div(s, 2)), "#fff6e8"), { dy: Math.max(1, scH - s), period: 40, on: 40 });
+  twinkle(g, wx, wy, wx + ww, wy + lower, div(ww * wh, 70), 80500);
   g.px(tvX + tvW - 3 * s, tvY + 2 * s, 2 * s, s, "#ff2a9d");
   g.px(tvX + tvW - 3 * s, tvY + 4 * s, 2 * s, s, "#ffd319");
   for (let t = 1; t <= 4 * s; t++) {
@@ -787,6 +912,14 @@ function cinema(g: Grid) {
     const top = by + div((sy - by) * t, reach), bottom = by + div((sy + sh - by) * t, reach);
     for (let y = top; y <= bottom; y++) if (((x + y) & 1) === 0 && mod(x * 3 + y, 4) === 0) g.px(x, y, 1, 1, "#4a3f7a");
   }
+  const beam = (a: Grid, pick: number) => {
+    for (let x = bx; x < sx; x++) {
+      const t = x - bx;
+      const top = by + div((sy - by) * t, reach), bottom = by + div((sy + sh - by) * t, reach);
+      for (let y = top; y <= bottom; y++) if (((x + y) & 1) === 0 && mod(x * 3 + y, 4) === pick) a.px(x, y, 1, 1, "#6a5fa0");
+    }
+  };
+  frames(g, 4, (a) => beam(a, 1), (a) => beam(a, 2));
   g.px(bx - 2 * s, by - s, 3 * s, 2 * s, "#d7d0e8");
   // Rows of seats, a few heads watching.
   const rowH = Math.max(3, div(h * 10, 100));
@@ -832,17 +965,22 @@ function tower(g: Grid) {
   const antenna = Math.max(3, div(h * 9, 100));
   g.px(cx, top - antenna, s, antenna, "#d7d0e8");
   g.px(cx, top - antenna - s, s, s, "#ff3d3d");
+  // The waves going out, one ring after another; the warning light blinks.
   for (let k = 1; k <= 3; k++) {
     const r = k * 4 * s;
     const reach = div(r * 6, 10);
-    for (let dy = -reach; dy <= reach; dy++) {
-      const dx = pixelIsqrt(r * r - dy * dy);
-      if (((dy + k) & 1) === 0) {
-        g.px(cx + dx, top - antenna + dy, 1, 1, "#2ee6ff");
-        g.px(cx - dx, top - antenna + dy, 1, 1, "#2ee6ff");
+    g.actor((a) => {
+      for (let dy = -reach; dy <= reach; dy++) {
+        const dx = pixelIsqrt(r * r - dy * dy);
+        if (((dy + k) & 1) === 0) {
+          a.px(cx + dx, top - antenna + dy, 1, 1, "#2ee6ff");
+          a.px(cx - dx, top - antenna + dy, 1, 1, "#2ee6ff");
+        }
       }
-    }
+    }, { period: 24, delay: (24 - (k - 1) * 8) % 24, on: 14 });
   }
+  g.actor((a) => a.px(cx, top - antenna - s, s, s, "#5a1a2a"), { period: 16, on: 8, rest: 8 });
+  twinkle(g, 0, 0, w, div(ground * 60, 100), div(w * ground, 600), 850);
   // The town in front, its windows lit.
   for (let x = 0, i = 0; x < w; i++) {
     const bw = 4 + mod(85000 + i, 7);
@@ -893,6 +1031,8 @@ function observatory(g: Grid) {
   }
   g.px(peakX - s, by - r, 2 * s, r, "#14102e");
   for (let t = 0; t < Math.max(4, div(r * 3, 2)); t++) g.px(peakX - t, by - div(r, 2) - t, 2 * s, 2 * s, "#7d7896");
+  shootingStar(g, 91000);
+  twinkle(g, 0, 0, w, div(h * 60, 100), div(w * h, 200), 950);
 }
 
 /** A station at night: the departure board's next trains, the clock, the yellow line, the town across the tracks. */
@@ -953,6 +1093,16 @@ function station(g: Grid) {
   g.px(benchX, platform - 3 * s, 8 * s, s, "#9a5a35");
   g.px(benchX + s, platform - 2 * s, s, 2 * s, "#5a2d1a");
   g.px(benchX + 6 * s, platform - 2 * s, s, 2 * s, "#5a2d1a");
+  // A train through the station now and then, right to left, its windows lit.
+  const trainH = Math.max(4, div(h * 18, 100)), trainY = platform - s - trainH, trainL = div(w * 70, 100);
+  g.actor((a) => {
+    a.px(w, trainY, trainL, trainH, "#c9d3e8");
+    a.px(w, trainY + trainH - 2 * s, trainL, s, "#2e6bff");
+    for (let x = w + 2 * s; x < w + trainL - 2 * s; x += 4 * s) a.px(x, trainY + s, 2 * s, Math.max(1, div(trainH, 3)), "#ffd36b");
+    for (let x = w + div(trainL, 4); x < w + trainL; x += div(trainL, 4)) a.px(x, trainY, 1, trainH, "#8f9ab8");
+    a.px(w, trainY + div(trainH, 2), s, s, "#fff27a");
+  }, { dx: -2 * (w + trainL), period: 260, delay: 130 });
+  g.actor((a) => a.px(bx + 2 * s, by + 2 * s, 5 * s, s, "#07040f"), { period: 12, on: 4, rest: 6 });
 }
 
 /** A desk at night: a beige computer's green prompt, the keyboard, a lamp, a mug, books and floppies on the shelf. */
@@ -992,7 +1142,7 @@ function terminal(g: Grid) {
     g.px(scX + s, y, len, s, "#5ce1a5");
     lastY = y; lastEnd = scX + s + len;
   }
-  g.px(Math.min(lastEnd + s, scX + scW - 2 * s), lastY, s, s, "#bff8ff");
+  g.actor((a) => a.px(Math.min(lastEnd + s, scX + scW - 2 * s), lastY, s, s, "#bff8ff"), { period: 10, on: 5 });
   g.px(mx + div(mw, 2) - 2 * s, my + mh, 4 * s, 2 * s, "#b0a690");
   // The keyboard.
   g.px(mx - 2 * s, desk + s, mw + 4 * s, 2 * s, "#d8cdb8");
@@ -1014,7 +1164,9 @@ function terminal(g: Grid) {
   const cupX = mx - 6 * s;
   g.px(cupX, desk - 3 * s, 3 * s, 3 * s, "#ff2a9d");
   g.px(cupX + 3 * s, desk - 2 * s, s, s, "#ff2a9d");
-  for (let t = 0; t < 3; t++) g.px(cupX + s + (t % 2) * s, desk - 4 * s - t * 2 * s, s, s, "#8f88ad");
+  frames(g, 12,
+    (a) => { for (let t = 0; t < 3; t++) a.px(cupX + s + (t % 2) * s, desk - 4 * s - t * 2 * s, s, s, "#8f88ad"); },
+    (a) => { for (let t = 0; t < 3; t++) a.px(cupX + s + ((t + 1) % 2) * s, desk - 5 * s - t * 2 * s, s, s, "#8f88ad"); });
 }
 
 /** A concert stage: spotlights, an equalizer glowing behind the band, light sticks up in the crowd. */
@@ -1040,12 +1192,19 @@ function stage(g: Grid) {
   // The equalizer down to the deck: columns of segments, pink at the bottom to cyan at the top.
   const ex = div(w * 38, 100), eTop = div(h * 12, 100), eBottom = deckY - s;
   const eSpan = Math.max(1, eBottom - eTop);
+  const peaks: number[][][] = [[], []];
   for (let x = ex, i = 0; x + 2 * s <= w - 2 * s; x += 3 * s, i++) {
     const tall = Math.max(2 * s, div(eSpan * (30 + mod(76000 + i, 71)), 100));
     for (let y = eBottom - tall; y < eBottom; y += 2 * s) {
       g.px(x, y, 2 * s, s, EQUALIZER[Math.min(EQUALIZER.length - 1, div((eBottom - y) * EQUALIZER.length, eSpan))]);
     }
+    peaks[i % 2].push([x, eBottom - tall]);
   }
+  // The bars bounce: every other one jumps two segments, then the rest.
+  const bounce = (a: Grid, set: number[][]) => {
+    for (const [x, top] of set) for (let k = 1; k <= 2; k++) if (top - 2 * s * k >= eTop - 2 * s) a.px(x, top - 2 * s * k, 2 * s, s, EQUALIZER[EQUALIZER.length - 1]);
+  };
+  frames(g, 6, (a) => bounce(a, peaks[0]), (a) => bounce(a, peaks[1]));
   // The deck, its footlights, an amp at each side.
   g.px(stageX, deckY, w - stageX, deckH, "#2a1650");
   g.px(stageX, deckY, w - stageX, s, "#4a2a7a");
@@ -1097,7 +1256,9 @@ function stage(g: Grid) {
 function notes(g: Grid, x: number, y: number, count: number, s: number, seed: number) {
   for (let k = 0; k < count; k++) {
     const color = NOTE_COLORS[mod(seed + k, NOTE_COLORS.length)];
-    g.sprite(NOTE, x - k * 7 * s - mod(seed + 10 + k, 4) * s, y - k * 5 * s - mod(seed + 20 + k, 3) * s, s, { "#": color });
+    const nx = x - k * 7 * s - mod(seed + 10 + k, 4) * s, ny = y - k * 5 * s - mod(seed + 20 + k, 3) * s;
+    // Each rises a little and goes, one after another.
+    g.actor((a) => a.sprite(NOTE, nx, ny, s, { "#": color }), { dy: -3 * s, period: 30, delay: k * 10, on: 24 });
   }
 }
 
@@ -1265,8 +1426,10 @@ function radio(g: Grid) {
   g.px(fcx, fcy, div(fr, 2) + 1, 1, "#2a1420");
   const pendTop = fcy + fr + s;
   g.px(clx + s, pendTop, cw - 2 * s, cly + ch - s - pendTop, "#2a1420");
-  g.px(fcx, pendTop, 1, Math.max(1, cly + ch - 3 * s - pendTop), "#c9a070");
-  g.disc(fcx, cly + ch - 3 * s, Math.max(1, s), "#ffd36b");
+  const bobY = cly + ch - 3 * s, swing = Math.max(1, s);
+  frames(g, 20,
+    (a) => { a.line(fcx, pendTop, fcx - swing, bobY, "#c9a070"); a.disc(fcx - swing, bobY, Math.max(1, s), "#ffd36b"); },
+    (a) => { a.line(fcx, pendTop, fcx + swing, bobY, "#c9a070"); a.disc(fcx + swing, bobY, Math.max(1, s), "#ffd36b"); });
   notes(g, rx - 2 * s, ry - 2 * s, 3, s, 92300);
 }
 
@@ -1320,8 +1483,9 @@ function hifi(g: Grid) {
     const half = s + div((y - (boardY - lh)) * s, Math.max(1, lh));
     g.px(lx + 2 * s - half, y, half * 2, 1, "#ff7f3f");
   }
-  g.disc(lx + 2 * s, boardY - div(lh * 2, 3), s, "#ffd319");
-  g.disc(lx + 2 * s, boardY - div(lh, 3), Math.max(1, s + div(s, 2)), "#ff2a9d");
+  frames(g, 40,
+    (a) => { a.disc(lx + 2 * s, boardY - div(lh * 2, 3), s, "#ffd319"); a.disc(lx + 2 * s, boardY - div(lh, 3), Math.max(1, s + div(s, 2)), "#ff2a9d"); },
+    (a) => { a.disc(lx + 2 * s, boardY - div(lh * 2, 5), s, "#ffd319"); a.disc(lx + 2 * s, boardY - div(lh * 3, 5), Math.max(1, s), "#ff2a9d"); });
   g.px(lx + s, boardY - lh - s, 2 * s, 2 * s, "#c9c3d9");
   // A crate of records on the floor, their sleeves in every colour.
   const crateX = div(w * 40, 100), crateW = Math.max(12, div(w * 10, 100)), crateH = Math.max(5, div(h * 14, 100));
@@ -1338,6 +1502,7 @@ function nightDrive(g: Grid) {
   const horizon = div(h * 44, 100);
   g.gradient(0, horizon, NIGHT_SKY);
   g.stars(0, div(horizon * 2, 3), Math.max(4, div(w * horizon, 260)), 93000);
+  twinkle(g, 0, 0, w, div(horizon * 2, 3), div(w * horizon, 800), 93050);
   g.disc(div(w * 66, 100), div(h * 16, 100), Math.max(2, div(h * 7, 100)), "#ffe9c8");
   // The city ahead, its windows lit.
   const tallest = Math.max(2 * s, horizon - div(h * 16, 100));
@@ -1351,6 +1516,7 @@ function nightDrive(g: Grid) {
   }
   // The highway: lane marks dashed by distance, lamps along both sides, a car's tail lights ahead.
   const vx = div(w, 2), depth = Math.max(1, dash - horizon);
+  const marks: number[][][] = [[], []];
   g.px(0, horizon, w, dash - horizon, "#0d0420");
   for (let y = horizon; y < dash; y++) {
     const dy = y - horizon + 1;
@@ -1359,12 +1525,17 @@ function nightDrive(g: Grid) {
     const edge = Math.max(1, div(half, 30));
     g.px(vx - half, y, edge, 1, "#ff7ad9");
     g.px(vx + half - edge, y, edge, 1, "#ff7ad9");
-    if (div(div(depth * 24, dy), 6) % 2 === 0) {
-      const mark = Math.max(1, div(half, 24));
-      g.px(vx - div(half, 3) - div(mark, 2), y, mark, 1, "#fff6e8");
-      g.px(vx + div(half, 3) - div(mark, 2), y, mark, 1, "#fff6e8");
-    }
+    marks[div(div(depth * 24, dy), 6) % 2].push([y, half]);
   }
+  // The lane marks rush past: their two sets take turns.
+  const lane = (a: Grid, set: number[][]) => {
+    for (const [y, half] of set) {
+      const mark = Math.max(1, div(half, 24));
+      a.px(vx - div(half, 3) - div(mark, 2), y, mark, 1, "#fff6e8");
+      a.px(vx + div(half, 3) - div(mark, 2), y, mark, 1, "#fff6e8");
+    }
+  };
+  frames(g, 4, (a) => lane(a, marks[0]), (a) => lane(a, marks[1]));
   for (const z of [26, 34, 46, 62, 86, 120, 170]) {
     const dy = Math.max(1, div(depth * 24, z)), y = horizon + dy - 1;
     const half = div(dy * w * 7, depth * 10), pole = div(dy * 3, 2), size = Math.max(1, div(dy, 6));
@@ -1384,6 +1555,7 @@ function nightDrive(g: Grid) {
   g.px(cl, cy - ch + s, lamp, s, "#ff3d3d");
   g.px(cl + cw - lamp, cy - ch + s, lamp, s, "#ff3d3d");
   g.px(vx - div(lamp, 2), cy - div(ch, 2), lamp, s, "#c9c3d9");
+  g.actor((a) => { a.px(cl, cy - ch + s, lamp, s, "#ffb0b0"); a.px(cl + cw - lamp, cy - ch + s, lamp, s, "#ffb0b0"); }, { period: 47, delay: 20, on: 6 });
   // The windshield's frame, the mirror and the dice hanging from it.
   g.px(0, 0, w, 2 * s, "#07010f");
   for (let y = 0; y < dash; y++) {
@@ -1487,6 +1659,10 @@ function karaoke(g: Grid) {
     const color = NOTE_COLORS[mod(91000 + i, NOTE_COLORS.length)];
     g.px(mod(91100 + i, w), mod(91200 + i, floor), s, s, color);
   }
+  frames(g, 6,
+    (a) => { for (let y = by - br; y <= by + br; y++) { const half = pixelIsqrt(br * br - (y - by) * (y - by)); for (let x = bx - half; x <= bx + half; x++) if (((div(x, s) + div(y, s)) & 1) === 1) a.px(x, y, 1, 1, "#d7d0e8"); } },
+    (a) => { for (let y = by - br; y <= by + br; y++) { const half = pixelIsqrt(br * br - (y - by) * (y - by)); for (let x = bx - half; x <= bx + half; x++) if (((div(x, s) + div(y, s)) & 1) === 0) a.px(x, y, 1, 1, "#7fe8ff"); } });
+  twinkle(g, 0, 0, w, floor, div(w * h, 300), 91500, "#fff6e8");
   // A sofa on the left and the table of drinks.
   const sofaY = floor - div(h * 18, 100);
   g.px(0, sofaY, div(w * 34, 100), floor - sofaY, "#8a1f3a");
@@ -1507,9 +1683,15 @@ function rooftopBand(g: Grid) {
   g.disc(div(w * 20, 100), div(h * 48, 100), Math.max(3, div(h * 16, 100)), "#ffe08a");
   for (let k = 0; k < 3; k++) {
     const cx = div(w * (12 + k * 30 + mod(94300 + k, 10)), 100), cy = div(h * (10 + mod(94400 + k, 18)), 100), cw = div(w * (10 + mod(94500 + k, 8)), 100);
-    g.px(cx, cy, cw, s, "#ff9fb8");
-    g.px(cx + 2 * s, cy - s, cw - 6 * s, s, "#ffc3d0");
+    drift(g, w, 0, 700 + k * 200, (a, ox) => {
+      a.px(cx + ox, cy, cw, s, "#ff9fb8");
+      a.px(cx + 2 * s + ox, cy - s, cw - 6 * s, s, "#ffc3d0");
+    });
   }
+  drift(g, -w, 0, 240, (a, ox) => {
+    bird(a, div(w * 60, 100) + ox, div(h * 20, 100), "#3a1a5a");
+    bird(a, div(w * 64, 100) + ox, div(h * 24, 100), "#3a1a5a");
+  });
   // The town beyond the fence, its lights coming on.
   const townTop = roof - div(h * 24, 100);
   for (let x = 0, k = 0; x < w; k++) {
@@ -1642,6 +1824,17 @@ function hologram(g: Grid) {
       if (color) g.px(fx + c * cell + slip, fy + y, cell, 1, color);
     }
   }
+  // Now and then her head and shoulders slip sideways too.
+  g.actor((a) => {
+    for (let y = 2 * cell; y < 7 * cell; y++) {
+      if (y % 3 === 2) continue;
+      const r = div(y, cell);
+      for (let c = 0; c < IDOL[r].length; c++) {
+        const color = IDOL_COLORS[IDOL[r][c]];
+        if (color) a.px(fx + c * cell - 2 * cell, fy + y, cell, 1, color);
+      }
+    }
+  }, { period: 43, delay: 15, on: 2 });
   const padW = fw + 6 * s, padX = cx - div(padW, 2);
   const crowdTop = deckY + Math.max(2, div(h * 6, 100));
   g.px(0, deckY, w, h - deckY, "#0c1650");
@@ -1651,7 +1844,8 @@ function hologram(g: Grid) {
   g.px(padX + 2 * s, deckY - 2 * s, padW - 4 * s, s, "#7fe8ff");
   g.px(padX, deckY - s, padW, s, "#2ee6ff");
   g.px(padX + 2 * s, deckY, padW - 4 * s, s, "#1a6a9a");
-  // The crowd, light sticks up.
+  // The crowd, light sticks up and waving.
+  const tips: number[][][] = [[], []];
   for (let x = -s, i = 0; x < w; x += 4 * s, i++) {
     const hy = crowdTop + 2 * s + mod(95000 + i, 3) * s;
     g.disc(x + 2 * s, hy, Math.max(1, s + div(s, 2)), "#01020a");
@@ -1659,8 +1853,322 @@ function hologram(g: Grid) {
     if (mod(95100 + i, 2) === 0) {
       g.px(x + 3 * s, hy - 4 * s, s, 4 * s, "#01020a");
       g.px(x + 3 * s, hy - 8 * s, s, 4 * s, GLOW_STICKS[mod(95300 + i, GLOW_STICKS.length)]);
+      tips[i % 4 < 2 ? 0 : 1].push([x + 3 * s, hy - 9 * s]);
     }
   }
+  const wave = (a: Grid, set: number[][]) => { for (const [x, y] of set) a.px(x, y, s, s, "#e8fdff"); };
+  frames(g, 8, (a) => wave(a, tips[0]), (a) => wave(a, tips[1]));
+}
+
+/** A shopping street at night in the rain: lit signs, glowing shopfronts, wires overhead, the signs' colours on the wet road. */
+function mangaStreet(g: Grid) {
+  const { w, h } = g;
+  const s = Math.max(1, div(h, 40));
+  const road = h - Math.max(4, div(h * 16, 100));
+  g.gradient(0, road, ["#070b16", "#0c1322", "#111b2e", "#16233a", "#1b2b44"]);
+  // Towers far off in the rain, a few windows lit.
+  for (let x = 0, i = 0; x < w; i++) {
+    const bw = 4 + mod(96000 + i, 9);
+    const tall = div(road * (50 + mod(96100 + i, 40)), 100);
+    g.px(x, road - tall, bw, tall, "#151f33");
+    for (let wy = road - tall + 2; wy < road - 2; wy += 3) {
+      for (let wx = x + 1; wx < x + bw - 1; wx += 2) if (mod(wx * 37 + wy * 11 + 3, 7) === 0) g.px(wx, wy, 1, 1, mod(wx + wy, 4) === 0 ? "#ffcf7a" : "#3b5478");
+    }
+    x += bw;
+  }
+  // Poles, and the wires sagging between them.
+  const wireY = div(h * 10, 100), span = Math.max(30, div(w * 30, 100)), first = div(w * 6, 100), sag = Math.max(2, div(h * 6, 100));
+  for (let k = 0; k < 2; k++) {
+    for (let x = 0; x < w; x++) {
+      const t = ((x - first) % span + span) % span;
+      g.px(x, wireY + k * 2 * s + div(4 * sag * t * (span - t), span * span), 1, 1, "#0a101c");
+    }
+  }
+  for (let px = first; px < w; px += span) {
+    g.px(px, wireY - 2 * s, s, road - wireY + 2 * s, "#0a101c");
+    g.px(px - 2 * s, wireY, 5 * s, s, "#0a101c");
+  }
+  // The shops: an upper floor, a lit sign, an awning, the glowing shopfront.
+  const shopTop = div(h * 34, 100);
+  const fronts: number[][] = [];
+  for (let x = -2 * s, i = 0; x < w; i++) {
+    const sw = Math.max(16 * s, div(w * (11 + mod(96200 + i, 7)), 100));
+    const top = shopTop + mod(96300 + i, Math.max(1, div(h * 12, 100)));
+    g.px(x, top, sw, road - top, i % 2 === 0 ? "#1d2436" : "#241f33");
+    g.px(x, top, sw, s, "#2c3550");
+    const winY = top + 2 * s, winH = Math.max(2 * s, div(road - top, 6));
+    for (let k = 0; k < 2; k++) {
+      g.px(x + div(sw * (14 + k * 46), 100), winY, Math.max(2 * s, div(sw, 4)), winH, mod(96400 + i * 2 + k, 3) === 0 ? "#ffcf7a" : "#2c3a55");
+    }
+    const ci = mod(96500 + i, SHOP_SIGNS.length);
+    const signY = winY + winH + 2 * s, signH = Math.max(3 * s, div(h * 8, 100));
+    g.px(x + s, signY, sw - 2 * s, signH, SHOP_SIGNS[ci]);
+    for (let gx = x + 3 * s; gx + 2 * s < x + sw - 2 * s; gx += 4 * s) g.px(gx, signY + s, 2 * s, Math.max(1, signH - 2 * s), "#1a1020");
+    if (mod(96700 + i, 3) === 0) {
+      const vc = SHOP_SIGNS[(ci + 2) % SHOP_SIGNS.length];
+      g.px(x + sw - 4 * s, top - 3 * s, 3 * s, signY - top + 3 * s, vc);
+      for (let gy = top - 2 * s; gy + s < signY; gy += 3 * s) g.px(x + sw - 3 * s, gy, s, 2 * s, "#1a1020");
+    }
+    const awnY = signY + signH + s;
+    g.px(x, awnY, sw, 2 * s, mod(96600 + i, 2) === 0 ? "#7a2a3a" : "#2a5a5a");
+    for (let ax = x + s; ax < x + sw; ax += 3 * s) g.px(ax, awnY + s, s, s, "#e8d8c0");
+    const frontY = awnY + 2 * s;
+    g.px(x + s, frontY, sw - 2 * s, road - frontY, "#16121c");
+    const pane = div(sw - 6 * s, 2);
+    for (const px of [x + 2 * s, x + sw - 2 * s - pane]) {
+      g.px(px, frontY + s, pane, road - frontY - 2 * s, "#d9a066");
+      for (let fy = frontY + 3 * s; fy < road - 2 * s; fy += 3 * s) g.px(px + s, fy, pane - 2 * s, s, "#8a5a3a");
+    }
+    fronts.push([x, sw, signY, signH, ci]);
+    x += sw;
+  }
+  // The wet road, the signs' colours streaked in it.
+  g.px(0, road, w, h - road, "#0a0f1a");
+  g.px(0, road, w, s, "#2a3550");
+  for (const [x, sw, , , ci] of fronts) {
+    for (let ry = road + 2 * s; ry < h; ry += 2) g.px(x + s + mod(ry * 7 + x + 99000, Math.max(1, sw - 2 * s)), ry, Math.max(1, div(sw, 5)), 1, SHOP_SIGNS[ci]);
+  }
+  // Moving: two signs blink out now and then, someone walks by under an umbrella, the rain.
+  for (let k = 0; k < Math.min(2, fronts.length); k++) {
+    const [x, sw, signY, signH] = fronts[(k * 3 + 1) % fronts.length];
+    g.actor((a) => a.px(x + s, signY, sw - 2 * s, signH, "#2a1f2a"), { period: 60 + k * 23, delay: k * 31, on: 3, rest: 30 });
+  }
+  const r = Math.max(2, 4 * s), body = Math.max(4, 6 * s);
+  const walk = w + 4 * r, walkPeriod = 420;
+  g.actor((a) => {
+    const cx = -2 * r, top = road - body - r - 2 * s;
+    for (let y = 0; y <= r; y++) {
+      const half = pixelIsqrt(r * r - (r - y) * (r - y));
+      a.px(cx - half, top + y, half * 2 + 1, 1, y === 0 ? "#ff8a9a" : "#d94a5a");
+    }
+    a.px(cx, top + r, Math.max(1, div(s, 2)), 2 * s, "#c9c3d9");
+    a.px(cx - s, top + r + s, 2 * s + 1, body, "#06080f");
+  }, { dx: walk, period: walkPeriod, rest: div(walkPeriod * (div(w * 30, 100) + 2 * r), walk) });
+  const drops = div(w * h, 60), slant = div(h, 5);
+  drift(g, -slant, h, 8, (a, ox, oy) => {
+    for (let i = 0; i < drops; i++) a.px(mod(98000 + i * 2, w + slant) + ox, mod(98001 + i * 2, h) + oy, 1, 2 + mod(98000 + i * 5, 2), "#4a6a9a");
+  });
+}
+
+/** A bench on a hill at night: someone sitting looking over the town's lights, the full moon in the clouds, wires overhead. */
+function moonBench(g: Grid) {
+  const { w, h } = g;
+  const s = Math.max(1, div(h, 40));
+  const ground = div(h * 84, 100);
+  g.gradient(0, h, ["#04060d", "#070c17", "#0b1322", "#10192c", "#141f35"]);
+  g.stars(0, div(h * 50, 100), div(w * h, 260), 97000, ["#dfe8ff", "#9fb4d9", "#ffffff"]);
+  // The moon, a soft halo, its seas.
+  const mr = Math.max(4, div(h * 17, 100)), mx = div(w * 22, 100), my = div(h * 28, 100);
+  for (let y = my - mr - 4; y <= my + mr + 4; y++) {
+    for (let x = mx - mr - 4; x <= mx + mr + 4; x++) {
+      const d = (x - mx) * (x - mx) + (y - my) * (y - my);
+      if (d > mr * mr && d <= (mr + 4) * (mr + 4) && ((x + y) & 1) === 0) g.px(x, y, 1, 1, "#1d2a44");
+    }
+  }
+  g.disc(mx, my, mr, "#dfe8f5");
+  g.disc(mx - div(mr, 3), my - div(mr, 5), Math.max(1, div(mr, 4)), "#b9c6dc");
+  g.disc(mx + div(mr, 4), my + div(mr, 3), Math.max(1, div(mr, 5)), "#b9c6dc");
+  g.disc(mx + div(mr, 3), my - div(mr, 3), Math.max(1, div(mr, 7)), "#c9d4e6");
+  // The ridge across the valley, a mast on its peak; then the town's lights below it.
+  const ridgeAt = (x: number) => {
+    const k = div(x, 30);
+    const a = 2 + mod(97100 + k, 9), b = 2 + mod(97100 + k + 1, 9);
+    return div(h * 44, 100) + a * s + div((b - a) * s * (x - k * 30), 30);
+  };
+  let peakX = 0;
+  for (let x = 0; x < w; x++) {
+    const top = ridgeAt(x);
+    if (top < ridgeAt(peakX)) peakX = x;
+    g.px(x, top, 1, ground - top, "#0a111e");
+  }
+  const mast = Math.max(3, 4 * s), peakY = ridgeAt(peakX);
+  g.px(peakX, peakY - mast, 1, mast, "#0a111e");
+  const lights = div(w * (ground - peakY), 34);
+  for (let i = 0; i < lights; i++) {
+    const x = mod(97200 + i, w), y = ridgeAt(x) + 2 + mod(97300 + i, Math.max(1, ground - ridgeAt(x) - 2));
+    if (y < ground) g.px(x, y, 1, 1, TOWN_LIGHTS[mod(97400 + i, TOWN_LIGHTS.length)]);
+  }
+  // The wires, then the ledge of grass and the bench with someone on it.
+  const sag = Math.max(2, div(h * 8, 100));
+  for (let k = 0; k < 2; k++) for (let x = 0; x < w; x++) g.px(x, div(h * 18, 100) + k * 3 * s + div(4 * sag * x * (w - x), w * w), 1, 1, "#1a2438");
+  g.px(0, ground, w, h - ground, "#05080e");
+  for (let x = 0; x < w; x += 2) g.px(x, ground - mod(97500 + x, 3), 1, 3, "#0a101a");
+  const bx = div(w * 52, 100), bw = Math.max(16 * s, div(w * 16, 100)), seat = ground - 5 * s;
+  g.px(bx, seat, bw, s, "#2a2a3a");
+  g.px(bx, seat - 4 * s, bw, s, "#2a2a3a");
+  g.px(bx, seat - 2 * s, bw, s, "#1f1f2c");
+  for (const lx of [bx + s, bx + bw - 2 * s]) g.px(lx, seat, s, ground - seat, "#1a1a26");
+  const pcx = bx + div(bw, 2) - s;
+  g.px(pcx - 2 * s, seat - 8 * s, 6 * s, 8 * s, "#03050a");
+  g.disc(pcx + s, seat - 10 * s, Math.max(1, 2 * s), "#03050a");
+  g.px(pcx - 2 * s, seat - 8 * s, s, 7 * s, "#24324c");
+  g.px(bx + bw - 4 * s, seat - 3 * s, s, 3 * s, "#3a6a5a");
+  // Moving: clouds pass the moon, the town's lights flicker, the mast's light blinks.
+  for (let k = 0; k < 2; k++) {
+    const cy = div(h * (18 + k * 16), 100), cw = div(w * (20 + k * 8), 100), cx = mod(97600 + k, w);
+    drift(g, w, 0, 900 + k * 300, (a, ox) => {
+      for (let r = 0; r < 3 * s; r++) {
+        const rw = cw - div(cw * (3 * s - 1 - r), 6 * s);
+        for (let x = 0; x < rw; x++) if (((x + r) & 1) === 0 || r > s) a.px(cx - div(rw, 2) + x + ox, cy + r, 1, 1, r === 0 ? "#2a3550" : "#1a2338");
+      }
+    });
+  }
+  twinkle(g, 0, peakY, w, ground, div(lights, 3), 97700, "#ffd27a");
+  g.actor((a) => a.px(peakX, peakY - mast - 1, 1, 1, "#ff3d3d"), { period: 20, on: 8 });
+}
+
+/** Dusk over the city: towers against the evening sky, wires, the elevated line and a train heading home. */
+function duskLine(g: Grid) {
+  const { w, h } = g;
+  const s = Math.max(1, div(h, 40));
+  const deck = div(h * 74, 100);
+  g.gradient(0, deck, ["#2a4a72", "#3a628c", "#5f86a8", "#a6ae98", "#e8cf8e", "#ffc27a"]);
+  g.disc(div(w * 46, 100), div(h * 60, 100), Math.max(3, div(h * 7, 100)), "#fff1c4");
+  // Far towers in the haze.
+  for (let x = 0, i = 0; x < w; i++) {
+    const bw = 5 + mod(98100 + i, 8);
+    const tall = div(deck * (25 + mod(98200 + i, 30)), 100);
+    g.px(x, deck - tall, bw, tall, "#7d93b0");
+    x += bw + mod(98300 + i, 4);
+  }
+  // Near towers: rows of lit windows, an antenna or two.
+  for (let x = -s, i = 0; x < w; i++) {
+    const bw = Math.max(8 * s, div(w * (6 + mod(98400 + i, 6)), 100));
+    if (mod(98500 + i, 4) === 0) { x += bw; continue; }
+    const tall = div(deck * (35 + mod(98600 + i, 45)), 100);
+    const top = deck - tall;
+    g.px(x, top, bw, tall, i % 2 === 0 ? "#34496c" : "#2c3f5e");
+    for (let wy = top + 2 * s; wy < deck - 2 * s; wy += 2 * s) {
+      for (let wx = x + s; wx < x + bw - s; wx += 2 * s) if (mod(wx * 13 + wy * 7 + 98700, 5) < 2) g.px(wx, wy, s, s, mod(wx + wy, 3) === 0 ? "#ffe2a0" : "#9fc0e0");
+    }
+    if (mod(98800 + i, 3) === 0) g.px(x + div(bw, 2), top - 4 * s, Math.max(1, div(s, 2)), 4 * s, "#2c3f5e");
+    x += bw;
+  }
+  // Poles and wires over the line.
+  const wireY = div(h * 40, 100);
+  for (let px = div(w * 12, 100); px < w; px += Math.max(30, div(w * 34, 100))) g.px(px, wireY - 2 * s, s, deck - wireY + 2 * s, "#1c2a44");
+  for (let k = 0; k < 2; k++) for (let x = 0; x < w; x++) g.px(x, wireY + k * 2 * s + div(mod(div(x, 9) + 98900, 3), 2), 1, 1, "#1c2a44");
+  // The elevated line: the deck, its railing, a signal.
+  g.px(0, deck, w, h - deck, "#18223a");
+  g.px(0, deck, w, s, "#3a4c70");
+  for (let y = deck + 3 * s; y < h; y += 3 * s) g.px(0, y, w, 1, "#121a2e");
+  for (let x = 0; x < w; x += 6 * s) g.px(x, deck + s, s, h - deck - s, "#121a2e");
+  const sigX = div(w * 86, 100);
+  g.px(sigX, deck - 8 * s, s, 8 * s, "#1c2a44");
+  g.px(sigX - s, deck - 9 * s, 3 * s, 2 * s, "#0c1220");
+  // Moving: the train goes home, clouds drift, the signal changes.
+  const th = Math.max(4, div(h * 12, 100)), length = div(w * 60, 100), travel = 2 * (w + length), period = 320;
+  g.actor((a) => {
+    const x0 = -length, ty = deck - th;
+    a.px(x0, ty, length, th, "#2f3e5c");
+    a.px(x0, ty, length, Math.max(1, div(s, 2)), "#5a6f96");
+    for (let x = x0 + s; x < x0 + length - 2 * s; x += 3 * s) a.px(x, ty + div(th, 3), 2 * s, Math.max(1, div(th, 3)), "#ffd27a");
+    for (let x = x0 + div(length, 4); x < x0 + length; x += div(length, 4)) a.px(x, ty, 1, th, "#1c2a44");
+    a.px(x0 + length - s, ty + div(th * 2, 3), s, s, "#fff1c4");
+  }, { dx: travel, period, rest: div(period * (div(w * 20, 100) + length), travel) });
+  for (let k = 0; k < 3; k++) {
+    const cy = div(h * (8 + k * 13), 100), cw = div(w * (14 + mod(99100 + k, 10)), 100), cx = mod(99000 + k, w);
+    drift(g, w, 0, 800 + k * 250, (a, ox) => {
+      for (let r = 0; r < 3; r++) {
+        const rw = div(cw * (2 + r), 4);
+        for (let x = 0; x < rw; x++) if (r > 0 || ((x & 1) === 0)) a.px(cx - div(rw, 2) + x + ox, cy + r, 1, 1, r === 2 ? "#e8b8a8" : "#8a7fa8");
+      }
+    });
+  }
+  frames(g, 50, (a) => a.px(sigX, deck - 9 * s, s, s, "#ff4a4a"), (a) => a.px(sigX + s, deck - 9 * s, s, s, "#5ce17a"));
+}
+
+/** A little green workshop on a quiet street: panels on the roof, a chimney tower, signs and a banner, a lamp in the shop window. */
+function greenShop(g: Grid) {
+  const { w, h } = g;
+  const s = Math.max(1, div(h, 40));
+  const ground = h - Math.max(3, div(h * 10, 100));
+  const ink = "#1e2b22";
+  g.gradient(0, ground, ["#7fb487", "#8cbe93", "#9ac99d", "#a6d2a6"]);
+  g.px(0, ground, w, h - ground, "#86b48a");
+  g.px(0, ground, w, s, ink);
+  const bx = div(w * 38, 100), bw = Math.max(30 * s, div(w * 34, 100));
+  const top = div(h * 30, 100), roofH = Math.max(4 * s, div(h * 12, 100));
+  const mid = top + div((ground - top) * 42, 100);
+  // The roof: a slanted band of panels, dark and light.
+  for (let y = top - roofH; y < top; y++) {
+    const inset = div((top - y) * 2, 3);
+    g.px(bx + inset, y, bw - 2 * inset, 1, "#2f6a4f");
+    for (let x = bx + inset; x < bx + bw - inset; x += 4 * s) {
+      if (((div(x - bx, 4 * s) + div(y - top + roofH, 2 * s)) & 1) === 0) g.px(x, y, Math.min(4 * s, bx + bw - inset - x), 1, "#4a8f6a");
+    }
+  }
+  g.px(bx + div(roofH * 2, 3), top - roofH - s, bw - div(roofH * 4, 3), s, "#7a8a2a");
+  // The upper floor: three window boxes with fans, vents under them.
+  g.px(bx, top, bw, mid - top, "#55a578");
+  g.px(bx, top, s, ground - top, ink);
+  const winW = div(bw, 5), winH = Math.max(3 * s, div((mid - top) * 50, 100));
+  for (let k = 0; k < 3; k++) {
+    const wx = bx + div(bw * (8 + k * 30), 100), wy = top + 2 * s;
+    g.px(wx - s, wy - s, winW + 2 * s, winH + 2 * s, ink);
+    g.px(wx, wy, winW, winH, "#2d4a3a");
+    g.disc(wx + div(winW, 2), wy + div(winH, 2), Math.max(1, div(Math.min(winW, winH), 3)), "#a8c8a0");
+    g.px(wx + s, wy + winH + 2 * s, winW - 2 * s, s, "#7a8a2a");
+  }
+  g.px(bx - s, mid, bw + 2 * s, 2 * s, "#6b7a1a");
+  // The ground floor: the shop's opening with a lamp, screens and a counter; notices beside it.
+  g.px(bx, mid + 2 * s, bw, ground - mid - 2 * s, "#4f9a6e");
+  const ox = bx + div(bw * 10, 100), ow = div(bw * 48, 100), oy = mid + 4 * s;
+  g.px(ox - s, oy - s, ow + 2 * s, ground - oy + s, ink);
+  g.px(ox, oy, ow, ground - oy, "#20261f");
+  for (let y = oy + 4 * s; y < ground - 3 * s; y += 3 * s) g.px(ox + s, y, div(ow, 3), s, "#3a5a44");
+  g.px(ox + div(ow, 2), oy + 4 * s, 3 * s, 2 * s, "#7fc8a0");
+  g.px(ox + div(ow, 2) + 4 * s, oy + 4 * s, 3 * s, 2 * s, "#7fc8a0");
+  const lampX = ox + div(ow * 40, 100), lr = Math.max(2, 3 * s);
+  g.px(lampX, oy, Math.max(1, div(s, 2)), 2 * s, "#9ab08a");
+  for (let y = 0; y <= lr; y++) {
+    const half = pixelIsqrt(lr * lr - (lr - y) * (lr - y));
+    g.px(lampX - half, oy + 2 * s + y, half * 2 + 1, 1, "#c9dca0");
+  }
+  g.px(ox, ground - 3 * s, ow, 3 * s, "#3f7a5a");
+  for (let k = 0; k < 2; k++) {
+    const nx = ox + ow + 3 * s + k * 5 * s, ny = oy + 2 * s;
+    g.px(nx, ny, 4 * s, 6 * s, "#c9d8a8");
+    for (let y = ny + s; y < ny + 5 * s; y += 2 * s) g.px(nx + s, y, 2 * s, Math.max(1, div(s, 2)), ink);
+  }
+  // The chimney tower on the right, under its little roof.
+  const tx = bx + bw - s, tw = Math.max(6 * s, div(w * 6, 100)), ty = div(h * 12, 100);
+  g.px(tx, ty, tw, ground - ty, "#3f7a5a");
+  g.px(tx + tw - 2 * s, ty, 2 * s, ground - ty, "#2d5a44");
+  for (let y = ty + 4 * s; y < ground; y += 6 * s) g.px(tx, y, tw, s, "#2d5a44");
+  for (let y = 0; y < 3 * s; y++) g.px(tx - s - y, ty - 3 * s + y, tw + 2 * s + 2 * y, 1, "#7a5a1a");
+  g.px(tx, ty - 5 * s, tw, 2 * s, "#5a4a1a");
+  // A street lamp and a sign by the road, a little fence, boxes by the tower.
+  const lx = div(w * 18, 100);
+  g.px(lx, div(h * 34, 100), s, ground - div(h * 34, 100), ink);
+  g.px(lx - 2 * s, div(h * 34, 100) - 2 * s, 5 * s, 2 * s, ink);
+  g.disc(lx - 4 * s, div(h * 50, 100), Math.max(2, 3 * s), ink);
+  g.disc(lx - 4 * s, div(h * 50, 100), Math.max(1, 2 * s), "#4f9a6e");
+  g.line(lx - 6 * s, div(h * 50, 100) + 2 * s, lx - 2 * s, div(h * 50, 100) - 2 * s, ink);
+  for (let x = div(w * 4, 100); x < div(w * 30, 100); x += 6 * s) g.px(x, ground - 5 * s, s, 5 * s, "#3f7a5a");
+  g.px(div(w * 4, 100), ground - 4 * s, div(w * 26, 100), s, "#3f7a5a");
+  for (let k = 0; k < 2; k++) g.px(tx + tw + s + k * s, ground - (4 + k * 3) * s, 5 * s - k * s, 3 * s, k === 0 ? "#5a7a64" : "#6a8a74");
+  // Moving: smoke from the chimney, the banner swaying, the shop's screens and lamp.
+  const smoke = (a: Grid, lift: number) => {
+    for (let k = 0; k < 3; k++) a.disc(tx + div(tw, 2) + (k % 2) * 2 * s - s, ty - 7 * s - k * 3 * s - lift, Math.max(1, s + div(k * s, 2)), "#dfe8d8");
+  };
+  frames(g, 14, (a) => smoke(a, 0), (a) => smoke(a, s));
+  const banner = (a: Grid, sway: number) => {
+    const bx2 = tx + tw + 3 * s + sway, by2 = ty + 6 * s, bh = Math.max(6 * s, div(h * 28, 100));
+    a.px(tx + tw, ty + 5 * s, 4 * s, s, ink);
+    a.px(bx2, by2, 4 * s, bh, "#c9d8a8");
+    for (let y = by2 + s; y < by2 + bh - s; y += 3 * s) a.px(bx2 + s, y, 2 * s, s, ink);
+    a.px(bx2, by2 + bh, s, s, ink);
+    a.px(bx2 + 3 * s, by2 + bh, s, s, ink);
+  };
+  frames(g, 30, (a) => banner(a, 0), (a) => banner(a, Math.max(1, div(s, 2))));
+  g.actor((a) => { a.px(ox + div(ow, 2), oy + 4 * s, 3 * s, 2 * s, "#2d4a3a"); }, { period: 26, delay: 9, on: 9, rest: 13 });
+  g.actor((a) => {
+    for (let y = 0; y <= lr; y++) {
+      const half = pixelIsqrt(lr * lr - (lr - y) * (lr - y));
+      a.px(lampX - half, oy + 2 * s + y, half * 2 + 1, 1, "#f0f8c8");
+    }
+  }, { period: 37, on: 2, rest: 10 });
 }
 
 /**

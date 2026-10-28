@@ -175,7 +175,7 @@ fun MangaHomeScreen(onOpen: (Manga) -> Unit, onOpenId: (Int) -> Unit, toggle: @C
             mangaSection("Trending Manga", f.trending, onOpen)
             mangaSection("Publishing Now", f.publishing, onOpen)
             if (AniColors.pixelMode.value) item(key = "interlude-shelf") {
-                PixelInterlude(PixelScene.LIBRARY, "Your shelf", "Every manga you follow, in one place", { onGo("manga-list") })
+                PixelInterlude(PixelScene.MANGA_STREET, "Your shelf", "Every manga you follow, in one place", { onGo("manga-list") })
             }
             mangaSection("Popular Manhwa", f.manhwa, onOpen)
             mangaSection("Top Rated", f.topRated, onOpen)

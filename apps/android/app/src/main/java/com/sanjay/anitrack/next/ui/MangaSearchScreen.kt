@@ -82,7 +82,7 @@ fun MangaSearchScreen(initialQuery: String = "", onOpen: (Manga) -> Unit) {
 
     Row(Modifier.fillMaxSize()) {
         Column(Modifier.weight(1f).padding(horizontal = 24.dp, vertical = 20.dp)) {
-            ScreenHeader("Browse manga", scene = PixelScene.OBSERVATORY, subtitle = "Filter AniList's manga, manhwa and manhua.", icon = Icons.Rounded.MenuBook)
+            ScreenHeader("Browse manga", scene = PixelScene.GREEN_SHOP, subtitle = "Filter AniList's manga, manhwa and manhua.", icon = Icons.Rounded.MenuBook)
             Spacer(Modifier.height(18.dp))
             val filtered = query.isNotBlank() || genre != null || year != null || type != (null to null) ||
                 status != null || sort != "TRENDING_DESC"

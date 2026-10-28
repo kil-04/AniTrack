@@ -221,12 +221,16 @@ internal fun AnikotoTop10(
     val wide = LocalConfiguration.current.screenWidthDp >= 820
     Column {
         SectionHeader("Top 10", trailing = {
-            PillTabs(
-                listOf("day" to "Today", "week" to "Week", "month" to "Month"),
-                selected = tab,
-                onSelect = { tab = it },
-                compact = true,
-            )
+            Row(verticalAlignment = Alignment.Bottom) {
+                // Pixel mode's dog keeps the chart company.
+                if (AniColors.pixelMode.value) PixelDog(Modifier.padding(end = 10.dp))
+                PillTabs(
+                    listOf("day" to "Today", "week" to "Week", "month" to "Month"),
+                    selected = tab,
+                    onSelect = { tab = it },
+                    compact = true,
+                )
+            }
         })
         val items = tabs[tab].orEmpty().take(10)
         // Two columns on wide screens so the list doesn't run a full page tall.
