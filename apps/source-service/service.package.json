@@ -1,0 +1,6 @@
+{
+  "name": "anitrack-source-service",
+  "version": "9.2.3",
+  "private": true,
+  "main": "dist-source-service/apps/source-service/main.js"
+}

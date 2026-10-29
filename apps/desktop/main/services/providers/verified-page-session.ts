@@ -48,6 +48,11 @@ export class VerifiedPageSession {
   private idleTimer: NodeJS.Timeout | null = null;
   private readonly options: Required<Omit<VerifiedPageSessionOptions, "allowedResourceHosts">> & Pick<VerifiedPageSessionOptions, "allowedResourceHosts">;
 
+  /** A passive readiness query; callers can require manual reconnection after idle close. */
+  isConnected(): boolean {
+    return this.verified && !!this.win && !this.win.isDestroyed() && !this.win.webContents.isDestroyed();
+  }
+
   constructor(options: VerifiedPageSessionOptions) {
     const origin = new URL(options.origin);
     if (origin.protocol !== "https:" || origin.origin !== options.origin) throw new Error("Verified page origin must be an HTTPS origin");

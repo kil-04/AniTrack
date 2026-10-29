@@ -1,0 +1,31 @@
+# Free-tier trial. No disk, paid compute, autoscaling, or automatic deploys.
+# Supply fresh base64url secrets through Render; never put them in this file.
+services:
+  - type: web
+    name: anitrack-source-service
+    runtime: docker
+    plan: free
+    region: singapore
+    numInstances: 1
+    autoDeployTrigger: off
+    dockerContext: .
+    dockerfilePath: apps/source-service/Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "10000"
+      - key: SOURCE_BIND_ADDRESS
+        value: 0.0.0.0
+      - key: SOURCE_PROFILE_DIR
+        value: /tmp/anitrack-source-profile
+      - key: SOURCE_SERVICE_KEY
+        sync: false
+      - key: SOURCE_OPERATOR_KEY
+        sync: false
+      - key: SOURCE_OPERATOR_ORIGIN
+        fromService:
+          type: web
+          name: anitrack-source-service
+          envVarKey: RENDER_EXTERNAL_URL
