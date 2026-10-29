@@ -199,7 +199,7 @@ test('Adapter Connect actions use fixed native sessions and AniChan reconnects t
     '../desktop/main/services/providers/anichan':{AniChanProvider},
     '../desktop/main/services/providers/stream-authorization':{},
     '../desktop/main/services/manga/sources':{connectMangaSource:async(...args)=>{calls.push(['manga',...args]);return true;}},
-    '../desktop/main/services/manga/anilist-manga':{},'./assets':{AssetVault:class{}},'./protocol':{},'./public-media':{},'./pagination':{chapterPage},
+    '../desktop/main/services/manga/anilist-manga':{},'./assets':{AssetVault:class{}},'./protocol':{},'./native-media':{NativeMediaTransport:class{async close(){}}},'./pagination':{chapterPage},
     './mangaball-images':{MangaBallImages:class{approvedOrigins(){return new Set();}async connect(){calls.push(['ball-images']);}close(){}}},
     '../../packages/shared/anichan':{ANICHAN:{ORIGIN:'https://anichan.to'}},
     '../../packages/shared/manga':{MANGADOT:{ORIGIN:'https://mangadot.example'}},

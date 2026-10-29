@@ -114,7 +114,10 @@ focused tests, but still needs a real hosted chapter and download check.
 connectors own catalogue parsing, download capabilities, page order, browser
 sessions and stream authorization. Media receipts expire and live only in
 memory. HLS manifests preserve keys, subtitles, audio renditions and relative
-resource order. Media requests pin public DNS answers and reject redirects;
+resource order. Anime media uses a separate in-memory Chromium network session
+through a loopback-only CONNECT tunnel. The tunnel pins checked public DNS
+answers; Chromium retains its normal TLS and certificate checks. Only active
+receipt URLs and their HTTPS authorities are leased, and redirects are rejected;
 cookies/headers are applied only when the native authorization registry grants
 them for that resource. A service restart requires fresh media resolution.
 

@@ -9,7 +9,7 @@ import {mangaById} from '../desktop/main/services/manga/anilist-manga';
 import {AssetVault, type AssetFetch} from './assets';
 import {opaqueId, reject, type SourceRequest} from './protocol';
 import type {SourceAdapter} from './handler';
-import {publicMediaFetch} from './public-media';
+import {NativeMediaTransport} from './native-media';
 import {ANICHAN} from '../../packages/shared/anichan';
 import {MANGADOT} from '../../packages/shared/manga';
 import {TOONKOTSU} from '../../packages/shared/toonkotsu';
@@ -35,6 +35,7 @@ export class NativeSourceAdapter implements SourceAdapter {
   private links = new Map<string, {source: string; link: string; expires: number}>();
   private serial = new Map<string, Promise<unknown>>();
   private mangaBallImages = new MangaBallImages();
+  private nativeMedia = new NativeMediaTransport();
   approvedOrigins(): Set<string> {
     const origins = new Set([ANICHAN.ORIGIN, MANGADOT.ORIGIN, TOONKOTSU.ORIGIN, new URL(anikotoBaseUrl()).origin]);
     for(const origin of this.mangaBallImages.approvedOrigins())origins.add(origin);
@@ -69,9 +70,9 @@ export class NativeSourceAdapter implements SourceAdapter {
     else if (publicReferer) {headers.set('Referer', publicReferer);headers.set('Origin', new URL(publicReferer).origin);}
     if (grant?.cookie) headers.set('Cookie', grant.cookie);
     if (range) headers.set('Range', range);
-    // Redirects must be separately authorized by the connector; credentials
-    // never follow an unreviewed redirect to another host.
-    return publicMediaFetch(url, headers, signal);
+    // Keep the maintained connector's browser networking, while the private
+    // tunnel pins public destinations. A denial never chooses another transport.
+    return this.nativeMedia.fetch(url, headers, signal);
   };}
   async call(request: SourceRequest, signal: AbortSignal): Promise<unknown> {
     const previous = this.serial.get(request.source) ?? Promise.resolve();
@@ -147,5 +148,5 @@ export class NativeSourceAdapter implements SourceAdapter {
     return reject(400, 'SOURCE_OPERATION_NOT_ALLOWED');
   }
   asset(id: string, request: Request) {return this.vault.respond(id, request);}
-  close(){this.mangaBallImages.close();}
+  close(){this.mangaBallImages.close();void this.nativeMedia.close().catch(()=>{});}
 }

@@ -17,6 +17,8 @@ const sessions = path.join(profile,'sessions');mkdirSync(sessions,{recursive:tru
 app.setPath('sessionData',sessions);
 app.enableSandbox();
 app.setName('AniTrack Source Service');
+// This server never plays video; avoid a hardware GPU pipeline on small hosts.
+app.disableHardwareAcceleration();
 app.on('window-all-closed', () => {});
 let approvedOrigins = () => new Set<string>();
 const configuredSessions = new WeakSet<Electron.Session>();
