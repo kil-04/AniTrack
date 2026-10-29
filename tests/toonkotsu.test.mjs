@@ -105,3 +105,51 @@ test('toonkotsu: closing Connect preserves the verified reader document and its 
     assert.equal(win.dead,true);
   } finally {session.close();}
 });
+
+test('verified page: a timed-out human check keeps one window until its manual completion', async()=>{
+  const require=createRequire(import.meta.url),ts=require('typescript');
+  const windows=[],timers=new Map();let sequence=0,title='Just a moment...',reads=0,reloads=0;
+  class WebsiteWindow extends EventEmitter {
+    visible=false;dead=false;url='';loads=0;
+    constructor(){
+      super();windows.push(this);
+      const contents=new EventEmitter(),session=new EventEmitter();
+      Object.assign(session,{setPermissionRequestHandler(){},setPermissionCheckHandler(){}});
+      Object.assign(contents,{session,isDestroyed:()=>this.dead,getURL:()=>this.url,setAudioMuted(){},setWindowOpenHandler(){},
+        executeJavaScript:async()=>title,executeJavaScriptInIsolatedWorld:async()=>{reads++;return {document:this.loads};},reloadIgnoringCache(){reloads++;}});
+      this.webContents=contents;
+    }
+    async loadURL(url){this.url=url;this.loads++;this.webContents.emit('did-finish-load');}
+    isDestroyed(){return this.dead;}isVisible(){return this.visible;}show(){this.visible=true;}hide(){this.visible=false;}focus(){}setTitle(){}setParentWindow(){}
+    destroy(){if(this.dead)return;this.dead=true;this.emit('closed');}
+  }
+  const compiled=ts.transpileModule(readFileSync(new URL('../apps/desktop/main/services/providers/verified-page-session.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+  const module={exports:{}},app=new EventEmitter();
+  new Function('require','module','exports','setTimeout','clearTimeout',compiled)(
+    name=>name==='electron'?{app,BrowserWindow:WebsiteWindow}:require(name),module,module.exports,
+    (fn,ms)=>{const id=++sequence;timers.set(id,{fn,ms});return id;},id=>timers.delete(id));
+  const session=new module.exports.VerifiedPageSession({origin:TOONKOTSU.ORIGIN,partition:'test',label:'Toonkotsu',world:1215,verificationWaitMs:50});
+  const isCheck=error=>error instanceof module.exports.PageVerificationError&&error.code==='SECURITY_CHECK';
+  const flush=async()=>{for(let index=0;index<10;index++)await Promise.resolve();};
+  const pending=[];
+  try{
+    const opening=assert.rejects(session.readPage(TOONKOTSU.ORIGIN+'/','local reader'),isCheck);pending.push(opening);
+    await flush();
+    const deadline=[...timers].find(([,timer])=>timer.ms===50);assert.ok(deadline,'the first check has a bounded wait');
+    timers.delete(deadline[0]);deadline[1].fn();await opening;
+    const original=windows[0];assert.equal(original.dead,false);assert.equal(original.visible,true);
+    for(const retry of [()=>session.readPage(TOONKOTSU.ORIGIN+'/','local reader'),()=>session.get(TOONKOTSU.ORIGIN+'/api/search','application/json'),()=>session.connect(TOONKOTSU.ORIGIN+'/',null)]){
+      const rejected=assert.rejects(retry(),isCheck);pending.push(rejected);await flush();
+      assert.equal(windows.length,1,'retries must reuse the existing human-check window');
+      await rejected;
+    }
+    assert.equal(original.loads,1,'a retry must not navigate or reload the challenge');assert.equal(reloads,0);assert.equal(reads,0);
+    assert.equal(original.dead,false);assert.equal(original.visible,true);
+    // Only a new load caused by the human completing the existing website check
+    // may mark this exact document ready; a later explicit read then succeeds.
+    title='One Piece';original.webContents.emit('did-finish-load');await flush();
+    assert.equal(session.isConnected(),true);
+    assert.equal((await session.readPage(TOONKOTSU.ORIGIN+'/','local reader')).document,1);
+    assert.equal(windows.length,1);assert.equal(original.loads,1);assert.equal(reloads,0);assert.equal(reads,1);
+  }finally{session.close();for(const win of windows)win.destroy();await Promise.allSettled(pending);}
+});
