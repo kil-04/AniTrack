@@ -39,6 +39,15 @@ try{
   checks.crossOriginRejected=(await request('/v1/rpc',{method:'POST',headers:{...auth,Origin:'https://visitor.example.test'},body:'{}'})).status===403;
   checks.unknownSourceRejected=(await request('/v1/rpc',{method:'POST',headers:auth,body:JSON.stringify({kind:'anime',source:'unregistered',method:'search',args:['fixture']})})).status===400;
   checks.operatorProtected=(await request('/operator')).status===401;
+  const signIn=await request('/operator');
+  checks.operatorBrowserForm=signIn.status===401&&!signIn.headers.has('www-authenticate')&&(await signIn.text()).includes('id="sign-in"');
+  const operatorAuth={Origin:'https://operator.example.test','Content-Type':'application/json'};
+  checks.operatorLoginRejectsVisitor=(await request('/operator/login',{method:'POST',headers:{...operatorAuth,Origin:'https://visitor.example.test'},body:JSON.stringify({password:operatorKey})})).status===403;
+  const login=await request('/operator/login',{method:'POST',headers:operatorAuth,body:JSON.stringify({password:operatorKey})});
+  const setCookie=login.headers.get('set-cookie')??'',operatorCookie=setCookie.split(';')[0];
+  checks.operatorLogin=login.status===200&&['Secure','HttpOnly','SameSite=Strict','Path=/operator'].every(flag=>setCookie.includes(flag));
+  checks.operatorCookieSession=(await request('/operator',{headers:{Cookie:operatorCookie}})).status===200;
+  checks.operatorLogout=(await request('/operator/logout',{method:'POST',headers:{...operatorAuth,Cookie:operatorCookie},body:'{}'})).status===200&&(await request('/operator',{headers:{Cookie:operatorCookie}})).status===401;
   checks.healthDoesNotExposeCredentials=!JSON.stringify(await(await request('/health')).json()).includes(serviceKey);
   if(Object.values(checks).some(value=>!value))throw Error('A startup/protocol check failed. No source was enabled.');
   const report={date:new Date().toISOString(),version:packageInfo.version,scope:'Real isolated Electron startup and HTTP boundary; no source website interaction',bind:'127.0.0.1',checks,limits:['Container startup and production hosting remain unverified.','No live source, verification challenge, playback or full download was exercised by this check.']};
