@@ -99,7 +99,10 @@ SameSite=Strict. Existing Basic-authenticated API clients remain compatible.
 Choose the named source and press Connect, then complete its normal
 check in the displayed source window and press Finish. The native connector owns
 this connection lifecycle, including clearing Toonkotsu's verification state and
-keeping AniChan's exact verified reader session. Return to AniTrack and retry the
+keeping AniChan's exact verified reader session. AnimePahe Connect also waits
+for human Finish and hides its verified homepage rather than destroying it:
+its same-origin API requests need that live page context. An unfinished check
+does not grant readiness. Return to AniTrack and retry the
 failed source operation manually.
 
 Only approved, sandboxed source windows can appear. The page supports direct
@@ -148,7 +151,7 @@ Run these checks from the repository root:
 
 ```text
 node node_modules/typescript/bin/tsc -p apps/source-service/tsconfig.json --noEmit
-node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/source-service.test.mjs tests/source-service-client.test.mjs tests/source-service-config.test.mjs tests/source-service-mangaball.test.mjs tests/source-service-mangaball-adapter.test.mjs tests/source-service-mangaball-catalogue.test.mjs tests/source-service-native-media.test.mjs tests/source-service-media-types.test.mjs tests/source-service-operator-login.test.mjs
+node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/source-service.test.mjs tests/source-service-client.test.mjs tests/source-service-config.test.mjs tests/source-service-mangaball.test.mjs tests/source-service-mangaball-adapter.test.mjs tests/source-service-mangaball-catalogue.test.mjs tests/source-service-native-media.test.mjs tests/source-service-media-types.test.mjs tests/source-service-operator-login.test.mjs tests/source-service-pahe-connect.test.mjs
 ```
 
 The portable `worker-client.ts` is copied unchanged to the website's

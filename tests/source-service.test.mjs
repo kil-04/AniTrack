@@ -182,7 +182,7 @@ test('A failed native connection exposes no URL, cookie or stack and allows a ne
 
 test('Adapter Connect actions use fixed native sessions and AniChan reconnects the exact reader session',async()=>{
   const calls=[],pages=[];let providerRead;
-  const pahe=sourceWindow('https://animepahe.example/'),unrelated=sourceWindow('https://unrelated.example/'),anikoto=sourceWindow('https://anikoto.example/');
+  const anikoto=sourceWindow('https://anikoto.example/');
   class PageSession {
     constructor(options){this.options=options;pages.push(this);}
     async readPage(url,code){calls.push(['read',this,url,code]);return {};}
@@ -193,7 +193,7 @@ test('Adapter Connect actions use fixed native sessions and AniChan reconnects t
   class AniChanProvider {constructor(options){providerRead=options.read;}}
   const modules={
     '../desktop/main/services/providers/registry':{ProviderRegistry:class{constructor(providers){this.providers=providers;}descriptors(){return [];}}},
-    '../desktop/main/services/providers/animepahe':{AnimePaheProvider:Provider,prewarm:()=>calls.push(['prewarm']),getPaheBaseUrl:()=> 'https://animepahe.example'},
+    '../desktop/main/services/providers/animepahe':{AnimePaheProvider:Provider,connectPahe:async(parent)=>{calls.push(['pahe-connect',parent]);return true;}},
     '../desktop/main/services/providers/anikoto':{AnikotoProvider:Provider},
     '../desktop/main/services/providers/shonen':{ShonenProvider:Provider},
     '../desktop/main/services/providers/anichan':{AniChanProvider},
@@ -209,7 +209,6 @@ test('Adapter Connect actions use fixed native sessions and AniChan reconnects t
     '../desktop/main/services/providers/anikoto-browser':{getAnikotoWindow:async()=>anikoto},
     '../desktop/main/services/providers/anichan-session':{aniChanPageReader:page=>async()=>page.readPage('https://anichan.to/anime/1/example/1','fixed reviewed reader')},
     '../desktop/main/services/providers/verified-page-session':{VerifiedPageSession:PageSession},
-    electron:{BrowserWindow:{getAllWindows:()=>[pahe,unrelated]}},
   };
   const source=readFileSync(new URL('../apps/source-service/adapter.ts',import.meta.url),'utf8');
   const exports={};runInNewContext(ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,
@@ -219,8 +218,8 @@ test('Adapter Connect actions use fixed native sessions and AniChan reconnects t
   assert.deepEqual(calls,[['ball-catalogue-transport']]);calls.length=0;
   assert.equal(adapter.approvedOrigins().has('https://api.mangaball.com'),true);
   await connect.mangadot();await connect.toonkotsu();await connect.animepahe();await connect.anikoto();
-  assert.deepEqual(calls.slice(0,3),[['manga','mangadot',null],['manga','toonkotsu',null],['prewarm']]);
-  assert.equal(pahe.state.visible,true);assert.equal(unrelated.state.visible,false);assert.equal(anikoto.state.visible,true);
+  assert.deepEqual(calls.slice(0,3),[['manga','mangadot',null],['manga','toonkotsu',null],['pahe-connect',null]]);
+  assert.equal(anikoto.state.visible,true);
   await providerRead({});await connect.anichan();
   const read=calls.find(row=>row[0]==='read'),connection=calls.find(row=>row[0]==='connect');
   assert.equal(pages.length,1);assert.equal(read[1],connection[1]);assert.equal(connection[2],read[2]);assert.equal(connection[3],null);

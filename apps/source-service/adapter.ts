@@ -1,5 +1,5 @@
 import {ProviderRegistry} from '../desktop/main/services/providers/registry';
-import {AnimePaheProvider, prewarm as prewarmAnimePahe, getPaheBaseUrl} from '../desktop/main/services/providers/animepahe';
+import {AnimePaheProvider, connectPahe} from '../desktop/main/services/providers/animepahe';
 import {AnikotoProvider} from '../desktop/main/services/providers/anikoto';
 import {ShonenProvider} from '../desktop/main/services/providers/shonen';
 import {AniChanProvider} from '../desktop/main/services/providers/anichan';
@@ -18,7 +18,6 @@ import {chapterPage} from './pagination';
 import {getAnikotoWindow} from '../desktop/main/services/providers/anikoto-browser';
 import {aniChanPageReader} from '../desktop/main/services/providers/anichan-session';
 import {VerifiedPageSession} from '../desktop/main/services/providers/verified-page-session';
-import {BrowserWindow} from 'electron';
 import type {SourceConnections} from './operator';
 import {MangaBallImages} from './mangaball-images';
 import {MangaBallCatalogue} from './mangaball-catalogue';
@@ -56,14 +55,7 @@ export class NativeSourceAdapter implements SourceAdapter {
       'mangaball-catalogue': () => this.mangaBallCatalogue.connect(),
       mangadot: () => connectMangaSource('mangadot', null),
       toonkotsu: () => connectMangaSource('toonkotsu', null),
-      animepahe: async () => {
-        prewarmAnimePahe();
-        for (const win of BrowserWindow.getAllWindows()) {
-          if (win.isDestroyed() || win.webContents.isDestroyed()) continue;
-          try {if (new URL(win.webContents.getURL()).origin === new URL(getPaheBaseUrl()).origin) {win.show();win.focus();}}
-          catch { /* A newly created source window may still be navigating. */ }
-        }
-      },
+      animepahe: () => connectPahe(null),
       anikoto: async () => {const win = await getAnikotoWindow(); if (!win.isDestroyed()) {win.show();win.focus();}},
       anichan: () => this.aniChanPage.connect(this.aniChanConnectionUrl, null),
     };

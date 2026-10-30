@@ -78,6 +78,7 @@ class FakeBrowserWindow extends EventEmitter {
   }
 }
 fixture.BrowserWindow = FakeBrowserWindow;
+fixture.app = new EventEmitter();
 fixture.kwikSession = {
   async fetch(url) {
     fixture.requests.push(url);
@@ -96,7 +97,7 @@ fixture.kwikSession = {
 // Exercise the real provider with a fresh, fake Electron session. These hooks
 // never load an installed app's store, cookies, profile, or network transport.
 const mocks = {
-  electron: "export const BrowserWindow=globalThis.__animepaheFixture.BrowserWindow; export const session={fromPartition:()=>globalThis.__animepaheFixture.kwikSession};",
+  electron: "export const app=globalThis.__animepaheFixture.app; export const BrowserWindow=globalThis.__animepaheFixture.BrowserWindow; export const session={fromPartition:()=>globalThis.__animepaheFixture.kwikSession};",
   "animepahe-config": `
     const f=globalThis.__animepaheFixture;
     export const animePaheEnabled=()=>true, assertAnimePaheEnabled=()=>{},
