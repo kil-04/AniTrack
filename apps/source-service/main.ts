@@ -48,7 +48,8 @@ void app.whenReady().then(async () => {
   const operator = new SourceOperator(config.operatorKey, config.operatorOrigin, () => adapter.approvedOrigins(), adapter.operatorConnections());
   const server = createServer(async (incoming, outgoing) => {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 130000); timer.unref();
+    // Keep the deadline through response delivery, including slow preview clients.
+    const timer = setTimeout(() => {controller.abort(); outgoing.destroy();}, 130000); timer.unref();
     outgoing.on('close', () => {clearTimeout(timer); if (!outgoing.writableFinished) controller.abort();});
     try {
       const request = new Request(`http://source-service${incoming.url}`, {
@@ -56,7 +57,6 @@ void app.whenReady().then(async () => {
         ...(!['GET','HEAD'].includes(incoming.method ?? '') ? {body: Readable.toWeb(incoming) as ReadableStream, duplex: 'half'} : {}),
       } as RequestInit);
       const response = new URL(request.url).pathname.startsWith('/operator') ? await operator.handle(request) : await service.handle(request);
-      clearTimeout(timer);
       outgoing.writeHead(response.status, Object.fromEntries(response.headers));
       if (response.body) Readable.fromWeb(response.body as any).on('error', () => outgoing.destroy()).pipe(outgoing);
       else outgoing.end();

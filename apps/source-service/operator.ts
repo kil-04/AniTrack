@@ -1,22 +1,80 @@
 import {BrowserWindow} from 'electron';
-import {authenticates, boundedJson, errorResponse, opaqueId, reject} from './protocol';
+import {authenticates, boundedJson, errorResponse, opaqueId, reject, ServiceError} from './protocol';
 
 const CONNECTION_SOURCES = {animepahe: 'AnimePahe', anikoto: 'Anikoto', anichan: 'AniChan', mangadot: 'MangaDot', 'mangaball-catalogue': 'MangaBall catalogue', mangaball: 'MangaBall images', toonkotsu: 'Toonkotsu'} as const;
 type ConnectionSource = keyof typeof CONNECTION_SOURCES;
 export type SourceConnections = Partial<Record<ConnectionSource, () => Promise<boolean | void>>>;
-type ConnectionState = 'idle' | 'connecting' | 'finished' | 'failed';
+type ConnectionState = 'idle' | 'connecting' | 'finished' | 'failed' | 'cancelled';
+// Presentation/connection ownership only. Every window must independently pass
+// approvedOrigins(); unknown configured alternatives require manual selection.
+const CONNECTION_ORIGINS: Record<ConnectionSource, readonly string[]> = {
+  animepahe: ['https://animepahe.pw'], anikoto: ['https://anikototv.to','https://anikoto.cz'],
+  anichan: ['https://anichan.to'], mangadot: ['https://mangadot.net'],
+  'mangaball-catalogue': ['https://api.mangaball.com'],
+  mangaball: ['https://bulbasaur.poke-black-and-white.net','https://chikorita.red-and-blue.net'],
+  toonkotsu: ['https://toonkotsu.com'],
+};
+const CAPTURE_WIDTH=1200,CAPTURE_HEIGHT=900,CAPTURE_BYTES=4*1024*1024,CAPTURE_DEADLINE_MS=10000;
 
 const PAGE = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AniTrack source checks</title><style>body{font:16px system-ui;background:#11101a;color:#eee;max-width:1100px;margin:24px auto;padding:16px}button,input,select{font:inherit;margin:6px;padding:10px;background:#242232;color:#eee;border:1px solid #555;border-radius:8px}img{display:block;max-width:100%;border:1px solid #555;cursor:crosshair}#message{min-height:2em;color:#d9b7ff}</style></head><body><h1>Source website checks</h1><p>Complete the source's normal verification manually, then return to AniTrack and retry. Only source windows are available here.</p><select id="windows"></select><button id="refresh">Refresh windows</button><button id="finish">Finish check</button><p id="message"></p><img id="screen" alt="Selected source website"><form id="typing"><input id="text" maxlength="200" autocomplete="off" aria-label="Type into the selected source window"><button>Type text</button></form><div id="keys"></div><script src="/operator/app.js"></script></body></html>`;
-const SCRIPT = `const selector=document.querySelector('#windows'),image=document.querySelector('#screen'),message=document.querySelector('#message');let loading=false;async function api(path,body){const response=await fetch('/operator/api/'+path,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});if(!response.ok)throw Error('The source window is unavailable. Refresh and retry.');return response;}async function action(body){try{await api('input',{id:selector.value,...body});await screen();}catch(error){message.textContent=error.message;}}async function windows(){try{const rows=await(await api('windows')).json(),selected=selector.value;selector.replaceChildren(...rows.map(row=>new Option(row.label,row.id)));if(rows.some(row=>row.id===selected))selector.value=selected;message.textContent=rows.length?'Choose the website that needs its check.':'No source website currently needs a check.';await screen();}catch(error){message.textContent=error.message;}}async function screen(){if(loading||!selector.value)return;loading=true;try{const response=await api('screen?id='+encodeURIComponent(selector.value)),blob=await response.blob(),old=image.src;image.src=URL.createObjectURL(blob);image.onload=()=>{if(old.startsWith('blob:'))URL.revokeObjectURL(old);};}catch(error){message.textContent=error.message;}finally{loading=false;}}selector.onchange=screen;document.querySelector('#refresh').onclick=windows;document.querySelector('#finish').onclick=async()=>{await action({type:'finish'});await windows();};image.onclick=event=>{const box=image.getBoundingClientRect();void action({type:'click',x:Math.round((event.clientX-box.left)*image.naturalWidth/box.width),y:Math.round((event.clientY-box.top)*image.naturalHeight/box.height)});};document.querySelector('#typing').onsubmit=event=>{event.preventDefault();const text=document.querySelector('#text');void action({type:'text',text:text.value});text.value='';};for(const key of ['Tab','Enter','Backspace','Escape','Up','Down','PageUp','PageDown']){const button=document.createElement('button');button.textContent=key;button.onclick=()=>action({type:'key',key});document.querySelector('#keys').append(button);}void windows();setInterval(()=>{if(!document.hidden)void screen();},1500);`;
+const SCRIPT = `
+const selector=document.querySelector('#windows'),image=document.querySelector('#screen'),message=document.querySelector('#message');
+let loading=false,previewUrl='',previewId='',previewGeneration=0;
+function clearPreview(){previewGeneration++;previewId='';image.removeAttribute('src');if(previewUrl)URL.revokeObjectURL(previewUrl);previewUrl='';}
+async function api(path,body){
+  const response=await fetch('/operator/api/'+path,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});
+  if(response.status===401){location.replace('/operator');throw Error('Sign in again to continue.');}
+  if(!response.ok){const result=await response.json().catch(()=>({}));const messages={SOURCE_WINDOW_HIDDEN:'This connection is in the background. Choose its source and Connect to open a check.',OPERATOR_CAPTURE_BUSY:'Another preview is loading. Try Refresh preview in a moment.',OPERATOR_CONNECTION_BUSY:'Finish or close the current source check before connecting another source.',OPERATOR_CAPTURE_TIMEOUT:'The preview took too long. Close the source or try Refresh preview later.',OPERATOR_CAPTURE_TOO_LARGE:'This source preview is too large to display.'};throw Error(messages[result.error]||'The source window is unavailable. Refresh and retry.');}
+  return response;
+}
+async function action(body){
+  try{await api('input',{id:selector.value,...body});if(body.type==='finish'||body.type==='close'){clearPreview();await windows();if(typeof connections==='function')await connections();}else await screen();}
+  catch(error){message.textContent=error.message;}
+}
+async function windows(preferredSource){
+  try{
+    const rows=await(await api('windows')).json(),selected=selector.value;
+    selector.replaceChildren(...rows.map(row=>new Option(row.label,row.id)));
+    const preferred=preferredSource&&rows.find(row=>row.source===preferredSource&&row.visible);
+    selector.value=preferred?preferred.id:rows.some(row=>row.id===selected)?selected:'';
+    if(previewId&&previewId!==selector.value)clearPreview();
+    message.textContent=rows.length?'Select a website and use Refresh preview to view its check.':'No source website currently needs a check.';
+    return !!preferred;
+  }catch(error){message.textContent=error.message;return false;}
+}
+async function screen(){
+  if(loading||!selector.value)return;loading=true;
+  const id=selector.value,generation=previewGeneration;
+  try{
+    const response=await api('screen?id='+encodeURIComponent(id)),blob=await response.blob();
+    if(selector.value!==id||previewGeneration!==generation)return;
+    const old=previewUrl;previewUrl=URL.createObjectURL(blob);previewId=id;image.src=previewUrl;
+    if(old)URL.revokeObjectURL(old);
+    message.textContent='Preview refreshed. Use Refresh preview again after the website changes.';
+  }catch(error){if(selector.value===id&&previewGeneration===generation)message.textContent=error.message;}
+  finally{loading=false;}
+}
+selector.onchange=()=>{clearPreview();void screen();};
+document.querySelector('#refresh').onclick=()=>windows();
+document.querySelector('#refresh-preview').onclick=()=>screen();
+document.querySelector('#finish').onclick=()=>action({type:'finish'});
+document.querySelector('#close-source').onclick=()=>action({type:'close'});
+image.onclick=event=>{if(previewId!==selector.value||!image.naturalWidth)return;const box=image.getBoundingClientRect();void action({type:'click',x:Math.round((event.clientX-box.left)*image.naturalWidth/box.width),y:Math.round((event.clientY-box.top)*image.naturalHeight/box.height)});};
+document.querySelector('#typing').onsubmit=event=>{event.preventDefault();const text=document.querySelector('#text');void action({type:'text',text:text.value});text.value='';};
+for(const key of ['Tab','Enter','Backspace','Escape','Up','Down','PageUp','PageDown']){const button=document.createElement('button');button.textContent=key;button.onclick=()=>action({type:'key',key});document.querySelector('#keys').append(button);}
+window.addEventListener('pagehide',clearPreview);
+void windows();
+`;
 
-const CONNECTION_PAGE = PAGE.replace('<select id="windows">', '<div><label for="sources">Source connection</label><select id="sources"></select><button id="connect">Connect</button><p id="connection-message">Choose a source and Connect. Complete its normal check, then use Finish check to close its window.</p></div><select id="windows">');
+const CONNECTION_PAGE = PAGE.replace('<select id="windows">', '<div><label for="sources">Source connection</label><select id="sources"></select><button id="connect">Connect</button><p id="connection-message">Choose a source and Connect. Complete its normal check, then use Finish check to keep its connection. Close source ends the connection.</p></div><select id="windows">')
+  .replace('<button id="finish">Finish check</button>','<button id="refresh-preview">Refresh preview</button><button id="finish">Finish check</button><button id="close-source">Close source</button>');
 const CONNECTION_SCRIPT = `
 const sourceSelector=document.querySelector('#sources'),connectButton=document.querySelector('#connect'),connectionMessage=document.querySelector('#connection-message');
 let connectionRows=[],refreshingConnections=false,refreshConnectionWindowsUntil=0;
 function sourceState(){
   const row=connectionRows.find(row=>row.source===sourceSelector.value);
-  connectButton.disabled=!row||row.state==='connecting';
-  connectionMessage.textContent=!row?'No source connections are configured.':row.state==='connecting'?'Complete the source check, then use Finish check to close its window.':row.state==='failed'?'The connection could not finish. Choose Connect to try again.':row.state==='finished'?'Complete any source check, then return to AniTrack and retry the source.':'Choose Connect, complete any source check, then use Finish check.';
+  connectButton.disabled=!row||row.state==='connecting'||connectionRows.some(other=>other.source!==row.source&&other.state==='connecting');
+  connectionMessage.textContent=!row?'No source connections are configured.':row.state==='connecting'?'Complete the source check, then use Finish check to keep its connection.':row.state==='failed'?'The connection could not finish. Close its window or choose Connect to try again.':row.state==='cancelled'?'Cancelled. Choose Connect when you want to use this source again.':row.state==='finished'?'Return to AniTrack and retry the source. Close source ends this connection.':'Choose Connect, complete any source check, then use Finish check.';
 }
 async function connections(){
   if(refreshingConnections)return;refreshingConnections=true;
@@ -33,9 +91,11 @@ sourceSelector.onchange=sourceState;
 connectButton.onclick=async()=>{
   connectButton.disabled=true;
   try{
-    await api('connect',{source:sourceSelector.value});
+    const source=sourceSelector.value;
+    await api('connect',{source});
     refreshConnectionWindowsUntil=Date.now()+30000;
-    await connections();await windows();
+    clearPreview();selector.value='';await connections();
+    if(await windows(source))await screen();else message.textContent='The source window is opening. Use Refresh windows, select its website, then Refresh preview.';
   }catch(error){connectionMessage.textContent=error.message;connectButton.disabled=false;}
 };
 void connections();
@@ -54,7 +114,7 @@ const SIGN_IN_PAGE=`<!doctype html><html lang="en"><head><meta charset="utf-8"><
 const SIGN_IN_STYLE=`:root{color-scheme:dark}body{margin:0;background:#11101a;color:#eee;font:16px system-ui}main{max-width:440px;margin:8vh auto;padding:24px}h1{font-size:1.7rem}p{line-height:1.5;color:#c9c3d7}label,input,button{display:block;width:100%;box-sizing:border-box}label{margin:28px 0 8px}input,button{font:inherit;border:1px solid #686075;border-radius:8px;padding:12px;background:#242232;color:#fff}button{margin-top:16px;background:#7050c4;cursor:pointer}button:disabled{opacity:.6;cursor:wait}input:focus-visible,button:focus-visible{outline:2px solid #b699ff;outline-offset:3px}#sign-in-message{min-height:1.5em;color:#eeb7bd}.hint{font-size:.85rem;color:#aaa1b9}`;
 const SIGN_IN_SCRIPT=`const form=document.querySelector('#sign-in'),field=document.querySelector('#operator-key'),button=document.querySelector('#sign-in-button'),message=document.querySelector('#sign-in-message');form.addEventListener('submit',async event=>{event.preventDefault();button.disabled=true;message.textContent='';const password=field.value;field.value='';try{const response=await fetch('/operator/login',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',redirect:'error',body:JSON.stringify({password})});if(response.ok){location.replace('/operator');return;}message.textContent=response.status===429?'Too many attempts. Wait a minute and try again.':response.status===503?'Sign-in is busy. Wait a little and try again.':'Sign-in failed. Check the operator key and try again.';}catch{message.textContent='The service could not be reached. Try again.';}finally{button.disabled=false;}});`;
 const SIGNED_IN_PAGE=CONNECTION_PAGE.replace('<h1>Source website checks</h1>','<h1>Source website checks</h1><button id="sign-out" type="button">Sign out</button>');
-const SIGNED_IN_SCRIPT=SCRIPT.replace("if(!response.ok)throw Error('The source window is unavailable. Refresh and retry.');","if(response.status===401){location.replace('/operator');throw Error('Sign in again to continue.');}if(!response.ok)throw Error('The source window is unavailable. Refresh and retry.');")+CONNECTION_SCRIPT+`document.querySelector('#sign-out').onclick=async()=>{try{await fetch('/operator/logout',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',redirect:'error',body:'{}'});}finally{location.replace('/operator');}};`;
+const SIGNED_IN_SCRIPT=SCRIPT+CONNECTION_SCRIPT+`document.querySelector('#sign-out').onclick=async()=>{try{await fetch('/operator/logout',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',redirect:'error',body:'{}'});}finally{clearPreview();location.replace('/operator');}};`;
 
 export interface OperatorLoginOptions {now?:()=>number;sessionTtlMs?:number;maxSessions?:number}
 async function loginInput(request:Request):Promise<unknown>{
@@ -77,11 +137,12 @@ async function loginInput(request:Request):Promise<unknown>{
 /** Human-operated verification only: no script evaluation or arbitrary URLs. */
 export class SourceOperator {
   private windows = new Map<string, BrowserWindow>();
-  private dismissed = new WeakSet<BrowserWindow>();
   private failures = 0;
   private retryAt = 0;
   private pendingConnections = new Map<ConnectionSource, Promise<void>>();
   private connectionStates = new Map<ConnectionSource, ConnectionState>();
+  private connectionGenerations = new Map<ConnectionSource, number>();
+  private captureBusy = false;
   private sessions=new Map<string,number>();
   private loginReads=0;
   private readonly now:()=>number;
@@ -114,6 +175,72 @@ export class SourceOperator {
     const win = typeof id === 'string' ? this.windows.get(id) : undefined;
     if (!win || !this.permitted(win)) return reject(404, 'SOURCE_WINDOW_UNAVAILABLE');
     return win;
+  }
+  private windowSource(win:BrowserWindow):ConnectionSource|undefined {
+    try {
+      const origin=new URL(win.webContents.getURL()).origin;
+      return (Object.keys(CONNECTION_ORIGINS) as ConnectionSource[]).find(source=>CONNECTION_ORIGINS[source].includes(origin));
+    } catch {return;}
+  }
+  private async screenshot(request:Request,win:BrowserWindow):Promise<Response> {
+    // Capturing a preview must never wake an idle reader or make it exempt from
+    // its provider's hidden-window cleanup. Connect is the explicit show action.
+    if(!win.isVisible())return reject(409,'SOURCE_WINDOW_HIDDEN');
+    if(request.signal.aborted)return reject(499,'REQUEST_CANCELLED');
+    if(this.captureBusy)return reject(429,'OPERATOR_CAPTURE_BUSY');
+    const [width,height]=win.getContentSize();
+    const bounded=(w:number,h:number)=>Number.isSafeInteger(w)&&Number.isSafeInteger(h)&&w>0&&h>0&&w<=CAPTURE_WIDTH&&h<=CAPTURE_HEIGHT;
+    if(!bounded(width,height))return reject(413,'OPERATOR_CAPTURE_TOO_LARGE');
+    this.captureBusy=true;
+    let captureSettled=false,responseSettled=false,payload:Uint8Array|undefined,payloadOffset=0;
+    let bodyController:ReadableStreamDefaultController<Uint8Array>|undefined;
+    let timer:ReturnType<typeof setTimeout>|undefined,onAbort=()=>{},interrupt:(error:Error)=>void=()=>{};
+    const release=()=>{if(captureSettled&&responseSettled)this.captureBusy=false;};
+    const finishResponse=(error?:Error)=>{
+      if(responseSettled)return;
+      responseSettled=true;payload=undefined;
+      if(timer)clearTimeout(timer);
+      request.signal.removeEventListener('abort',onAbort);
+      if(error&&bodyController){try{bodyController.error(error);}catch{/* already cancelled */}}
+      release();
+    };
+    const interrupted=new Promise<never>((_,fail)=>{
+      interrupt=error=>{finishResponse(error);fail(error);};
+      onAbort=()=>interrupt(new ServiceError(499,'REQUEST_CANCELLED'));
+      request.signal.addEventListener('abort',onAbort,{once:true});
+      timer=setTimeout(()=>interrupt(new ServiceError(504,'OPERATOR_CAPTURE_TIMEOUT')),CAPTURE_DEADLINE_MS);timer.unref?.();
+    });
+    const capture=(async()=>{
+      try{
+        const image=await win.webContents.capturePage({x:0,y:0,width,height});
+        if(responseSettled||request.signal.aborted)return reject(499,'REQUEST_CANCELLED');
+        const size=image.getSize();
+        if(!bounded(size.width,size.height))return reject(413,'OPERATOR_CAPTURE_TOO_LARGE');
+        const png=image.toPNG();
+        if(!png.length||png.length>CAPTURE_BYTES)return reject(413,'OPERATOR_CAPTURE_TOO_LARGE');
+        // A view avoids copying the encoded PNG once more. There is no image
+        // history; only this admitted response owns these bytes.
+        return new Uint8Array(png.buffer,png.byteOffset,png.byteLength);
+      }finally{captureSettled=true;release();}
+    })();
+    try{
+      payload=await Promise.race([capture,interrupted]);
+      if(request.signal.aborted)return reject(499,'REQUEST_CANCELLED');
+      const length=payload.byteLength;
+      const body=new ReadableStream<Uint8Array>({
+        start(controller){bodyController=controller;},
+        pull(controller){
+          // Small copies respect HTTP backpressure without retaining the whole
+          // PNG through a final socket-buffered view after this stream closes.
+          if(payload&&payloadOffset<payload.byteLength){const end=Math.min(payload.byteLength,payloadOffset+65536);controller.enqueue(payload.slice(payloadOffset,end));payloadOffset=end;}
+          else{controller.close();finishResponse();}
+        },
+        cancel(){finishResponse();},
+      },{highWaterMark:0});
+      return new Response(body,{headers:{...SAFE,'Content-Type':'image/png','Content-Length':String(length)}});
+    }catch(error){finishResponse();throw error;}
+    // A timeout/abort does not cancel Electron capturePage(). Its slot stays
+    // occupied until that actual operation settles, even after the HTTP reply.
   }
   async handle(request: Request): Promise<Response> {
     try {
@@ -171,10 +298,13 @@ export class SourceOperator {
         const source = input.source as ConnectionSource, connect = this.connections[source];
         if (typeof connect !== 'function') return reject(400,'INVALID_OPERATOR_INPUT');
         if (!this.pendingConnections.has(source)) {
+          if([...this.connectionStates].some(([other,state])=>other!==source&&state==='connecting'))return reject(409,'OPERATOR_CONNECTION_BUSY');
+          const generation=(this.connectionGenerations.get(source)??0)+1;
+          this.connectionGenerations.set(source,generation);
           this.connectionStates.set(source,'connecting');
           const pending = Promise.resolve().then(connect).then(result => {
-            this.connectionStates.set(source,result === false ? 'failed' : 'finished');
-          }, () => {this.connectionStates.set(source,'failed');}).finally(() => {
+            if(this.connectionGenerations.get(source)===generation)this.connectionStates.set(source,result === false ? 'failed' : 'finished');
+          }, () => {if(this.connectionGenerations.get(source)===generation)this.connectionStates.set(source,'failed');}).finally(() => {
             if (this.pendingConnections.get(source) === pending) this.pendingConnections.delete(source);
           });
           this.pendingConnections.set(source,pending);
@@ -184,22 +314,29 @@ export class SourceOperator {
         return Response.json({ok:true,pending:true},{status:202,headers:safe});
       }
       if (request.method === 'GET' && path === '/operator/api/windows') {
-        for (const [id,win] of this.windows) if (!this.permitted(win) || this.dismissed.has(win) && !win.isVisible()) this.windows.delete(id);
-        for (const win of BrowserWindow.getAllWindows()) if (this.permitted(win) && !(this.dismissed.has(win) && !win.isVisible()) && ![...this.windows.values()].includes(win)) {this.dismissed.delete(win);this.windows.set(opaqueId(),win);}
-        return Response.json([...this.windows].map(([id,win])=>({id,label:new URL(win.webContents.getURL()).hostname+(win.isVisible()?'':' (background)')})),{headers:safe});
+        for (const [id,win] of this.windows) if (!this.permitted(win)) this.windows.delete(id);
+        for (const win of BrowserWindow.getAllWindows()) if (this.permitted(win) && ![...this.windows.values()].includes(win)) this.windows.set(opaqueId(),win);
+        return Response.json([...this.windows].map(([id,win])=>({id,label:new URL(win.webContents.getURL()).hostname+(win.isVisible()?'':' (background)'),source:this.windowSource(win),visible:win.isVisible()})),{headers:safe});
       }
       if (request.method === 'GET' && path === '/operator/api/screen') {
         const win = this.window(new URL(request.url).searchParams.get('id'));
-        // Selecting a background source is a human request to view its check.
-        if (!win.isVisible()) {win.show();win.focus();}
-        const image = await win.webContents.capturePage();
-        return new Response(new Uint8Array(image.toPNG()),{headers:{...safe,'Content-Type':'image/png'}});
+        return await this.screenshot(request,win);
       }
       if (request.method === 'POST' && path === '/operator/api/input') {
         const input = await boundedJson(request) as any;
         if (!input || typeof input !== 'object' || Object.keys(input).some(key=>!['id','type','x','y','key','text'].includes(key))) return reject(400,'INVALID_OPERATOR_INPUT');
         const win = this.window(input.id), contents = win.webContents;
-        if (input.type === 'finish') {win.close();this.dismissed.add(win);this.windows.delete(input.id);}
+        if (input.type === 'finish') {win.close();}
+        else if(input.type==='close'){
+          const source=this.windowSource(win);
+          if(source){
+            this.connectionGenerations.set(source,(this.connectionGenerations.get(source)??0)+1);
+            this.connectionStates.set(source,'cancelled');this.pendingConnections.delete(source);
+          }
+          // Provider close handlers mean Finish/retain. Destroy instead invokes
+          // their closed cleanup and ends only the selected approved connection.
+          this.windows.delete(input.id);win.destroy();
+        }
         else if (input.type === 'click') {
           const [width,height] = win.getContentSize();
           if (![input.x,input.y].every(Number.isInteger) || input.x < 0 || input.y < 0 || input.x >= width || input.y >= height) return reject(400,'INVALID_OPERATOR_INPUT');

@@ -62,10 +62,13 @@ through the host's secret settings. Confirm the generated HTTPS origin and
 account settings before connecting the website.
 
 The Free instance has 512 MB of RAM, so Electron source checks may exceed its
-memory budget. A trial with several retained source windows caused an OOM
-restart. Hardware acceleration is disabled because this service does not play
-video; test one source at a time and do not infer multi-user capacity from the
-single-source checks. Idle services spin down after 15 minutes, and a cold start takes
+memory budget. Two hosted source-check attempts ended in confirmed OOM
+restarts; those events do not identify which allocation caused the failure.
+Hardware acceleration is disabled because this service does not play video.
+Previews refresh only on explicit operator actions, and screenshot captures
+are bounded across operator tabs. Check one source at a time, close blocked
+checks, and do not infer multi-user capacity from single-source checks.
+Idle services spin down after 15 minutes, and a cold start takes
 about one minute. Restarts and spin-downs discard profile sessions. Bandwidth and
 build minutes have quotas: exceeding them may suspend services or builds, or
 incur charges when the account has a payment method. Account usage and spending
@@ -108,6 +111,13 @@ for human Finish and hides its verified homepage rather than destroying it:
 its same-origin API requests need that live page context. An unfinished check
 does not grant readiness. Return to AniTrack and retry the
 failed source operation manually.
+
+Use **Refresh preview** after a page changes. Background status updates do not
+take screenshots or reopen hidden source windows. **Finish check** asks the
+connector to retain a verified session; **Close source** destroys the selected
+source window and cancels its check. Close a refused source before connecting
+another one. Only one manual source connection can be pending at a time;
+completed sessions are not automatically evicted while they may still be in use.
 
 Only approved, sandboxed source windows can appear. The page supports direct
 human clicks/typing; it cannot navigate to an arbitrary URL or evaluate code.
@@ -155,7 +165,7 @@ Run these checks from the repository root:
 
 ```text
 node node_modules/typescript/bin/tsc -p apps/source-service/tsconfig.json --noEmit
-node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/source-service.test.mjs tests/source-service-client.test.mjs tests/source-service-config.test.mjs tests/source-service-mangaball.test.mjs tests/source-service-mangaball-adapter.test.mjs tests/source-service-mangaball-catalogue.test.mjs tests/source-service-native-media.test.mjs tests/source-service-media-types.test.mjs tests/source-service-operator-login.test.mjs tests/source-service-pahe-connect.test.mjs
+node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/source-service.test.mjs tests/source-service-client.test.mjs tests/source-service-config.test.mjs tests/source-service-mangaball.test.mjs tests/source-service-mangaball-adapter.test.mjs tests/source-service-mangaball-catalogue.test.mjs tests/source-service-native-media.test.mjs tests/source-service-media-types.test.mjs tests/source-service-operator-login.test.mjs tests/source-service-operator-resources.test.mjs tests/source-service-pahe-connect.test.mjs
 ```
 
 The portable `worker-client.ts` is copied unchanged to the website's

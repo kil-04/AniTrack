@@ -97,9 +97,9 @@ test('Pinned media transport refuses local, mapped, reserved and non-HTTPS desti
 const operatorKey='operator_fixture_'.repeat(3),operatorOrigin='https://source.example';
 const operatorRequest=(path,body,password=operatorKey,origin=operatorOrigin)=>new Request(base+path,{method:body?'POST':'GET',headers:{Authorization:'Basic '+Buffer.from('operator:'+password).toString('base64'),...(body?{'Content-Type':'application/json',Origin:origin}:{})},...(body?{body:JSON.stringify(body)}:{})});
 function sourceWindow(url){
-  const state={url,visible:false,inputs:[]};
-  return {state,isDestroyed:()=>false,isVisible:()=>state.visible,show:()=>{state.visible=true;},focus(){},close:()=>{state.visible=false;},getContentSize:()=>[800,600],
-    webContents:{isDestroyed:()=>false,getURL:()=>state.url,capturePage:async()=>({toPNG:()=>Buffer.from('png')}),sendInputEvent:event=>state.inputs.push(event),insertText:async text=>state.inputs.push({text})}};
+  const state={url,visible:false,destroyed:false,shows:0,captures:0,inputs:[]};
+  return {state,isDestroyed:()=>state.destroyed,isVisible:()=>state.visible,show:()=>{state.shows++;state.visible=true;},focus(){},close:()=>{state.visible=false;},destroy:()=>{state.destroyed=true;},getContentSize:()=>[800,600],
+    webContents:{isDestroyed:()=>state.destroyed,getURL:()=>state.url,capturePage:async()=>{state.captures++;return {getSize:()=>({width:800,height:600}),isEmpty:()=>false,toPNG:()=>Buffer.from('png')};},sendInputEvent:event=>state.inputs.push(event),insertText:async text=>state.inputs.push({text})}};
 }
 test('Invalid login flooding cannot lock out a correctly authenticated source operator',async()=>{
   const operator=new SourceOperator(operatorKey,operatorOrigin,()=>new Set());
@@ -107,12 +107,13 @@ test('Invalid login flooding cannot lock out a correctly authenticated source op
   assert.equal((await operator.handle(operatorRequest('/operator',undefined,'bad'))).status,429);
   assert.equal((await operator.handle(operatorRequest('/operator'))).status,200);
 });
-test('The operator can select a background source check but cannot control an unapproved page',async()=>{
+test('Operator preview leaves background checks hidden and cannot control an unapproved page',async()=>{
   const source=sourceWindow('https://anikototv.to/'),other=sourceWindow('https://unrelated.example/');globalThis.__sourceServiceWindows=[source,other];
   const operator=new SourceOperator(operatorKey,operatorOrigin,()=>new Set(['https://anikototv.to']));
   const rows=await(await operator.handle(operatorRequest('/operator/api/windows'))).json();assert.equal(rows.length,1);assert.match(rows[0].label,/background/);
   const id=rows[0].id;
-  assert.equal((await operator.handle(operatorRequest('/operator/api/screen?id='+id))).status,200);assert.equal(source.state.visible,true);
+  assert.equal((await operator.handle(operatorRequest('/operator/api/screen?id='+id))).status,409);assert.equal(source.state.visible,false);
+  source.show();const preview=await operator.handle(operatorRequest('/operator/api/screen?id='+id));assert.equal(preview.status,200);await preview.body.cancel();
   assert.equal((await operator.handle(operatorRequest('/operator/api/input',{id,type:'click',x:10,y:15}))).status,200);assert.equal(source.state.inputs.length,2);
   assert.equal((await operator.handle(operatorRequest('/operator/api/input',{id,type:'key',key:'F12'}))).status,400);
   assert.equal((await operator.handle(operatorRequest('/operator/api/input',{id,type:'click',x:900,y:15}))).status,400);
@@ -120,14 +121,16 @@ test('The operator can select a background source check but cannot control an un
   source.state.url='https://unrelated.example/';assert.equal((await operator.handle(operatorRequest('/operator/api/input',{id,type:'click',x:10,y:15}))).status,404);
   globalThis.__sourceServiceWindows=[];
 });
-test('Finishing a hidden-preserving source check does not reopen it on the next refresh',async()=>{
+test('A finished retained connection stays listed in the background and can be closed without waking it',async()=>{
   const source=sourceWindow('https://mangadot.net/');source.state.visible=true;globalThis.__sourceServiceWindows=[source];
   const operator=new SourceOperator(operatorKey,operatorOrigin,()=>new Set(['https://mangadot.net']));
   const [{id}]=await(await operator.handle(operatorRequest('/operator/api/windows'))).json();
   assert.equal((await operator.handle(operatorRequest('/operator/api/input',{id,type:'finish'}))).status,200);
-  assert.equal((await operator.handle(operatorRequest('/operator/api/screen?id='+id))).status,404);
-  assert.deepEqual(await(await operator.handle(operatorRequest('/operator/api/windows'))).json(),[]);
-  source.state.visible=true;assert.equal((await(await operator.handle(operatorRequest('/operator/api/windows'))).json()).length,1);
+  assert.equal(source.state.visible,false);
+  const rows=await(await operator.handle(operatorRequest('/operator/api/windows'))).json();assert.equal(rows.length,1);assert.equal(rows[0].id,id);assert.equal(rows[0].visible,false);assert.match(rows[0].label,/background/);
+  assert.equal((await operator.handle(operatorRequest('/operator/api/screen?id='+id))).status,409);assert.equal(source.state.shows,0);assert.equal(source.state.captures,0);assert.equal(source.state.visible,false);
+  assert.equal((await operator.handle(operatorRequest('/operator/api/input',{id,type:'close'}))).status,200);assert.equal(source.state.destroyed,true);assert.equal(source.state.shows,0);assert.equal(source.state.captures,0);
+  assert.equal((await operator.handle(operatorRequest('/operator/api/screen?id='+id))).status,404);assert.deepEqual(await(await operator.handle(operatorRequest('/operator/api/windows'))).json(),[]);
   globalThis.__sourceServiceWindows=[];
 });
 
