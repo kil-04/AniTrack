@@ -32,20 +32,21 @@ const image=(width=900,height=700,bytes=Buffer.from([137,80,78,71]))=>({getSize:
 
 function windowFixture(options={}){
   const events=new EventEmitter();
-  const state={url:sourceOrigin+'/',visible:true,destroyed:false,width:900,height:700,captures:[],shows:0,focuses:0,closes:0,destroys:0,...options};
+  const state={url:sourceOrigin+'/',visible:true,destroyed:false,width:900,height:700,captures:[],shows:0,focuses:0,contentFocuses:0,events:[],closes:0,destroys:0,...options};
   const win=Object.assign(events,{
     isDestroyed:()=>state.destroyed,
     isVisible:()=>state.visible,
     getContentSize:()=>[state.width,state.height],
     show:()=>{state.shows++;state.visible=true;},
-    focus:()=>{state.focuses++;},
+    focus:()=>{state.focuses++;state.events.push('window-focus');},
     close:()=>{state.closes++;},
     destroy:()=>{state.destroys++;state.destroyed=true;events.emit('closed');},
     webContents:{
       isDestroyed:()=>state.destroyed,
       getURL:()=>state.url,
       capturePage:async(...args)=>{state.captures.push(args);return state.capture?state.capture(...args):image(state.width,state.height);},
-      sendInputEvent:()=>{},insertText:async()=>{},
+      focus:()=>{state.contentFocuses++;state.events.push('contents-focus');},
+      sendInputEvent:event=>{state.events.push(event.type);},insertText:async text=>{state.events.push('text:'+text);},
     },
   });
   return {win,state};
@@ -78,7 +79,7 @@ test('Opening, refreshing, and polling window lists do not capture; explicit Con
     replaceChildren(...rows){this.children=rows;if(!rows.some(row=>row.value===this.value))this.value=rows[0]?.value??'';}
     append(row){this.children.push(row);}
     removeAttribute(name){if(name==='src')this.src='';}
-    getBoundingClientRect(){return {left:0,top:0,width:900,height:700};}
+    getBoundingClientRect(){return this.bounds??{left:0,top:0,width:900,height:700};}
   }
   const element=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
   const rows=[{id:'old-source',source:'mangadot',label:'mangadot.net',visible:true},{id:'chosen-source',source:'anichan',label:'anichan.to',visible:true}];
@@ -92,6 +93,7 @@ test('Opening, refreshing, and polling window lists do not capture; explicit Con
       if(path==='/operator/api/windows')return Response.json(rows);
       if(path==='/operator/api/sources')return Response.json([{source:'anichan',label:'AniChan',state:'connecting'},{source:'mangadot',label:'MangaDot',state:'idle'}]);
       if(path==='/operator/api/connect')return Response.json({ok:true,pending:true},{status:202});
+      if(path==='/operator/api/input')return Response.json({ok:true});
       if(path.startsWith('/operator/api/screen?'))return new Response(new Uint8Array([137,80,78,71]),{headers:{'Content-Type':'image/png'}});
       throw Error('Unexpected operator request '+path);
     },
@@ -107,6 +109,39 @@ test('Opening, refreshing, and polling window lists do not capture; explicit Con
   element('#sources').value='anichan';await element('#connect').onclick();await flush();
   const captures=calls.filter(row=>row.path.includes('/screen?'));assert.equal(captures.length,2);assert.match(captures[1].path,/id=chosen-source$/);
   assert.equal(element('#windows').value,'chosen-source');
+  const preview=element('#screen');preview.bounds={left:10,top:20,width:450,height:350};
+  preview.onclick({clientX:110,clientY:120});await flush();
+  let click=JSON.parse(calls.filter(row=>row.path==='/operator/api/input').at(-1).init.body);assert.deepEqual(click,{id:'chosen-source',type:'click',x:200,y:200});
+  preview.onclick({clientX:460,clientY:370});await flush();
+  click=JSON.parse(calls.filter(row=>row.path==='/operator/api/input').at(-1).init.body);assert.deepEqual(click,{id:'chosen-source',type:'click',x:899,y:699});
+  const inputCount=calls.filter(row=>row.path==='/operator/api/input').length;
+  preview.bounds={left:10,top:20,width:0,height:350};preview.onclick({clientX:11,clientY:21});await flush();assert.equal(calls.filter(row=>row.path==='/operator/api/input').length,inputCount);
+});
+
+test('Validated human click, key, and text actions focus their visible source before dispatch',async()=>{
+  const source=windowFixture(),f=fixture({windows:[source]}),id=await f.id();
+  for(const [body,events] of [[{type:'click',x:10,y:15},['mouseDown','mouseUp']],[{type:'key',key:'Tab'},['keyDown','keyUp']],[{type:'text',text:'Fixture'},['text:Fixture']]]){
+    source.state.events.length=0;
+    const response=await f.operator.handle(request('/operator/api/input',{id,...body}));assert.equal(response.status,200);
+    assert.deepEqual(source.state.events,['window-focus','contents-focus',...events]);
+  }
+  assert.equal(source.state.focuses,3);assert.equal(source.state.contentFocuses,3);assert.equal(source.state.shows,0);
+});
+
+test('Hidden retained sources reject human input without waking, focusing, or dispatching',async()=>{
+  const source=windowFixture({visible:false}),f=fixture({windows:[source]}),id=await f.id();
+  for(const body of [{type:'click',x:10,y:15},{type:'key',key:'Tab'},{type:'text',text:'Fixture'}]){
+    const response=await f.operator.handle(request('/operator/api/input',{id,...body}));assert.equal(response.status,409);assert.deepEqual(await response.json(),{error:'SOURCE_WINDOW_HIDDEN'});
+  }
+  assert.equal(source.state.focuses,0);assert.equal(source.state.contentFocuses,0);assert.equal(source.state.shows,0);assert.deepEqual(source.state.events,[]);
+});
+
+test('Invalid human input is rejected before a source is focused',async()=>{
+  const source=windowFixture(),f=fixture({windows:[source]}),id=await f.id();
+  for(const body of [{type:'click',x:-1,y:15},{type:'click',x:900,y:15},{type:'click',x:10.5,y:15},{type:'click',x:10,y:NaN},{type:'key',key:'F12'},{type:'text',text:'bad\u0000text'},{type:'text',text:'x'.repeat(201)},{type:'text',text:5},{type:'unknown'}]){
+    const response=await f.operator.handle(request('/operator/api/input',{id,...body}));assert.equal(response.status,400);
+  }
+  assert.equal(source.state.focuses,0);assert.equal(source.state.contentFocuses,0);assert.equal(source.state.shows,0);assert.deepEqual(source.state.events,[]);
 });
 
 test('A hidden source cannot be shown, focused, or captured by a preview request',async()=>{

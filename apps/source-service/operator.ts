@@ -16,7 +16,7 @@ const CONNECTION_ORIGINS: Record<ConnectionSource, readonly string[]> = {
 };
 const CAPTURE_WIDTH=1200,CAPTURE_HEIGHT=900,CAPTURE_BYTES=4*1024*1024,CAPTURE_DEADLINE_MS=10000;
 
-const PAGE = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AniTrack source checks</title><style>body{font:16px system-ui;background:#11101a;color:#eee;max-width:1100px;margin:24px auto;padding:16px}button,input,select{font:inherit;margin:6px;padding:10px;background:#242232;color:#eee;border:1px solid #555;border-radius:8px}img{display:block;max-width:100%;border:1px solid #555;cursor:crosshair}#message{min-height:2em;color:#d9b7ff}</style></head><body><h1>Source website checks</h1><p>Complete the source's normal verification manually, then return to AniTrack and retry. Only source windows are available here.</p><select id="windows"></select><button id="refresh">Refresh windows</button><button id="finish">Finish check</button><p id="message"></p><img id="screen" alt="Selected source website"><form id="typing"><input id="text" maxlength="200" autocomplete="off" aria-label="Type into the selected source window"><button>Type text</button></form><div id="keys"></div><script src="/operator/app.js"></script></body></html>`;
+const PAGE = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AniTrack source checks</title><style>body{font:16px system-ui;background:#11101a;color:#eee;max-width:1100px;margin:24px auto;padding:16px}button,input,select{font:inherit;margin:6px;padding:10px;background:#242232;color:#eee;border:1px solid #555;border-radius:8px}img{display:block;max-width:100%;height:auto;outline:1px solid #555;cursor:crosshair}#message{min-height:2em;color:#d9b7ff}</style></head><body><h1>Source website checks</h1><p>Complete the source's normal verification manually, then return to AniTrack and retry. Only source windows are available here.</p><select id="windows"></select><button id="refresh">Refresh windows</button><button id="finish">Finish check</button><p id="message"></p><img id="screen" alt="Selected source website"><form id="typing"><input id="text" maxlength="200" autocomplete="off" aria-label="Type into the selected source window"><button>Type text</button></form><div id="keys"></div><script src="/operator/app.js"></script></body></html>`;
 const SCRIPT = `
 const selector=document.querySelector('#windows'),image=document.querySelector('#screen'),message=document.querySelector('#message');
 let loading=false,previewUrl='',previewId='',previewGeneration=0;
@@ -59,7 +59,13 @@ document.querySelector('#refresh').onclick=()=>windows();
 document.querySelector('#refresh-preview').onclick=()=>screen();
 document.querySelector('#finish').onclick=()=>action({type:'finish'});
 document.querySelector('#close-source').onclick=()=>action({type:'close'});
-image.onclick=event=>{if(previewId!==selector.value||!image.naturalWidth)return;const box=image.getBoundingClientRect();void action({type:'click',x:Math.round((event.clientX-box.left)*image.naturalWidth/box.width),y:Math.round((event.clientY-box.top)*image.naturalHeight/box.height)});};
+image.onclick=event=>{
+  if(previewId!==selector.value||!image.naturalWidth||!image.naturalHeight)return;
+  const box=image.getBoundingClientRect();if(box.width<=0||box.height<=0)return;
+  const x=Math.max(0,Math.min(image.naturalWidth-1,Math.floor((event.clientX-box.left)*image.naturalWidth/box.width)));
+  const y=Math.max(0,Math.min(image.naturalHeight-1,Math.floor((event.clientY-box.top)*image.naturalHeight/box.height)));
+  void action({type:'click',x,y});
+};
 document.querySelector('#typing').onsubmit=event=>{event.preventDefault();const text=document.querySelector('#text');void action({type:'text',text:text.value});text.value='';};
 for(const key of ['Tab','Enter','Backspace','Escape','Up','Down','PageUp','PageDown']){const button=document.createElement('button');button.textContent=key;button.onclick=()=>action({type:'key',key});document.querySelector('#keys').append(button);}
 window.addEventListener('pagehide',clearPreview);
@@ -326,6 +332,12 @@ export class SourceOperator {
         const input = await boundedJson(request) as any;
         if (!input || typeof input !== 'object' || Object.keys(input).some(key=>!['id','type','x','y','key','text'].includes(key))) return reject(400,'INVALID_OPERATOR_INPUT');
         const win = this.window(input.id), contents = win.webContents;
+        const focusInput=()=>{
+          // Only an explicit, validated human action may focus its visible
+          // source. Hidden retained sessions must stay hidden and inactive.
+          if(!win.isVisible())return reject(409,'SOURCE_WINDOW_HIDDEN');
+          win.focus();contents.focus();
+        };
         if (input.type === 'finish') {win.close();}
         else if(input.type==='close'){
           const source=this.windowSource(win);
@@ -340,10 +352,12 @@ export class SourceOperator {
         else if (input.type === 'click') {
           const [width,height] = win.getContentSize();
           if (![input.x,input.y].every(Number.isInteger) || input.x < 0 || input.y < 0 || input.x >= width || input.y >= height) return reject(400,'INVALID_OPERATOR_INPUT');
+          focusInput();
           contents.sendInputEvent({type:'mouseDown',x:input.x,y:input.y,button:'left',clickCount:1});
           contents.sendInputEvent({type:'mouseUp',x:input.x,y:input.y,button:'left',clickCount:1});
-        } else if (input.type === 'text' && typeof input.text === 'string' && input.text.length <= 200 && !/[\x00-\x1f\x7f]/.test(input.text)) await contents.insertText(input.text);
+        } else if (input.type === 'text' && typeof input.text === 'string' && input.text.length <= 200 && !/[\x00-\x1f\x7f]/.test(input.text)) {focusInput();await contents.insertText(input.text);}
         else if (input.type === 'key' && ['Tab','Enter','Backspace','Escape','Up','Down','PageUp','PageDown'].includes(input.key)) {
+          focusInput();
           contents.sendInputEvent({type:'keyDown',keyCode:input.key}); contents.sendInputEvent({type:'keyUp',keyCode:input.key});
         } else return reject(400,'INVALID_OPERATOR_INPUT');
         return Response.json({ok:true},{headers:safe});

@@ -121,6 +121,9 @@ completed sessions are not automatically evicted while they may still be in use.
 
 Only approved, sandboxed source windows can appear. The page supports direct
 human clicks/typing; it cannot navigate to an arbitrary URL or evaluate code.
+Validated clicks, keys and typing focus the selected visible source before
+delivery. Hidden connections reject these inputs without being shown or focused;
+Finish and Close remain available for retained background connections.
 No challenge solver, stealth driver, automatic retry or cookie import/export is
 provided. A source may still reject the hosting network; do not enable its
 website download capability until its full live checks pass.
