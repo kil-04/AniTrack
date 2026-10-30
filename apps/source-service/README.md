@@ -15,6 +15,10 @@ contain local references only; removing website history preserves those files.
 Other protected sources remain disabled pending their own website checks and
 complete playback/reading and download validation. A passing unit test or health
 endpoint does not establish that a source accepts the hosting network.
+AnimePahe currently displays "Sorry, you have been blocked" in the hosted
+browser on `animepahe.pw`, confirmed by the operator after the manual check.
+Its streaming and download connection remains disabled; this is a source-side
+access restriction, and no automatic repeated attempts are made.
 
 ## Deployment
 
