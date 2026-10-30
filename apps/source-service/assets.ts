@@ -14,7 +14,7 @@ function transportPrefix(prefix:Uint8Array, length:number):boolean {
   return true;
 }
 /** Inspect only four complete packets, then replay every original byte lazily. */
-async function mediaPrefix(body:ReadableStream<Uint8Array>,signal:AbortSignal):Promise<{body:ReadableStream<Uint8Array>;transportStream:boolean}>{
+export async function mediaPrefix(body:ReadableStream<Uint8Array>,signal:AbortSignal):Promise<{body:ReadableStream<Uint8Array>;transportStream:boolean}>{
   const reader=body.getReader(),chunks:Uint8Array[]=[],prefix=new Uint8Array(TS_PREFIX_BYTES);
   let length=0,ended=false,stopped=false,controller:ReadableStreamDefaultController<Uint8Array>|undefined,abort:(reason:unknown)=>void=()=>{};
   const interrupted=new Promise<never>((_,fail)=>{abort=fail;});
@@ -102,7 +102,7 @@ export class AssetVault {
       return new Response(lines.join('\n'), {headers: {'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-store'}});
     }
     if (asset.kind === 'image' && !/^image\//i.test(type)) {await response.body?.cancel(); return reject(502, 'INVALID_PAGE_IMAGE');}
-    let body=response.body;
+    let body:ReadableStream<Uint8Array>|null=response.body;
     if(asset.kind==='media'&&response.status===200&&!range&&!response.headers.has('content-range')&&body){
       const inspected=await mediaPrefix(body,request.signal);body=inspected.body;
       if(inspected.transportStream)type='video/mp2t';

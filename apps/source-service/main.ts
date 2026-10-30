@@ -46,17 +46,24 @@ void app.whenReady().then(async () => {
   approvedOrigins = () => adapter.approvedOrigins();
   const service = new SourceService(adapter, key);
   const operator = new SourceOperator(config.operatorKey, config.operatorOrigin, () => adapter.approvedOrigins(), adapter.operatorConnections());
+  const {loadWebsite}=await import('./website');
+  const website=await loadWebsite(app.getAppPath(),config.operatorOrigin,key,service);
   const server = createServer(async (incoming, outgoing) => {
     const controller = new AbortController();
     // Keep the deadline through response delivery, including slow preview clients.
     const timer = setTimeout(() => {controller.abort(); outgoing.destroy();}, 130000); timer.unref();
     outgoing.on('close', () => {clearTimeout(timer); if (!outgoing.writableFinished) controller.abort();});
     try {
-      const request = new Request(`http://source-service${incoming.url}`, {
+      if(!incoming.url?.startsWith('/'))throw Error('Invalid request path.');
+      const request = new Request(`${config.operatorOrigin}${incoming.url}`, {
         method: incoming.method, headers: incoming.headers as Record<string, string>, signal: controller.signal,
         ...(!['GET','HEAD'].includes(incoming.method ?? '') ? {body: Readable.toWeb(incoming) as ReadableStream, duplex: 'half'} : {}),
       } as RequestInit);
-      const response = new URL(request.url).pathname.startsWith('/operator') ? await operator.handle(request) : await service.handle(request);
+      const pathname=new URL(request.url).pathname;
+      const response = pathname.startsWith('/operator') ? await operator.handle(request)
+        : pathname==='/health'||pathname.startsWith('/v1/')||!website ? await service.handle(request)
+        : await website(request);
+      if(controller.signal.aborted){await response.body?.cancel();outgoing.destroy();return;}
       outgoing.writeHead(response.status, Object.fromEntries(response.headers));
       if (response.body) Readable.fromWeb(response.body as any).on('error', () => outgoing.destroy()).pipe(outgoing);
       else outgoing.end();

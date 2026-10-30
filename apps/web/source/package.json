@@ -1,0 +1,149 @@
+{
+  "name": "anitrack",
+  "version": "9.2.2",
+  "description": "Anime and manga tracker with MyAnimeList and AniList sync, streaming, offline downloads, a manga reader and cross-device progress",
+  "main": "dist-electron/apps/desktop/main/main.js",
+  "author": "Sanjay",
+  "license": "MIT",
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev:vite\" \"npm:dev:electron\"",
+    "dev:vite": "vite --config apps/desktop/vite.config.ts",
+    "dev:electron": "wait-on tcp:5173 && tsc -p apps/desktop/tsconfig.main.json && cross-env NODE_ENV=development electron .",
+    "dev:electron-watch": "wait-on tcp:5173 && tsc -p apps/desktop/tsconfig.main.json -w --preserveWatchOutput",
+    "build:vite": "vite build --config apps/desktop/vite.config.ts",
+    "build:electron": "tsc -p apps/desktop/tsconfig.main.json",
+    "build": "npm run build:vite && npm run build:electron",
+    "pack": "npm run build && electron-builder",
+    "publish": "npm run release:all",
+    "release:all": "node --env-file-if-exists=.env scripts/release-all.js",
+    "release:preflight": "node --env-file-if-exists=.env scripts/preflight-release.js",
+    "github:configure": "node --env-file-if-exists=.env scripts/configure-github-production.js",
+    "automation:keygen": "node scripts/generate-automation-key.js",
+    "automation:sign": "node --env-file-if-exists=.env scripts/sign-automation.js",
+    "automation:verify": "node scripts/sign-automation.js --verify",
+    "providers:health": "node scripts/provider-health.js",
+    "providers:smoke:electron": "npm run build:electron && electron scripts/electron-provider-smoke.js",
+    "providers:playback:electron": "npm run build:electron && electron scripts/electron-playback-smoke.js",
+    "android:keygen": "node scripts/generate-android-signing-key.js",
+    "android:next:debug": "apps\\android\\gradlew.bat -p apps/android :app:assembleDebug",
+    "android:next:test": "apps\\android\\gradlew.bat -p apps/android :app:testDebugUnitTest",
+    "android:next:release": "node --env-file-if-exists=.env scripts/run-native-gradle.js :app:assembleRelease",
+    "android:next:verify": "node scripts/android-release-common.js",
+    "test:electron-media": "npm run build:electron && node scripts/electron-native-media-smoke.cjs --run",
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/anilist-request.test.mjs tests/anikoto-provider.test.mjs tests/anikoto-hls.test.mjs tests/downloads.test.mjs tests/electron-provider-smoke.test.cjs tests/anikoto-source.test.mjs tests/anikoto-transport.test.mjs tests/animepahe-session.test.mjs tests/desktop-player.test.mjs tests/living-museum.test.mjs tests/match.test.mjs tests/miruro-protocol.test.mjs tests/miruro-provider.test.mjs tests/miruro-web-session.test.mjs tests/mkissa-provider.test.mjs tests/provider-client.test.mjs tests/provider-registry.test.mjs tests/provider-search.test.mjs tests/recommendations.test.mjs tests/story-bridge.test.mjs tests/anime-themes.test.mjs tests/anisongs.test.mjs tests/manga.test.mjs tests/stream-authorization.test.mjs tests/taste-genome.test.mjs tests/time-machine.test.mjs tests/runtime-config.test.cjs tests/comix-transport.test.mjs tests/comix-protocol.test.mjs tests/comix-session.test.mjs tests/comix-images.test.mjs tests/comix-chapters.test.mjs tests/comix-html-pages.test.mjs tests/manga-sync.test.mjs tests/novel.test.mjs tests/novel-sync.test.mjs tests/anichan.test.mjs tests/anichan-page.test.mjs tests/anichan-provider.test.mjs tests/shonen.test.mjs tests/xcomic.test.mjs tests/toonkotsu.test.mjs tests/watch-progress.test.mjs tests/list-merge.test.mjs tests/mal-sync.test.mjs tests/bg-music.test.mjs tests/zip-entries.test.mjs tests/release-notes.test.cjs tests/city-pop.test.mjs tests/city-pop-scene.test.mjs tests/pixel-scenes.test.mjs tests/city-pop-archive.test.mjs tests/city-pop-desktop.test.mjs",
+    "typecheck": "tsc -p apps/desktop/tsconfig.renderer.json --noEmit && tsc -p apps/desktop/tsconfig.main.json --noEmit",
+    "legacy:capacitor:sync": "npm run build:vite && cd legacy/capacitor && npx cap sync android",
+    "legacy:capacitor:open": "cd legacy/capacitor && npx cap open android",
+    "legacy:capacitor:build": "npm run legacy:capacitor:sync && cd legacy/capacitor/android && gradlew.bat assembleRelease"
+  },
+  "dependencies": {
+    "@capacitor-community/sqlite": "^6.0.2",
+    "@capacitor/android": "^6.2.0",
+    "@capacitor/browser": "^6.0.3",
+    "@capacitor/core": "^6.2.0",
+    "@capacitor/screen-orientation": "^6.0.2",
+    "electron-updater": "^6.8.3",
+    "framer-motion": "^12.40.0",
+    "hls.js": "^1.5.15",
+    "lucide-react": "^0.451.0",
+    "node-sqlite3-wasm": "^0.8.9",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.27.0",
+    "zustand": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.4",
+    "@types/react": "^18.3.11",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.2",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.0.1",
+    "cross-env": "^7.0.3",
+    "electron": "^32.1.2",
+    "electron-builder": "^25.0.5",
+    "libsodium-wrappers": "^0.7.15",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.13",
+    "typescript": "^5.6.2",
+    "vite": "^5.4.8",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "com.sanjay.anitrack",
+    "productName": "AniTrack",
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "apps/android/app/src/main/assets/comix_transport.js",
+      "apps/android/app/src/main/assets/toonkotsu_page.js",
+      "apps/android/app/src/main/assets/anichan_page.js",
+      "apps/android/app/src/main/assets/song_charts.json",
+      "apps/android/app/src/main/assets/comix_connection_help.js",
+      "apps/android/app/src/main/assets/licenses/comix-image-format-notice.txt",
+      "apps/android/app/src/main/assets/licenses/Apache-2.0.txt",
+      "!node_modules/@capacitor/**",
+      "!node_modules/@capacitor-community/**",
+      "!node_modules/**/android/**",
+      "!node_modules/{react,react-dom,react-router,react-router-dom,@remix-run,scheduler,loose-envify,js-tokens,zustand}/**",
+      "!node_modules/{framer-motion,motion-dom,motion-utils,lucide-react,hls.js}/**",
+      "!node_modules/{@stencil,jeep-sqlite,sql.js,localforage,lie,immediate,jszip,pako,setimmediate,browser-fs-access,tslib}/**",
+      "!node_modules/{core-util-is,inherits,isarray,process-nextick-args,util-deprecate}/**"
+    ],
+    "extraResources": [
+      {
+        "from": "apps/desktop/build/icon.ico",
+        "to": "icon.ico"
+      },
+      {
+        "from": "apps/android/app/src/main/assets/music",
+        "to": "music",
+        "filter": [
+          "*.mp3"
+        ]
+      }
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "protocols": [
+      {
+        "name": "anitrack",
+        "schemes": [
+          "anitrack"
+        ]
+      }
+    ],
+    "icon": "apps/desktop/build/icon.ico",
+    "win": {
+      "artifactName": "AniTrack-Setup-${version}.${ext}",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "apps/desktop/build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "AniTrack",
+      "include": "apps/desktop/build/installer.nsh"
+    },
+    "asarUnpack": [
+      "node_modules/node-sqlite3-wasm/**/*"
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "kil-04",
+      "repo": "AniTrack",
+      "releaseType": "draft"
+    }
+  }
+}

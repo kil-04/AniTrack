@@ -1,5 +1,10 @@
 # Standalone AniTrack source service
 
+The same service also serves the full AniTrack browser application at `/`.
+Its public API is under `/api/`; `/operator` remains a separately protected
+source-check tool and `/v1/` still requires the server key. See
+[`apps/web/README.md`](../web/README.md) for builds and browser data behavior.
+
 This service runs the maintained native connectors in its own isolated Electron
 profile on a server. Website visitors do not install or pair a desktop app.
 The composition explicitly includes AnimePahe, Anikoto, Shonen, AniChan,

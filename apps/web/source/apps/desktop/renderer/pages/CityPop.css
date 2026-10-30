@@ -1,0 +1,117 @@
+/* City Pop's retrowave pixel look (Android: ui/CityPopUi.kt): a pixel font for titles, labels and
+   buttons; square, hard-shadowed panels; neon pink, cyan and purple on night. */
+@font-face { font-family: "AniTrack Pixel"; src: url("../fonts/city-pop-pixel.woff") format("woff"); font-display: block; }
+.city-pop { --pixel: "AniTrack Pixel", ui-monospace, monospace; --pink: #ff2a9d; --pink-soft: #ff7ac6; --cyan: #2ee6ff; --yellow: #ffd319; --lilac: #c9a8ff; --night: #0d0221; --ink: #12021f; --panel: #140a2b; --line: #3b1d63; --shadow: #050010; }
+.city-pop button { transition: background-color .12s, border-color .12s, color .12s, transform .08s, box-shadow .08s; }
+.city-pop button:disabled { cursor: wait; opacity: .5; }
+.city-pop h2, .city-pop-pixel, .city-pop-pill, .city-pop-kicker, .city-pop-title, .city-pop-primary, .city-pop-outline, .city-pop-text-button, .city-pop-pack-tab, .city-pop-filter, .city-pop-station h3, .city-pop-station-number, .city-pop-station-play, .city-pop-artist, .city-pop-year, .city-pop-track-artist, .city-pop-track-listen, .city-pop-track-watch, .city-pop-archive-type, .city-pop-file-action, .city-pop-file-saved, .city-pop-source-picker, .city-pop-search input, .city-pop-hero-footer, .city-pop footer {
+  font-family: var(--pixel); font-weight: 400; font-synthesis: none; letter-spacing: 0; text-transform: uppercase; -webkit-font-smoothing: none;
+}
+.city-pop h2 { font-size: 18px; color: #fff; text-shadow: 2px 2px 0 #3d0a63; }
+.city-pop-pixel { font-size: 12px; }
+.city-pop-pill { display: inline-flex; align-items: center; gap: 7px; padding: 6px 10px; border: 2px solid var(--line); background: var(--ink); color: var(--lilac); font-size: 10px; }
+.city-pop-text-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; color: var(--lilac); font-size: 11px; }
+.city-pop-text-button:hover { color: var(--cyan); }
+
+/* The banner: the shared pixel-art sunset behind the words. */
+.city-pop-hero { position: relative; isolation: isolate; overflow: hidden; min-height: 410px; border: 2px solid var(--pink); background: var(--night); box-shadow: 6px 6px 0 #3d0a2c; }
+.city-pop-pixel-scene { position: absolute; inset: 0; z-index: 0; width: 100%; height: 100%; image-rendering: pixelated; }
+.city-pop-hero-shade { position: absolute; inset: 0; z-index: 1; pointer-events: none; background: linear-gradient(90deg, rgba(8,1,20,.84), rgba(8,1,20,.4) 42%, transparent 66%), repeating-linear-gradient(0deg, rgba(0,0,0,.16) 0 2px, transparent 2px 4px); }
+.city-pop-hero-copy { position: relative; z-index: 2; padding: 34px 38px 72px; width: 62%; }
+.city-pop-kicker { display: flex; align-items: center; gap: 10px; color: var(--pink-soft); font-size: 11px; }
+.city-pop-kicker::before { content: ''; width: 28px; height: 2px; background: var(--pink-soft); }
+.city-pop-japanese { color: #ffb3e1; letter-spacing: .3em; font-size: 13px; margin: 16px 0 6px; }
+.city-pop-title { font-size: 56px; line-height: 1; color: #fff3fb; text-shadow: 4px 4px 0 var(--pink), 8px 8px 0 #3d0a63; }
+.city-pop-title span { display: block; margin-top: 18px; font-size: 16px; color: var(--cyan); text-shadow: 2px 2px 0 #0b2a55; }
+.city-pop-hero-footer { position: absolute; z-index: 2; bottom: 0; left: 0; right: 0; display: flex; justify-content: space-between; padding: 11px 37px; border-top: 2px solid #ff2a9d55; background: #0d0221cc; color: #ffb3e1; font-size: 10px; }
+.city-pop-hero-compact { min-height: 0; }
+.city-pop-hero-compact .city-pop-hero-copy { padding: 22px 30px 24px; width: 60%; }
+.city-pop-hero-compact .city-pop-title { margin-top: 12px; font-size: 34px; text-shadow: 3px 3px 0 var(--pink), 6px 6px 0 #3d0a63; }
+.city-pop-hero-compact .city-pop-title span { margin-top: 10px; font-size: 12px; }
+
+/* Buttons: pink for the main action, cyan outlines for the rest; they press into their shadow. */
+.city-pop-primary { display: inline-flex; align-items: center; justify-content: center; gap: 9px; min-height: 42px; padding: 10px 16px; border: 2px solid #ffd1ec; background: var(--pink); color: var(--ink); font-size: 13px; box-shadow: 4px 4px 0 #6b0f4a; }
+.city-pop-primary:hover { background: #ff5cb4; }
+.city-pop-outline { display: inline-flex; align-items: center; gap: 8px; padding: 9px 13px; border: 2px solid var(--cyan); background: var(--ink); color: var(--cyan); font-size: 12px; box-shadow: 4px 4px 0 #0b4a55; }
+.city-pop-outline:hover { background: #0b2a3a; }
+.city-pop-primary:active, .city-pop-outline:active, .city-pop-pack-tab:active, .city-pop-station-play:active, .city-pop-track-listen:active, .city-pop-track-watch:active, .city-pop-file-action:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--shadow); }
+
+/* Tabs: the pack's two collections, then the archive's framed Browse · Videos · Downloads. */
+.city-pop-pack-tabs { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; padding-bottom: 18px; border-bottom: 2px dashed #2a1450; }
+.city-pop-pack-tab { display: inline-flex; align-items: center; gap: 8px; min-height: 42px; padding: 10px 14px; border: 2px solid var(--line); background: var(--ink); color: var(--lilac); font-size: 13px; box-shadow: 4px 4px 0 var(--shadow); }
+.city-pop-pack-tab:hover { border-color: var(--cyan); color: var(--cyan); }
+.city-pop-pack-tab-active, .city-pop-pack-tab-active:hover { background: var(--cyan); border-color: #bff8ff; color: var(--night); box-shadow: 4px 4px 0 #0b4a55; }
+.city-pop-subtabs { border: 2px solid var(--line); background: var(--night); padding: 4px; box-shadow: 4px 4px 0 var(--shadow); }
+.city-pop-filter { display: inline-flex; align-items: center; gap: 6px; padding: 8px 11px; border: 2px solid var(--line); background: var(--ink); color: var(--lilac); font-size: 11px; }
+.city-pop-filter:hover { border-color: var(--pink-soft); color: var(--pink-soft); }
+.city-pop-filter-active, .city-pop-filter-active:hover { background: var(--pink); border-color: #ffd1ec; color: var(--ink); }
+
+/* Fields. */
+.city-pop-search { display: flex; align-items: center; gap: 9px; flex: 1; max-width: 360px; min-width: 210px; min-height: 42px; border: 2px solid var(--line); background: var(--night); padding: 0 12px; color: #8f74c9; box-shadow: inset 2px 2px 0 #000; }
+.city-pop-search:focus-within { border-color: var(--cyan); }
+.city-pop-search input { width: 100%; min-width: 0; outline: none; background: transparent; font-size: 12px; color: #fff; user-select: text; padding: 10px 0; }
+.city-pop-search input::placeholder { color: #6e55a3; }
+.city-pop-source-picker { display: flex; align-items: center; gap: 10px; color: var(--lilac); font-size: 11px; }
+.city-pop-source-picker select { min-height: 38px; border: 2px solid var(--cyan); background: var(--ink); padding: 7px 30px 7px 11px; color: var(--cyan); font: inherit; cursor: pointer; box-shadow: 3px 3px 0 #0b4a55; }
+.city-pop-source-picker select:focus-visible { outline: 2px solid var(--pink); outline-offset: 2px; }
+.city-pop-artist { border-bottom: 2px solid #3b1d63; padding-bottom: 2px; font-size: 11px; }
+.city-pop-artist:hover { color: var(--pink-soft); border-color: var(--pink-soft); }
+
+/* Stations, with their pixel icons. */
+.city-pop-station { position: relative; overflow: hidden; padding: 18px; border: 2px solid var(--line); background: var(--panel); box-shadow: 4px 4px 0 var(--shadow); color: #9f8cff; }
+.city-pop-station::after { content: ''; position: absolute; inset: 0; pointer-events: none; background: repeating-linear-gradient(0deg, rgba(255,255,255,.025) 0 1px, transparent 1px 4px); }
+.city-pop-station-night-drive { color: #9f8cff; background: linear-gradient(160deg, #1a1240, #0f0a24); }
+.city-pop-station-sunset { color: var(--yellow); background: linear-gradient(160deg, #3a1030, #160a24); }
+.city-pop-station-after-hours { color: var(--cyan); background: linear-gradient(160deg, #0c2a3a, #0a1224); }
+.city-pop-station-selected { border-color: currentColor; }
+.city-pop-station h3 { font-size: 16px; color: #fff; text-shadow: 2px 2px 0 #000; }
+.city-pop-station-number { font-size: 24px; line-height: 1; opacity: .45; }
+.city-pop-station-play { display: inline-flex; align-items: center; gap: 7px; border: 2px solid currentColor; padding: 7px 10px; background: var(--ink); color: inherit; font-size: 11px; box-shadow: 3px 3px 0 var(--shadow); }
+.city-pop-station-play:hover { background: #ffffff10; }
+.city-pop-pixel-icon { display: block; image-rendering: pixelated; }
+
+/* Track cards: the video frame under scanlines, the artist in cyan, Listen and Watch. */
+.city-pop-track { overflow: hidden; border: 2px solid var(--line); background: var(--panel); box-shadow: 4px 4px 0 var(--shadow); transition: border-color .15s, transform .15s; }
+.city-pop-track:hover { border-color: var(--pink); transform: translate(-1px, -1px); }
+.city-pop-art { position: relative; aspect-ratio: 16 / 9; overflow: hidden; border-bottom: 2px solid var(--line); background: linear-gradient(145deg, #2a0e54, #0d0221); }
+.city-pop-art img { width: 100%; height: 100%; object-fit: cover; opacity: .86; filter: saturate(1.15) contrast(1.05); transition: transform .4s, opacity .3s; }
+.city-pop-track:hover .city-pop-art img { transform: scale(1.03); opacity: .96; }
+.city-pop-art::after, .city-pop-album-cover::after { content: ''; position: absolute; inset: 0; z-index: 1; pointer-events: none; background: repeating-linear-gradient(0deg, rgba(10,0,30,.26) 0 1px, transparent 1px 3px); }
+.city-pop-art-shade { position: absolute; inset: 0; z-index: 1; background: linear-gradient(0deg, rgba(13,2,33,.85), transparent 60%); pointer-events: none; }
+.city-pop-year { position: absolute; z-index: 2; bottom: 9px; left: 12px; color: var(--yellow); font-size: 10px; text-shadow: 2px 2px 0 #000; }
+.city-pop-heart { position: absolute; z-index: 2; top: 9px; right: 9px; display: grid; height: 32px; width: 32px; place-items: center; border: 2px solid #ffffff55; background: #0d0221cc; color: #fff; }
+.city-pop-heart:hover, .city-pop-heart-active { color: var(--pink); border-color: var(--pink); background: #2a0620; }
+.city-pop-track-overlay { position: absolute; inset: 0; z-index: 2; display: grid; place-items: center; pointer-events: none; opacity: 0; color: #fff; transition: opacity .2s; }
+.city-pop-track:hover .city-pop-track-overlay { opacity: .75; }
+.city-pop-track-artist { font-size: 10px; color: var(--cyan); }
+.city-pop-track-listen, .city-pop-track-watch { display: inline-flex; align-items: center; justify-content: center; gap: 7px; flex: 1; padding: 9px; border: 2px solid; font-size: 11px; box-shadow: 3px 3px 0 var(--shadow); }
+.city-pop-track-listen { background: var(--pink); border-color: #ffd1ec; color: var(--ink); }
+.city-pop-track-listen:hover { background: #ff5cb4; }
+.city-pop-track-watch { background: var(--ink); border-color: var(--cyan); color: var(--cyan); }
+.city-pop-track-watch:hover { background: #0b2a3a; }
+
+/* The archive: album cards, an album's files, downloads. */
+.city-pop-archive-card { text-align: left; overflow: hidden; border: 2px solid var(--line); background: var(--panel); box-shadow: 4px 4px 0 var(--shadow); }
+.city-pop-archive-card:hover { border-color: var(--pink); transform: translate(-1px, -1px); }
+.city-pop-album-cover { position: relative; overflow: hidden; aspect-ratio: 1; border-bottom: 2px solid var(--line); background: linear-gradient(145deg, #2a0e54, #0d0221); }
+.city-pop-video-cover { aspect-ratio: 16 / 9; }
+.city-pop-album-cover img { position: relative; z-index: 0; height: 100%; width: 100%; object-fit: cover; }
+.city-pop-album-placeholder { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #ff2a9d55; }
+.city-pop-archive-type { position: absolute; z-index: 2; bottom: 8px; left: 8px; display: flex; align-items: center; gap: 5px; padding: 4px 7px; border: 2px solid #ffffff33; background: #0d0221dd; color: #fff; font-size: 10px; }
+.city-pop-album-files { border: 2px solid var(--line); background: var(--panel); box-shadow: 4px 4px 0 var(--shadow); padding: 20px; }
+.city-pop-file-row { display: flex; align-items: center; gap: 13px; padding: 15px 0; }
+.city-pop-file-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 10px; border: 2px solid var(--line); background: var(--ink); color: #e6d9ff; font-size: 11px; box-shadow: 3px 3px 0 var(--shadow); }
+.city-pop-file-action:hover { border-color: var(--pink-soft); color: #fff; }
+.city-pop-file-download { border-color: var(--cyan); color: var(--cyan); box-shadow: 3px 3px 0 #0b4a55; }
+.city-pop-file-download:hover { background: #0b2a3a; border-color: var(--cyan); color: var(--cyan); }
+.city-pop-file-saved { display: inline-flex; align-items: center; gap: 5px; padding: 8px; color: var(--cyan); opacity: .75; font-size: 10px; }
+.city-pop-empty { min-height: 180px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; border: 2px dashed var(--line); background: var(--night); padding: 30px 20px; text-align: center; color: #e6d9ff; font-size: 13px; }
+.city-pop-downloads-list { border: 2px solid var(--line); box-shadow: 4px 4px 0 var(--shadow); overflow: hidden; }
+.city-pop-download-row { display: flex; align-items: center; gap: 14px; padding: 17px; background: var(--panel); border-bottom: 2px solid #22103f; }
+.city-pop-download-row:last-child { border-bottom: 0; }
+.city-pop-download-icon { display: grid; flex-shrink: 0; place-items: center; height: 40px; width: 40px; border: 2px solid var(--pink); background: #2a0620; color: var(--pink); }
+.city-pop footer { border-top: 2px dashed #2a1450; color: #8f74c9; font-size: 10px; }
+
+@media (max-width: 1000px) { .city-pop-hero-copy { width: 76%; padding-left: 27px; } .city-pop-hero-footer { padding-left: 27px; padding-right: 27px; } }
+@media (max-width: 640px) { .city-pop-hero-copy, .city-pop-hero-compact .city-pop-hero-copy { width: 100%; padding: 29px 23px 70px; } .city-pop-hero-compact .city-pop-hero-copy { padding-bottom: 24px; } .city-pop-title { font-size: 40px; } .city-pop-hero-footer { padding-left: 23px; padding-right: 23px; font-size: 8px; } .city-pop-search { max-width: none; flex-basis: 100%; } }
+@media (max-width: 760px) { .city-pop-file-row, .city-pop-download-row { flex-wrap: wrap; gap: 10px; } .city-pop-file-row>div:last-child { width: 100%; justify-content: flex-start; padding-left: 31px; } .city-pop-download-row>div:last-child { width: 100%; justify-content: flex-start; padding-left: 54px; } .city-pop-album-files { padding: 16px; } }

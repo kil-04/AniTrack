@@ -1,0 +1,590 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Outfit, bundled (SIL OFL 1.1, fonts/OFL.txt): a variable font, so two files cover
+   every weight, and the window paints without waiting on fonts.googleapis.com. */
+@font-face {
+  font-family: "Outfit";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("./fonts/outfit-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Outfit";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("./fonts/outfit-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* Design tokens. RGB triplets, so Tailwind can add alpha (bg-accent/20).
+   Midnight surfaces: blue-black, stepped up by elevation; cool accents. */
+:root {
+  --bg: 5 6 11;
+  --bg-elev: 8 10 18;
+  --surface-1: 12 15 25;
+  --surface-2: 17 21 34;
+  --surface-3: 25 30 47;
+  --text: 236 240 248;
+  --text-2: 158 167 189;
+  --text-3: 101 111 135;
+  --muted: 128 138 162;
+  /* Anime: electric azure into indigo. */
+  --accent: 61 139 255;
+  --accent-hover: 110 168 255;
+  --accent-2: 99 91 255;
+  --accent-alt: 34 211 238;
+  color-scheme: dark;
+}
+/* Manga: a deep royal blue into navy indigo, clearly darker than anime's azure. */
+[data-mode="manga"] {
+  --accent: 29 78 216;
+  --accent-hover: 53 99 233;
+  --accent-2: 46 44 158;
+  --accent-alt: 30 58 138;
+}
+/* Novels: an ink indigo, between manga's royal blue and a violet. */
+[data-mode="novel"] {
+  --accent: 88 80 236;
+  --accent-hover: 116 108 245;
+  --accent-2: 67 56 202;
+  --accent-alt: 55 48 163;
+}
+
+
+html,
+body,
+#root {
+  height: 100%;
+  background-color: rgb(var(--bg));
+  color: rgb(var(--text));
+  font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  user-select: none;
+  overflow: hidden;
+}
+
+::selection { background: rgb(var(--accent) / 0.35); }
+
+/* Hide scrollbars but keep scroll */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { scrollbar-width: none; }
+
+/* Custom scrollbar for content panes */
+.thin-scrollbar::-webkit-scrollbar { width: 10px; height: 10px; }
+.thin-scrollbar::-webkit-scrollbar-thumb {
+  background: rgb(255 255 255 / 0.1);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
+}
+.thin-scrollbar::-webkit-scrollbar-thumb:hover { background-color: rgb(255 255 255 / 0.18); }
+.thin-scrollbar::-webkit-scrollbar-track { background: transparent; }
+
+/* Make the drag region the title bar area on macOS */
+.titlebar-drag {
+  -webkit-app-region: drag;
+}
+.titlebar-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Smooth focus rings */
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid rgb(var(--accent) / 0.75);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+/* Premium Glassmorphic Subtitles Styling */
+video::cue {
+  font-weight: 500 !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8) !important;
+  border-radius: 6px !important;
+  padding: 4px 8px !important;
+}
+
+/* The window's ambient light: two soft glows behind every page, tinted by the mode. */
+.app-ambient {
+  background:
+    radial-gradient(1000px 520px at -8% -16%, rgb(var(--accent) / 0.10), transparent 62%),
+    radial-gradient(860px 500px at 108% -20%, rgb(var(--accent-alt) / 0.07), transparent 60%),
+    radial-gradient(1200px 700px at 50% 125%, rgb(var(--accent-2) / 0.05), transparent 70%),
+    rgb(var(--bg));
+}
+
+/* The hero rail's countdown bar (8 s per slide, see pages/Home.tsx). */
+@keyframes heroProgress {
+  from { width: 0%; }
+  to { width: 100%; }
+}
+
+@layer components {
+  /* Buttons */
+  .btn {
+    @apply inline-flex h-10 select-none items-center justify-center gap-2 whitespace-nowrap rounded-xl px-4 text-sm font-semibold transition-all duration-200 disabled:pointer-events-none disabled:opacity-40;
+  }
+  .btn-sm { @apply h-8 gap-1.5 rounded-lg px-3 text-xs; }
+  .btn-lg { @apply h-12 gap-2.5 rounded-2xl px-6 text-[15px]; }
+  .btn-icon { @apply h-10 w-10 px-0; }
+  .btn-primary {
+    @apply bg-accent-gradient text-white shadow-glow hover:-translate-y-px hover:shadow-glow-lg hover:brightness-110 active:translate-y-0;
+  }
+  .btn-light {
+    @apply bg-white text-[#0b0b10] shadow-[0_10px_30px_-12px_rgb(255_255_255/0.45)] hover:-translate-y-px hover:bg-white/90 active:translate-y-0;
+  }
+  .btn-secondary {
+    @apply border border-white/10 bg-white/[0.07] text-white backdrop-blur-md hover:border-white/20 hover:bg-white/[0.12];
+  }
+  .btn-ghost { @apply text-ink-2 hover:bg-white/[0.06] hover:text-white; }
+  .btn-danger { @apply border border-red-400/20 bg-red-500/10 text-red-300 hover:bg-red-500/20; }
+
+  /* Surfaces */
+  .panel { @apply rounded-2xl border border-white/[0.07] bg-surface-1/80 shadow-card; }
+  .glass { @apply border border-white/10 bg-[rgb(18_18_26/0.62)] backdrop-blur-xl backdrop-saturate-150; }
+
+  /* Small parts */
+  .chip {
+    @apply inline-flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full border border-white/[0.08] bg-white/[0.05] px-3 text-xs font-medium text-ink-2 transition hover:border-white/15 hover:bg-white/[0.09] hover:text-white;
+  }
+  .chip-active { @apply border-accent/40 bg-accent/15 text-white; }
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide;
+  }
+  .badge-accent { @apply bg-accent-gradient text-white shadow-[0_4px_14px_-4px_rgb(var(--accent)/0.7)]; }
+  .badge-glass { @apply border border-white/15 bg-black/55 text-white backdrop-blur-md; }
+  .eyebrow { @apply text-[11px] font-bold uppercase tracking-[0.22em] text-accent; }
+  .icon-tile { @apply grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-accent/[0.14] text-accent ring-1 ring-inset ring-accent/20; }
+  .kbd {
+    @apply inline-flex h-5 items-center rounded-md border border-white/10 bg-white/[0.06] px-1.5 font-sans text-[10px] font-semibold text-ink-3;
+  }
+  .input {
+    @apply h-10 w-full rounded-xl border border-white/[0.08] bg-surface-2/70 px-3.5 text-sm text-white outline-none transition placeholder:text-ink-3 focus:border-accent/60 focus:bg-surface-2 focus:ring-4 focus:ring-accent/15;
+  }
+  .section-title { @apply text-[22px] font-bold tracking-tight text-white; }
+  .skeleton {
+    @apply bg-[linear-gradient(90deg,rgb(255_255_255/0.04)_0%,rgb(255_255_255/0.09)_50%,rgb(255_255_255/0.04)_100%)] bg-[length:800px_100%] animate-shimmer;
+  }
+}
+
+/* ── Pixel mode (Settings → Appearance, lib/skin.ts) ─────────────────────────────────────────
+   City Pop's retrowave pixel art across the app: night-purple surfaces, neon accents per mode,
+   square corners, hard offset shadows, the AniTrack Pixel font (scripts/build-city-pop-font.py)
+   for headings, labels and buttons, and a pixel-art banner on every page (components/PixelScene.tsx,
+   packages/shared/pixel-scenes.ts). The font is sized by cap height to match Outfit's, so text
+   keeps its room; letters it lacks fall back to Outfit. */
+@font-face {
+  font-family: "AniTrack Pixel";
+  src: url("./fonts/city-pop-pixel.woff") format("woff");
+  font-display: block;
+}
+
+[data-skin="pixel"] {
+  --bg: 13 2 33;
+  --bg-elev: 17 5 40;
+  --surface-1: 22 10 46;
+  --surface-2: 31 15 62;
+  --surface-3: 44 22 84;
+  --text: 246 238 255;
+  --text-2: 205 180 255;
+  --text-3: 150 124 205;
+  --muted: 165 140 215;
+  /* Anime: hot pink into violet, cyan for highlights. */
+  --accent: 255 42 157;
+  --accent-hover: 255 122 198;
+  --accent-2: 176 38 255;
+  --accent-alt: 46 230 255;
+  --pixel-font: "AniTrack Pixel", "Outfit", system-ui, sans-serif;
+  --pixel-line: 59 29 99;
+  --pixel-shadow: 5 0 16;
+  --pixel-night: 13 2 33;
+  --pixel-night-2: 27 9 64;
+}
+/* Manga: electric violet. Novels: sunset orange. */
+[data-skin="pixel"][data-mode="manga"] {
+  --accent: 139 61 255;
+  --accent-hover: 176 128 255;
+  --accent-2: 46 120 255;
+  --accent-alt: 46 230 255;
+}
+[data-skin="pixel"][data-mode="novel"] {
+  --accent: 240 92 40;
+  --accent-hover: 255 140 90;
+  --accent-2: 255 42 157;
+  --accent-alt: 255 211 25;
+}
+/* Pixel mode in AniTrack blue, an uncertain future: a cold near-black navy, cyan neon with a red
+   glitch edge, banners drowned in blue haze (ui/AniTheme.kt's retroBlue holds the same tokens). */
+[data-skin="pixel"][data-palette="blue"] {
+  --bg: 3 7 15;
+  --bg-elev: 6 12 24;
+  --surface-1: 10 20 36;
+  --surface-2: 15 28 48;
+  --surface-3: 22 38 63;
+  --text: 221 235 250;
+  --text-2: 143 168 200;
+  --text-3: 86 112 143;
+  --muted: 120 145 175;
+  --accent: 0 168 255;
+  --accent-hover: 0 240 255;
+  --accent-2: 255 46 99;
+  --accent-alt: 0 240 255;
+  --pixel-line: 30 58 92;
+  --pixel-shadow: 0 2 8;
+  --pixel-night: 3 7 15;
+  --pixel-night-2: 8 24 40;
+}
+[data-skin="pixel"][data-palette="blue"][data-mode="manga"] { --accent: 58 108 255; }
+[data-skin="pixel"][data-palette="blue"][data-mode="novel"] { --accent: 120 100 255; }
+
+/* The glitch: headings split into cyan and red, banner titles jump now and then, a cold haze
+   recolours the scenes and a bright bar rolls down them like a failing monitor. */
+[data-skin="pixel"][data-palette="blue"] h1,
+[data-skin="pixel"][data-palette="blue"] h2,
+[data-skin="pixel"][data-palette="blue"] .section-title { text-shadow: -2px 0 rgb(0 240 255 / 0.5), 2px 0 rgb(255 46 99 / 0.5); }
+[data-skin="pixel"][data-palette="blue"] .pixel-banner-title {
+  text-shadow: -3px 0 rgb(0 240 255 / 0.75), 3px 0 rgb(255 46 99 / 0.75);
+  animation: pixel-glitch 7s steps(1) infinite;
+}
+[data-skin="pixel"][data-palette="blue"] .pixel-banner::before,
+[data-skin="pixel"][data-palette="blue"] .pixel-interlude::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(180deg, #0a2440 0%, #0d5a8a 70%, #00a8ff 100%);
+  mix-blend-mode: color;
+  opacity: 0.62;
+}
+[data-skin="pixel"][data-palette="blue"] .pixel-banner::after {
+  background: repeating-linear-gradient(to bottom, rgb(0 0 0 / 0.2) 0 1px, transparent 1px 3px);
+}
+/* The rolling bar: its own element moved by transform in 60 steps, so only the compositor works. */
+.pixel-roll { display: none; }
+.pixel-banner, .pixel-screen, .pixel-interlude { container-type: size; }
+[data-skin="pixel"][data-palette="blue"] .pixel-roll {
+  display: block;
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  z-index: 1;
+  height: 48px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent 0, rgb(120 240 255 / 0.16) 50%, transparent 100%);
+  animation: pixel-roll 6s steps(60) infinite;
+}
+@keyframes pixel-roll {
+  from { transform: translateY(-48px); }
+  to { transform: translateY(calc(100cqh + 48px)); }
+}
+@keyframes pixel-glitch {
+  0%, 90%, 100% { transform: none; clip-path: none; }
+  91% { transform: translate(-3px, 1px); }
+  92% { transform: translate(4px, -1px); clip-path: inset(18% 0 46% 0); }
+  93% { transform: translate(-2px, 0); clip-path: inset(58% 0 8% 0); }
+  94% { transform: none; clip-path: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-skin="pixel"][data-palette="blue"] .pixel-banner-title,
+  [data-skin="pixel"][data-palette="blue"] .pixel-roll { display: none; }
+}
+
+[data-skin="pixel"] *,
+[data-skin="pixel"] *::before,
+[data-skin="pixel"] *::after,
+[data-skin="pixel"] ::-webkit-scrollbar-thumb { border-radius: 0 !important; }
+/* Round things stay round, as on Android: a record is a disc in any skin. */
+[data-skin="pixel"] .pixel-round { border-radius: 9999px !important; }
+
+/* A starry night behind every page: 2 px stars on a 240 px tile over the night gradient. */
+[data-skin="pixel"] .app-ambient {
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240' shape-rendering='crispEdges'%3E%3Cg fill='%23fff6d6' fill-opacity='.55'%3E%3Crect x='18' y='22' width='2' height='2'/%3E%3Crect x='131' y='9' width='2' height='2'/%3E%3Crect x='201' y='61' width='2' height='2'/%3E%3Crect x='77' y='97' width='2' height='2'/%3E%3Crect x='163' y='151' width='2' height='2'/%3E%3Crect x='37' y='183' width='2' height='2'/%3E%3Crect x='222' y='212' width='2' height='2'/%3E%3C/g%3E%3Cg fill='%23ff9be6' fill-opacity='.5'%3E%3Crect x='96' y='41' width='2' height='2'/%3E%3Crect x='12' y='129' width='2' height='2'/%3E%3Crect x='181' y='108' width='2' height='2'/%3E%3C/g%3E%3Cg fill='%232ee6ff' fill-opacity='.45'%3E%3Crect x='58' y='60' width='2' height='2'/%3E%3Crect x='121' y='204' width='2' height='2'/%3E%3Crect x='229' y='146' width='2' height='2'/%3E%3C/g%3E%3C/svg%3E") repeat,
+    linear-gradient(180deg, rgb(var(--pixel-night)) 0%, rgb(var(--pixel-night-2)) 100%);
+}
+
+/* The pixel font for headings, labels, buttons, chips and the sidebar. */
+[data-skin="pixel"] h1,
+[data-skin="pixel"] h2,
+[data-skin="pixel"] .section-title,
+[data-skin="pixel"] .eyebrow,
+[data-skin="pixel"] .uppercase,
+[data-skin="pixel"] .btn,
+[data-skin="pixel"] .chip,
+[data-skin="pixel"] .badge,
+[data-skin="pixel"] aside nav a,
+[data-skin="pixel"] .wordmark {
+  font-family: var(--pixel-font);
+  font-size-adjust: cap-height 0.7;
+  font-weight: 400 !important;
+  font-synthesis: none;
+  letter-spacing: 0.04em !important;
+  text-transform: uppercase;
+}
+[data-skin="pixel"] h1,
+[data-skin="pixel"] h2,
+[data-skin="pixel"] .section-title { text-shadow: 2px 2px 0 rgb(var(--accent-2) / 0.55); }
+[data-skin="pixel"] .wordmark > span {
+  background: none !important;
+  color: rgb(var(--accent)) !important;
+  -webkit-text-fill-color: currentColor;
+}
+
+/* Hard offset shadows instead of soft glows; stepped gradients instead of smooth ones. */
+[data-skin="pixel"] .panel,
+[data-skin="pixel"] .shadow-card {
+  border: 2px solid rgb(var(--pixel-line));
+  box-shadow: 4px 4px 0 0 rgb(var(--pixel-shadow) / 0.9) !important;
+}
+[data-skin="pixel"] .shadow-pop,
+[data-skin="pixel"] .shadow-glow-lg { box-shadow: 6px 6px 0 0 rgb(var(--pixel-shadow) / 0.9) !important; }
+[data-skin="pixel"] .shadow-glow,
+[data-skin="pixel"] .btn-primary,
+[data-skin="pixel"] .badge-accent { box-shadow: 3px 3px 0 0 rgb(var(--accent-2)) !important; }
+[data-skin="pixel"] .btn-primary:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 0 rgb(var(--accent-2)) !important; }
+[data-skin="pixel"] .bg-accent-gradient {
+  background-image: linear-gradient(135deg, rgb(var(--accent-hover)) 0 30%, rgb(var(--accent)) 30% 68%, rgb(var(--accent-2)) 68% 100%);
+}
+[data-skin="pixel"] .btn-secondary,
+[data-skin="pixel"] .input { border: 2px solid rgb(var(--pixel-line)); }
+[data-skin="pixel"] .input:focus { border-color: rgb(var(--accent-alt)); box-shadow: 3px 3px 0 0 rgb(var(--accent-alt) / 0.35); }
+[data-skin="pixel"] .icon-tile { box-shadow: 2px 2px 0 0 rgb(var(--pixel-shadow)); }
+[data-skin="pixel"] button:focus-visible,
+[data-skin="pixel"] a:focus-visible { outline: 2px dashed rgb(var(--accent-alt)); }
+[data-skin="pixel"] ::selection { background: rgb(var(--accent) / 0.5); }
+
+/* Home's hero in Pixel mode: its art pixelated (components/PixelScene.tsx's filter) under a CRT
+   screen; in blue, the banners' haze and rolling bar too. */
+.pixel-screen { display: none; pointer-events: none; }
+[data-skin="pixel"] .hero-art { filter: url(#pixelate-8); }
+[data-skin="pixel"] .pixel-screen {
+  display: block;
+  background: repeating-linear-gradient(to bottom, rgb(0 0 0 / 0.18) 0 1px, transparent 1px 3px);
+}
+[data-skin="pixel"][data-palette="blue"] .pixel-screen {
+  background: repeating-linear-gradient(to bottom, rgb(0 0 0 / 0.2) 0 1px, transparent 1px 3px);
+}
+[data-skin="pixel"][data-palette="blue"] .pixel-screen::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, #0a2440 0%, #0d5a8a 70%, #00a8ff 100%);
+  mix-blend-mode: color;
+  opacity: 0.45;
+}
+
+/* The page banner. */
+.pixel-scene { position: absolute; inset: 0; z-index: -2; width: 100%; height: 100%; image-rendering: pixelated; }
+/* A scene's moving parts (PixelSceneCanvas): compositor-only animations in steps, still when motion is off. */
+.pixel-actors { position: absolute; inset: 0; z-index: -2; overflow: hidden; pointer-events: none; }
+.pixel-actors canvas { position: absolute; image-rendering: pixelated; will-change: transform, opacity; }
+@keyframes pixel-actor-move { from { transform: translate(0, 0); } to { transform: translate(var(--dx), var(--dy)); } }
+[data-motion="off"] .pixel-actors canvas { animation: none !important; }
+@media (prefers-reduced-motion: reduce) { .pixel-actors canvas { animation: none !important; } }
+
+/* Pixel mode's critters: a dog on the Top 10 panel, a cat crossing between Home's rows. Two frames
+   take turns by opacity in steps; the cat moves by transform, sized by its strip (container units). */
+.pixel-dog { position: absolute; right: 18px; bottom: calc(100% - 2px); width: 32px; height: 24px; pointer-events: none; }
+.pixel-dog > *, .pixel-walker-cat > * { position: absolute; left: 0; bottom: 0; }
+.pixel-frame-b { opacity: 0; }
+@keyframes pixel-frame-a { 0% { opacity: 1; } 50% { opacity: 0; } }
+@keyframes pixel-frame-b { 0% { opacity: 0; } 50% { opacity: 1; } 100% { opacity: 1; } }
+.pixel-dog > :first-child { animation: pixel-frame-a 1.6s step-end infinite; }
+.pixel-dog > .pixel-frame-b { animation: pixel-frame-b 1.6s step-end infinite; }
+.pixel-walker { position: relative; height: 0; margin: 0 2rem; container-type: inline-size; pointer-events: none; }
+.pixel-walker-cat { position: absolute; left: 0; bottom: 8px; width: 32px; height: 24px; transform: translateX(-48px); animation: pixel-walk 60s linear infinite; }
+@keyframes pixel-walk {
+  0% { transform: translateX(-48px); animation-timing-function: steps(200, end); }
+  33.3% { transform: translateX(calc(100cqw + 16px)); }
+  100% { transform: translateX(calc(100cqw + 16px)); }
+}
+.pixel-walker-cat > :first-child { animation: pixel-frame-a 0.6s step-end infinite; }
+.pixel-walker-cat > .pixel-frame-b { animation: pixel-frame-b 0.6s step-end infinite; }
+[data-motion="off"] .pixel-dog > *, [data-motion="off"] .pixel-walker-cat, [data-motion="off"] .pixel-walker-cat > * { animation: none !important; }
+@media (prefers-reduced-motion: reduce) { .pixel-dog > *, .pixel-walker-cat, .pixel-walker-cat > * { animation: none !important; } }
+.pixel-banner {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  height: 172px;
+  border: 2px solid rgb(var(--accent));
+  background: rgb(var(--pixel-night));
+  box-shadow: 6px 6px 0 0 rgb(var(--accent-2) / 0.45);
+}
+.pixel-banner::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: repeating-linear-gradient(to bottom, rgb(0 0 0 / 0.16) 0 1px, transparent 1px 3px);
+}
+.pixel-banner-shade {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(90deg, rgb(var(--pixel-night) / 0.78) 0%, rgb(var(--pixel-night) / 0.45) 34%, rgb(var(--pixel-night) / 0) 62%);
+}
+.pixel-banner-copy {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  height: 100%;
+  align-items: flex-end;
+  gap: 16px;
+  padding: 22px 26px;
+}
+.pixel-banner-icon {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  background: rgb(var(--accent));
+  color: #fff;
+  box-shadow: 4px 4px 0 0 #050010;
+}
+[data-skin="pixel"] .pixel-banner-title {
+  font-size: 32px;
+  line-height: 1.2;
+  color: #fff;
+  text-shadow: 3px 3px 0 rgb(var(--accent-2));
+}
+.pixel-banner-sub { margin-top: 6px; font-size: 13px; color: #f4eeff; text-shadow: 1px 1px 0 #000; }
+/* The Time Machine's hero and the Songs jukebox: the year's scene under scanlines (and the blue haze),
+   behind their own scrims and words, which are left as they are. */
+[data-skin="pixel"] .pixel-era { border: 2px solid rgb(var(--accent)); box-shadow: 6px 6px 0 0 rgb(var(--accent-2) / 0.45); }
+[data-skin="pixel"] .pixel-era::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: repeating-linear-gradient(to bottom, rgb(0 0 0 / 0.14) 0 1px, transparent 1px 3px);
+}
+[data-skin="pixel"][data-palette="blue"] .pixel-era::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(180deg, #0a2440 0%, #0d5a8a 70%, #00a8ff 100%);
+  mix-blend-mode: color;
+  opacity: 0.55;
+}
+[data-skin="pixel"] .pixel-year {
+  font-family: var(--pixel-font);
+  font-size-adjust: cap-height 0.7;
+  font-weight: 400 !important;
+  letter-spacing: 0 !important;
+  line-height: 1 !important;
+  text-shadow: 5px 5px 0 rgb(var(--accent-2));
+}
+[data-skin="pixel"][data-palette="blue"] .pixel-year { text-shadow: -4px 0 rgb(0 240 255 / 0.6), 4px 0 rgb(255 46 99 / 0.6); }
+
+/* Home's interludes (components/PixelScene.tsx PixelInterlude). */
+.pixel-interlude {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  height: 128px;
+  padding: 0 26px;
+  border: 2px solid rgb(var(--accent));
+  background: rgb(var(--pixel-night));
+  box-shadow: 5px 5px 0 0 rgb(var(--accent-2) / 0.45);
+  transition: transform 0.08s, box-shadow 0.08s;
+}
+.pixel-interlude:hover { transform: translate(-2px, -2px); box-shadow: 7px 7px 0 0 rgb(var(--accent-2) / 0.55); }
+.pixel-interlude:active { transform: translate(2px, 2px); box-shadow: 2px 2px 0 0 rgb(var(--accent-2) / 0.55); }
+.pixel-interlude::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: repeating-linear-gradient(to bottom, rgb(0 0 0 / 0.16) 0 1px, transparent 1px 3px);
+}
+.pixel-interlude-copy { position: relative; z-index: 2; min-width: 0; max-width: 50%; }
+[data-skin="pixel"] .pixel-interlude-title { font-size: 20px; line-height: 1.25; color: #fff; text-shadow: 2px 2px 0 rgb(var(--accent-2)); }
+.pixel-interlude-sub { margin-top: 4px; font-size: 13px; color: #f4eeff; text-shadow: 1px 1px 0 #000; }
+.pixel-interlude-go {
+  position: relative;
+  z-index: 2;
+  flex-shrink: 0;
+  padding: 7px 12px;
+  background: rgb(var(--accent));
+  color: #fff;
+  font-family: var(--pixel-font);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  box-shadow: 3px 3px 0 0 rgb(var(--pixel-shadow));
+}
+/* The Appearance section's preview. */
+.pixel-preview {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  width: 220px;
+  height: 92px;
+  flex-shrink: 0;
+  border: 2px solid rgb(var(--accent));
+  box-shadow: 4px 4px 0 0 rgb(var(--accent-2) / 0.45);
+}
+
+/* ── Pixel mode's animated night (components/PixelAmbient.tsx, Android ui/PixelAmbient.kt) ──────
+   Twinkling crosses, shooting stars, rain in the blue palette, a skyline whose windows blink and a
+   cat walking the street: transform and opacity animations in pixel steps, so the compositor runs
+   them. The Animated background setting, the open player or reduced motion keep it still. */
+.pixel-ambient { position: absolute; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; container-type: size; }
+.pixel-twinkle { position: absolute; inset: 0; opacity: 0; background-repeat: repeat; animation: pixel-twinkle 5.2s steps(1) infinite; }
+.pixel-twinkle-a { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300' shape-rendering='crispEdges'%3E%3Cg fill='%23ffffff'%3E%3Crect x='38' y='30' width='6' height='2'/%3E%3Crect x='40' y='28' width='2' height='6'/%3E%3C/g%3E%3Cg fill='%23ff9be6'%3E%3Crect x='208' y='70' width='6' height='2'/%3E%3Crect x='210' y='68' width='2' height='6'/%3E%3C/g%3E%3Cg fill='%23bff8ff'%3E%3Crect x='118' y='160' width='6' height='2'/%3E%3Crect x='120' y='158' width='2' height='6'/%3E%3C/g%3E%3Cg fill='%23ffffff'%3E%3Crect x='258' y='230' width='6' height='2'/%3E%3Crect x='260' y='228' width='2' height='6'/%3E%3C/g%3E%3Cg fill='%23ffd319'%3E%3Crect x='28' y='250' width='6' height='2'/%3E%3Crect x='30' y='248' width='2' height='6'/%3E%3C/g%3E%3Cg fill='%23ffffff'%3E%3Crect x='168' y='280' width='6' height='2'/%3E%3Crect x='170' y='278' width='2' height='6'/%3E%3C/g%3E%3C/svg%3E"); }
+.pixel-twinkle-b { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='410' height='410' shape-rendering='crispEdges'%3E%3Cg fill='%23bff8ff'%3E%3Crect x='118' y='70' width='6' height='2'/%3E%3Crect x='120' y='68' width='2' height='6'/%3E%3C/g%3E%3Cg fill='%23ffffff'%3E%3Crect x='348' y='30' width='6' height='2'/%3E%3Crect x='350' y='28' width='2' height='6'/%3E%3C/g%3E%3Cg fill='%23ffffff'%3E%3Crect x='28' y='190' width='6' height='2'/%3E%3Crect x='30' y='188' width='2' height='6'/%3E%3C/g%3E%3Cg fill='%23ff9be6'%3E%3Crect x='268' y='250' width='6' height='2'/%3E%3Crect x='270' y='248' width='2' height='6'/%3E%3C/g%3E%3Cg fill='%23ffffff'%3E%3Crect x='108' y='330' width='6' height='2'/%3E%3Crect x='110' y='328' width='2' height='6'/%3E%3C/g%3E%3Cg fill='%23fff27a'%3E%3Crect x='203' y='150' width='6' height='2'/%3E%3Crect x='205' y='148' width='2' height='6'/%3E%3C/g%3E%3Cg fill='%23ffffff'%3E%3Crect x='378' y='380' width='6' height='2'/%3E%3Crect x='380' y='378' width='2' height='6'/%3E%3C/g%3E%3C/svg%3E"); animation-duration: 6.8s; animation-delay: -2.6s; }
+@keyframes pixel-twinkle { 0% { opacity: 0; } 20% { opacity: 0.85; } 40% { opacity: 0.35; } 60% { opacity: 0; } }
+.pixel-rain { position: absolute; left: 0; right: 0; top: -240px; bottom: 0; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240' shape-rendering='crispEdges'%3E%3Crect x='82' y='38' width='2' height='8' fill='%239fd8ff' fill-opacity='.24'/%3E%3Crect x='166' y='12' width='2' height='6' fill='%239fd8ff' fill-opacity='.24'/%3E%3Crect x='210' y='137' width='2' height='6' fill='%239fd8ff' fill-opacity='.24'/%3E%3Crect x='92' y='149' width='2' height='6' fill='%239fd8ff' fill-opacity='.24'/%3E%3Crect x='232' y='129' width='2' height='6' fill='%239fd8ff' fill-opacity='.24'/%3E%3Crect x='8' y='22' width='2' height='8' fill='%239fd8ff' fill-opacity='.24'/%3E%3Crect x='106' y='17' width='2' height='6' fill='%239fd8ff' fill-opacity='.24'/%3E%3Crect x='22' y='141' width='2' height='8' fill='%239fd8ff' fill-opacity='.24'/%3E%3Crect x='14' y='211' width='2' height='10' fill='%239fd8ff' fill-opacity='.24'/%3E%3Crect x='30' y='57' width='2' height='10' fill='%239fd8ff' fill-opacity='.24'/%3E%3Crect x='160' y='149' width='2' height='6' fill='%239fd8ff' fill-opacity='.24'/%3E%3Crect x='146' y='149' width='2' height='8' fill='%239fd8ff' fill-opacity='.24'/%3E%3Crect x='12' y='56' width='2' height='6' fill='%239fd8ff' fill-opacity='.24'/%3E%3Crect x='142' y='219' width='2' height='6' fill='%239fd8ff' fill-opacity='.24'/%3E%3Crect x='74' y='107' width='2' height='6' fill='%239fd8ff' fill-opacity='.24'/%3E%3Crect x='138' y='30' width='2' height='10' fill='%239fd8ff' fill-opacity='.24'/%3E%3Crect x='78' y='143' width='2' height='10' fill='%239fd8ff' fill-opacity='.24'/%3E%3Crect x='46' y='26' width='2' height='10' fill='%239fd8ff' fill-opacity='.24'/%3E%3C/svg%3E"); animation: pixel-rain 1.6s steps(16) infinite; }
+@keyframes pixel-rain { from { transform: translateY(0); } to { transform: translateY(240px); } }
+.pixel-shooting { position: absolute; left: 0; top: 0; width: 48px; height: 24px; opacity: 0; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='24' shape-rendering='crispEdges'%3E%3Crect x='0' y='18' width='3' height='3' fill='%23ffffff' fill-opacity='1.00'/%3E%3Crect x='6' y='15' width='3' height='3' fill='%23ffffff' fill-opacity='0.88'/%3E%3Crect x='12' y='12' width='3' height='3' fill='%23ffffff' fill-opacity='0.75'/%3E%3Crect x='18' y='9' width='3' height='3' fill='%23ffffff' fill-opacity='0.62'/%3E%3Crect x='24' y='6' width='3' height='3' fill='%23ffffff' fill-opacity='0.50'/%3E%3Crect x='30' y='3' width='3' height='3' fill='%23ffffff' fill-opacity='0.38'/%3E%3Crect x='36' y='0' width='3' height='3' fill='%23ffffff' fill-opacity='0.25'/%3E%3Crect x='42' y='-3' width='3' height='3' fill='%23ffffff' fill-opacity='0.12'/%3E%3C/svg%3E"); animation: pixel-shoot 14s linear infinite; --x0: 72cqw; --y0: 4cqh; --x1: 44cqw; --y1: 24cqh; }
+.pixel-shooting-2 { animation-duration: 23s; animation-delay: -9s; --x0: 48cqw; --y0: 12cqh; --x1: 20cqw; --y1: 32cqh; }
+@keyframes pixel-shoot {
+  0% { opacity: 0; transform: translate(var(--x0), var(--y0)); }
+  1% { opacity: 1; }
+  5% { opacity: 0; transform: translate(var(--x1), var(--y1)); }
+  100% { opacity: 0; transform: translate(var(--x1), var(--y1)); }
+}
+.pixel-skyline { position: absolute; left: 0; right: 0; bottom: 0; height: 84px; opacity: 0.8; }
+.pixel-skyline canvas { position: absolute; inset: 0; width: 100%; height: 100%; image-rendering: pixelated; }
+.pixel-skyline-blink { animation: pixel-blink 2.8s steps(1) infinite; }
+@keyframes pixel-blink { 0% { opacity: 0; } 50% { opacity: 1; } }
+.pixel-cat-path { position: absolute; left: 0; right: 0; bottom: 3px; height: 36px; }
+.pixel-cat { position: absolute; left: 0; bottom: 0; image-rendering: pixelated; animation: pixel-cat-step 0.44s steps(2) infinite, pixel-cat-walk 75s steps(420) infinite; }
+@keyframes pixel-cat-step { from { background-position: 0 0; } to { background-position: -96px 0; } }
+@keyframes pixel-cat-walk {
+  0% { transform: translateX(-60px); }
+  45% { transform: translateX(calc(100cqw + 12px)); }
+  100% { transform: translateX(calc(100cqw + 12px)); }
+}
+.pixel-still .pixel-skyline-blink { animation: none; opacity: 0; }
+
+/* Sprites (components/PixelSprite.tsx): empty states and the footer bob in pixel steps. */
+.pixel-bob { display: inline-block; animation: pixel-bob 1.3s steps(1) infinite; }
+.pixel-bob-late { animation-delay: -0.65s; }
+@keyframes pixel-bob { 0% { transform: none; } 50% { transform: translateY(-4px); } }
+[data-motion="off"] .pixel-bob { animation: none; }
+.pixel-footer { display: flex; flex-direction: column; align-items: center; gap: 14px; margin: 8px 0 120px; }
+.pixel-footer p { font-family: var(--pixel-font); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: rgb(var(--text-3)); }
+@media (prefers-reduced-motion: reduce) {
+  .pixel-ambient *, .pixel-bob { animation: none !important; }
+  .pixel-cat-path, .pixel-shooting, .pixel-rain { display: none; }
+}

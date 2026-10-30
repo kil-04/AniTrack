@@ -1,0 +1,774 @@
+/**
+ * Capacitor shim for window.api — mirrors the Electron preload bridge exactly.
+ *
+ * On Android, Capacitor plugins (Kotlin) handle all native operations.
+ * AniList queries go directly via fetch (public GraphQL API, no auth needed for search).
+ * MAL OAuth uses @capacitor/browser for the in-app browser flow.
+ * AnimePahe scraping + CF bypass is handled by AniTrackPahePlugin (hidden WebView).
+ * SQLite is handled by AniTrackDbPlugin (native SQLite3).
+ */
+
+import { Browser } from "@capacitor/browser";
+import { ScreenOrientation } from "@capacitor/screen-orientation";
+import { classicEraBoost, classicEraLabel } from "../../../../packages/shared/recommendations";
+import { planStory } from "../../../../packages/shared/story-bridge";
+import { mixRadio, parseThemesResponse, themesUrl } from "../../../../packages/shared/anime-themes";
+import { ANISONGS, isSeasonQuery, parseAniSongs, parseCharts, searchBody } from "../../../../packages/shared/anisongs";
+import {
+  gemPopularityFloor,
+  timeMachineCandidate,
+  timeMachineQuery,
+  timeMachineVariables,
+  type TimeMachineList,
+  type TimeMachinePart,
+} from "../../../../packages/shared/time-machine";
+
+import {
+  AniTrackDb,
+  AniTrackMal,
+  AniTrackPahe,
+  AniTrackSettings,
+} from "./capacitor-plugins";
+import {
+  alGql,
+  ANILIST_GQL,
+  mapMedia,
+  MEDIA_FIELDS,
+  rankByRelevance,
+} from "./capacitor-anilist";
+// ── Event bus (lightweight replacement for ipcRenderer.on) ────────────────────
+
+type Listener = (...args: unknown[]) => void;
+const _listeners = new Map<string, Set<Listener>>();
+
+function emit(channel: string, ...args: unknown[]) {
+  _listeners.get(channel)?.forEach((fn) => fn(...args));
+}
+
+function onEvent(channel: string, fn: Listener): () => void {
+  if (!_listeners.has(channel)) _listeners.set(channel, new Set());
+  _listeners.get(channel)!.add(fn);
+  return () => _listeners.get(channel)?.delete(fn);
+}
+
+// ── MAL OAuth flow via Browser plugin ─────────────────────────────────────────
+
+const DEFAULT_MAL_CLIENT_ID = "10093a3f9f0174b6b5577c40e9accdae"; // MALSync public client
+
+async function getMalClientId(): Promise<string> {
+  const stored = await AniTrackSettings.get({ key: "mal_client_id" }).catch(() => ({ value: null }));
+  return stored.value ?? DEFAULT_MAL_CLIENT_ID;
+}
+
+// ── AniList auth (stub — AniList search/trending don't require auth on Android) ─
+
+let _alState: import("../../../../packages/shared/types").AniListAuthState = {
+  connected: false,
+  username: null,
+  userId: null,
+  expiresAt: null,
+  hasClientId: false
+};
+
+import { anikotoMalIds, anikotoProvider } from "./capacitor-anikoto";
+// ── Shim installation ──────────────────────────────────────────────────────────
+
+export async function installCapacitorApiBridge() {
+  // --- SYNC NATIVE RECOVERY ---
+  // If the WebView's localStorage gets wiped during an app update, recover the
+  // GitHub-Gist sync details from Android SharedPreferences BEFORE React boots.
+  const gistTok = await AniTrackSettings.get({ key: "gist_token" }).catch(() => ({ value: null }));
+  const gistId  = await AniTrackSettings.get({ key: "gist_id" }).catch(() => ({ value: null }));
+
+  if (gistTok.value) localStorage.setItem("gist_token", gistTok.value);
+  if (gistId.value)  localStorage.setItem("gist_id", gistId.value);
+
+  // Bridge Capacitor plugin events → JS event bus so Settings.tsx listeners work unchanged.
+  AniTrackMal.addListener("mal:auth-complete", async (data: any) => {
+    // Auto-pull the user's MAL list right after connecting so Library populates immediately.
+    try { await AniTrackMal.pull(); } catch { /* ignore pull errors */ }
+    emit("mal:auth-complete", data);
+  });
+  AniTrackMal.addListener("mal:auth-error", (data: any) => {
+    emit("mal:auth-error", (data as any).error ?? "Auth failed");
+  });
+
+  // Listen for deep links (e.g. AniList OAuth redirects)
+  const AppPlugin = (window as any).Capacitor?.Plugins?.App;
+  if (AppPlugin) {
+    const handleOpenUrl = async (url: string) => {
+      console.log("[Capacitor] App opened via URL:", url);
+      if (url.startsWith("anitrack://anilist-callback")) {
+        try {
+          const fragPart = url.split("#")[1];
+          if (!fragPart) return;
+          const frag = new URLSearchParams(fragPart);
+          const token = frag.get("access_token");
+          const expiresIn = Number(frag.get("expires_in") ?? 31536000);
+          if (!token) return;
+
+          // Fetch user info from AniList GQL API
+          const headers = {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${token}`
+          };
+          const gqlQuery = JSON.stringify({ query: "{ Viewer { id name } }" });
+          const res = await fetch(ANILIST_GQL, {
+            method: "POST",
+            headers,
+            body: gqlQuery
+          });
+          if (!res.ok) throw new Error(`AniList Viewer query failed: ${res.status}`);
+          const json: any = await res.json();
+          if (json.errors?.length) throw new Error(json.errors[0].message);
+
+          const viewer = json.data?.Viewer;
+          if (viewer) {
+            _alState = {
+              connected: true,
+              username: viewer.name,
+              userId: viewer.id,
+              expiresAt: Date.now() + expiresIn * 1000,
+              hasClientId: true
+            };
+            await AniTrackSettings.set({ key: "al_state", value: JSON.stringify(_alState) });
+            await AniTrackSettings.set({ key: "al_token", value: token });
+            console.log("[Capacitor] AniList authentication complete. Viewer:", viewer.name);
+            emit("al:auth-complete", _alState);
+          }
+        } catch (err) {
+          console.error("[Capacitor] AniList callback handling error:", err);
+          emit("al:auth-error", String(err));
+        }
+      }
+    };
+
+    AppPlugin.addListener("appUrlOpen", (data: { url: string }) => {
+      handleOpenUrl(data.url);
+    });
+
+    // Check for cold-start deep link launch URLs
+    AppPlugin.getLaunchUrl()
+      .then((launchData: any) => {
+        if (launchData?.url) {
+          console.log("[Capacitor] App launched with URL:", launchData.url);
+          handleOpenUrl(launchData.url);
+        }
+      })
+      .catch((err: any) => {
+        console.error("[Capacitor] Failed to get launch URL:", err);
+      });
+  }
+
+  (window as any).api = {
+
+    // ── al (AniList) ──────────────────────────────────────────────────────────
+    al: {
+      async beginAuth() {
+        // AniList OAuth implicit flow — open in-app browser
+        const clientId = await AniTrackSettings.get({ key: "al_client_id" }).then(r => r.value).catch(() => null) ?? "21986";
+        const redirectUri = "anitrack://anilist-callback";
+        const url = `https://anilist.co/api/v2/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token`;
+        await Browser.open({ url });
+        return { ok: true };
+      },
+      async state() {
+        const raw = await AniTrackSettings.get({ key: "al_state" }).catch(() => ({ value: null }));
+        if (raw.value) {
+          try { _alState = JSON.parse(raw.value); } catch { /* ignore */ }
+        }
+        return _alState;
+      },
+      async disconnect() {
+        _alState = { connected: false, username: null };
+        await AniTrackSettings.set({ key: "al_state", value: JSON.stringify(_alState) }).catch(() => {});
+        return _alState;
+      },
+      async pull() {
+        // AniList list pull — import user list entries into local DB
+        const token = await AniTrackSettings.get({ key: "al_token" }).then(r => r.value).catch(() => null);
+        if (!token || !_alState.connected) return { imported: 0 };
+        // Simplified: just return 0 imported (full implementation would query AniList user list)
+        return { imported: 0 };
+      },
+      async setClientId(id: string) {
+        await AniTrackSettings.set({ key: "al_client_id", value: id }).catch(() => {});
+        return _alState;
+      },
+    },
+
+    // ── mal (MyAnimeList) ─────────────────────────────────────────────────────
+    mal: {
+      async beginAuth() {
+        try {
+          const clientId = await getMalClientId();
+          return AniTrackMal.beginAuth({ clientId }).catch(e => ({ ok: false, reason: String(e) }));
+        } catch (e) {
+          return { ok: false, reason: String(e) };
+        }
+      },
+      async state() {
+        const raw = await AniTrackMal.getState();
+        return JSON.parse(raw.value);
+      },
+      async disconnect() {
+        const raw = await AniTrackMal.disconnect();
+        return JSON.parse(raw.value);
+      },
+      async pull() { return AniTrackMal.pull(); },
+      async push() { return AniTrackMal.push(); },
+      async setClientId(id: string) { return AniTrackMal.setClientId({ clientId: id }); },
+      async clientInfo() { return AniTrackMal.clientInfo(); },
+    },
+
+    // ── anilist ───────────────────────────────────────────────────────────────
+    anilist: {
+      async premieredOn(month: number, day: number) {
+        const like = `%${String(month).padStart(2, "0")}${String(day).padStart(2, "0")}`;
+        const data = await alGql<any>(`
+          query($like: String) {
+            Page(perPage: 24) {
+              media(type: ANIME, isAdult: false, startDate_like: $like, sort: POPULARITY_DESC, popularity_greater: 2000) {
+                ${MEDIA_FIELDS} startDate { year }
+              }
+            }
+          }`, { like });
+        return (data.Page?.media ?? [])
+          .filter((m: any) => (m.startDate?.year ?? 0) > 1900)
+          .map((m: any) => ({ anime: mapMedia(m), year: m.startDate.year as number }));
+      },
+      async timeMachineYear(year: number, part: TimeMachinePart) {
+        const list = async (name: TimeMachineList, minPopularity = 0, priority: "high" | "low" = "high") =>
+          (await alGql<any>(timeMachineQuery(MEDIA_FIELDS), timeMachineVariables(year, name, minPopularity), priority)).Page?.media ?? [];
+        const candidate = (m: any, source: "sample" | "gems") =>
+          timeMachineCandidate({ anime: mapMedia(m), year, startMonth: m.startDate?.month, relations: m.relations?.edges, source });
+        if (part === "main") {
+          const pages = await Promise.all([list("popular"), list("popular-2"), list("films")]);
+          return pages.flat().map((m: any) => candidate(m, "sample"));
+        }
+        const top = Math.max(0, ...(await list("popular")).map((m: any) => m.popularity ?? 0));
+        return (await list("gems", gemPopularityFloor(top), "low")).map((m: any) => candidate(m, "gems"));
+      },
+      async search(q: string) {
+        const data = await alGql<any>(`
+          query($q: String) {
+            Page(perPage: 25) {
+              media(search: $q, type: ANIME, sort: SEARCH_MATCH, isAdult: false) { ${MEDIA_FIELDS} }
+            }
+          }`, { q });
+        return rankByRelevance(q, data.Page?.media ?? []).map((m: any) => mapMedia(m));
+      },
+      async advancedSearch(filters: any) {
+        const page = filters.page || 1;
+        const queryArgs = [];
+        const mediaArgs = [];
+        const variables: Record<string, any> = {};
+
+        if (filters.query?.trim()) {
+          queryArgs.push("$q: String");
+          mediaArgs.push("search: $q");
+          variables.q = filters.query.trim();
+        }
+        if (filters.genre && filters.genre.length > 0) {
+          queryArgs.push("$genre: [String]");
+          mediaArgs.push("genre_in: $genre");
+          variables.genre = filters.genre;
+        }
+        if (filters.tag && filters.tag.length > 0) {
+          queryArgs.push("$tag: [String]");
+          mediaArgs.push("tag_in: $tag");
+          mediaArgs.push("minimumTagRank: 50");
+          variables.tag = filters.tag;
+        }
+        if (filters.season) {
+          queryArgs.push("$season: MediaSeason");
+          mediaArgs.push("season: $season");
+          variables.season = filters.season;
+        }
+        if (filters.year) {
+          queryArgs.push("$year: Int");
+          mediaArgs.push("seasonYear: $year");
+          variables.year = filters.year;
+        }
+        if (filters.startYear) {
+          queryArgs.push("$started: String");
+          mediaArgs.push("startDate_like: $started", "isAdult: false");
+          variables.started = `${filters.startYear}%`;
+        }
+        if (filters.format) {
+          queryArgs.push("$format: MediaFormat");
+          mediaArgs.push("format: $format");
+          variables.format = filters.format;
+        }
+        if (filters.status) {
+          queryArgs.push("$status: MediaStatus");
+          mediaArgs.push("status: $status");
+          variables.status = filters.status;
+        }
+        if (filters.source) {
+          queryArgs.push("$source: MediaSource");
+          mediaArgs.push("source: $source");
+          variables.source = filters.source;
+        }
+        if (filters.episodesGreater != null) {
+          queryArgs.push("$epGt: Int");
+          mediaArgs.push("episodes_greater: $epGt");
+          variables.epGt = Math.max(0, filters.episodesGreater - 1);
+        }
+        if (filters.episodesLesser != null) {
+          queryArgs.push("$epLt: Int");
+          mediaArgs.push("episodes_lesser: $epLt");
+          variables.epLt = filters.episodesLesser + 1;
+        }
+
+        const isRelevanceSearch = !!filters.query?.trim() && !filters.sort;
+        queryArgs.push("$sort: [MediaSort]");
+        mediaArgs.push("sort: $sort");
+        variables.sort = filters.sort ? [filters.sort] : (filters.query?.trim() ? ["SEARCH_MATCH"] : ["TRENDING_DESC", "POPULARITY_DESC"]);
+
+        queryArgs.push("$page: Int");
+        const qArgsStr = queryArgs.length > 0 ? `(${queryArgs.join(", ")})` : "";
+        const mArgsStr = mediaArgs.length > 0 ? `(${mediaArgs.join(", ")}, type: ANIME)` : "(type: ANIME)";
+
+        const data = await alGql<any>(
+          `query${qArgsStr} {
+            Page(page: $page, perPage: 36) {
+              pageInfo { hasNextPage lastPage total }
+              media${mArgsStr} { ${MEDIA_FIELDS} }
+            }
+          }`,
+          { ...variables, page }
+        );
+
+        const rawMedia = data.Page?.media ?? [];
+        const media = isRelevanceSearch ? rankByRelevance(filters.query.trim(), rawMedia) : rawMedia;
+        return {
+          results: media.map((m: any) => mapMedia(m)),
+          hasNextPage: data.Page?.pageInfo?.hasNextPage ?? false,
+          lastPage: data.Page?.pageInfo?.lastPage ?? (data.Page?.pageInfo?.total ? Math.ceil(data.Page.pageInfo.total / 36) : undefined),
+        };
+      },
+      async trending() {
+        const data = await alGql<any>(`
+          query {
+            Page(perPage: 20) {
+              media(type: ANIME, sort: TRENDING_DESC, status_in: [RELEASING, NOT_YET_RELEASED]) { ${MEDIA_FIELDS} }
+            }
+          }`, {}, "low");
+        return (data.Page?.media ?? []).map((m: any) => mapMedia(m));
+      },
+      async get(id: number) {
+        if (id <= 0 || id > 1_000_000_000) return null;
+        try {
+          const data = await alGql<any>(`
+            query($id: Int) { Media(id: $id, type: ANIME) { ${MEDIA_FIELDS} } }`, { id });
+          return data.Media ? mapMedia(data.Media) : null;
+        } catch { return null; }
+      },
+      async airing(ids: number[]) {
+        const unique = Array.from(new Set((ids ?? []).filter((n) => Number.isInteger(n) && n > 0)));
+        if (unique.length === 0) return [];
+        const out: any[] = [];
+        for (let i = 0; i < unique.length; i += 50) {
+          const chunk = unique.slice(i, i + 50);
+          try {
+            const data = await alGql<any>(`
+              query($ids: [Int]) {
+                Page(perPage: 50) {
+                  media(id_in: $ids, type: ANIME) {
+                    id title { romaji english } coverImage { large }
+                    nextAiringEpisode { airingAt episode }
+                  }
+                }
+              }`, { ids: chunk }, "low");
+            for (const m of (data.Page?.media ?? [])) {
+              if (!m.nextAiringEpisode) continue;
+              out.push({
+                animeId: m.id,
+                title: m.title?.english || m.title?.romaji || "Untitled",
+                coverImage: m.coverImage?.large ?? null,
+                episode: m.nextAiringEpisode.episode,
+                airingAt: m.nextAiringEpisode.airingAt,
+              });
+            }
+          } catch { /* skip chunk on error */ }
+        }
+        return out;
+      },
+      async recent(page = 1) {
+        const safePage = Number.isInteger(page) && page > 0 ? page : 1;
+        const data = await alGql<any>(`
+          query($to: Int, $page: Int) {
+            Page(page: $page, perPage: 30) {
+              pageInfo { hasNextPage }
+              airingSchedules(airingAt_lesser: $to, sort: TIME_DESC) {
+                airingAt episode
+                media { ${MEDIA_FIELDS} isAdult }
+              }
+            }
+          }`, { to: Math.floor(Date.now() / 1000), page: safePage }, "low");
+        const seen = new Set<number>();
+        return {
+          data: (data.Page?.airingSchedules ?? []).flatMap((schedule: any) => {
+            const media = schedule.media;
+            if (!media || media.isAdult || seen.has(media.id)) return [];
+            seen.add(media.id);
+            return [{
+              anime: mapMedia(media),
+              episode: schedule.episode,
+              airingAt: schedule.airingAt,
+            }];
+          }),
+          page: safePage,
+          hasNextPage: data.Page?.pageInfo?.hasNextPage ?? false,
+        };
+      },
+      async airingBetween(from: number, to: number) {
+        const out: import("../../../../packages/shared/types").RecentEpisode[] = [];
+        for (let page = 1; page <= 3; page++) {
+          const data = await alGql<any>(`
+            query($from: Int, $to: Int, $page: Int) {
+              Page(page: $page, perPage: 50) {
+                pageInfo { hasNextPage }
+                airingSchedules(airingAt_greater: $from, airingAt_lesser: $to, sort: TIME) {
+                  airingAt episode
+                  media { ${MEDIA_FIELDS} isAdult }
+                }
+              }
+            }`, { from, to, page }, "high");
+          for (const schedule of data.Page?.airingSchedules ?? []) {
+            if (!schedule.media || schedule.media.isAdult) continue;
+            out.push({ anime: mapMedia(schedule.media), episode: schedule.episode, airingAt: schedule.airingAt });
+          }
+          if (!data.Page?.pageInfo?.hasNextPage) break;
+        }
+        return out;
+      },
+      async recommendations(seedIds: number[], excludedIds: number[]) {
+        const seeds = Array.from(new Set((seedIds ?? []).filter((id) => Number.isInteger(id) && id > 0))).slice(0, 8);
+        if (seeds.length === 0) return [];
+        const excluded = new Set((excludedIds ?? []).filter((id) => Number.isInteger(id) && id > 0));
+        seeds.forEach((id) => excluded.add(id));
+        const data = await alGql<any>(`
+          query($ids: [Int]) {
+            Page(perPage: 8) {
+              media(id_in: $ids, type: ANIME) {
+                id title { romaji english }
+                recommendations(sort: RATING_DESC, perPage: 12) {
+                  nodes { rating mediaRecommendation { ${MEDIA_FIELDS} isAdult } }
+                }
+              }
+            }
+          }`, { ids: seeds }, "low");
+        const ranked = new Map<number, any>();
+        for (const seed of (data.Page?.media ?? [])) {
+          const seedTitle = seed.title?.english || seed.title?.romaji || "a show in your list";
+          for (const node of (seed.recommendations?.nodes ?? [])) {
+            const media = node.mediaRecommendation;
+            if (!media || media.isAdult || excluded.has(media.id) || node.rating <= 0) continue;
+            const edgeScore = Math.log2(node.rating + 1);
+            const existing = ranked.get(media.id);
+            if (existing) {
+              existing.score += edgeScore;
+              existing.sources.add(seed.id);
+              if (node.rating > existing.bestRating) {
+                existing.bestRating = node.rating;
+                existing.reason = `Because you liked ${seedTitle}`;
+              }
+            } else {
+              ranked.set(media.id, {
+                anime: mapMedia(media),
+                score: edgeScore,
+                bestRating: node.rating,
+                reason: `Because you liked ${seedTitle}`,
+                sources: new Set([seed.id]),
+              });
+            }
+          }
+        }
+        return Array.from(ranked.values())
+          .map((item) => {
+            const graphReason = item.sources.size > 1
+              ? `${item.reason} and ${item.sources.size - 1} more from your list`
+              : item.reason;
+            const classicLabel = classicEraLabel(item.anime.year);
+            return {
+              anime: item.anime,
+              reason: classicLabel ? `${classicLabel} · ${graphReason}` : graphReason,
+              score: item.score + (item.sources.size - 1) * 2 + classicEraBoost(item.anime.year),
+            };
+          })
+          .sort((a, b) => b.score - a.score || (b.anime.averageScore ?? 0) - (a.anime.averageScore ?? 0))
+          .slice(0, 20);
+      },
+      async relations(id: number) {
+        if (id <= 0) return [];
+        try {
+          const data = await alGql<any>(`
+            query($id: Int) {
+              Media(id: $id) {
+                relations { edges { relationType(version: 2) node { ${MEDIA_FIELDS} } } }
+              }
+            }`, { id }, "low");
+          return (data.Media?.relations?.edges ?? []).map((edge: any) => ({
+            relationType: edge.relationType,
+            anime: mapMedia(edge.node),
+          }));
+        } catch { return []; }
+      },
+      async story(id: number) {
+        if (id <= 0) return planStory(null, []);
+        try {
+          const data = await alGql<any>(`
+            query($id: Int) {
+              Media(id: $id, type: ANIME) {
+                source
+                relations { edges { relationType(version: 2) node {
+                  id type format status chapters volumes popularity isAdult countryOfOrigin
+                  title { romaji english native } coverImage { extraLarge large } startDate { year }
+                } } }
+              }
+            }`, { id }, "low");
+          const links = (data.Media?.relations?.edges ?? [])
+            .filter((edge: any) => edge.node?.type === "MANGA" && !edge.node.isAdult)
+            .map((edge: any) => ({
+              relationType: edge.relationType,
+              book: {
+                id: edge.node.id,
+                title: edge.node.title?.english || edge.node.title?.romaji || edge.node.title?.native || "Untitled",
+                coverImage: edge.node.coverImage?.extraLarge || edge.node.coverImage?.large || null,
+                format: edge.node.format ?? null,
+                status: edge.node.status ?? null,
+                chapters: edge.node.chapters ?? null,
+                volumes: edge.node.volumes ?? null,
+                year: edge.node.startDate?.year ?? null,
+                popularity: edge.node.popularity ?? null,
+                country: edge.node.countryOfOrigin ?? null,
+              },
+            }));
+          return planStory(data.Media?.source ?? null, links);
+        } catch { return planStory(null, []); }
+      },
+    },
+
+    // ── songs (AnisongDB). The legacy shell ships no chart file: charts are empty. ──
+    songs: {
+      async charts() {
+        return parseCharts({ generatedAt: new Date(0).toISOString(), decades: {}, allTime: {} });
+      },
+      async season(season, year) {
+        if (!isSeasonQuery(season, year)) return [];
+        const res = await fetch(`${ANISONGS.API}/season_request`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ season: `${season} ${year}` }) });
+        return res.ok ? parseAniSongs(await res.json()) : [];
+      },
+      async show(malId) {
+        if (!Number.isSafeInteger(malId) || malId <= 0) return [];
+        const res = await fetch(`${ANISONGS.API}/mal_ids_request`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mal_ids: [malId] }) });
+        return res.ok ? parseAniSongs(await res.json()) : [];
+      },
+      async search(query, by) {
+        if (query.trim().length < 2) return [];
+        const res = await fetch(`${ANISONGS.API}/search_request`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(searchBody(query, by)) });
+        return res.ok ? parseAniSongs(await res.json()) : [];
+      },
+    },
+
+    // ── theme songs (AnimeThemes.moe) ─────────────────────────────────────────
+    themes: {
+      async forAnime(id: number) {
+        if (id <= 0) return [];
+        try {
+          const data = await alGql<any>(`
+            query($id: Int) { Media(id: $id, type: ANIME) { ${MEDIA_FIELDS} } }`, { id }, "low");
+          const meta = data.Media ? mapMedia(data.Media) : null;
+          const show = { id, title: meta?.title ?? "Unknown", cover: meta?.coverImage ?? null };
+          const res = await fetch(themesUrl([id]), { headers: { Accept: "application/json" } });
+          if (!res.ok) return [];
+          return parseThemesResponse(await res.json(), [show]).get(id) ?? [];
+        } catch { return []; }
+      },
+      async radio() {
+        try {
+          const raw = await AniTrackDb.continueWatching();
+          const items = JSON.parse(raw.value) as { anime: { id: number; title: string; coverImage: string | null } }[];
+          const shows = items.filter((item) => item.anime?.id > 0).slice(0, 25)
+            .map((item) => ({ id: item.anime.id, title: item.anime.title, cover: item.anime.coverImage ?? null }));
+          if (!shows.length) return [];
+          const res = await fetch(themesUrl(shows.map((show) => show.id)), { headers: { Accept: "application/json" } });
+          if (!res.ok) return [];
+          return mixRadio([...parseThemesResponse(await res.json(), shows).values()].flat());
+        } catch { return []; }
+      },
+    },
+
+    // ── list ──────────────────────────────────────────────────────────────────
+    list: {
+      async getAll() {
+        const raw = await AniTrackDb.getAll();
+        return JSON.parse(raw.value);
+      },
+      async set(entry: any) {
+        const raw = await AniTrackDb.listSet({ entry: JSON.stringify(entry) });
+        return JSON.parse(raw.value);
+      },
+      async continueWatching() {
+        const raw = await AniTrackDb.continueWatching();
+        return JSON.parse(raw.value);
+      },
+      async continueWatchingPaged(page: number, pageSize: number) {
+        const raw = await AniTrackDb.continueWatchingPaged({ page, pageSize });
+        return JSON.parse(raw.value);
+      },
+      async dismissContinueWatching(animeId: number) {
+        return AniTrackDb.dismissContinueWatching({ animeId });
+      },
+    },
+
+    // ── progress ──────────────────────────────────────────────────────────────
+    progress: {
+      async get(id: number, ep: number) {
+        const raw = await AniTrackDb.progressGet({ animeId: id, episode: ep });
+        return raw.value ? JSON.parse(raw.value) : null;
+      },
+      async set(p: any) {
+        return AniTrackDb.progressSet({ progress: JSON.stringify(p) });
+      },
+      async getForAnime(id: number) {
+        const raw = await AniTrackDb.progressGetForAnime({ animeId: id });
+        return JSON.parse(raw.value);
+      },
+    },
+
+    // ── pahe ──────────────────────────────────────────────────────────────────
+    pahe: {
+      async latest(page = 1) {
+        const raw = await AniTrackPahe.latest({ page });
+        return JSON.parse(raw.value);
+      },
+      async search(q: string) {
+        const pahePromise = AniTrackPahe.search({ query: q })
+          .then(r => {
+            const list = JSON.parse(r.value) as any[];
+            return list.map(item => ({
+              id: item.session ?? item.id,
+              paheId: item.id,
+              session: item.session ?? item.id,
+              providerId: "animepahe",
+              title: item.title,
+              poster: item.poster,
+              episodes: item.episodes,
+              type: item.type,
+              status: item.status,
+              season: item.season,
+              year: item.year,
+              score: item.score
+            }));
+          })
+          .catch(() => []);
+
+        const anikotoPromise = anikotoProvider.search(q).catch(() => []);
+        const [paheRes, anikotoRes] = await Promise.all([pahePromise, anikotoPromise]);
+
+        const flat = [...paheRes, ...anikotoRes];
+        return flat.sort((a, b) => {
+          const aId = a.providerId ?? "animepahe";
+          const bId = b.providerId ?? "animepahe";
+          if (aId === "animepahe" && bId !== "animepahe") return -1;
+          if (aId !== "animepahe" && bId === "animepahe") return 1;
+          return 0;
+        });
+      },
+      async episodes(providerId: string, animeId: string, page: number) {
+        if (providerId === "anikoto") {
+          return anikotoProvider.getEpisodes(String(animeId), page);
+        }
+        // Correct native parameter mismatch: Map animeId -> session (stringified to prevent type-coercion bypass)
+        const raw = await AniTrackPahe.episodes({ providerId, session: String(animeId), page });
+        return JSON.parse(raw.value);
+      },
+      async links(providerId: string, episodeId: string, animeId: string) {
+        if (providerId === "anikoto") {
+          return anikotoProvider.getStreamLinks(String(episodeId), String(animeId));
+        }
+        // Correct native parameter mismatch: Map episodeId -> epSession and animeId -> animeSession
+        const raw = await AniTrackPahe.links({ providerId, epSession: String(episodeId), animeSession: String(animeId) });
+        return JSON.parse(raw.value);
+      },
+      async resolve(providerId: string, linkId: string) {
+        if (providerId === "anikoto") {
+          return anikotoProvider.resolveStream(String(linkId));
+        }
+        // Correct native parameter mismatch: Map linkId -> kwikUrl
+        return AniTrackPahe.resolve({ providerId, kwikUrl: String(linkId) });
+      },
+      async prefetch(kwikUrl: string) {
+        return AniTrackPahe.prefetch({ kwikUrl: String(kwikUrl) });
+      },
+      async getIds(paheId: number | string, session: string) {
+        // Anikoto candidates pass their slug (non-numeric string). Their MAL id
+        // lives in the episode list — fetch it so title-mislabeled entries
+        // (e.g. anikoto's "City Hunter" actually being City Hunter '91) can be
+        // caught by id verification, same as on desktop.
+        if (typeof paheId === "string" && !/^\d+$/.test(paheId)) {
+          if (!anikotoMalIds.has(paheId)) {
+            try { await anikotoProvider.getEpisodes(paheId, 1); } catch { /* unreachable */ }
+          }
+          const mal = anikotoMalIds.get(paheId);
+          return mal != null ? { malId: mal } : {};
+        }
+        const raw = await AniTrackPahe.getIds({ paheId: Number(paheId), session: String(session) });
+        return JSON.parse(raw.value);
+      },
+      async findById(anilistId?: number, malId?: number) {
+        const raw = await AniTrackPahe.findById({ anilistId, malId });
+        return raw.value ? JSON.parse(raw.value) : null;
+      },
+      async getUrl() {
+        const raw = await AniTrackPahe.getUrl();
+        return raw.url;
+      },
+      async setUrl(url: string) {
+        return AniTrackPahe.setUrl({ url });
+      },
+      async fetchUrl(url: string, binary = false, headers?: Record<string, string>) {
+        return AniTrackPahe.fetchUrl({ url, binary, headers });
+      },
+      async anikotoTop() {
+        return anikotoProvider.getTop();
+      },
+    },
+
+    // ── updater (checks GitHub for APK updates) ───────────────────────────────
+    updater: {
+      async check() {
+        try {
+          const res = await fetch("https://api.github.com/repos/kil-04/AniTrack/releases/latest");
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data: any = await res.json();
+          const latestVersion = data.tag_name.replace(/^v/, '');
+
+          // @ts-ignore
+          if (latestVersion.localeCompare(__APP_VERSION__, undefined, { numeric: true, sensitivity: 'base' }) === 1) {
+             emit("update:available", { version: latestVersion });
+             emit("update:downloaded", { version: latestVersion });
+          } else {
+             emit("update:not-available");
+          }
+          return { ok: true, version: latestVersion };
+        } catch (e) {
+          emit("update:error", String(e));
+          return { ok: false, version: null, reason: String(e) };
+        }
+      },
+      async install() {
+        await Browser.open({ url: "https://github.com/kil-04/AniTrack/releases/latest" });
+      },
+    },
+
+    // ── on (event listener) ───────────────────────────────────────────────────
+    on: onEvent,
+  } satisfies Window["api"];
+}
+
+// Export ScreenOrientation for use in StreamPlayer
+export { ScreenOrientation };

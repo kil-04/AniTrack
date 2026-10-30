@@ -1,6 +1,6 @@
 import {spawn} from 'node:child_process';
 import {randomBytes} from 'node:crypto';
-import {mkdir,readFile,writeFile} from 'node:fs/promises';
+import {mkdir,readFile,writeFile,access} from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -49,6 +49,16 @@ try{
   checks.operatorCookieSession=(await request('/operator',{headers:{Cookie:operatorCookie}})).status===200;
   checks.operatorLogout=(await request('/operator/logout',{method:'POST',headers:{...operatorAuth,Cookie:operatorCookie},body:'{}'})).status===200&&(await request('/operator',{headers:{Cookie:operatorCookie}})).status===401;
   checks.healthDoesNotExposeCredentials=!JSON.stringify(await(await request('/health')).json()).includes(serviceKey);
+  const hasWebsite=await access(path.join(appDir,'dist-web/server.cjs')).then(()=>true,()=>false);
+  if(hasWebsite){
+    const website=await request('/'),html=await website.text();
+    checks.websitePublic=website.status===200&&html.includes('id="root"')&&html.includes('/assets/')&&!html.includes('id="sign-in"');
+    checks.websiteServerPrivate=(await request('/server.cjs')).status===404&&(await request('/package.json')).status===404;
+    const publicRpc=await request('/api/rpc',{method:'POST',headers:{Origin:'https://operator.example.test','Content-Type':'application/json'},body:JSON.stringify({operation:'source.status',args:[]})});
+    const publicStatus=await publicRpc.json();
+    checks.websiteSourceStatus=publicRpc.status===200&&publicStatus.value?.sources?.includes('anichan')&&!JSON.stringify(publicStatus).includes(serviceKey);
+    checks.websiteRejectsVisitorOrigin=(await request('/api/rpc',{method:'POST',headers:{Origin:'https://visitor.example.test','Content-Type':'application/json'},body:JSON.stringify({operation:'source.status',args:[]})})).status===403;
+  }
   if(Object.values(checks).some(value=>!value))throw Error('A startup/protocol check failed. No source was enabled.');
   const report={date:new Date().toISOString(),version:packageInfo.version,scope:'Real isolated Electron startup and HTTP boundary; no source website interaction',bind:'127.0.0.1',checks,limits:['Container startup and production hosting remain unverified.','No live source, verification challenge, playback or full download was exercised by this check.']};
   await writeFile(path.join(root,'artifacts/web-qa/source-service-runtime.json'),JSON.stringify(report,null,2));

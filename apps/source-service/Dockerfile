@@ -9,11 +9,15 @@ COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY apps/desktop/main ./apps/desktop/main
 COPY apps/source-service ./apps/source-service
+COPY apps/web ./apps/web
+COPY scripts/build-web.mjs ./scripts/build-web.mjs
 COPY packages ./packages
 COPY automation/remote-config.json automation/remote-config.sig ./automation/
 COPY apps/android/app/src/main/assets/anichan_page.js ./apps/android/app/src/main/assets/anichan_page.js
 COPY apps/android/app/src/main/assets/toonkotsu_page.js ./apps/android/app/src/main/assets/toonkotsu_page.js
-RUN node node_modules/typescript/bin/tsc -p apps/source-service/tsconfig.json \
+RUN node scripts/build-web.mjs \
+    && test -f dist-web/public/index.html \
+    && node node_modules/typescript/bin/tsc -p apps/source-service/tsconfig.json \
     && cp apps/source-service/service.package.json package.json \
     && chown root:root node_modules/electron/dist/chrome-sandbox \
     && chmod 4755 node_modules/electron/dist/chrome-sandbox

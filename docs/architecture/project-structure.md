@@ -8,6 +8,8 @@ application for reference and migration support.
 | `apps/desktop/renderer/` | Current | Electron renderer (React + Vite) |
 | `apps/desktop/main/` | Current | Electron main process, IPC and desktop services |
 | `apps/android/` | Current | Native Android application (Kotlin + Compose) |
+| `apps/web/` | Current | Browser application and public API, served by the standalone Render service |
+| `apps/source-service/` | Current | Isolated hosted source connectors and protected operator controls |
 | `packages/shared/` | Current | Desktop contracts and signed automation trust data |
 | `legacy/capacitor/android/` | Legacy | Previous Capacitor-generated Android application |
 | `legacy/capacitor/plugins/` | Legacy source | Capacitor plugin source/templates |

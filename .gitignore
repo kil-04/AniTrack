@@ -9,6 +9,7 @@ node_modules/
 /dist/
 /dist-electron/
 /dist-source-service/
+/dist-web/
 /release/
 /coverage/
 /.nyc_output/

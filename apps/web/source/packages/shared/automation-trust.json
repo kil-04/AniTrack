@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "algorithm": "ECDSA_P256_SHA256",
+  "publicKeySpkiBase64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEG9Oe1uKvBsPsIJVJwtMg8LsGytKB6cgk0Dgo0LeSMaMfd2IPaa05RncIoMZi7npLE1f6n0SQUseR42GlCi2K5g==",
+  "androidReleaseCertSha256": "df2e4f6cc9d9385659d5feeeb3c3a48159bbcae773a5ce8cf638872a6334ec6b",
+  "configUrl": "https://raw.githubusercontent.com/kil-04/AniTrack/main/automation/remote-config.json",
+  "configSignatureUrl": "https://raw.githubusercontent.com/kil-04/AniTrack/main/automation/remote-config.sig",
+  "androidUpdateManifestUrl": "https://github.com/kil-04/AniTrack/releases/latest/download/anitrack-next-update.json",
+  "androidUpdateSignatureUrl": "https://github.com/kil-04/AniTrack/releases/latest/download/anitrack-next-update.sig"
+}
