@@ -124,6 +124,11 @@ human clicks/typing; it cannot navigate to an arbitrary URL or evaluate code.
 Validated clicks, keys and typing focus the selected visible source before
 delivery. Hidden connections reject these inputs without being shown or focused;
 Finish and Close remain available for retained background connections.
+Mouse pairs use two fixed private browser input commands so ordinary frames in
+separate renderer processes receive the human's click. There is no general
+debugger command, script or URL endpoint. Foreign debugger attachments are not
+used or detached. One mouse pair blocks other focusing inputs until its native
+commands and any safe paired release settle, including after cancellation.
 No challenge solver, stealth driver, automatic retry or cookie import/export is
 provided. A source may still reject the hosting network; do not enable its
 website download capability until its full live checks pass.
@@ -168,7 +173,7 @@ Run these checks from the repository root:
 
 ```text
 node node_modules/typescript/bin/tsc -p apps/source-service/tsconfig.json --noEmit
-node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/source-service.test.mjs tests/source-service-client.test.mjs tests/source-service-config.test.mjs tests/source-service-mangaball.test.mjs tests/source-service-mangaball-adapter.test.mjs tests/source-service-mangaball-catalogue.test.mjs tests/source-service-native-media.test.mjs tests/source-service-media-types.test.mjs tests/source-service-operator-login.test.mjs tests/source-service-operator-resources.test.mjs tests/source-service-pahe-connect.test.mjs
+node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/source-service.test.mjs tests/source-service-client.test.mjs tests/source-service-config.test.mjs tests/source-service-mangaball.test.mjs tests/source-service-mangaball-adapter.test.mjs tests/source-service-mangaball-catalogue.test.mjs tests/source-service-native-media.test.mjs tests/source-service-media-types.test.mjs tests/source-service-operator-login.test.mjs tests/source-service-operator-input.test.mjs tests/source-service-operator-resources.test.mjs tests/source-service-pahe-connect.test.mjs
 ```
 
 The portable `worker-client.ts` is copied unchanged to the website's

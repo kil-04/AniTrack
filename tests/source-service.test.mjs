@@ -99,7 +99,7 @@ const operatorRequest=(path,body,password=operatorKey,origin=operatorOrigin)=>ne
 function sourceWindow(url){
   const state={url,visible:false,destroyed:false,shows:0,captures:0,inputs:[]};
   return {state,isDestroyed:()=>state.destroyed,isVisible:()=>state.visible,show:()=>{state.shows++;state.visible=true;},focus(){},close:()=>{state.visible=false;},destroy:()=>{state.destroyed=true;},getContentSize:()=>[800,600],
-    webContents:{focus(){},isDestroyed:()=>state.destroyed,getURL:()=>state.url,capturePage:async()=>{state.captures++;return {getSize:()=>({width:800,height:600}),isEmpty:()=>false,toPNG:()=>Buffer.from('png')};},sendInputEvent:event=>state.inputs.push(event),insertText:async text=>state.inputs.push({text})}};
+    webContents:{focus(){},on(){},removeListener(){},debugger:{on(){},removeListener(){},attached:false,isAttached(){return this.attached;},attach(){this.attached=true;},detach(){this.attached=false;},async sendCommand(method,params){state.inputs.push({method,params});}},isDestroyed:()=>state.destroyed,getURL:()=>state.url,capturePage:async()=>{state.captures++;return {getSize:()=>({width:800,height:600}),isEmpty:()=>false,toPNG:()=>Buffer.from('png')};},sendInputEvent:event=>state.inputs.push(event),insertText:async text=>state.inputs.push({text})}};
 }
 test('Invalid login flooding cannot lock out a correctly authenticated source operator',async()=>{
   const operator=new SourceOperator(operatorKey,operatorOrigin,()=>new Set());

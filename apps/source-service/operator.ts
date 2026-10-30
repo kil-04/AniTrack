@@ -1,5 +1,6 @@
 import {BrowserWindow} from 'electron';
 import {authenticates, boundedJson, errorResponse, opaqueId, reject, ServiceError} from './protocol';
+import {OperatorClickRouter} from './operator-input';
 
 const CONNECTION_SOURCES = {animepahe: 'AnimePahe', anikoto: 'Anikoto', anichan: 'AniChan', mangadot: 'MangaDot', 'mangaball-catalogue': 'MangaBall catalogue', mangaball: 'MangaBall images', toonkotsu: 'Toonkotsu'} as const;
 type ConnectionSource = keyof typeof CONNECTION_SOURCES;
@@ -24,7 +25,7 @@ function clearPreview(){previewGeneration++;previewId='';image.removeAttribute('
 async function api(path,body){
   const response=await fetch('/operator/api/'+path,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});
   if(response.status===401){location.replace('/operator');throw Error('Sign in again to continue.');}
-  if(!response.ok){const result=await response.json().catch(()=>({}));const messages={SOURCE_WINDOW_HIDDEN:'This connection is in the background. Choose its source and Connect to open a check.',OPERATOR_CAPTURE_BUSY:'Another preview is loading. Try Refresh preview in a moment.',OPERATOR_CONNECTION_BUSY:'Finish or close the current source check before connecting another source.',OPERATOR_CAPTURE_TIMEOUT:'The preview took too long. Close the source or try Refresh preview later.',OPERATOR_CAPTURE_TOO_LARGE:'This source preview is too large to display.'};throw Error(messages[result.error]||'The source window is unavailable. Refresh and retry.');}
+  if(!response.ok){const result=await response.json().catch(()=>({}));const messages={OPERATOR_INPUT_BUSY:'Another source action is still finishing. Wait before trying again.',OPERATOR_INPUT_TIMEOUT:'The source action took too long. Close the source if it stays busy.',OPERATOR_INPUT_UNAVAILABLE:'This source cannot accept input right now. Close it and reconnect.',OPERATOR_INPUT_FAILED:'The click could not be sent. Refresh the preview and retry manually.',SOURCE_WINDOW_HIDDEN:'This connection is in the background. Choose its source and Connect to open a check.',OPERATOR_CAPTURE_BUSY:'Another preview is loading. Try Refresh preview in a moment.',OPERATOR_CONNECTION_BUSY:'Finish or close the current source check before connecting another source.',OPERATOR_CAPTURE_TIMEOUT:'The preview took too long. Close the source or try Refresh preview later.',OPERATOR_CAPTURE_TOO_LARGE:'This source preview is too large to display.'};throw Error(messages[result.error]||'The source window is unavailable. Refresh and retry.');}
   return response;
 }
 async function action(body){
@@ -149,6 +150,7 @@ export class SourceOperator {
   private connectionStates = new Map<ConnectionSource, ConnectionState>();
   private connectionGenerations = new Map<ConnectionSource, number>();
   private captureBusy = false;
+  private inputRouter=new OperatorClickRouter();
   private sessions=new Map<string,number>();
   private loginReads=0;
   private readonly now:()=>number;
@@ -335,6 +337,7 @@ export class SourceOperator {
         const focusInput=()=>{
           // Only an explicit, validated human action may focus its visible
           // source. Hidden retained sessions must stay hidden and inactive.
+          if(this.inputRouter.isBusy())return reject(429,'OPERATOR_INPUT_BUSY');
           if(!win.isVisible())return reject(409,'SOURCE_WINDOW_HIDDEN');
           win.focus();contents.focus();
         };
@@ -352,9 +355,7 @@ export class SourceOperator {
         else if (input.type === 'click') {
           const [width,height] = win.getContentSize();
           if (![input.x,input.y].every(Number.isInteger) || input.x < 0 || input.y < 0 || input.x >= width || input.y >= height) return reject(400,'INVALID_OPERATOR_INPUT');
-          focusInput();
-          contents.sendInputEvent({type:'mouseDown',x:input.x,y:input.y,button:'left',clickCount:1});
-          contents.sendInputEvent({type:'mouseUp',x:input.x,y:input.y,button:'left',clickCount:1});
+          await this.inputRouter.click(win,input.x,input.y,request.signal,()=>this.permitted(win));
         } else if (input.type === 'text' && typeof input.text === 'string' && input.text.length <= 200 && !/[\x00-\x1f\x7f]/.test(input.text)) {focusInput();await contents.insertText(input.text);}
         else if (input.type === 'key' && ['Tab','Enter','Backspace','Escape','Up','Down','PageUp','PageDown'].includes(input.key)) {
           focusInput();

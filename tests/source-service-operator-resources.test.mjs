@@ -31,8 +31,9 @@ const deferred=()=>{let resolve,reject;const promise=new Promise((done,fail)=>{r
 const image=(width=900,height=700,bytes=Buffer.from([137,80,78,71]))=>({getSize:()=>({width,height}),isEmpty:()=>!width||!height,toPNG:()=>bytes});
 
 function windowFixture(options={}){
-  const events=new EventEmitter();
-  const state={url:sourceOrigin+'/',visible:true,destroyed:false,width:900,height:700,captures:[],shows:0,focuses:0,contentFocuses:0,events:[],closes:0,destroys:0,...options};
+  const events=new EventEmitter(),contentEvents=new EventEmitter(),debuggerEvents=new EventEmitter();
+  const state={url:sourceOrigin+'/',visible:true,destroyed:false,width:900,height:700,captures:[],shows:0,focuses:0,contentFocuses:0,events:[],closes:0,destroys:0,debuggerAttached:false,commands:[],...options};
+  const inspector=Object.assign(debuggerEvents,{isAttached:()=>state.debuggerAttached,attach:()=>{state.debuggerAttached=true;},detach:()=>{state.debuggerAttached=false;debuggerEvents.emit('detach',{},'fixture');},sendCommand:async(method,params)=>{state.commands.push({method,params});state.events.push(params.type==='mousePressed'?'mouseDown':'mouseUp');if(state.command)return state.command(method,params);}});
   const win=Object.assign(events,{
     isDestroyed:()=>state.destroyed,
     isVisible:()=>state.visible,
@@ -41,13 +42,14 @@ function windowFixture(options={}){
     focus:()=>{state.focuses++;state.events.push('window-focus');},
     close:()=>{state.closes++;},
     destroy:()=>{state.destroys++;state.destroyed=true;events.emit('closed');},
-    webContents:{
+    webContents:Object.assign(contentEvents,{
+      debugger:inspector,
       isDestroyed:()=>state.destroyed,
       getURL:()=>state.url,
       capturePage:async(...args)=>{state.captures.push(args);return state.capture?state.capture(...args):image(state.width,state.height);},
       focus:()=>{state.contentFocuses++;state.events.push('contents-focus');},
       sendInputEvent:event=>{state.events.push(event.type);},insertText:async text=>{state.events.push('text:'+text);},
-    },
+    }),
   });
   return {win,state};
 }
@@ -142,6 +144,17 @@ test('Invalid human input is rejected before a source is focused',async()=>{
     const response=await f.operator.handle(request('/operator/api/input',{id,...body}));assert.equal(response.status,400);
   }
   assert.equal(source.state.focuses,0);assert.equal(source.state.contentFocuses,0);assert.equal(source.state.shows,0);assert.deepEqual(source.state.events,[]);
+});
+
+test('A pending mouse pair blocks key and text actions from taking another source window focus',async()=>{
+  const first=windowFixture(),second=windowFixture(),f=fixture({windows:[first,second]}),press=deferred();
+  const rows=await(await f.operator.handle(request('/operator/api/windows'))).json();
+  first.state.command=(_method,params)=>params.type==='mousePressed'?press.promise:undefined;
+  const click=f.operator.handle(request('/operator/api/input',{id:rows[0].id,type:'click',x:5,y:5}));await flush();
+  for(const body of [{type:'key',key:'Tab'},{type:'text',text:'Fixture'}]){
+    const response=await f.operator.handle(request('/operator/api/input',{id:rows[1].id,...body}));assert.equal(response.status,429);assert.deepEqual(await response.json(),{error:'OPERATOR_INPUT_BUSY'});
+  }
+  assert.equal(second.state.focuses,0);assert.equal(second.state.contentFocuses,0);assert.deepEqual(second.state.events,[]);press.resolve();assert.equal((await click).status,200);
 });
 
 test('A hidden source cannot be shown, focused, or captured by a preview request',async()=>{
