@@ -4,7 +4,7 @@ import {AnikotoProvider} from '../desktop/main/services/providers/anikoto';
 import {ShonenProvider} from '../desktop/main/services/providers/shonen';
 import {AniChanProvider} from '../desktop/main/services/providers/anichan';
 import {getResolvedStreamAuthorization} from '../desktop/main/services/providers/stream-authorization';
-import {sourceById, fetchPageImage, connectMangaSource} from '../desktop/main/services/manga/sources';
+import {sourceById, fetchPageImage, connectMangaSource, configureMangaBallCatalogueTransport} from '../desktop/main/services/manga/sources';
 import {mangaById} from '../desktop/main/services/manga/anilist-manga';
 import {AssetVault, type AssetFetch} from './assets';
 import {opaqueId, reject, type SourceRequest} from './protocol';
@@ -21,6 +21,7 @@ import {VerifiedPageSession} from '../desktop/main/services/providers/verified-p
 import {BrowserWindow} from 'electron';
 import type {SourceConnections} from './operator';
 import {MangaBallImages} from './mangaball-images';
+import {MangaBallCatalogue} from './mangaball-catalogue';
 
 /** Explicit published composition; never imports the development registry. */
 export class NativeSourceAdapter implements SourceAdapter {
@@ -35,10 +36,13 @@ export class NativeSourceAdapter implements SourceAdapter {
   private links = new Map<string, {source: string; link: string; expires: number}>();
   private serial = new Map<string, Promise<unknown>>();
   private mangaBallImages = new MangaBallImages();
+  private mangaBallCatalogue = new MangaBallCatalogue();
   private nativeMedia = new NativeMediaTransport();
+  constructor(){configureMangaBallCatalogueTransport(this.mangaBallCatalogue.fetch);}
   approvedOrigins(): Set<string> {
     const origins = new Set([ANICHAN.ORIGIN, MANGADOT.ORIGIN, TOONKOTSU.ORIGIN, new URL(anikotoBaseUrl()).origin]);
     for(const origin of this.mangaBallImages.approvedOrigins())origins.add(origin);
+    for(const origin of this.mangaBallCatalogue.approvedOrigins())origins.add(origin);
     for (const descriptor of this.registry.descriptors()) {
       const base = this.registry.get(descriptor.id).getBaseUrl?.();
       if (base) origins.add(new URL(base).origin);
@@ -49,6 +53,7 @@ export class NativeSourceAdapter implements SourceAdapter {
   operatorConnections(): SourceConnections {
     return {
       mangaball: () => this.mangaBallImages.connect(),
+      'mangaball-catalogue': () => this.mangaBallCatalogue.connect(),
       mangadot: () => connectMangaSource('mangadot', null),
       toonkotsu: () => connectMangaSource('toonkotsu', null),
       animepahe: async () => {
@@ -148,5 +153,5 @@ export class NativeSourceAdapter implements SourceAdapter {
     return reject(400, 'SOURCE_OPERATION_NOT_ALLOWED');
   }
   asset(id: string, request: Request) {return this.vault.respond(id, request);}
-  close(){this.mangaBallImages.close();void this.nativeMedia.close().catch(()=>{});}
+  close(){this.mangaBallImages.close();this.mangaBallCatalogue.close();void this.nativeMedia.close().catch(()=>{});}
 }

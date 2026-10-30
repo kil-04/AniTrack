@@ -284,7 +284,18 @@ const latestOf = (detail: SourceDetail | null): SourceLatest | null =>
 
 // ── MangaBall: public JSON API ───────────────────────────────────────────────
 
-const ballHttp = new SourceHttp("MangaBall", new Set(["api.mangaball.com"]), 250, () => net.fetch, honestAgent());
+export type MangaBallCatalogueFetcher = (url: string, init: RequestInit) => Promise<Response>;
+let ballCatalogueFetcher: MangaBallCatalogueFetcher | undefined;
+let ballCatalogueStarted = false;
+/** Trusted process composition only; the desktop keeps its normal public HTTP transport. */
+export function configureMangaBallCatalogueTransport(fetcher: MangaBallCatalogueFetcher): void {
+  if (ballCatalogueStarted || ballCatalogueFetcher || typeof fetcher !== "function") throw new Error("MangaBall catalogue transport must be configured once before its first request.");
+  ballCatalogueFetcher = fetcher;
+}
+const ballHttp = new SourceHttp("MangaBall", new Set(["api.mangaball.com"]), 250, () => {
+  ballCatalogueStarted = true;
+  return ballCatalogueFetcher ?? net.fetch;
+}, honestAgent());
 const ballChapters = new Map<string, { at: number; list: MangaChapter[] }>();
 const ballDetail = async (id: string) => mangaBallDetail(parseJson(await ballHttp.get(`${MANGABALL.API}/title/detail/${id}`, 2 * 1024 * 1024)));
 

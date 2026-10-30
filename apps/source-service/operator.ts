@@ -1,7 +1,7 @@
 import {BrowserWindow} from 'electron';
 import {authenticates, boundedJson, errorResponse, opaqueId, reject} from './protocol';
 
-const CONNECTION_SOURCES = {animepahe: 'AnimePahe', anikoto: 'Anikoto', anichan: 'AniChan', mangadot: 'MangaDot', mangaball: 'MangaBall images', toonkotsu: 'Toonkotsu'} as const;
+const CONNECTION_SOURCES = {animepahe: 'AnimePahe', anikoto: 'Anikoto', anichan: 'AniChan', mangadot: 'MangaDot', 'mangaball-catalogue': 'MangaBall catalogue', mangaball: 'MangaBall images', toonkotsu: 'Toonkotsu'} as const;
 type ConnectionSource = keyof typeof CONNECTION_SOURCES;
 export type SourceConnections = Partial<Record<ConnectionSource, () => Promise<boolean | void>>>;
 type ConnectionState = 'idle' | 'connecting' | 'finished' | 'failed';

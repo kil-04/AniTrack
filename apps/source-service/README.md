@@ -8,10 +8,13 @@ anime registry or offer development-only sources.
 
 ## Status
 
-This is a local implementation awaiting hosting, container validation and live
-playback/download checks. It is not yet connected to the public website. A
-passing unit test or health endpoint does not establish that a protected source
-has accepted the hosting network or that a complete episode/chapter opens offline.
+The service is deployed as a Render Free trial. AniChan is individually enabled
+on the public website after a real complete-episode file download (498 files,
+306,682,536 bytes), local VLC playback and midpoint seeking. Its media playlists
+contain local references only; removing website history preserves those files.
+Other protected sources remain disabled pending their own website checks and
+complete playback/reading and download validation. A passing unit test or health
+endpoint does not establish that a source accepts the hosting network.
 
 ## Deployment
 
@@ -55,7 +58,10 @@ through the host's secret settings. Confirm the generated HTTPS origin and
 account settings before connecting the website.
 
 The Free instance has 512 MB of RAM, so Electron source checks may exceed its
-memory budget. Idle services spin down after 15 minutes, and a cold start takes
+memory budget. A trial with several retained source windows caused an OOM
+restart. Hardware acceleration is disabled because this service does not play
+video; test one source at a time and do not infer multi-user capacity from the
+single-source checks. Idle services spin down after 15 minutes, and a cold start takes
 about one minute. Restarts and spin-downs discard profile sessions. Bandwidth and
 build minutes have quotas: exceeding them may suspend services or builds, or
 incur charges when the account has a payment method. Account usage and spending
@@ -80,15 +86,17 @@ Unenabled sources retain their existing supported public transport or explicit
 unavailable state. The website exposes source identifiers only; there is no
 visitor setting or browser storage entry for the service origin/key.
 
-The container runs as a nonroot user with Electron's sandbox enabled. If the
-hosting environment does not support that sandbox, deployment must fail; do not
-add `--no-sandbox`. The Docker image and profile-directory ownership need a real deployment
-check before calling this ready.
+The deployed container runs as a nonroot user with Electron's sandbox enabled.
+If another hosting environment does not support that sandbox, deployment must
+fail; do not add `--no-sandbox`.
 
 ## Source checks
 
-The operator opens `/operator` over HTTPS and signs in as `operator` using the
-operator key. Choose the named source and press Connect, then complete its normal
+The operator opens `/operator` over HTTPS and enters `SOURCE_OPERATOR_KEY` in
+the sign-in form. The key is never placed in a link or browser storage. A random
+memory-only session cookie expires after 15 minutes and is Secure, HttpOnly and
+SameSite=Strict. Existing Basic-authenticated API clients remain compatible.
+Choose the named source and press Connect, then complete its normal
 check in the displayed source window and press Finish. The native connector owns
 this connection lifecycle, including clearing Toonkotsu's verification state and
 keeping AniChan's exact verified reader session. Return to AniTrack and retry the
@@ -108,6 +116,17 @@ manual retry reads image bytes in that same verified session. Idle-closed
 windows require Connect again. Unknown CDN hosts fail for review. This path has
 focused tests, but still needs a real hosted chapter and download check.
 
+The separately named **MangaBall catalogue** connection handles its public API.
+It opens only after the operator selects Connect. Finish must observe a normal
+HTTP 200 JSON response on a reviewed catalogue route before reads are enabled.
+Only the existing public title/chapter GET routes are accepted; source cookies
+stay in that dedicated browser session. A 403 stops reads until a new explicit
+connection; a 429 also preserves its waiting period. The native desktop app
+continues using its existing transport unless this service explicitly composes
+the browser transport before its first MangaBall request. This connection is
+not advertised as ready until a real hosted catalogue, chapter and local-file
+download have passed.
+
 ## Boundaries and validation
 
 `SourceService` accepts a fixed operation allowlist and bounded JSON. Native
@@ -120,12 +139,16 @@ answers; Chromium retains its normal TLS and certificate checks. Only active
 receipt URLs and their HTTPS authorities are leased, and redirects are rejected;
 cookies/headers are applied only when the native authorization registry grants
 them for that resource. A service restart requires fresh media resolution.
+Some source servers mislabel MPEG-TS segments as images or JavaScript. Full
+media responses are relabelled only after a bounded prefix proves four valid
+188-byte transport packets. Keys, subtitles, images and byte ranges are excluded
+from that probe; other active-content responses remain rejected.
 
 Run these checks from the repository root:
 
 ```text
 node node_modules/typescript/bin/tsc -p apps/source-service/tsconfig.json --noEmit
-node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/source-service.test.mjs tests/source-service-client.test.mjs tests/source-service-config.test.mjs tests/source-service-mangaball.test.mjs tests/source-service-mangaball-adapter.test.mjs
+node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/source-service.test.mjs tests/source-service-client.test.mjs tests/source-service-config.test.mjs tests/source-service-mangaball.test.mjs tests/source-service-mangaball-adapter.test.mjs tests/source-service-mangaball-catalogue.test.mjs tests/source-service-native-media.test.mjs tests/source-service-media-types.test.mjs tests/source-service-operator-login.test.mjs
 ```
 
 The portable `worker-client.ts` is copied unchanged to the website's

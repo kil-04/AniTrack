@@ -192,15 +192,16 @@ test('Adapter Connect actions use fixed native sessions and AniChan reconnects t
   class Provider {}
   class AniChanProvider {constructor(options){providerRead=options.read;}}
   const modules={
-    '../desktop/main/services/providers/registry':{ProviderRegistry:class{constructor(providers){this.providers=providers;}}},
+    '../desktop/main/services/providers/registry':{ProviderRegistry:class{constructor(providers){this.providers=providers;}descriptors(){return [];}}},
     '../desktop/main/services/providers/animepahe':{AnimePaheProvider:Provider,prewarm:()=>calls.push(['prewarm']),getPaheBaseUrl:()=> 'https://animepahe.example'},
     '../desktop/main/services/providers/anikoto':{AnikotoProvider:Provider},
     '../desktop/main/services/providers/shonen':{ShonenProvider:Provider},
     '../desktop/main/services/providers/anichan':{AniChanProvider},
     '../desktop/main/services/providers/stream-authorization':{},
-    '../desktop/main/services/manga/sources':{connectMangaSource:async(...args)=>{calls.push(['manga',...args]);return true;}},
+    '../desktop/main/services/manga/sources':{configureMangaBallCatalogueTransport:()=>calls.push(['ball-catalogue-transport']),connectMangaSource:async(...args)=>{calls.push(['manga',...args]);return true;}},
     '../desktop/main/services/manga/anilist-manga':{},'./assets':{AssetVault:class{}},'./protocol':{},'./native-media':{NativeMediaTransport:class{async close(){}}},'./pagination':{chapterPage},
     './mangaball-images':{MangaBallImages:class{approvedOrigins(){return new Set();}async connect(){calls.push(['ball-images']);}close(){}}},
+    './mangaball-catalogue':{MangaBallCatalogue:class{fetch=async()=>new Response();approvedOrigins(){return new Set(['https://api.mangaball.com']);}async connect(){calls.push(['ball-catalogue']);}close(){}}},
     '../../packages/shared/anichan':{ANICHAN:{ORIGIN:'https://anichan.to'}},
     '../../packages/shared/manga':{MANGADOT:{ORIGIN:'https://mangadot.example'}},
     '../../packages/shared/toonkotsu':{TOONKOTSU:{ORIGIN:'https://toonkotsu.example'}},
@@ -214,7 +215,9 @@ test('Adapter Connect actions use fixed native sessions and AniChan reconnects t
   const exports={};runInNewContext(ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,
     {exports,URL,Headers,require:name=>{assert.ok(Object.hasOwn(modules,name),name);return modules[name];}});
   const adapter=new exports.NativeSourceAdapter(),connect=adapter.operatorConnections();
-  assert.deepEqual(Object.keys(connect).sort(),['anichan','anikoto','animepahe','mangaball','mangadot','toonkotsu']);
+  assert.deepEqual(Object.keys(connect).sort(),['anichan','anikoto','animepahe','mangaball','mangaball-catalogue','mangadot','toonkotsu']);
+  assert.deepEqual(calls,[['ball-catalogue-transport']]);calls.length=0;
+  assert.equal(adapter.approvedOrigins().has('https://api.mangaball.com'),true);
   await connect.mangadot();await connect.toonkotsu();await connect.animepahe();await connect.anikoto();
   assert.deepEqual(calls.slice(0,3),[['manga','mangadot',null],['manga','toonkotsu',null],['prewarm']]);
   assert.equal(pahe.state.visible,true);assert.equal(unrelated.state.visible,false);assert.equal(anikoto.state.visible,true);
@@ -223,4 +226,5 @@ test('Adapter Connect actions use fixed native sessions and AniChan reconnects t
   assert.equal(pages.length,1);assert.equal(read[1],connection[1]);assert.equal(connection[2],read[2]);assert.equal(connection[3],null);
   assert.equal(pages[0].options.partition,'persist:anichan');
   await connect.mangaball();assert.equal(calls.at(-1)[0],'ball-images');
+  await connect['mangaball-catalogue']();assert.equal(calls.at(-1)[0],'ball-catalogue');
 });
