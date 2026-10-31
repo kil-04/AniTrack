@@ -7,6 +7,10 @@
 !apps/desktop/main/**
 !apps/source-service/
 !apps/source-service/**
+!apps/web/
+!apps/web/**
+!scripts/
+!scripts/build-web.mjs
 !apps/android/
 !apps/android/app/
 !apps/android/app/src/
