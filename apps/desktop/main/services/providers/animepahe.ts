@@ -29,7 +29,7 @@ import type {
  *    No player/ad embed is executed to discover media or establish cookies.
  */
 
-import { BrowserWindow } from "electron";
+import { app, BrowserWindow } from "electron";
 import { getRuntimeConfig } from "../remote-config";
 import { PaheAccessError, PaheVerificationState, paheResponseError, retryAfterMs } from "./animepahe-session";
 import {
@@ -98,12 +98,15 @@ let _windowBase = "";
 /** A user request is waiting on the window; a startup prewarm alone never shows it. */
 let _userWaiting = false;
 let _idleTimer: NodeJS.Timeout | null = null;
+let _manualConnection: { win: BrowserWindow; promise: Promise<boolean> } | null = null;
 // The hidden window runs the site's own scripts. Once AnimePahe is idle, free
 // that renderer; the next request reopens it (playback/Kwik do not need it).
 const IDLE_CLOSE_MS = 10 * 60_000;
 
 function scheduleIdleClose(): void {
   if (_idleTimer) clearTimeout(_idleTimer);
+  _idleTimer = null;
+  if (_manualConnection) return;
   _idleTimer = setTimeout(() => {
     _idleTimer = null;
     // Never close a window that is loading or showing a check to the user.
@@ -145,6 +148,10 @@ function getPaheWindow(interactive = true): Promise<BrowserWindow> {
   if (_readyPromise && _win && !_win.isDestroyed()) {
     return _readyPromise;
   }
+  if (_manualConnection?.win === _win && _win && !_win.isDestroyed()) {
+    showPaheVerification(_win);
+    return Promise.reject(paheResponseError(403, "")!);
+  }
 
   const generation = _verification.reset();
   _windowBase = base;
@@ -181,7 +188,7 @@ function getPaheWindow(interactive = true): Promise<BrowserWindow> {
       _readyPromise = null;
       if (error) {
         reject(error);
-        if (!(error instanceof PaheAccessError) && !win.isDestroyed()) win.destroy();
+        if (!(error instanceof PaheAccessError) && _manualConnection?.win !== win && !win.isDestroyed()) win.destroy();
       }
       else resolve(win);
     };
@@ -202,7 +209,7 @@ function getPaheWindow(interactive = true): Promise<BrowserWindow> {
         if (!title || new URL(win.webContents.getURL()).origin !== base) return;
         if (_verification.markReady(generation)) {
           _userWaiting = false;
-          if (win.isVisible()) win.hide();
+          if (_manualConnection?.win !== win && win.isVisible()) win.hide();
           finish();
           scheduleIdleClose();
         }
@@ -243,6 +250,90 @@ function showPaheVerification(win: BrowserWindow, revalidate = false): void {
     win.focus();
     if (revalidate) win.webContents.reloadIgnoringCache();
   } catch { /* window closed while the request was completing */ }
+}
+
+/**
+ * Explicit source-operator connection. Human Finish closes only this bounded
+ * transaction: the verified homepage itself stays alive for same-origin reads.
+ * Ordinary desktop closes retain their existing destruction/reset behavior.
+ */
+export function connectPahe(parent: BrowserWindow | null = null): Promise<boolean> {
+  try {
+    assertAnimePaheEnabled();
+    _verification.assertRequestAllowed();
+  } catch (error) {
+    // A retained human check is reusable; a rate limit is never cleared here.
+    if (!(error instanceof PaheAccessError) || error.code !== "PAHE_SECURITY_CHECK" || !_win || _win.isDestroyed()) return Promise.reject(error);
+  }
+  if (_manualConnection) {
+    showPaheVerification(_manualConnection.win);
+    return _manualConnection.promise;
+  }
+  let opening: Promise<BrowserWindow> | undefined;
+  if (!_win || _win.isDestroyed() || _windowBase !== paheBaseUrl()) opening = getPaheWindow(true);
+  const win = _win;
+  if (!win || win.isDestroyed()) {void opening?.catch(() => {});return Promise.resolve(false);}
+  _userWaiting = true;
+  if (_idleTimer) clearTimeout(_idleTimer);
+  _idleTimer = null;
+  let resolve: (value: boolean) => void = () => {}, settled = false, finishing = false, quitting = false;
+  let timer: NodeJS.Timeout | undefined;
+  const promise = new Promise<boolean>(done => {resolve = done;});
+  const connection = {win, promise};
+  const complete = (verified: boolean) => {
+    if (settled) return;
+    settled = true;
+    if (timer) clearTimeout(timer);
+    win.removeListener("close", onClose);
+    win.removeListener("closed", onDestroyed);
+    app.removeListener("before-quit", onQuit);
+    if (_manualConnection === connection) _manualConnection = null;
+    if (!quitting && _win === win && !win.isDestroyed()) {
+      if (verified) win.hide();
+      else {
+        if (!_verification.ready) _verification.reject(paheResponseError(403, "")!);
+        showPaheVerification(win);
+      }
+      scheduleIdleClose();
+    }
+    resolve(verified);
+  };
+  const verifiedDocument = async () => {
+    const current = () => _win === win && !win.isDestroyed() && !win.webContents.isDestroyed() && _windowBase === paheBaseUrl()
+      && new URL(win.webContents.getURL()).origin === new URL(paheBaseUrl()).origin && !win.webContents.isLoadingMainFrame();
+    try {
+      assertAnimePaheEnabled();
+      if (!current() || !_verification.ready) return false;
+      _verification.assertRequestAllowed();
+      const title: unknown = await win.webContents.executeJavaScript("document.title", true);
+      _verification.assertRequestAllowed();
+      const normalTitle = typeof title === "string" && !!title.trim()
+        && !/just a moment|attention required|checking your browser|verify you are human/i.test(title);
+      if (!normalTitle && _win === win) _verification.reject(paheResponseError(403, "")!);
+      return current() && _verification.ready && normalTitle;
+    } catch {return false;}
+  };
+  const onClose = (event: Electron.Event) => {
+    if (quitting) return;
+    event.preventDefault();
+    if (finishing) return;
+    finishing = true;
+    void verifiedDocument().then(complete, () => complete(false));
+  };
+  const onDestroyed = () => complete(false);
+  const onQuit = () => {quitting = true;complete(false);};
+  _manualConnection = connection;
+  win.on("close", onClose);
+  win.once("closed", onDestroyed);
+  app.on("before-quit", onQuit);
+  timer = setTimeout(() => complete(false), 3 * 60_000);
+  timer.unref?.();
+  if (parent && !parent.isDestroyed()) win.setParentWindow(parent);
+  showPaheVerification(win);
+  // Startup may meet a normal website check or the desktop's shorter loading
+  // deadline. The human transaction retains that document until Finish/timeout.
+  void opening?.catch(() => {});
+  return promise;
 }
 
 // ─── Browser-session requests (one attempt per call) ─────────────────────────

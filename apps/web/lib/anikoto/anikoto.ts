@@ -1,0 +1,749 @@
+import { Buffer } from "node:buffer";
+import type {
+  StreamProvider,
+  AnimeInfo,
+  EpisodeInfo,
+  StreamLink,
+  StreamData,
+  ProviderFeed,
+  ProviderFeedResult,
+} from "./types";
+import {
+  anikotoBaseUrl,
+  anikotoRoute,
+  anikotoSelector,
+  anikotoUrl,
+  elementAttributeById,
+  escapeRegex,
+  extractRouteValue,
+  htmlAttribute,
+} from "./anikoto-config";
+import {
+  anikotoFetch,
+  prewarmAnikoto,
+  rememberAnikotoStreamOrigin,
+} from "./anikoto-browser";
+import { assertAnikotoMediaUrl, parseAnikotoSourceCipher, parseAnikotoSourceUrl, type AnikotoSourceCipher } from "./anikoto-source";
+import { AnikotoTransportError } from "./anikoto-transport";
+import { prepareAnikotoHlsAuthorization } from "./anikoto-hls";
+import { authorizeResolvedStream } from "./stream-authorization";
+import {
+  getAnikotoTop,
+  type AnikotoTopResult,
+} from "./anikoto-top";
+
+export {
+  getAnikotoPlayerOrigin,
+  getAnikotoPlayerOriginForUrl,
+  prewarmAnikoto,
+} from "./anikoto-browser";
+export {
+  getAnikotoTop,
+  parseAnikotoTop,
+} from "./anikoto-top";
+export type {
+  AnikotoTopItem,
+  AnikotoTopResult,
+} from "./anikoto-top";
+
+type AnikotoSubtitleType = "soft" | "hard" | "dub";
+
+function isHardSubtitleLabel(label: string): boolean {
+  const normalized = label.toUpperCase().replace(/[\s-]+/g, "");
+  return normalized.includes("HARDSUB") || normalized.includes("HSUB");
+}
+
+function isSoftSubtitleLabel(label: string): boolean {
+  return label.toUpperCase().includes("SUB") && !label.toUpperCase().includes("DUB") && !isHardSubtitleLabel(label);
+}
+
+function episodeCoordinates(episodeId: unknown, animeId: unknown) {
+  if (typeof animeId !== "string" || animeId === "." || animeId === ".." || !/^[A-Za-z0-9._~-]{1,512}$/.test(animeId)
+    || typeof episodeId !== "string" || episodeId.length > 8192 || /[\u0000-\u001f\u007f]/.test(episodeId)) {
+    throw new Error("Invalid Anikoto episode/server link. Reload the episode list.");
+  }
+  const [slug, dataId, ...serverParts] = episodeId.split(":");
+  const serversParam = serverParts.join(":");
+  if (!slug.startsWith("ep-") || slug.length < 4 || slug.length > 512
+    || !dataId || dataId.length > 512 || serversParam.length > 4096) {
+    throw new Error("Invalid Anikoto episode/server link. Reload the episode list.");
+  }
+  return { episodeId, animeId, dataId, serversParam };
+}
+
+function streamCoordinates(linkId: unknown) {
+  if (typeof linkId !== "string" || linkId.length > 16_384) {
+    throw new Error("Invalid Anikoto episode/server link. Reload the episode list.");
+  }
+  let parsed: unknown;
+  try { parsed = JSON.parse(linkId); }
+  catch { throw new Error("Invalid Anikoto episode/server link. Reload the episode list."); }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Invalid Anikoto episode/server link. Reload the episode list.");
+  }
+  const data = parsed as { episodeId?: unknown; animeId?: unknown; subType?: unknown };
+  const subType = data.subType ?? "soft";
+  if (subType !== "soft" && subType !== "hard" && subType !== "dub") {
+    throw new Error("Invalid Anikoto subtitle selection. Reload the episode list.");
+  }
+  return { ...episodeCoordinates(data.episodeId, data.animeId), subType: subType as AnikotoSubtitleType };
+}
+
+export class AnikotoProvider implements StreamProvider {
+  readonly id = "anikoto";
+  readonly name = "Anikoto";
+  readonly capabilities = {
+    top: true,
+    externalIds: true,
+    downloads: true,
+    // Only getStreamLinks' lightweight metadata is warmed by the player.
+    prefetch: true,
+    streamVariants: "subtitle-type" as const,
+    episodePageSize: 10_000,
+  };
+
+  private episodesCache = new Map<string, { episodes: EpisodeInfo[]; total: number; timestamp: number }>();
+  private readonly EPISODES_CACHE_TTL = 15 * 60 * 1000; // 15 minutes
+  private episodesPending = new Map<string, Promise<{ data: EpisodeInfo[]; total: number; lastPage: number }>>();
+
+  // MAL id per slug, harvested from the episode list's data-mal attribute.
+  // Anikoto entries can be MISLABELED (their "City Hunter" is actually City
+  // Hunter '91's episodes) — the embedded MAL id is the only reliable truth,
+  // so match verification uses this instead of trusting titles.
+  private malIdCache = new Map<string, number | null>();
+
+  private resolveCache = new Map<string, { data: StreamData; timestamp: number }>();
+  // Media URLs are transient. Keep only a brief deduplication cache so retries
+  // obtain fresh sources rather than reusing half-hour-old player metadata.
+  private readonly RESOLVE_CACHE_TTL = 15 * 1000;
+  // Player-client cipher constants keyed by client URL; null marks a client
+  // with no readable source decoder.
+  private cipherCache = new Map<string, { at: number; cipher: AnikotoSourceCipher | null }>();
+  private readonly CIPHER_CACHE_TTL = 15 * 60 * 1000;
+
+  /** Readable decoder constants of a player client, or null when it has none. */
+  private async playerCipher(clientUrl: string, referer: string): Promise<AnikotoSourceCipher | null> {
+    const known = this.cipherCache.get(clientUrl);
+    if (known && Date.now() - known.at < this.CIPHER_CACHE_TTL) return known.cipher;
+    // The client bundle only carries two constants; re-reading it on every
+    // episode or server change cost a request per resolve.
+    const response = await anikotoFetch(clientUrl, { headers: { Referer: referer } });
+    if (!response.ok) throw new Error(`Anikoto player metadata returned HTTP ${response.status}`);
+    let cipher: AnikotoSourceCipher | null = null;
+    try { cipher = parseAnikotoSourceCipher(await response.text()); } catch { /* remembered as unreadable */ }
+    if (this.cipherCache.size >= 8) this.cipherCache.delete(this.cipherCache.keys().next().value!);
+    this.cipherCache.set(clientUrl, { at: Date.now(), cipher });
+    return cipher;
+  }
+  private resolvePending = new Map<string, Promise<StreamData>>();
+
+  private cacheResolve(linkId: string, data: StreamData) {
+    if (this.resolveCache.size >= 200) {
+      const firstKey = this.resolveCache.keys().next().value;
+      if (firstKey !== undefined) this.resolveCache.delete(firstKey);
+    }
+    this.resolveCache.set(linkId, { data, timestamp: Date.now() });
+    if (data.referer) rememberAnikotoStreamOrigin(data, data.referer);
+  }
+
+  async search(query: string): Promise<AnimeInfo[]> {
+    const results: AnimeInfo[] = [];
+
+    const fetchPage = async (pageNo: number) => {
+      try {
+        const resp = await anikotoFetch(anikotoUrl("search", { query, page: pageNo }));
+        if (!resp.ok) {
+          if (pageNo === 1) throw new Error(`Anikoto search returned HTTP ${resp.status}`);
+          return;
+        }
+        const html = await resp.text();
+
+        const itemClass = escapeRegex(anikotoSelector("searchItemClass"));
+        const blocks = html.split(new RegExp(`<div\\s+class=["'][^"']*\\b${itemClass}\\b[^"']*["'][^>]*>`, "i"));
+        for (let i = 1; i < blocks.length; i++) {
+          const block = blocks[i];
+
+          const hrefValue = htmlAttribute(block, "href") || /href="([^"]+)"/.exec(block)?.[1] || "";
+          const href = extractRouteValue(hrefValue, "watch", "animeId");
+          if (!href) continue;
+
+          const imgM = /<img src="([^"]+)" alt="([^"]+)"/.exec(block);
+          const imgSrc = imgM ? imgM[1] : null;
+          const imgAlt = imgM ? imgM[2] : null;
+
+          const dataJp = (htmlAttribute(block, anikotoSelector("searchTitleAttribute")) || "").replace(/&#039;/g, "'") || null;
+
+          const countFor = (selector: string) => new RegExp(
+            `class=["'][^"']*\\bep-status\\b[^"']*\\b${escapeRegex(selector)}\\b[^"']*["'][^>]*>\\s*<span>\\s*(\\d+)`,
+            "i",
+          ).exec(block);
+          const totalM = countFor(anikotoSelector("totalClass"));
+          const totalEps = totalM ? parseInt(totalM[1], 10) : undefined;
+          // Anikoto cards also carry per-language availability badges.
+          const subM = countFor(anikotoSelector("subClass"));
+          const dubM = countFor(anikotoSelector("dubClass"));
+          const subCount = subM ? parseInt(subM[1], 10) : undefined;
+          const dubCount = dubM ? parseInt(dubM[1], 10) : undefined;
+
+          const title = dataJp || imgAlt || "Untitled";
+
+          // Extract year from title if possible
+          let parsedYear: number | undefined;
+          const clean = title.trim();
+          const y4Match = clean.match(/\b(19\d\d|20[0-2]\d)\b/);
+          if (y4Match) {
+            parsedYear = parseInt(y4Match[1], 10);
+          } else {
+            const y2Match = clean.match(/'(\d{2})\b/);
+            if (y2Match) {
+              const yy = parseInt(y2Match[1], 10);
+              parsedYear = yy >= 50 ? 1900 + yy : 2000 + yy;
+            } else {
+              const end2Match = clean.match(/\b([5-9]\d|0\d|1\d|2[0-5])\b\s*$/);
+              if (end2Match) {
+                const yy = parseInt(end2Match[1], 10);
+                parsedYear = yy >= 50 ? 1900 + yy : 2000 + yy;
+              }
+            }
+          }
+
+          results.push({
+            id: href,
+            providerId: this.id,
+            poster: imgSrc || "",
+            title: title,
+            episodes: totalEps,
+            subCount,
+            dubCount,
+            year: parsedYear,
+          });
+        }
+      } catch (err) {
+        if (pageNo === 1 || err instanceof AnikotoTransportError) throw err;
+        console.warn("[Anikoto] Extra search page was unavailable");
+      }
+    };
+
+    await Promise.all([fetchPage(1), fetchPage(2)]);
+    return results;
+  }
+
+  async getEpisodes(animeId: string, page = 1): Promise<{ data: EpisodeInfo[]; total: number; lastPage: number }> {
+    // 1. Check episodes list cache
+    const cached = this.episodesCache.get(animeId);
+    if (cached && (Date.now() - cached.timestamp < this.EPISODES_CACHE_TTL)) {
+      console.log(`[Anikoto] getEpisodes cache HIT for: ${animeId}`);
+      return {
+        data: cached.episodes,
+        total: cached.total,
+        lastPage: 1
+      };
+    }
+
+    // 2. Check in-flight requests deduplication
+    if (this.episodesPending.has(animeId)) {
+      console.log(`[Anikoto] getEpisodes hit in-flight request deduplication for: ${animeId}`);
+      return this.episodesPending.get(animeId)!;
+    }
+
+    const promise = (async () => {
+      console.log(`[Anikoto] Fetching watch page HTML for showId: ${animeId}`);
+      const resp = await anikotoFetch(anikotoUrl("watch", { animeId }));
+      if (!resp.ok) throw new Error(`Failed to load watch page: status ${resp.status}`);
+      const html = await resp.text();
+
+      // Extract show/anime ID (data-id) from watch page HTML
+      const showId = elementAttributeById(
+        html,
+        anikotoSelector("watchContainerId"),
+        anikotoSelector("showIdAttribute"),
+      );
+      if (!showId) throw new Error("Failed to extract anime show ID from watch page HTML");
+      console.log(`[Anikoto] Extracted showId: ${showId} for ${animeId}`);
+
+      // Direct AJAX fetch to get episodes list
+      const listResp = await anikotoFetch(anikotoUrl("episodeList", { showId }), {
+        headers: {
+          'X-Requested-With': 'XMLHttpRequest'
+        }
+      });
+      if (!listResp.ok) throw new Error(`Failed to fetch episodes list AJAX: status ${listResp.status}`);
+      const listJson = (await listResp.json()) as any;
+      const listHtml = listJson.result || "";
+
+      // Harvest the MAL id the episode anchors carry (data-mal) — used to
+      // verify search matches against AniList/MAL ids.
+      const malM = new RegExp(`${escapeRegex(anikotoSelector("malIdAttribute"))}=["'](\\d+)["']`, "i").exec(listHtml);
+      if (this.malIdCache.size >= 200) {
+        const oldest = this.malIdCache.keys().next().value;
+        if (oldest !== undefined) this.malIdCache.delete(oldest);
+      }
+      this.malIdCache.set(animeId, malM ? parseInt(malM[1], 10) : null);
+
+      // Parse episodes from returned HTML using fast regex
+      const episodes: EpisodeInfo[] = [];
+      const regex = /<a\b[^>]*>([\s\S]*?)<\/a>/gi;
+      let match;
+      while ((match = regex.exec(listHtml)) !== null) {
+        const tag = match[0];
+        const dataId = htmlAttribute(tag, anikotoSelector("episodeIdAttribute"));
+        const dataSlug = htmlAttribute(tag, anikotoSelector("episodeSlugAttribute"));
+        if (!dataId || !dataSlug) continue;
+        const text = match[1].replace(/<[^>]+>/g, "").trim();
+        const numValue = htmlAttribute(tag, anikotoSelector("episodeNumberAttribute"));
+        const titleM = /title="([^"]*)"/.exec(tag);
+
+        const num = numValue || text;
+        const title = titleM ? titleM[1] : `Episode ${num}`;
+
+        // Extract the server list parameter 'data-ids'
+        const serversParam = htmlAttribute(tag, anikotoSelector("episodeServersAttribute")) || "";
+
+        const slugStr = `ep-${dataSlug}`;
+        // Encode: slug:dataId:serversParam
+        const id = `${slugStr}:${dataId}:${serversParam}`;
+
+        episodes.push({
+          id,
+          episodeNumber: parseFloat(num) || 0,
+          title
+        });
+      }
+
+      console.log(`[Anikoto] Parsed ${episodes.length} episodes browserlessly for ${animeId}`);
+
+      // Cache episodes (bounded — evict the oldest entry once full)
+      if (this.episodesCache.size >= 200) {
+        const firstKey = this.episodesCache.keys().next().value;
+        if (firstKey !== undefined) this.episodesCache.delete(firstKey);
+      }
+      this.episodesCache.set(animeId, {
+        episodes,
+        total: episodes.length,
+        timestamp: Date.now()
+      });
+
+      return {
+        data: episodes,
+        total: episodes.length,
+        lastPage: 1
+      };
+    })();
+
+    this.episodesPending.set(animeId, promise);
+    // .catch on the derived chain so a rejected fetch doesn't surface as an
+    // unhandled rejection — the caller still receives the original rejection.
+    promise.finally(() => this.episodesPending.delete(animeId)).catch(() => {});
+    return promise;
+  }
+
+  /** External ids for a slug — the MAL id embedded in the episode list. Reuses
+   *  the episode fetch (cache + in-flight dedup), so verifying a match costs at
+   *  most one episodes load that the player would do anyway. */
+  async getAnimeIds(animeId: string): Promise<{ malId?: number; anilistId?: number }> {
+    if (!this.malIdCache.has(animeId)) {
+      try { await this.getEpisodes(animeId, 1); } catch { /* unreachable page */ }
+    }
+    const mal = this.malIdCache.get(animeId);
+    return mal != null ? { malId: mal } : {};
+  }
+
+  async getStreamLinks(episodeId: string, animeId: string): Promise<StreamLink[]> {
+    const { serversParam } = episodeCoordinates(episodeId, animeId);
+    if (!serversParam) {
+      return [
+        {
+          id: JSON.stringify({ episodeId, animeId, subType: "soft" }),
+          quality: "Auto (Soft Sub)",
+          audio: "jpn",
+          variant: "soft",
+        }
+      ];
+    }
+
+    try {
+      const serversResp = await anikotoFetch(anikotoUrl("serverList", { servers: serversParam }), {
+        headers: {
+          'X-Requested-With': 'XMLHttpRequest'
+        }
+      });
+      if (!serversResp.ok) throw new Error(`Status ${serversResp.status}`);
+      const serversJson = await serversResp.json() as any;
+      const serversHtml = serversJson.result || "";
+
+      const labels: string[] = [];
+      const labelRe = /<label[^>]*>([\s\S]*?)<\/label>/g;
+      let match;
+      while ((match = labelRe.exec(serversHtml)) !== null) {
+        labels.push(match[1].replace(/<[^>]+>/g, '').trim().toUpperCase());
+      }
+
+      const links: StreamLink[] = [];
+
+      const hasSub = labels.some(isSoftSubtitleLabel);
+      const hasHSub = labels.some(isHardSubtitleLabel);
+
+      // Dub is intentionally not offered — only soft/hard subs.
+      if (hasSub) {
+        links.push({
+          id: JSON.stringify({ episodeId, animeId, subType: "soft" }),
+          quality: "Auto (Soft Sub)",
+          audio: "jpn",
+          variant: "soft",
+        });
+      }
+      if (hasHSub) {
+        links.push({
+          id: JSON.stringify({ episodeId, animeId, subType: "hard" }),
+          quality: "Auto (Hard Sub)",
+          audio: "jpn",
+          variant: "hard",
+        });
+      }
+
+      return links;
+    } catch (err) {
+      if (err instanceof AnikotoTransportError) throw err;
+      console.warn("[Anikoto] Episode server metadata was unavailable");
+      return [
+        {
+          id: JSON.stringify({ episodeId, animeId, subType: "soft" }),
+          quality: "Auto (Soft Sub)",
+          audio: "jpn",
+          variant: "soft",
+        }
+      ];
+    }
+  }
+
+  async resolveStream(linkId: string): Promise<StreamData> {
+    const coordinates = streamCoordinates(linkId);
+    // 1. Check resolved stream cache
+    const cached = this.resolveCache.get(linkId);
+    if (cached && (Date.now() - cached.timestamp < this.RESOLVE_CACHE_TTL)) {
+      console.log("[Anikoto] Resolved stream cache hit");
+      if (cached.data.referer) rememberAnikotoStreamOrigin(cached.data, cached.data.referer);
+      return cached.data;
+    }
+
+    // 2. Check in-flight resolves deduplication
+    if (this.resolvePending.has(linkId)) {
+      console.log("[Anikoto] Reusing in-flight stream resolution");
+      return this.resolvePending.get(linkId)!;
+    }
+
+    const promise = (async () => {
+      const { animeId, dataId, subType } = coordinates;
+      let { serversParam } = coordinates;
+
+      // Fallback: If serversParam is missing (should not happen in browserless flow), fetch watch page list
+      if (!serversParam) {
+        console.log(`[Anikoto] Fallback: serversParam missing from episodeId. Fetching list...`);
+        const resp = await anikotoFetch(anikotoUrl("watch", { animeId }));
+        if (resp.ok) {
+          const html = await resp.text();
+          const showId = elementAttributeById(
+            html,
+            anikotoSelector("watchContainerId"),
+            anikotoSelector("showIdAttribute"),
+          );
+          if (showId) {
+            const listResp = await anikotoFetch(anikotoUrl("episodeList", { showId }), {
+              headers: {
+                'X-Requested-With': 'XMLHttpRequest'
+              }
+            });
+            if (listResp.ok) {
+              const listJson = await listResp.json() as any;
+              const listHtml = listJson.result || "";
+              const tagMatch = [...listHtml.matchAll(/<a\b[^>]*>/gi)]
+                .map((match) => match[0])
+                .find((tag) => htmlAttribute(tag, anikotoSelector("episodeIdAttribute")) === dataId);
+              if (tagMatch) {
+                serversParam = htmlAttribute(tagMatch, anikotoSelector("episodeServersAttribute")) || "";
+              }
+            }
+          }
+        }
+      }
+
+      if (!serversParam) {
+        throw new Error("Anikoto episode metadata is missing. Reload the episode list and retry.");
+      }
+
+      // Fetch server list AJAX
+      console.log("[Anikoto] Fetching episode servers");
+      const serversResp = await anikotoFetch(anikotoUrl("serverList", { servers: serversParam }), {
+        headers: {
+          'X-Requested-With': 'XMLHttpRequest'
+        }
+      });
+      if (!serversResp.ok) throw new Error(`Failed to fetch servers list AJAX: status ${serversResp.status}`);
+      const serversJson = (await serversResp.json()) as any;
+      const serversHtml = serversJson.result || "";
+
+      // Parse types and servers
+      const types: { label: string; items: { linkId: string; name: string }[] }[] = [];
+      const typeRe = /<div class="type"[^>]*>([\s\S]*?)<\/ul>\s*<\/div>/g;
+      let typeMatch;
+      while ((typeMatch = typeRe.exec(serversHtml)) !== null) {
+        const typeHtml = typeMatch[1];
+        const labelM = /<label[^>]*>([\s\S]*?)<\/label>/.exec(typeHtml);
+        const label = labelM ? labelM[1].replace(/<[^>]+>/g, '').trim() : '';
+
+        const liRe = /<li\b[^>]*>([\s\S]*?)<\/li>/gi;
+        let liMatch;
+        const items = [];
+        while ((liMatch = liRe.exec(typeHtml)) !== null) {
+          const linkId = htmlAttribute(liMatch[0], anikotoSelector("serverLinkAttribute"));
+          if (!linkId) continue;
+          items.push({
+            linkId,
+            name: liMatch[1].replace(/<[^>]+>/g, '').trim()
+          });
+        }
+        types.push({ label, items });
+      }
+
+      const isDubLabel = (labelStr: string) => {
+        const l = labelStr.toUpperCase();
+        return l.includes("DUB");
+      };
+
+      // Find best server matching subtype selection
+      const targetType = types.find(t => {
+        if (subType === "hard") return isHardSubtitleLabel(t.label);
+        if (subType === "dub") return isDubLabel(t.label);
+        return isSoftSubtitleLabel(t.label);
+      });
+
+      // Build the ordered list of candidate servers to try. Each sub-type lists
+      // several servers (VidPlay, HD, Vidstream, VidCloud, …); the first is often
+      // down for a given episode, so we fall through to the next until one yields
+      // a playable stream — that flakiness is why soft sub failed on some episodes.
+      const chosenType = targetType;
+      if (!chosenType || chosenType.items.length === 0) {
+        throw new Error(`Anikoto does not currently offer ${subType === "dub" ? "dubbed audio" : `${subType} subtitles`} for this episode`);
+      }
+      const isActualHardSub = isHardSubtitleLabel(chosenType.label);
+      const candidateLinkIds = chosenType.items.slice(0, 5).map(it => it.linkId);
+
+      let iframeUrl = "";
+      let serverGetJson: any = null;
+
+      // Catalogue metadata is authoritative; do not execute a provider embed
+      // or silently substitute a soft/dub stream for unavailable hard subtitles.
+      if (subType === "hard" && !isActualHardSub) {
+        throw new Error("Anikoto does not currently offer hard subtitles for this episode");
+      }
+
+      // Resolve a single player iframe → { data, playerOrigin }: either the
+      // base64-hash path (plyr.php/mewcdn) or fetch the Megaplay iframe + call
+      // getSources. Throws on failure so the caller can try the next server.
+      // Returns playerOrigin so the caller sets the global Referer hint to match
+      // the CHOSEN stream rather than whichever attempt happened to run last.
+      const attempt = async (attIframeUrl: string, attServerGetJson: any): Promise<{ data: StreamData; playerOrigin: string }> => {
+        // getSources/segment CDN lives on the SAME origin as the iframe; the host
+        // rotates (megaplay.buzz → vidtube.site → …) so derive it rather than
+        // hardcode a dead domain (a stale host 302s to an ad → ERR_BLOCKED_BY_CLIENT).
+        const originalIframeUrl = new URL(attIframeUrl);
+        const sourceHash = originalIframeUrl.hash.slice(1);
+        attIframeUrl = assertAnikotoMediaUrl(attIframeUrl);
+        const playerOrigin = new URL(attIframeUrl).origin;
+
+        // H-SUB encoding from hash
+        if (originalIframeUrl.pathname.includes("plyr.php") || (originalIframeUrl.hostname === "mewcdn.online" && originalIframeUrl.pathname.startsWith("/player/"))) {
+          if (sourceHash) {
+            if (!/^[A-Za-z0-9_+/-]+={0,2}$/.test(sourceHash)) throw new Error("Anikoto returned invalid hard-sub source metadata");
+            let decodedUrl = assertAnikotoMediaUrl(Buffer.from(sourceHash, 'base64url').toString('utf-8'));
+            if (new URL(decodedUrl).pathname.endsWith(".m3u8")) {
+              decodedUrl = await prepareAnikotoHlsAuthorization(decodedUrl, playerOrigin, anikotoFetch);
+            }
+            return {
+              data: {
+                url: decodedUrl,
+                subtitles: [],
+                intro: attServerGetJson?.result?.skip_data?.intro?.end > 0 ? attServerGetJson.result.skip_data.intro : undefined,
+                outro: attServerGetJson?.result?.skip_data?.outro?.end > 0 ? attServerGetJson.result.skip_data.outro : undefined,
+                referer: playerOrigin,
+                authorizationScope: new URL(decodedUrl).pathname.endsWith(".m3u8") ? "directory" : "exact",
+              },
+              playerOrigin,
+            };
+          }
+        }
+
+        // Extract Megaplay ID by fetching the player iframe page HTML.
+        attIframeUrl = assertAnikotoMediaUrl(attIframeUrl);
+        const megaplayResp = await anikotoFetch(attIframeUrl, { headers: { 'Referer': `${anikotoBaseUrl()}/` } });
+        if (!megaplayResp.ok) throw new Error(`Failed to fetch Megaplay iframe: status ${megaplayResp.status}`);
+        const megaplayHtml = await megaplayResp.text();
+        const megaplayId = elementAttributeById(
+          megaplayHtml,
+          anikotoSelector("playerContainerId"),
+          anikotoSelector("playerIdAttribute"),
+        );
+        if (!megaplayId) throw new Error("Failed to extract player id from iframe HTML");
+        console.log("[Anikoto] Read player source metadata");
+
+        const sourcesRoute = anikotoRoute("sources", { playerId: megaplayId });
+        const videoJsPlayer = new URL(attIframeUrl).pathname.startsWith("/videojs/");
+        // The legacy signed /stream route is relative to the player package.
+        // Already-prefixed or explicitly custom signed routes remain unchanged.
+        const sourcesPath = videoJsPlayer && sourcesRoute.startsWith("/stream/") ? `/videojs${sourcesRoute}` : sourcesRoute;
+        const sourcesResp = await anikotoFetch(`${playerOrigin}${sourcesPath}`, {
+          headers: { 'Referer': attIframeUrl, 'X-Requested-With': 'XMLHttpRequest' },
+        });
+        if (!sourcesResp.ok) throw new Error(`getSources failed: status ${sourcesResp.status}`);
+        const json = (await sourcesResp.json()) as any;
+        if (!json || typeof json !== "object" || Array.isArray(json)) throw new Error("Anikoto returned invalid player source metadata");
+        const directFile = Array.isArray(json.sources) ? json.sources[0]?.file : json.sources?.file;
+        let streamUrl: string;
+        if (typeof json.enc === "string" && !directFile) {
+          // /stream/ players decode in an obfuscated bundle (never read), and
+          // their own client only holds a telemetry cipher. Live sources from
+          // both player kinds decode with the same origin's readable videojs
+          // client constants, so fall back to those as data.
+          const clientPaths = videoJsPlayer
+            ? ["/videojs/lib/newclient.min.js"]
+            : ["/lib/newclient.min.js", "/videojs/lib/newclient.min.js"];
+          let decoded: string | null = null;
+          let lastError: unknown = null;
+          for (const clientPath of clientPaths) {
+            try {
+              const cipher = await this.playerCipher(`${playerOrigin}${clientPath}`, attIframeUrl);
+              if (!cipher) continue;
+              decoded = parseAnikotoSourceUrl(json, cipher);
+              break;
+            } catch (error) {
+              // A challenge or rate limit stops here; no further client request.
+              if (error instanceof AnikotoTransportError) throw error;
+              lastError = error;
+            }
+          }
+          if (!decoded) throw lastError ?? new Error("Anikoto player format changed; its connector needs an update");
+          streamUrl = decoded;
+        } else {
+          streamUrl = parseAnikotoSourceUrl(json);
+        }
+        console.log("[Anikoto] Resolved a media source");
+        const subs = isActualHardSub ? [] : (Array.isArray(json.tracks) ? json.tracks : []).slice(0, 32)
+          .filter((track: any) => track?.kind === "captions" && typeof track.file === "string")
+          .flatMap((track: any) => {
+            try {
+              const file = assertAnikotoMediaUrl(track.file);
+              authorizeResolvedStream({ url: file, referer: playerOrigin, authorizationScope: "exact" });
+              return [{ ...track, file }];
+            } catch { return []; }
+          });
+        const intro = json.intro?.end > 0 ? json.intro : (attServerGetJson?.result?.skip_data?.intro?.end > 0 ? attServerGetJson.result.skip_data.intro : undefined);
+        const outro = json.outro?.end > 0 ? json.outro : (attServerGetJson?.result?.skip_data?.outro?.end > 0 ? attServerGetJson.result.skip_data.outro : undefined);
+        if (new URL(streamUrl).pathname.endsWith(".m3u8")) {
+          streamUrl = await prepareAnikotoHlsAuthorization(streamUrl, playerOrigin, anikotoFetch);
+        }
+        return { data: { url: streamUrl, subtitles: subs, intro, outro, referer: playerOrigin,
+          authorizationScope: new URL(streamUrl).pathname.endsWith(".m3u8") ? "directory" : "exact" }, playerOrigin };
+      };
+
+      let result: StreamData | null = null;
+
+      if (iframeUrl) {
+        // The H-SUB BrowserWindow path already produced an iframe — use it directly.
+        const a = await attempt(iframeUrl, serverGetJson);
+        result = a.data;
+        rememberAnikotoStreamOrigin(a.data, a.playerOrigin);
+      } else {
+        // Try each server in the matched sub-type until one resolves. The first
+        // server is frequently dead for a given episode — that's what made soft
+        // sub fail intermittently; falling through to the next fixes it.
+        //
+        // For soft sub we also prefer a server that returns real caption tracks:
+        // a SUB server with no tracks is serving a hard-subbed video, so we keep
+        // looking before settling for it — that's why soft sub sometimes showed
+        // burned-in (hard) subs.
+        let lastErr: any = null;
+        let firstResolved: { data: StreamData; playerOrigin: string } | null = null;
+        for (const cand of candidateLinkIds) {
+          try {
+            const serverGetResp = await anikotoFetch(anikotoUrl("serverResolve", { linkId: cand }), {
+              headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            });
+            if (!serverGetResp.ok) throw new Error(`server iframe status ${serverGetResp.status}`);
+            const sgJson = (await serverGetResp.json()) as any;
+            const candIframe = sgJson.result?.url || "";
+            if (!candIframe) throw new Error("Server iframe URL not found in AJAX response");
+            console.log("[Anikoto] Trying an episode server");
+            const a = await attempt(candIframe, sgJson);
+            if (!firstResolved) firstResolved = a;
+            // Accept immediately unless we're on soft sub and this stream has no
+            // caption tracks (= hard-subbed); in that case keep trying.
+            if (subType !== "soft" || (a.data.subtitles && a.data.subtitles.length > 0)) {
+              result = a.data;
+              rememberAnikotoStreamOrigin(a.data, a.playerOrigin);
+              break;
+            }
+            console.log(`[Anikoto] Soft-sub server has no caption tracks (hard-subbed); trying next…`);
+          } catch (e: any) {
+            if (e instanceof AnikotoTransportError && ["SECURITY_CHECK", "RATE_LIMITED", "COOLDOWN"].includes(e.code)) throw e;
+            lastErr = e;
+            console.warn("[Anikoto] Advertised server unavailable:", String(e?.message ?? e).replace(/https?:\/\/\S+/g,"[source]"));
+          }
+        }
+        if (!result && firstResolved) {
+          // No soft-sub-with-tracks server found — fall back to the first that resolved.
+          result = firstResolved.data;
+          rememberAnikotoStreamOrigin(firstResolved.data, firstResolved.playerOrigin);
+        }
+        if (!result) throw lastErr ?? new Error("All Anikoto servers failed to resolve");
+      }
+
+      this.cacheResolve(linkId, result);
+      return result;
+    })();
+
+    this.resolvePending.set(linkId, promise);
+    promise.finally(() => this.resolvePending.delete(linkId)).catch(() => {});
+    return promise;
+  }
+
+  getExternalIds(animeId: string) {
+    return this.getAnimeIds(animeId);
+  }
+
+  async getFeed(feed: ProviderFeed, page = 1, count = 30): Promise<ProviderFeedResult> {
+    if (feed !== "top") throw new Error(`${this.name} does not support the ${feed} feed`);
+    const result = await getAnikotoTop();
+    const safePage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
+    const safeCount = Number.isFinite(count) && count > 0 ? Math.min(100, Math.floor(count)) : 30;
+    const offset = (safePage - 1) * safeCount;
+    const definitions: Array<{ id: keyof AnikotoTopResult; title: string }> = [
+      { id: "day", title: "Today" },
+      { id: "week", title: "This Week" },
+      { id: "month", title: "This Month" },
+    ];
+    const lengths = definitions.map(({ id }) => result[id].length);
+    return {
+      providerId: this.id,
+      feed,
+      page: safePage,
+      total: lengths.reduce((sum, length) => sum + length, 0),
+      lastPage: Math.max(1, Math.ceil(Math.max(0, ...lengths) / safeCount)),
+      groups: definitions.map(({ id, title }) => ({
+        id,
+        title,
+        items: result[id].slice(offset, offset + safeCount).map((item) => ({
+          id: item.showId || item.slug,
+          providerId: this.id,
+          animeId: item.slug,
+          title: item.title,
+          titleAlternatives: item.titleJp ? [item.titleJp] : undefined,
+          poster: item.poster,
+          subCount: item.sub ?? undefined,
+          dubCount: item.dub ?? undefined,
+        })),
+      })),
+    };
+  }
+
+  prewarm(): void { prewarmAnikoto(); }
+}

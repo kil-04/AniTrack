@@ -8,6 +8,8 @@ node_modules/
 # Desktop build output and JavaScript/TypeScript caches
 /dist/
 /dist-electron/
+/dist-source-service/
+/dist-web/
 /release/
 /coverage/
 /.nyc_output/

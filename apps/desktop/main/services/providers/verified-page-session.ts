@@ -48,6 +48,11 @@ export class VerifiedPageSession {
   private idleTimer: NodeJS.Timeout | null = null;
   private readonly options: Required<Omit<VerifiedPageSessionOptions, "allowedResourceHosts">> & Pick<VerifiedPageSessionOptions, "allowedResourceHosts">;
 
+  /** A passive readiness query; callers can require manual reconnection after idle close. */
+  isConnected(): boolean {
+    return this.verified && !!this.win && !this.win.isDestroyed() && !this.win.webContents.isDestroyed();
+  }
+
   constructor(options: VerifiedPageSessionOptions) {
     const origin = new URL(options.origin);
     if (origin.protocol !== "https:" || origin.origin !== options.origin) throw new Error("Verified page origin must be an HTTPS origin");
@@ -230,6 +235,13 @@ export class VerifiedPageSession {
   private open(): Promise<BrowserWindow> {
     if (this.win && !this.win.isDestroyed() && this.verified) return Promise.resolve(this.win);
     if (this.ready && this.win && !this.win.isDestroyed()) return this.ready;
+    if (this.win && !this.win.isDestroyed()) {
+      // A timed-out check keeps its document for the human to finish. Reuse it
+      // without another navigation, reload, or replacement renderer process.
+      this.show(this.win);
+      return Promise.reject(new PageVerificationError(
+        `${this.options.label} verification is not complete. Complete the check in its existing window, then retry.`));
+    }
     const { origin, partition, label } = this.options;
     const win = new BrowserWindow({
       show: false, width: 900, height: 700,

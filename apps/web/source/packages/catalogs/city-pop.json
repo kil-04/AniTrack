@@ -1,0 +1,134 @@
+[
+  {
+    "id": "miki-matsubara-stay-with-me",
+    "title": "Mayonaka no Door / Stay With Me",
+    "artist": "Miki Matsubara",
+    "year": 1979,
+    "videoId": "nuU2YHtxMik",
+    "channel": "ponycanyon",
+    "moods": ["night-drive", "after-hours"],
+    "note": "A midnight favorite, presented in Pony Canyon's official lyric video.",
+    "sourceUrl": "https://www.youtube.com/watch?v=nuU2YHtxMik"
+  },
+  {
+    "id": "mariya-takeuchi-plastic-love",
+    "title": "Plastic Love",
+    "artist": "Mariya Takeuchi",
+    "year": 1984,
+    "videoId": "T_lC2O1oIew",
+    "channel": "竹内まりや - Mariya Takeuchi Official YouTube Channel",
+    "moods": ["night-drive", "after-hours"],
+    "note": "The official music video pairs a city-night atmosphere with an unhurried groove.",
+    "sourceUrl": "https://www.youtube.com/watch?v=T_lC2O1oIew"
+  },
+  {
+    "id": "tatsuro-yamashita-sparkle",
+    "title": "SPARKLE",
+    "artist": "Tatsuro Yamashita",
+    "year": 1982,
+    "videoId": "pqobRu9aR3M",
+    "channel": "山下達郎 Tatsuro Yamashita",
+    "moods": ["sunset", "night-drive"],
+    "note": "Bright guitar and an ocean-side official video from 2023.",
+    "sourceUrl": "https://www.youtube.com/watch?v=pqobRu9aR3M"
+  },
+  {
+    "id": "taeko-onuki-four-am",
+    "title": "4:00 A.M.",
+    "artist": "Taeko Onuki",
+    "year": 1978,
+    "videoId": "_sOKkON_UnQ",
+    "channel": "Taeko Ohnuki - Topic",
+    "moods": ["after-hours", "night-drive"],
+    "note": "A patient late-night selection from MIGNONNE, delivered by Sony's official audio release.",
+    "sourceUrl": "https://www.youtube.com/watch?v=_sOKkON_UnQ"
+  },
+  {
+    "id": "anri-windy-summer",
+    "title": "Windy Summer",
+    "artist": "ANRI",
+    "year": 1983,
+    "videoId": "-8WTumwpvmg",
+    "channel": "ANRI 杏里 Official",
+    "moods": ["sunset"],
+    "note": "A breezy TIMELY!! selection with a video from ANRI's official channel.",
+    "sourceUrl": "https://www.youtube.com/watch?v=-8WTumwpvmg"
+  },
+  {
+    "id": "anri-remember-summer-days",
+    "title": "Remember Summer Days",
+    "artist": "ANRI",
+    "year": null,
+    "videoId": "3agC6do-624",
+    "channel": "Anri - Topic",
+    "moods": ["sunset", "after-hours"],
+    "note": "An easy-going summer memory from For Life Music's official audio catalog.",
+    "sourceUrl": "https://www.youtube.com/watch?v=3agC6do-624"
+  },
+  {
+    "id": "anri-i-cant-stop-the-loneliness",
+    "title": "I Can't Stop the Loneliness / 悲しみがとまらない",
+    "artist": "ANRI",
+    "year": 1983,
+    "videoId": "Io57r9R0HcE",
+    "channel": "Anri - Topic",
+    "moods": ["night-drive", "sunset"],
+    "note": "A lively change of pace, in For Life Music's ANRI the BEST audio release.",
+    "sourceUrl": "https://www.youtube.com/watch?v=Io57r9R0HcE"
+  },
+  {
+    "id": "tomoko-aran-midnight-pretenders",
+    "title": "Midnight Pretenders",
+    "artist": "Tomoko Aran",
+    "year": 1983,
+    "videoId": "7pPb5fmumNo",
+    "channel": "Tomoko Aran - Topic",
+    "moods": ["after-hours", "night-drive"],
+    "note": "A slow, atmospheric finish to the evening from Warner Music Japan's official audio.",
+    "sourceUrl": "https://www.youtube.com/watch?v=7pPb5fmumNo"
+  },
+  {
+    "id": "kingo-hamada-machi-no-dorufin",
+    "title": "Machi No Dorufin",
+    "artist": "Kingo Hamada",
+    "year": 1982,
+    "videoId": "VDuDQNkSC6g",
+    "channel": "Kingo Hamada - Topic",
+    "moods": ["sunset", "night-drive"],
+    "note": "A playful coastal detour from midnight cruisin', delivered by Warner Music Japan.",
+    "sourceUrl": "https://www.youtube.com/watch?v=VDuDQNkSC6g"
+  },
+  {
+    "id": "yasuha-fly-day-chinatown",
+    "title": "Fly-day Chinatown",
+    "artist": "Yasuha",
+    "year": 1981,
+    "videoId": "g0p_jI6T2WQ",
+    "channel": "UNIVERSAL MUSIC JAPAN",
+    "moods": ["night-drive"],
+    "note": "Neon energy in Universal Music Japan's illustrated official lyric video.",
+    "sourceUrl": "https://www.youtube.com/watch?v=g0p_jI6T2WQ"
+  },
+  {
+    "id": "takako-mamiya-love-trip",
+    "title": "LOVE TRIP",
+    "artist": "Takako Mamiya",
+    "year": 1982,
+    "videoId": "M0HmUICJRZc",
+    "channel": "Takako Mamiya - Topic",
+    "moods": ["sunset", "after-hours"],
+    "note": "A relaxed groove from Universal Music's official audio release.",
+    "sourceUrl": "https://www.youtube.com/watch?v=M0HmUICJRZc"
+  },
+  {
+    "id": "anri-last-summer-whisper",
+    "title": "Last Summer Whisper",
+    "artist": "ANRI",
+    "year": null,
+    "videoId": "uWqnsVMc8CQ",
+    "channel": "ANRI 杏里 Official",
+    "moods": ["sunset", "after-hours"],
+    "note": "A softer end to a summer evening, with a video from ANRI's official channel.",
+    "sourceUrl": "https://www.youtube.com/watch?v=uWqnsVMc8CQ"
+  }
+]

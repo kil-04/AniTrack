@@ -34,7 +34,10 @@
     "typecheck": "tsc -p apps/desktop/tsconfig.renderer.json --noEmit && tsc -p apps/desktop/tsconfig.main.json --noEmit",
     "legacy:capacitor:sync": "npm run build:vite && cd legacy/capacitor && npx cap sync android",
     "legacy:capacitor:open": "cd legacy/capacitor && npx cap open android",
-    "legacy:capacitor:build": "npm run legacy:capacitor:sync && cd legacy/capacitor/android && gradlew.bat assembleRelease"
+    "legacy:capacitor:build": "npm run legacy:capacitor:sync && cd legacy/capacitor/android && gradlew.bat assembleRelease",
+    "web:build": "node scripts/build-web.mjs",
+    "web:preview": "node scripts/web-preview.mjs",
+    "web:typecheck": "tsc -p apps/web/tsconfig.json --pretty false"
   },
   "dependencies": {
     "@capacitor-community/sqlite": "^6.0.2",
@@ -43,6 +46,7 @@
     "@capacitor/core": "^6.2.0",
     "@capacitor/screen-orientation": "^6.0.2",
     "electron-updater": "^6.8.3",
+    "fflate": "^0.8.3",
     "framer-motion": "^12.40.0",
     "hls.js": "^1.5.15",
     "lucide-react": "^0.451.0",
