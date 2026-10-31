@@ -13,6 +13,11 @@ retain their separate authentication; public visitors use the bounded `/api/`
 routes. Native-source calls stay inside the process through the existing
 validated service client and handler.
 
+The optional server catalogue route coalesces public read-only queries in a
+bounded two-minute cache. Authenticated account calls are excluded. Source
+429 responses pause that host's new and queued reads for its Retry-After period;
+the app does not automatically change hosts or transports after a denial.
+
 Media signatures use a dedicated secret derived from the existing service key
 unless `ANITRACK_MEDIA_SECRET` is configured. The native enabled-source list
 defaults to individually validated AniChan. Other existing public connectors

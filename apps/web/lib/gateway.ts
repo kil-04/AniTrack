@@ -19,6 +19,7 @@ import {standaloneSources,standaloneCall,standaloneAsset} from './standalone-ser
 import {signMediaReceipt,readMediaReceipt} from './media-receipts';
 import {safeMedia} from '../server/media';
 import {serverFetch as fetch} from '../server/network';
+import {publicCatalogue} from '../server/catalogue';
 const json = async (url: string, init: RequestInit = {}) => JSON.parse(await sourceText(url, init));
 const textArg = (x: unknown, max = 200) => { if (typeof x !== 'string' || x.length > max || /[\x00-\x1f]/.test(x))
     throw new Error('Invalid selection.'); return x; };
@@ -284,7 +285,7 @@ export async function rpc(operation: string, args: any[]): Promise<any> {
         const [query, variables] = args;
         if (typeof query !== 'string' || query.length > 20000 || /\bmutation\b/i.test(query))
             throw new Error('Only catalogue queries are available here.');
-        return json('https://graphql.anilist.co', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query, variables }) });
+        return publicCatalogue(query,variables,()=>json('https://graphql.anilist.co', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query, variables }) }));
     }
     if (operation === 'novel')
         return novelOperation(textArg(args[0], 30), args.slice(1));

@@ -13,8 +13,11 @@ class WebsiteError extends Error {constructor(public readonly status:number,mess
 const cancelled=()=>new WebsiteError(499,'Request cancelled.');
 const failure=(error:unknown)=>{
   const sourceStatus=error&&typeof error==='object'&&'sourceStatus'in error?error.sourceStatus:undefined;
-  const message=error instanceof WebsiteError?error.message:error instanceof Error&&error.message.startsWith('PROVIDER_ACCESS_DENIED:')?'PROVIDER_ACCESS_DENIED: This source needs its website check. Choose another source.':sourceStatus===401?'This connection needs authorization (HTTP 401). Reconnect your account.':sourceStatus===403?'This source needs its website check. Choose another source.':sourceStatus===429?'This source is busy. Wait a little before trying again.':'The source could not be reached.';
-  return Response.json({error:message},{status:error instanceof WebsiteError?error.status:sourceStatus===401||sourceStatus===403||sourceStatus===429?sourceStatus:502,headers:{...SAFE,'Cache-Control':'no-store'}});
+  const status=error instanceof WebsiteError?error.status:sourceStatus===401||sourceStatus===403||sourceStatus===429?sourceStatus:502;
+  const message=status===429?'This source is busy (HTTP 429). Wait before trying again.':error instanceof WebsiteError?error.message:error instanceof Error&&error.message.startsWith('PROVIDER_ACCESS_DENIED:')?'PROVIDER_ACCESS_DENIED: This source needs its website check. Choose another source.':sourceStatus===401?'This connection needs authorization (HTTP 401). Reconnect your account.':sourceStatus===403?'This source needs its website check. Choose another source.':'The source could not be reached.';
+  const raw=error&&typeof error==='object'&&'retryAfter'in error?error.retryAfter:undefined;
+  const retryAfter=typeof raw==='number'&&Number.isFinite(raw)&&raw>0?Math.max(1,Math.min(86400,Math.ceil(raw))):60;
+  return Response.json({error:message},{status,headers:{...SAFE,'Cache-Control':'no-store',...(status===429?{'Retry-After':String(retryAfter)}:{})}});
 };
 
 async function input(request:Request){
