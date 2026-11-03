@@ -44,7 +44,7 @@ The two apps are built separately (Electron on Windows, native Kotlin on Android
 - **Schedule** with countdowns to the next episode of the shows you follow, plus new-episode and new-chapter **notifications** on Android.
 
 ### Watch
-- **A built-in player.** On desktop it has YouTube-style controls and keyboard shortcuts. On Android it has swipe gestures, picture-in-picture and a mini player that keeps playing while you browse.
+- **A built-in player.** On desktop it has YouTube-style controls and keyboard shortcuts. On Android it has swipe gestures, picture-in-picture and a mini player that keeps playing while you browse. Both have a **sleep timer** that pauses after 15 minutes to an hour, or stops at the end of the episode.
 - **Skip the intro and outro** with one click, or automatically on Android, using community timestamps.
 - **Offline downloads** in both apps; on Android, a whole range of episodes at once.
 - Streams come from built-in **source connectors**, and you can switch to another source if one has trouble.

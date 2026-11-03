@@ -62,6 +62,15 @@ import {
   streamVariant,
 } from "../lib/provider-api";
 import type { ProviderDescriptor, StreamLink } from "../../../../packages/shared/provider-types";
+import {
+  SLEEP_END_OF_EPISODE,
+  SLEEP_OFF,
+  sleepDeadline,
+  sleepDue,
+  sleepLabel,
+  sleepStopsAtEpisodeEnd,
+  type SleepMode,
+} from "../../../../packages/shared/sleep-timer";
 
 installMediaSourceCodecShim();
 
@@ -187,6 +196,14 @@ export default function StreamPlayer({
   // Settings — persisted in localStorage
   const [autoPlay, setAutoPlay] = useState(() => localStorage.getItem("ap-autoplay") !== "false");
   const [autoNext, setAutoNext] = useState(() => localStorage.getItem("ap-autonext") !== "false");
+  // Sleep timer, as on Android: off, the end of this episode, or pause after N minutes.
+  // Not persisted: it is for this sitting only.
+  const [sleepMode, setSleepMode] = useState<SleepMode>(SLEEP_OFF);
+  const [sleepAt, setSleepAt] = useState<number | null>(null);
+  const [sleepNow, setSleepNow] = useState(() => Date.now());
+  // A short message over the video ("Sleep timer paused playback").
+  const [playerNotice, setPlayerNotice] = useState<string | null>(null);
+  const playerNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Soft Subtitle Caption Customization Settings — persisted in localStorage
   const [cueFontSize, setCueFontSize] = useState(() => localStorage.getItem("ap-cue-size") ?? "20px");
@@ -234,6 +251,7 @@ export default function StreamPlayer({
   const seekingRef = useRef(false);
   const singleClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoNextRef = useRef(autoNext);
+  const sleepModeRef = useRef<SleepMode>(SLEEP_OFF);
   const currentEpRef = useRef<any>(null);
   const episodesRef = useRef<any[]>([]);
   const linksRef = useRef<any[]>([]);
@@ -467,6 +485,7 @@ export default function StreamPlayer({
   const [watchedEps, setWatchedEps] = useState<Map<number, number>>(new Map());
 
   useEffect(() => { autoNextRef.current = autoNext; }, [autoNext]);
+  useEffect(() => { sleepModeRef.current = sleepMode; }, [sleepMode]);
   useEffect(() => { currentEpRef.current = currentEp; }, [currentEp]);
   useEffect(() => { availableSourcesRef.current = availableSources; }, [availableSources]);
   useEffect(() => { episodesRef.current = episodes; }, [episodes]);
@@ -1630,6 +1649,41 @@ export default function StreamPlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [minimized]);
 
+  // ── Sleep timer ─────────────────────────────────────────────────────────────
+
+  const showPlayerNotice = useCallback((message: string) => {
+    if (playerNoticeTimerRef.current) clearTimeout(playerNoticeTimerRef.current);
+    setPlayerNotice(message);
+    playerNoticeTimerRef.current = setTimeout(() => setPlayerNotice(null), 6000);
+  }, []);
+  useEffect(() => () => { if (playerNoticeTimerRef.current) clearTimeout(playerNoticeTimerRef.current); }, []);
+
+  const changeSleep = useCallback((mode: SleepMode) => {
+    const now = Date.now();
+    setSleepMode(mode);
+    setSleepAt(sleepDeadline(mode, now));
+    setSleepNow(now);
+    if (mode === SLEEP_END_OF_EPISODE) showPlayerNotice("Playback will stop at the end of this episode");
+    else if (mode > 0) showPlayerNotice(`Sleep timer set for ${mode >= 60 ? "1 hour" : `${mode} minutes`}`);
+    else showPlayerNotice("Sleep timer off");
+  }, [showPlayerNotice]);
+
+  // A timed mode checks its deadline (and refreshes "N min left") every few seconds.
+  useEffect(() => {
+    if (sleepAt == null) return;
+    const tick = () => {
+      const now = Date.now();
+      setSleepNow(now);
+      if (!sleepDue(sleepModeRef.current, sleepAt, now)) return;
+      setSleepMode(SLEEP_OFF);
+      setSleepAt(null);
+      videoRef.current?.pause();
+      showPlayerNotice("Sleep timer paused playback");
+    };
+    const timer = setInterval(tick, 5000);
+    return () => clearInterval(timer);
+  }, [sleepAt, showPlayerNotice]);
+
   // ── "Up next" autoplay countdown (YouTube-style) ────────────────────────────
 
   const [upNext, setUpNext] = useState<{ episode: number; count: number } | null>(null);
@@ -1716,7 +1770,15 @@ export default function StreamPlayer({
       if (!video.duration || !isFinite(video.duration) || video.buffered.length === 0) return;
       setBufferedPct((video.buffered.end(video.buffered.length - 1) / video.duration) * 100);
     };
-    const onEnded = () => { if (autoNextRef.current) beginUpNextRef.current(); };
+    const onEnded = () => {
+      // "End of episode": stop here instead of counting down to the next one.
+      if (sleepStopsAtEpisodeEnd(sleepModeRef.current)) {
+        setSleepMode(SLEEP_OFF);
+        showPlayerNotice("Sleep timer stopped after this episode");
+        return;
+      }
+      if (autoNextRef.current) beginUpNextRef.current();
+    };
     const onCanPlay = () => {
       setLoadingStream(false);
       setBuffering(false);
@@ -2087,6 +2149,7 @@ export default function StreamPlayer({
       currentEpisode={currentEp}
       loadingStream={loadingStream}
       fallbackNotice={fallbackNotice}
+      playerNotice={playerNotice}
       buffering={buffering}
       streamError={streamError}
       playing={playing}
@@ -2174,6 +2237,9 @@ export default function StreamPlayer({
             localStorage.setItem("ap-autonext", String(next));
             return next;
           })}
+          sleepMode={sleepMode}
+          sleepLabel={sleepLabel(sleepMode, sleepAt, sleepNow)}
+          onChangeSleep={changeSleep}
           onPlayPrev={playPrev}
           onPlayNext={playNext}
           onToggleFullscreen={toggleFullscreen}
