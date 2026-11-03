@@ -55,6 +55,7 @@ private fun publishLabel(status: String?) = when (status) {
 }
 
 /** The book this anime comes from (or its manga version), with where you are in it. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun StorySection(anime: Anime, onOpenManga: (Int) -> Unit) {
     var source by remember(anime.id) { mutableStateOf<String?>(null) }
@@ -149,7 +150,8 @@ internal fun StorySection(anime: Anime, onOpenManga: (Int) -> Unit) {
             Spacer(Modifier.height(6.dp))
             Text(message, style = MaterialTheme.typography.bodySmall, color = AniColors.TextSecondary)
             Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Wraps on phones, where "Read the manga" and "About the light novel" don't fit side by side.
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (readable != null) {
                     PillButton(
                         resume?.let { "Continue · Ch ${MangaChapters.label(it)}" } ?: "Read the manga",

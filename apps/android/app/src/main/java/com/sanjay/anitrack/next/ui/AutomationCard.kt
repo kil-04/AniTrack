@@ -3,6 +3,8 @@ package com.sanjay.anitrack.next.ui
 import android.app.Activity
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -38,6 +40,7 @@ import com.sanjay.anitrack.next.data.RemoteConfig
 import com.sanjay.anitrack.next.update.AppUpdater
 import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AutomationCard() {
     val configStatus by RemoteConfig.status
@@ -53,7 +56,7 @@ fun AutomationCard() {
         "Automatic fixes & updates",
         "Signed provider rules update automatically. App fixes download as a verified APK; Android asks once before installing.",
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Tag("App ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
             Tag("Rules r${configStatus.revision} · ${configStatus.source}")
         }
@@ -70,7 +73,11 @@ fun AutomationCard() {
             Text(it, style = MaterialTheme.typography.bodySmall, color = AniColors.Warning)
         }
         Spacer(Modifier.height(14.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        // Wraps on phones: the two pills need ~350 dp and a phone card has ~272 dp.
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
             PillButton(
                 if (configBusy) "Refreshing…" else "Refresh rules",
                 onClick = {

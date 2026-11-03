@@ -85,48 +85,57 @@ fun SearchScreen(onOpen: (Anime) -> Unit, initialQuery: String = "") {
         }
     }
 
-    Row(Modifier.fillMaxSize()) {
-        Column(Modifier.weight(1f).padding(horizontal = 24.dp, vertical = 20.dp)) {
-            ScreenHeader("Browse anime", scene = PixelScene.OBSERVATORY, subtitle = "Filter AniList by genre, season, year and more.", icon = Icons.Rounded.TravelExplore)
-            Spacer(Modifier.height(18.dp))
-            // Filter panel: search plus dropdowns, applied with the Filter button.
-            val apply: () -> Unit = { page = 1; reload++ }
-            val filtered = query.isNotBlank() || genre != null || year != null || season != null || format != null ||
-                status != null || source != null || epRange != null || sort != "TRENDING_DESC"
-            AniCard(padding = PaddingValues(16.dp)) {
-                @OptIn(ExperimentalLayoutApi::class)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    FilterSearchField(query, { query = it }, "Search titles…", onSearch = apply)
-                    FilterDropdown("Select genre", genre, listOf("Select genre" to null) + GENRES.map { it to it }) { genre = it; apply() }
-                    FilterDropdown("Select season", SEASONS.entries.firstOrNull { it.value == season }?.key?.takeIf { season != null }, SEASONS.map { it.key to it.value }) { season = it; apply() }
-                    FilterDropdown("Select year", year?.toString(), listOf("Select year" to null) + (2026 downTo 1960).map { it.toString() to it }) { year = it; apply() }
-                    FilterDropdown("Select type", FORMATS.entries.firstOrNull { it.value == format }?.key?.takeIf { format != null }, FORMATS.map { it.key to it.value }) { format = it; apply() }
-                    FilterDropdown("Select status", STATUSES_F.entries.firstOrNull { it.value == status }?.key?.takeIf { status != null }, STATUSES_F.map { it.key to it.value }) { status = it; apply() }
-                    FilterDropdown("Select source", SOURCES.entries.firstOrNull { it.value == source }?.key?.takeIf { source != null }, SOURCES.map { it.key to it.value }) { source = it; apply() }
-                    FilterDropdown("Episode range", EP_RANGES.entries.firstOrNull { it.value == epRange }?.key?.takeIf { epRange != null }, EP_RANGES.map { it.key to it.value }) { epRange = it; apply() }
-                    FilterDropdown("Default sort", SORTS.entries.firstOrNull { it.value == sort }?.key?.takeIf { sort != "TRENDING_DESC" }, SORTS.map { it.key to it.value }) { sort = it ?: "TRENDING_DESC"; apply() }
-                    PillButton("Filter", apply, icon = Icons.Rounded.FilterList, style = PillStyle.Primary)
-                    if (filtered) {
-                        PillButton("Reset", {
-                            query = ""; genre = null; year = null; season = null; format = null
-                            status = null; source = null; epRange = null; sort = "TRENDING_DESC"
-                            apply()
-                        }, icon = Icons.Rounded.RestartAlt, style = PillStyle.Ghost)
-                    }
+    // A phone can't fit the header and the tall filter card above a pinned grid (the
+    // results got less than one poster row), so there they scroll with the results.
+    val narrow = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 600
+    // Filter panel: search plus dropdowns, applied with the Filter button.
+    val apply: () -> Unit = { page = 1; reload++ }
+    val filtered = query.isNotBlank() || genre != null || year != null || season != null || format != null ||
+        status != null || source != null || epRange != null || sort != "TRENDING_DESC"
+    val top: @Composable () -> Unit = {
+        ScreenHeader("Browse anime", scene = PixelScene.OBSERVATORY, subtitle = "Filter AniList by genre, season, year and more.", icon = Icons.Rounded.TravelExplore)
+        Spacer(Modifier.height(18.dp))
+        AniCard(padding = PaddingValues(16.dp)) {
+            @OptIn(ExperimentalLayoutApi::class)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                FilterSearchField(query, { query = it }, "Search titles…", onSearch = apply, modifier = if (narrow) Modifier.fillMaxWidth() else Modifier.width(260.dp))
+                FilterDropdown("Select genre", genre, listOf("Select genre" to null) + GENRES.map { it to it }) { genre = it; apply() }
+                FilterDropdown("Select season", SEASONS.entries.firstOrNull { it.value == season }?.key?.takeIf { season != null }, SEASONS.map { it.key to it.value }) { season = it; apply() }
+                FilterDropdown("Select year", year?.toString(), listOf("Select year" to null) + (2026 downTo 1960).map { it.toString() to it }) { year = it; apply() }
+                FilterDropdown("Select type", FORMATS.entries.firstOrNull { it.value == format }?.key?.takeIf { format != null }, FORMATS.map { it.key to it.value }) { format = it; apply() }
+                FilterDropdown("Select status", STATUSES_F.entries.firstOrNull { it.value == status }?.key?.takeIf { status != null }, STATUSES_F.map { it.key to it.value }) { status = it; apply() }
+                FilterDropdown("Select source", SOURCES.entries.firstOrNull { it.value == source }?.key?.takeIf { source != null }, SOURCES.map { it.key to it.value }) { source = it; apply() }
+                FilterDropdown("Episode range", EP_RANGES.entries.firstOrNull { it.value == epRange }?.key?.takeIf { epRange != null }, EP_RANGES.map { it.key to it.value }) { epRange = it; apply() }
+                FilterDropdown("Default sort", SORTS.entries.firstOrNull { it.value == sort }?.key?.takeIf { sort != "TRENDING_DESC" }, SORTS.map { it.key to it.value }) { sort = it ?: "TRENDING_DESC"; apply() }
+                PillButton("Filter", apply, icon = Icons.Rounded.FilterList, style = PillStyle.Primary)
+                if (filtered) {
+                    PillButton("Reset", {
+                        query = ""; genre = null; year = null; season = null; format = null
+                        status = null; source = null; epRange = null; sort = "TRENDING_DESC"
+                        apply()
+                    }, icon = Icons.Rounded.RestartAlt, style = PillStyle.Ghost)
                 }
             }
-            Spacer(Modifier.height(16.dp))
-            if (searching && results.isEmpty()) {
-                LinearProgressIndicator(Modifier.fillMaxWidth().clip(aniShape(50)), color = AniColors.Accent, trackColor = AniColors.SurfaceHigh)
-            } else if (!searching && results.isEmpty()) {
-                EmptyState(Icons.Rounded.SearchOff, "No results", "Nothing matches these filters. Try removing one or searching another title.")
-            }
+        }
+        Spacer(Modifier.height(16.dp))
+        if (searching && results.isEmpty()) {
+            LinearProgressIndicator(Modifier.fillMaxWidth().clip(aniShape(50)), color = AniColors.Accent, trackColor = AniColors.SurfaceHigh)
+        } else if (!searching && results.isEmpty()) {
+            EmptyState(Icons.Rounded.SearchOff, "No results", "Nothing matches these filters. Try removing one or searching another title.")
+        }
+    }
+
+    Row(Modifier.fillMaxSize()) {
+        Column(Modifier.weight(1f).padding(horizontal = 24.dp, vertical = if (narrow) 0.dp else 20.dp)) {
+            if (!narrow) top()
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(140.dp),
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp),
+                contentPadding = PaddingValues(vertical = if (narrow) 20.dp else 0.dp),
                 modifier = Modifier.weight(1f),
             ) {
+                if (narrow) item(span = { GridItemSpan(maxLineSpan) }) { Column { top() } }
                 items(results, key = { it.id }) { a -> AnimeCard(a, onOpen, width = null) }
                 if (results.isNotEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
                     PageControls(page, hasNext, onPrevious = { page-- }, onNext = { page++ })
@@ -162,9 +171,9 @@ internal fun PageControls(page: Int, hasNext: Boolean, onPrevious: () -> Unit, o
 
 /** Search input matching the filter dropdowns. */
 @Composable
-internal fun FilterSearchField(value: String, onChange: (String) -> Unit, placeholder: String, onSearch: () -> Unit) {
+internal fun FilterSearchField(value: String, onChange: (String) -> Unit, placeholder: String, onSearch: () -> Unit, modifier: Modifier = Modifier.width(260.dp)) {
     Row(
-        Modifier.width(260.dp).height(44.dp)
+        modifier.height(44.dp)
             .clip(aniShape(12.dp)).background(AniColors.SurfaceHigh)
             .border(1.dp, AniColors.BorderSoft, aniShape(12.dp))
             .padding(horizontal = 12.dp),

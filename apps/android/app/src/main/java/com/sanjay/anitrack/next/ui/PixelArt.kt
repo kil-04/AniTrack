@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -292,18 +293,30 @@ fun PixelInterlude(scene: String, title: String, subtitle: String, onClick: () -
 }
 
 /** Settings → Appearance: Pixel mode on or off, with a preview of its banners. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun AppearanceCard() {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("anitrack_next", Context.MODE_PRIVATE) }
     val pixel = AniColors.pixelMode.value
+    // A phone card is about 272 dp inside: beside the preview and the switch the text got ~42 dp.
+    val narrow = LocalConfiguration.current.screenWidthDp < 600
+    val preview: @Composable (Modifier) -> Unit = { size ->
+        Box(
+            size.padding(end = 4.dp, bottom = 4.dp)
+                .pixelPanel(AniColors.Bg, AniColors.Accent, AniColors.AccentDeep.copy(alpha = 0.45f), 4.dp),
+        ) { PixelSceneArt(PixelScene.SAKURA, Modifier.matchParentSize().padding(2.dp), cell = 2.dp) }
+    }
     SettingsSection(Icons.Rounded.Palette, "Appearance", "How AniTrack looks on this device.") {
+        if (narrow) {
+            preview(Modifier.fillMaxWidth().height(64.dp))
+            Spacer(Modifier.height(12.dp))
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.size(width = 150.dp, height = 64.dp).padding(end = 4.dp, bottom = 4.dp)
-                    .pixelPanel(AniColors.Bg, AniColors.Accent, AniColors.AccentDeep.copy(alpha = 0.45f), 4.dp),
-            ) { PixelSceneArt(PixelScene.SAKURA, Modifier.matchParentSize().padding(2.dp), cell = 2.dp) }
-            Spacer(Modifier.width(16.dp))
+            if (!narrow) {
+                preview(Modifier.size(width = 150.dp, height = 64.dp))
+                Spacer(Modifier.width(16.dp))
+            }
             Column(Modifier.weight(1f)) {
                 Text("Pixel mode", style = MaterialTheme.typography.titleMedium)
                 Text(
@@ -323,7 +336,12 @@ internal fun AppearanceCard() {
         }
         if (pixel) {
             Spacer(Modifier.height(14.dp))
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Wraps on phones, where "Colours" and both chips just overflow the card.
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                itemVerticalAlignment = Alignment.CenterVertically,
+            ) {
                 Text("Colours", style = MaterialTheme.typography.bodySmall, color = AniColors.TextSecondary)
                 for ((blue, label) in listOf(false to "Neon", true to "AniTrack blue")) {
                     FilterChip(

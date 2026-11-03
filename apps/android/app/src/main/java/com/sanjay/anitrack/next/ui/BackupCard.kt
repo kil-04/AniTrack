@@ -17,6 +17,7 @@ import kotlinx.coroutines.launch
 import java.time.LocalDate
 
 /** Settings: export everything kept on this device to a file, and merge one back in. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun BackupCard() {
     val context = LocalContext.current
@@ -60,7 +61,11 @@ internal fun BackupCard() {
         "Save your watch progress, lists, reading progress and settings to a file, or bring them back. " +
             "Restoring keeps whichever entry is newer, so it never rolls progress back. Account sign-ins aren't included.",
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        // Wraps on phones, where both pills don't fit the card.
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
             PillButton(
                 "Export backup",
                 { export.launch("anitrack-backup-${LocalDate.now()}.json") },

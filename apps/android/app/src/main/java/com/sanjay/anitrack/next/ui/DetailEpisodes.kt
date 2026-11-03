@@ -28,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.sanjay.anitrack.next.data.Anime
@@ -302,6 +303,9 @@ internal fun EpisodesSection(
 
                 // Episode list: thumbnail, title, watch state and download control.
                 val dls = com.sanjay.anitrack.next.data.Downloads.items
+                // Phones: a labelled Download pill beside a 128 dp thumbnail left the
+                // episode text ~40 dp, so it wrapped letter by letter.
+                val narrow = LocalConfiguration.current.screenWidthDp < 600
                 Text(
                     "Long-press an episode to mark it watched or unwatched.",
                     style = MaterialTheme.typography.labelSmall,
@@ -336,7 +340,7 @@ internal fun EpisodesSection(
                                 .padding(10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Box(Modifier.width(128.dp).aspectRatio(16f / 9f).clip(aniShape(10.dp))) {
+                            Box(Modifier.width(if (narrow) 96.dp else 128.dp).aspectRatio(16f / 9f).clip(aniShape(10.dp))) {
                                 PosterImage(ep.snapshot ?: anime.banner ?: anime.cover, null, Modifier.fillMaxSize())
                                 Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.28f)))
                                 Icon(
@@ -352,13 +356,15 @@ internal fun EpisodesSection(
                                     )
                                 }
                             }
-                            Spacer(Modifier.width(14.dp))
+                            Spacer(Modifier.width(if (narrow) 10.dp else 14.dp))
                             Column(Modifier.weight(1f)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(
                                         "Episode ${epLabel(ep.number)}",
                                         style = MaterialTheme.typography.titleSmall,
                                         color = if (pct >= 85) AniColors.Success else AniColors.Text,
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false),
                                     )
                                     if (pct >= 85) {
                                         Spacer(Modifier.width(5.dp))
@@ -372,10 +378,31 @@ internal fun EpisodesSection(
                                     when { pct >= 85 -> "Watched"; pct > 0 -> "$pct% watched"; else -> "Not watched" },
                                     style = MaterialTheme.typography.labelSmall,
                                     color = AniColors.TextTertiary,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis,
                                 )
                             }
-                            // Download control.
-                            if (canDownload) when (dl?.status) {
+                            // Download control: icon-only on phones, where the labels don't fit.
+                            if (canDownload && narrow) when (dl?.status) {
+                                com.sanjay.anitrack.next.data.Downloads.Status.DONE ->
+                                    Icon(
+                                        Icons.Rounded.DownloadDone, "Saved", tint = AniColors.Success,
+                                        modifier = Modifier.padding(horizontal = 10.dp).size(20.dp),
+                                    )
+                                com.sanjay.anitrack.next.data.Downloads.Status.DOWNLOADING ->
+                                    CircularProgressIndicator(
+                                        progress = { dl.progress.coerceIn(0, 100) / 100f },
+                                        modifier = Modifier.padding(horizontal = 10.dp).size(20.dp), strokeWidth = 2.dp,
+                                        color = AniColors.Accent, trackColor = AniColors.SurfaceHighest,
+                                    )
+                                com.sanjay.anitrack.next.data.Downloads.Status.QUEUED ->
+                                    CircularProgressIndicator(
+                                        Modifier.padding(horizontal = 12.dp).size(16.dp), strokeWidth = 2.dp, color = AniColors.TextTertiary,
+                                    )
+                                else -> IconButton(
+                                    { com.sanjay.anitrack.next.data.Downloads.enqueue(anime.id, ep.number, anime.title, anime.cover, ep.resolveForDownload) },
+                                    Modifier.size(40.dp),
+                                ) { Icon(Icons.Rounded.Download, "Download", tint = AniColors.Text, modifier = Modifier.size(20.dp)) }
+                            } else if (canDownload) when (dl?.status) {
                                 com.sanjay.anitrack.next.data.Downloads.Status.DONE ->
                                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(end = 8.dp)) {
                                         Icon(Icons.Rounded.DownloadDone, null, tint = AniColors.Success, modifier = Modifier.size(18.dp))

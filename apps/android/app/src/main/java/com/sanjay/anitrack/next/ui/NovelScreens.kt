@@ -371,7 +371,9 @@ fun NovelSearchScreen(initialQuery: String = "", initialGenre: String? = null, o
     val shown = if (showMtl) results else results.filter { !it.mtl }
     val mtlCount = results.count { it.mtl }
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 20.dp)) {
+    // On a phone the header and filters scroll with the results, as in Browse anime.
+    val narrow = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 600
+    val top: @Composable () -> Unit = {
         ScreenHeader("Browse novels", scene = PixelScene.LIBRARY, subtitle = "${source.label}: ${source.blurb}", icon = Icons.Rounded.MenuBook)
         Spacer(Modifier.height(14.dp))
         PillTabs(
@@ -385,7 +387,7 @@ fun NovelSearchScreen(initialQuery: String = "", initialGenre: String? = null, o
         AniCard(padding = PaddingValues(16.dp)) {
             @OptIn(ExperimentalLayoutApi::class)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                FilterSearchField(query, { query = it }, "Search novels…", onSearch = apply)
+                FilterSearchField(query, { query = it }, "Search novels…", onSearch = apply, modifier = if (narrow) Modifier.fillMaxWidth() else Modifier.width(260.dp))
                 FilterDropdown("Select genre", genre, listOf("Select genre" to null) + NovelGenres.all.map { it to it }) { genre = it; apply() }
                 FilterDropdown("Select status", NOVEL_STATUSES.firstOrNull { it.second == status }?.first?.takeIf { status != null }, NOVEL_STATUSES) { status = it; apply() }
                 FilterDropdown("Popular", sort.label.takeIf { sort != NovelSort.Popular }, NovelSort.entries.map { it.label to it }) { sort = it; apply() }
@@ -403,12 +405,18 @@ fun NovelSearchScreen(initialQuery: String = "", initialGenre: String? = null, o
             !searching && shown.isEmpty() -> EmptyState(Icons.Rounded.SearchOff, "No results", "Nothing matches on ${answered.label}. Try fewer filters, another spelling, or the other source.")
         }
         notice?.takeIf { error == null }?.let { SourceNotice(it, Modifier.padding(bottom = 14.dp)) }
+    }
+
+    Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = if (narrow) 0.dp else 20.dp)) {
+        if (!narrow) top()
         LazyVerticalGrid(
             columns = GridCells.Adaptive(140.dp),
             horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
+            contentPadding = PaddingValues(vertical = if (narrow) 20.dp else 0.dp),
             modifier = Modifier.weight(1f),
         ) {
+            if (narrow) item(span = { GridItemSpan(maxLineSpan) }) { Column { top() } }
             items(shown, key = { it.id }) { NovelCardView(it, onOpen, width = null) }
             if (shown.isNotEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
                 PageControls(page, hasNext, onPrevious = { page-- }, onNext = { page++ })
@@ -589,6 +597,7 @@ fun NovelDetailScreen(source: NovelSourceId, titleId: String, onRead: () -> Unit
         }
     }
     val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 820
+    val narrow = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 600
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 32.dp)) {
         item(key = "head") {
@@ -656,47 +665,68 @@ fun NovelDetailScreen(source: NovelSourceId, titleId: String, onRead: () -> Unit
         }
         item(key = "chapters-header") {
             Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 18.dp, bottom = 8.dp)) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                // One novel, read from whichever copy works.
+                val sourcePills: @Composable () -> Unit = {
+                    NovelSourceId.entries.forEach { s ->
+                        val on = s == source
+                        val linked = on || group.any { it.source == s }
+                        val busy = (finding as? Finding.Searching)?.target == s
+                        Row(
+                            Modifier.clip(aniShape(50))
+                                .background(if (on) AniColors.AccentSoft else Color.White.copy(alpha = 0.05f))
+                                .border(1.dp, if (on) AniColors.Accent.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.08f), aniShape(50))
+                                .clickable(enabled = !on) { switchTo(s) }
+                                .padding(horizontal = 12.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (busy) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = AniColors.Accent)
+                            else Icon(if (linked) Icons.Rounded.Link else Icons.Rounded.Search, null, tint = if (on) AniColors.Accent else AniColors.TextTertiary, modifier = Modifier.size(15.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(s.label, style = MaterialTheme.typography.labelLarge, color = if (on) Color.White else AniColors.TextSecondary, fontWeight = if (on) FontWeight.Bold else FontWeight.Medium)
+                        }
+                    }
+                    if (group.size > 1) {
+                        Text(
+                            "Unlink", style = MaterialTheme.typography.labelMedium, color = AniColors.TextTertiary,
+                            modifier = Modifier.clip(aniShape(8.dp)).clickable {
+                                scope.launch {
+                                    NovelStore.unlink(source, titleId)
+                                    com.sanjay.anitrack.next.data.GistSync.novelReadingChanged()
+                                    group = NovelStore.group(source, titleId)
+                                    progress = NovelStore.progressFor(source, titleId)
+                                }
+                            }.padding(6.dp),
+                        )
+                    }
+                }
+                val sortPill: @Composable () -> Unit = {
+                    PillButton(if (newestFirst) "Newest first" else "Oldest first", { newestFirst = !newestFirst }, icon = Icons.Rounded.SwapVert, style = PillStyle.Ghost, compact = true)
+                }
+                if (narrow) {
+                    // A phone can't fit a 260 dp search field beside the source pills: it
+                    // squeezed the switch, Unlink and the sort pill to nothing. Two lines instead.
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) {
+                        Text("Chapters", style = MaterialTheme.typography.titleLarge, color = AniColors.Text, modifier = Modifier.padding(end = 6.dp))
+                        sourcePills()
+                    }
+                    if (list.isNotEmpty()) {
+                        Spacer(Modifier.height(10.dp))
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            FilterSearchField(query, { query = it; limit = CHAPTER_PAGE }, "Find chapter", onSearch = {}, modifier = Modifier.weight(1f))
+                            Spacer(Modifier.width(8.dp))
+                            sortPill()
+                        }
+                    }
+                } else Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text("Chapters", style = MaterialTheme.typography.titleLarge, color = AniColors.Text)
                     Spacer(Modifier.width(14.dp))
-                    // One novel, read from whichever copy works.
                     Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        NovelSourceId.entries.forEach { s ->
-                            val on = s == source
-                            val linked = on || group.any { it.source == s }
-                            val busy = (finding as? Finding.Searching)?.target == s
-                            Row(
-                                Modifier.clip(aniShape(50))
-                                    .background(if (on) AniColors.AccentSoft else Color.White.copy(alpha = 0.05f))
-                                    .border(1.dp, if (on) AniColors.Accent.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.08f), aniShape(50))
-                                    .clickable(enabled = !on) { switchTo(s) }
-                                    .padding(horizontal = 12.dp, vertical = 7.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                if (busy) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = AniColors.Accent)
-                                else Icon(if (linked) Icons.Rounded.Link else Icons.Rounded.Search, null, tint = if (on) AniColors.Accent else AniColors.TextTertiary, modifier = Modifier.size(15.dp))
-                                Spacer(Modifier.width(6.dp))
-                                Text(s.label, style = MaterialTheme.typography.labelLarge, color = if (on) Color.White else AniColors.TextSecondary, fontWeight = if (on) FontWeight.Bold else FontWeight.Medium)
-                            }
-                        }
-                        if (group.size > 1) {
-                            Text(
-                                "Unlink", style = MaterialTheme.typography.labelMedium, color = AniColors.TextTertiary,
-                                modifier = Modifier.clip(aniShape(8.dp)).clickable {
-                                    scope.launch {
-                                        NovelStore.unlink(source, titleId)
-                                        com.sanjay.anitrack.next.data.GistSync.novelReadingChanged()
-                                        group = NovelStore.group(source, titleId)
-                                        progress = NovelStore.progressFor(source, titleId)
-                                    }
-                                }.padding(6.dp),
-                            )
-                        }
+                        sourcePills()
                     }
                     if (list.isNotEmpty()) {
                         FilterSearchField(query, { query = it; limit = CHAPTER_PAGE }, "Find chapter", onSearch = {})
                         Spacer(Modifier.width(8.dp))
-                        PillButton(if (newestFirst) "Newest first" else "Oldest first", { newestFirst = !newestFirst }, icon = Icons.Rounded.SwapVert, style = PillStyle.Ghost, compact = true)
+                        sortPill()
                     }
                 }
                 when (val f = finding) {

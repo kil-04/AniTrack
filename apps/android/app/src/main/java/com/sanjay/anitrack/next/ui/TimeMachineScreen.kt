@@ -512,27 +512,34 @@ private fun Passport(
             ProgressStrip(explored / total.toFloat(), Modifier.width(120.dp))
         }
         Spacer(Modifier.height(12.dp))
-        TimeMachineArchive.eras.filter { it.start <= lastYear }.forEach { decade ->
-            val tint = Color(decade.accent)
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 3.dp)) {
-                Text(decade.label, color = tint, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, modifier = Modifier.width(48.dp))
-                (decade.start..minOf(decade.end, lastYear)).forEach { y ->
-                    val seen = y in visited
-                    Box(
-                        Modifier.padding(end = 4.dp).size(28.dp).clip(aniShape(7.dp))
-                            .background(if (seen) tint.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.06f))
-                            .then(if (y == current) Modifier.border(2.dp, Color.White, aniShape(7.dp)) else Modifier)
-                            .clickable { onTravel(y) },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            (y % 100).toString().padStart(2, '0'),
-                            color = if (seen) Color.Black else Color.White.copy(alpha = 0.45f),
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        if (y in historyYears) {
-                            Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 2.dp).size(4.dp).clip(CircleShape).background(if (seen) Color.Black else Color.White))
+        // Ten 28 dp stamps plus the label need 368 dp, more than a phone's passport has,
+        // so there they shrink to fit instead of the last years being squeezed to nothing.
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val stamp = ((maxWidth - 48.dp) / 10 - 4.dp).coerceIn(0.dp, 28.dp)
+            Column {
+                TimeMachineArchive.eras.filter { it.start <= lastYear }.forEach { decade ->
+                    val tint = Color(decade.accent)
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 3.dp)) {
+                        Text(decade.label, color = tint, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, modifier = Modifier.width(48.dp))
+                        (decade.start..minOf(decade.end, lastYear)).forEach { y ->
+                            val seen = y in visited
+                            Box(
+                                Modifier.padding(end = 4.dp).size(stamp).clip(aniShape(7.dp))
+                                    .background(if (seen) tint.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.06f))
+                                    .then(if (y == current) Modifier.border(2.dp, Color.White, aniShape(7.dp)) else Modifier)
+                                    .clickable { onTravel(y) },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    (y % 100).toString().padStart(2, '0'),
+                                    color = if (seen) Color.Black else Color.White.copy(alpha = 0.45f),
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                                if (y in historyYears) {
+                                    Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 2.dp).size(4.dp).clip(CircleShape).background(if (seen) Color.Black else Color.White))
+                                }
+                            }
                         }
                     }
                 }

@@ -54,6 +54,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import android.app.Activity
 import android.content.Intent
@@ -131,6 +132,7 @@ private sealed interface ChapterLoad {
 /** Rows shown at first and per "Show more", like MangaDot's list. */
 private const val CHAPTER_PAGE = 60
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ChaptersSection(
     manga: Manga,
@@ -249,8 +251,9 @@ private fun ChaptersSection(
         if (MangaReading.open(manga, state.source, state.title, list, chapter, start)) onRead()
     }
 
-    Row(Modifier.fillMaxWidth().padding(end = 24.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.weight(1f)) { SectionHeader("Chapters") }
+    // Phones stack what a tablet row fits side by side (chapter rows, filters, connect buttons).
+    val narrow = LocalConfiguration.current.screenWidthDp < 600
+    val connectButtons: @Composable () -> Unit = {
         MangaSources.all.filter { it.id in needsConnect }.forEach { source ->
             source.connectionActivity?.let { screen ->
                 TextButton(onClick = { connect.launch(Intent(context, screen)) }, enabled = load !is ChapterLoad.Loading) {
@@ -258,7 +261,15 @@ private fun ChaptersSection(
                 }
             }
         }
+    }
+    Row(Modifier.fillMaxWidth().padding(end = 24.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.weight(1f)) { SectionHeader("Chapters") }
+        if (!narrow) connectButtons()
         if (MangaSources.all.size < 2 && ready != null) Tag("via ${ready.source.label}", tone = TagTone.Outline)
+    }
+    // On a phone two Connect buttons would squeeze the header to nothing, so they get their own line.
+    if (narrow && needsConnect.isNotEmpty()) {
+        FlowRow(Modifier.padding(horizontal = 16.dp)) { connectButtons() }
     }
     if (MangaSources.all.size > 1) {
         // Source picker: the loaded source is highlighted; picking one sticks for this title.
@@ -271,6 +282,8 @@ private fun ChaptersSection(
                     chosenSource = id
                     prefs.edit().putString(preferenceKey, id).apply()
                 },
+                // When the tabs scroll (phones), the loading spinner after them still shows.
+                modifier = Modifier.weight(1f, fill = false),
                 compact = true,
             )
             if (load is ChapterLoad.Loading) {
@@ -305,15 +318,18 @@ private fun ChaptersSection(
             // One upload per chapter: the chosen group's (or the automatic pick), as Continue reads.
             val readingList = remember(state, activeGroup) { MangaChapters.normalize(state.uploads, activeGroup) }
             val target = MangaChapters.resumeTarget(readingList, progress)
-            val heroLabel = target?.let { (if (progress.isNotEmpty()) "Continue · Ch " else "Start reading · Ch ") + MangaChapters.label(it.number) }
+            // The hero's button column is about 200 dp wide on a phone, so "Start reading" shortens there.
+            val startLabel = if (narrow) "Read · Ch " else "Start reading · Ch "
+            val heroLabel = target?.let { (if (progress.isNotEmpty()) "Continue · Ch " else startLabel) + MangaChapters.label(it.number) }
             LaunchedEffect(heroLabel, state, activeGroup) {
                 onNextUp(if (target != null && heroLabel != null) heroLabel to { open(state, target) } else null)
             }
             var rangeOpen by remember(manga.id) { mutableStateOf(false) }
-            Row(
+            // Wraps on phones, where Continue and Download range don't fit one line.
+            FlowRow(
                 Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 if (target != null) {
                     val resuming = progress.isNotEmpty()
@@ -354,19 +370,33 @@ private fun ChaptersSection(
                     },
                 )
             }
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                if (groups.size > 1) {
-                    GroupFilter(groups, activeGroup) { choice ->
-                        groupFilter = choice
-                        prefs.edit().apply { if (choice == null) remove(groupKey) else putString(groupKey, choice) }.apply()
+            val chooseGroup: (String?) -> Unit = { choice ->
+                groupFilter = choice
+                prefs.edit().apply { if (choice == null) remove(groupKey) else putString(groupKey, choice) }.apply()
+            }
+            if (narrow && groups.size > 1) {
+                // A phone can't fit the group menu, search and sort on one line: search gets its own.
+                Column(
+                    Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                        // A long group name ellipsizes instead of pushing Newest/Oldest off the line.
+                        GroupFilter(groups, activeGroup, modifier = Modifier.weight(1f, fill = false).padding(end = 10.dp), onChoose = chooseGroup)
+                        NewestOldest(newestFirst) { newestFirst = it }
                     }
+                    ChapterSearch(query, { query = it }, Modifier.fillMaxWidth())
                 }
-                ChapterSearch(query, { query = it }, Modifier.weight(1f))
-                NewestOldest(newestFirst) { newestFirst = it }
+            } else {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    if (groups.size > 1) GroupFilter(groups, activeGroup, onChoose = chooseGroup)
+                    ChapterSearch(query, { query = it }, Modifier.weight(1f))
+                    NewestOldest(newestFirst) { newestFirst = it }
+                }
             }
             Text(
                 "Long-press a chapter to mark it read or unread.",
@@ -391,6 +421,7 @@ private fun ChaptersSection(
                                 chapter,
                                 progress[chapter.number],
                                 now,
+                                narrow = narrow,
                                 download = MangaDownloads.items.firstOrNull { it.key == MangaDownloads.keyOf(manga.id, chapter.id) },
                                 onDownload = { MangaDownloads.enqueue(manga, state.source, state.title, chapter) },
                                 onLongClick = { menu = true },
@@ -435,9 +466,15 @@ private fun ChaptersSection(
 
 /** MangaDot-style group dropdown: [allLabel] ("All Groups"; null leaves it out) or one group's uploads only. */
 @Composable
-private fun GroupFilter(groups: List<Pair<String, Int>>, choice: String?, allLabel: String? = "All Groups", onChoose: (String?) -> Unit) {
+private fun GroupFilter(
+    groups: List<Pair<String, Int>>,
+    choice: String?,
+    allLabel: String? = "All Groups",
+    modifier: Modifier = Modifier,
+    onChoose: (String?) -> Unit,
+) {
     var open by remember { mutableStateOf(false) }
-    Box {
+    Box(modifier) {
         Row(
             Modifier.height(44.dp).clip(aniShape(10.dp))
                 .border(1.dp, Color.White.copy(alpha = 0.12f), aniShape(10.dp))
@@ -450,7 +487,8 @@ private fun GroupFilter(groups: List<Pair<String, Int>>, choice: String?, allLab
                 color = Color.White,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = 220.dp),
+                // Weighted so the arrow keeps its room when the menu is narrower than the name.
+                modifier = Modifier.weight(1f, fill = false).widthIn(max = 220.dp),
             )
             Spacer(Modifier.width(4.dp))
             Icon(Icons.Rounded.ExpandMore, null, tint = AniColors.TextSecondary, modifier = Modifier.size(20.dp))
@@ -547,6 +585,8 @@ private fun ChapterRow(
     chapter: MangaChapter,
     state: ReadState?,
     nowMs: Long,
+    /** Phones: two lines (number · title, then progress · group · pages · date) instead of columns. */
+    narrow: Boolean = false,
     download: MangaDownloads.Item?,
     onDownload: () -> Unit,
     onLongClick: () -> Unit = {},
@@ -559,7 +599,7 @@ private fun ChapterRow(
             .background(Color.White.copy(alpha = if (read) 0.02f else 0.045f))
             .border(1.dp, Color.White.copy(alpha = 0.07f), aniShape(10.dp))
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
+            .padding(start = 16.dp, end = if (narrow) 8.dp else 16.dp, top = if (narrow) 10.dp else 14.dp, bottom = if (narrow) 10.dp else 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
@@ -581,61 +621,119 @@ private fun ChapterRow(
             modifier = Modifier.size(18.dp),
         )
         Spacer(Modifier.width(14.dp))
-        Text(
-            "Ch. $label",
-            fontFamily = FontFamily.Monospace,
-            color = Color.White.copy(alpha = if (read) 0.45f else 0.85f),
-            maxLines = 1,
-            modifier = Modifier.width(96.dp),
-        )
-        // Title, flag and group sit together; the columns after them stay right-aligned.
-        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+        if (narrow) {
+            // The fixed columns below add up to more than a phone row, so everything flexible
+            // shares one weighted column and the download button keeps its full size.
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Ch. $label",
+                        fontFamily = FontFamily.Monospace,
+                        color = Color.White.copy(alpha = if (read) 0.45f else 0.85f),
+                        maxLines = 1,
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        chapter.title ?: "Chapter $label",
+                        color = Color.White.copy(alpha = if (read) 0.45f else 0.95f),
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Spacer(Modifier.height(2.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (state != null && !read) {
+                        Text(
+                            "p. ${state.page + 1}/${state.pageCount}",
+                            color = MangaDetailAccent,
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    // The group ellipsizes first; pages and date are short and always show.
+                    Text(
+                        chapter.group ?: "Unknown group",
+                        color = Color.White.copy(alpha = 0.55f),
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    val meta = listOfNotNull(
+                        chapter.pageCount?.let { "${it}p" },
+                        chapter.uploadedAt?.let { MangaChapters.uploadedLabel(it, nowMs) },
+                    )
+                    if (meta.isNotEmpty()) {
+                        Text(
+                            meta.joinToString(" · ", prefix = " · "),
+                            color = Color.White.copy(alpha = 0.5f),
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.width(4.dp))
+            DownloadControl(download, onDownload)
+        } else {
             Text(
-                chapter.title ?: "Chapter $label",
-                color = Color.White.copy(alpha = if (read) 0.45f else 0.95f),
-                fontWeight = FontWeight.SemiBold,
+                "Ch. $label",
+                fontFamily = FontFamily.Monospace,
+                color = Color.White.copy(alpha = if (read) 0.45f else 0.85f),
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false),
+                modifier = Modifier.width(96.dp),
             )
-            Spacer(Modifier.width(10.dp))
-            Text("🇬🇧")
-            Spacer(Modifier.width(10.dp))
+            // Title, flag and group sit together; the columns after them stay right-aligned.
+            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    chapter.title ?: "Chapter $label",
+                    color = Color.White.copy(alpha = if (read) 0.45f else 0.95f),
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                Spacer(Modifier.width(10.dp))
+                Text("🇬🇧")
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    chapter.group ?: "Unknown group",
+                    color = Color.White.copy(alpha = 0.55f),
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 240.dp),
+                )
+            }
+            if (state != null && !read) {
+                Text(
+                    "p. ${state.page + 1}/${state.pageCount}",
+                    color = MangaDetailAccent,
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                Spacer(Modifier.width(16.dp))
+            }
             Text(
-                chapter.group ?: "Unknown group",
-                color = Color.White.copy(alpha = 0.55f),
-                style = MaterialTheme.typography.bodySmall,
+                chapter.pageCount?.let { "${it}p" } ?: "",
+                color = Color.White.copy(alpha = 0.5f),
+                fontFamily = FontFamily.Monospace,
+                textAlign = TextAlign.End,
+                modifier = Modifier.width(56.dp),
+            )
+            Text(
+                chapter.uploadedAt?.let { MangaChapters.uploadedLabel(it, nowMs) } ?: "",
+                color = Color.White.copy(alpha = 0.5f),
+                fontFamily = FontFamily.Monospace,
+                textAlign = TextAlign.End,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = 240.dp),
+                // Wide enough for "Aug 13, 2025" in monospace.
+                modifier = Modifier.width(136.dp),
             )
+            Spacer(Modifier.width(8.dp))
+            DownloadControl(download, onDownload)
         }
-        if (state != null && !read) {
-            Text(
-                "p. ${state.page + 1}/${state.pageCount}",
-                color = MangaDetailAccent,
-                style = MaterialTheme.typography.labelMedium,
-            )
-            Spacer(Modifier.width(16.dp))
-        }
-        Text(
-            chapter.pageCount?.let { "${it}p" } ?: "",
-            color = Color.White.copy(alpha = 0.5f),
-            fontFamily = FontFamily.Monospace,
-            textAlign = TextAlign.End,
-            modifier = Modifier.width(56.dp),
-        )
-        Text(
-            chapter.uploadedAt?.let { MangaChapters.uploadedLabel(it, nowMs) } ?: "",
-            color = Color.White.copy(alpha = 0.5f),
-            fontFamily = FontFamily.Monospace,
-            textAlign = TextAlign.End,
-            maxLines = 1,
-            // Wide enough for "Aug 13, 2025" in monospace.
-            modifier = Modifier.width(136.dp),
-        )
-        Spacer(Modifier.width(8.dp))
-        DownloadControl(download, onDownload)
     }
 }
 
@@ -669,6 +767,7 @@ private fun DownloadControl(download: MangaDownloads.Item?, onDownload: () -> Un
  * group's where it has none and "Fill gaps" is on. Numbers already downloaded or
  * queued, from any group, are skipped.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DownloadRangeDialog(
     uploads: List<MangaChapter>,
@@ -704,7 +803,8 @@ private fun DownloadRangeDialog(
         title = { Text("Download chapters") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Four presets overrun a phone-width dialog, so they wrap.
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     presets.forEach { (label, low, high) ->
                         val chosen = from == low && to == high
                         Text(

@@ -40,6 +40,7 @@ import kotlinx.coroutines.launch
  * Disconnect.
  */
 @SuppressLint("SetJavaScriptEnabled")
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun MalCard(onProfileChanged: (connected: Boolean, username: String?) -> Unit = { _, _ -> }) {
     var connected by remember { mutableStateOf(Mal.isConnected) }
@@ -74,7 +75,11 @@ fun MalCard(onProfileChanged: (connected: Boolean, username: String?) -> Unit = 
                 }
             }
             Spacer(Modifier.height(14.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            // Wraps on phones, where both pills don't fit the card.
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 PillButton(
                     "Sync from MAL",
                     onClick = {

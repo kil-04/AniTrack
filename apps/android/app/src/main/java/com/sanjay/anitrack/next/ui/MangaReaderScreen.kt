@@ -171,6 +171,8 @@ fun MangaReaderScreen(onBack: () -> Unit) {
     var spreadShift by remember { mutableStateOf(prefs.getBoolean("reader_spread_shift", false)) }
     val configuration = LocalConfiguration.current
     val landscape = configuration.screenWidthDp > configuration.screenHeightDp
+    // Phones get an icon-only top bar so the title keeps its room (tablets keep the labelled pills).
+    val narrow = configuration.screenWidthDp < 600
     // Holds key focus so the volume keys reach the reader instead of changing the volume.
     val keyFocus = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { keyFocus.requestFocus() } }
@@ -468,13 +470,26 @@ fun MangaReaderScreen(onBack: () -> Unit) {
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                // Background music keeps playing while reading; its controls ride along in the reader bar.
-                BackgroundMusicBar(compact = true, onOpenSettings = {})
-                Spacer(Modifier.width(8.dp))
-                PillButton("Chapters", { chaptersOpen = true }, icon = Icons.AutoMirrored.Rounded.FormatListBulleted, compact = true)
-                Spacer(Modifier.width(8.dp))
-                PillButton(effective.label, { settingsOpen = true }, icon = Icons.Rounded.Tune, compact = true)
-                Spacer(Modifier.width(8.dp))
+                if (narrow) {
+                    // The phone's single Music switch; long-press opens reader settings, which hold
+                    // the full music controls on phones.
+                    BackgroundMusicButton(onOpenSettings = { settingsOpen = true })
+                    Spacer(Modifier.width(4.dp))
+                    IconButton(onClick = { chaptersOpen = true }) {
+                        Icon(Icons.AutoMirrored.Rounded.FormatListBulleted, "Chapters", tint = Color.White)
+                    }
+                    IconButton(onClick = { settingsOpen = true }) {
+                        Icon(Icons.Rounded.Tune, "Reader settings: ${effective.label}", tint = Color.White)
+                    }
+                } else {
+                    // Background music keeps playing while reading; its controls ride along in the reader bar.
+                    BackgroundMusicBar(compact = true, onOpenSettings = {})
+                    Spacer(Modifier.width(8.dp))
+                    PillButton("Chapters", { chaptersOpen = true }, icon = Icons.AutoMirrored.Rounded.FormatListBulleted, compact = true)
+                    Spacer(Modifier.width(8.dp))
+                    PillButton(effective.label, { settingsOpen = true }, icon = Icons.Rounded.Tune, compact = true)
+                    Spacer(Modifier.width(8.dp))
+                }
             }
         }
         AnimatedVisibility(chrome, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomCenter)) {
@@ -555,6 +570,7 @@ fun MangaReaderScreen(onBack: () -> Unit) {
                     spreadShift = it
                     prefs.edit().putBoolean("reader_spread_shift", it).apply()
                 },
+                musicControls = narrow,
             )
         }
     }
@@ -893,6 +909,8 @@ private fun ReaderSettings(
     onSpread: (ReaderSpread) -> Unit,
     spreadShift: Boolean,
     onSpreadShift: (Boolean) -> Unit,
+    /** Phones: the top bar only has the Music switch, so pause and skip live here. */
+    musicControls: Boolean = false,
 ) {
     run {
         Column(
@@ -900,6 +918,11 @@ private fun ReaderSettings(
                 .padding(start = 24.dp, end = 24.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            if (musicControls && com.sanjay.anitrack.next.data.BackgroundMusic.tracks.value.isNotEmpty()) {
+                Text("Background music", style = MaterialTheme.typography.labelLarge, color = AniColors.TextSecondary)
+                BackgroundMusicBar(compact = false, onOpenSettings = {})
+                Spacer(Modifier.height(6.dp))
+            }
             Text("Reading mode", style = MaterialTheme.typography.labelLarge, color = AniColors.TextSecondary)
             ReaderMode.entries.forEach { option ->
                 Row(

@@ -85,6 +85,7 @@ fun NovelReaderScreen(onBack: () -> Unit, onOpenTitle: (com.sanjay.anitrack.next
     var attempt by remember { mutableIntStateOf(0) }
     var chrome by remember { mutableStateOf(true) }
     var panel by remember { mutableStateOf("none") }
+    val narrow = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 600
     val list = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val chapter = session.chapter
@@ -220,19 +221,25 @@ fun NovelReaderScreen(onBack: () -> Unit, onOpenTitle: (com.sanjay.anitrack.next
                     Text("${chapter.label} · ${session.index + 1} of ${session.chapters.size}", color = theme.muted, style = MaterialTheme.typography.labelSmall, maxLines = 1)
                 }
                 // Background music keeps playing while reading; its controls ride along in the reader bar.
-                BackgroundMusicBar(compact = true, onOpenSettings = {}, modifier = Modifier.padding(end = 4.dp))
-                IconButton(onClick = { NovelReading.jump(session.index - 1) }, enabled = session.previous != null) {
-                    Icon(Icons.AutoMirrored.Rounded.KeyboardArrowLeft, "Previous chapter", tint = theme.text.copy(alpha = if (session.previous != null) 1f else 0.3f))
-                }
-                IconButton(onClick = { NovelReading.jump(session.index + 1) }, enabled = session.next != null) {
-                    Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, "Next chapter", tint = theme.text.copy(alpha = if (session.next != null) 1f else 0.3f))
+                // A phone gets the single round toggle (long-press opens the text panel, which holds the
+                // full music controls there), and leaves previous / next to the pills at the end of the
+                // chapter and the chapters panel, so the title still has room.
+                if (narrow) BackgroundMusicButton(onOpenSettings = { panel = "type" }, modifier = Modifier.padding(end = 4.dp))
+                else BackgroundMusicBar(compact = true, onOpenSettings = {}, modifier = Modifier.padding(end = 4.dp))
+                if (!narrow) {
+                    IconButton(onClick = { NovelReading.jump(session.index - 1) }, enabled = session.previous != null) {
+                        Icon(Icons.AutoMirrored.Rounded.KeyboardArrowLeft, "Previous chapter", tint = theme.text.copy(alpha = if (session.previous != null) 1f else 0.3f))
+                    }
+                    IconButton(onClick = { NovelReading.jump(session.index + 1) }, enabled = session.next != null) {
+                        Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, "Next chapter", tint = theme.text.copy(alpha = if (session.next != null) 1f else 0.3f))
+                    }
                 }
                 IconButton(onClick = { panel = if (panel == "chapters") "none" else "chapters" }) { Icon(Icons.AutoMirrored.Rounded.FormatListBulleted, "Chapters", tint = theme.text) }
                 IconButton(onClick = { panel = if (panel == "type") "none" else "type" }) { Icon(Icons.Rounded.TextFields, "Text settings", tint = theme.text) }
             }
         }
 
-        if (panel == "type") TypePanel(prefs, theme, Modifier.align(Alignment.TopEnd).padding(top = 66.dp, end = 12.dp))
+        if (panel == "type") TypePanel(prefs, theme, musicControls = narrow, Modifier.align(Alignment.TopEnd).padding(top = 66.dp, end = 12.dp))
         if (panel == "chapters") {
             val chapters = session.chapters
             val chapterList = rememberLazyListState(initialFirstVisibleItemIndex = (session.index - 5).coerceAtLeast(0))
@@ -259,11 +266,16 @@ fun NovelReaderScreen(onBack: () -> Unit, onOpenTitle: (com.sanjay.anitrack.next
 }
 
 @Composable
-private fun TypePanel(prefs: NovelPrefs, theme: ReaderTheme, modifier: Modifier) {
+private fun TypePanel(prefs: NovelPrefs, theme: ReaderTheme, musicControls: Boolean, modifier: Modifier) {
     Column(
         modifier.width(300.dp).clip(aniShape(18.dp)).background(theme.chrome).border(1.dp, theme.rule, aniShape(18.dp)).padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        // A phone's reader bar only has the music on/off switch, so pause and skip live here.
+        if (musicControls && com.sanjay.anitrack.next.data.BackgroundMusic.tracks.value.isNotEmpty()) {
+            Text("Background music", color = theme.muted, style = MaterialTheme.typography.labelLarge)
+            BackgroundMusicBar(compact = false, onOpenSettings = {})
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             READER_THEMES.forEach { (key, t) ->
                 Box(

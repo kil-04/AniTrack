@@ -90,6 +90,7 @@ internal fun StatusLine(text: String, ok: Boolean? = null) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SyncCard() {
     var token by remember { mutableStateOf(GistSync.token) }
@@ -118,7 +119,11 @@ private fun SyncCard() {
             ),
         )
         Spacer(Modifier.height(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            itemVerticalAlignment = Alignment.CenterVertically,
+        ) {
             PillButton(
                 "Save",
                 onClick = {

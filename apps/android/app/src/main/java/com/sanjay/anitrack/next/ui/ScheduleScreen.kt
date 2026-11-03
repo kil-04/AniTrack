@@ -157,11 +157,20 @@ fun ScheduleScreen(onOpen: (Int) -> Unit) {
                 Column(Modifier.weight(1f)) {
                     Text(a.anime.title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Spacer(Modifier.height(2.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Wraps, so on a phone the tag drops under the episode line instead of
+                    // being clipped to a sliver beside it.
+                    @OptIn(ExperimentalLayoutApi::class)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        itemVerticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Text(
                             metaLine("Episode ${a.episode}", formatLabel(a.anime.format)),
                             style = MaterialTheme.typography.labelMedium,
                             color = AniColors.TextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                         if (listed) Tag("ON MY LIST", tone = TagTone.Accent, icon = Icons.Rounded.Bookmark)
                         else if (mine) Tag("WATCHING", tone = TagTone.Accent, icon = Icons.Rounded.PlayArrow)
