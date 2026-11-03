@@ -516,7 +516,7 @@ test("City Pop desktop: IPC accepts only the main frame and validates mode, rece
   assert.deepEqual(searches, [["Mariya", 2, "video"], ["Miki", 1, "all"]]);
   assert.throws(() => invoke("CITY_POP_DOWNLOAD_PLAY", "../../secret", "listen"), /Choose a City Pop download/);
   // An album: its files once each, and a starting track among them.
-  for (const [names, start] of [["one.mp3", 0], [[], 0], [Array.from({ length: 201 }, (_, i) => `${i}.mp3`), 0], [["one.mp3", "one.mp3"], 0], [["one.mp3"], 1], [["one.mp3"], -1], [["one.mp3"], 0.5], [["one.mp3"], "0"], [["one\n.mp3"], 0], [[42], 0]]) {
+  for (const [names, start] of [["one.mp3", 0], [[], 0], [Array.from({ length: 501 }, (_, i) => `${i}.mp3`), 0], [["one.mp3", "one.mp3"], 0], [["one.mp3"], 1], [["one.mp3"], -1], [["one.mp3"], 0.5], [["one.mp3"], "0"], [["one\n.mp3"], 0], [[42], 0]]) {
     assert.throws(() => invoke("CITY_POP_ARCHIVE_PLAY", "test-album", names, start, "listen"), /Invalid City Pop selection/);
   }
   assert.throws(() => invoke("CITY_POP_ARCHIVE_PLAY", "test-album", ["one.mp3"], 0, "background"), /Choose Listen/);

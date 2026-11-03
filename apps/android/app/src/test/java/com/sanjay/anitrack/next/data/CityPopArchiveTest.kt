@@ -105,6 +105,7 @@ class CityPopArchiveTest {
         assertTrue(CityPopArchive.parseMetadata(album(listOf(file("song.mp3")), "mediatype" to "texts"), "test-album").isEmpty())
     }
     @Test fun parserBoundsFilesAndResults() {
-        assertEquals(500, CityPopArchive.parseMetadata(album((0 until 5500).map { file("song-$it.mp3") }), "test-album").size)
+        assertEquals(500, CityPopArchive.TRACK_LIMIT)
+        assertEquals(CityPopArchive.TRACK_LIMIT, CityPopArchive.parseMetadata(album((0 until 5500).map { file("song-$it.mp3") }), "test-album").size)
     }
 }

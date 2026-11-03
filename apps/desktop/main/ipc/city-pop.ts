@@ -3,6 +3,7 @@ import { IPC } from "../../../../packages/shared/types";
 import { closeCityPop, cityPopIsOpen, openCityPop, playArchiveCityPop, playOfflineCityPop, searchCityPop } from "../services/city-pop-player";
 import { searchCityPopArchive, cityPopArchiveItem, downloadCityPopArchive, cityPopDownloads, cancelCityPopDownload, removeCityPopDownload } from "../services/city-pop-archive";
 import type { CityPopMode } from "../../../../packages/shared/city-pop-api";
+import { ARCHIVE_TRACK_LIMIT } from "../../../../packages/shared/city-pop-archive";
 
 export function registerCityPopIpc(getMainWindow: () => BrowserWindow | null): void {
   const owner = (event: IpcMainInvokeEvent): BrowserWindow => {
@@ -41,7 +42,7 @@ export function registerCityPopIpc(getMainWindow: () => BrowserWindow | null): v
   ipcMain.handle(IPC.CITY_POP_ARCHIVE_ITEM, (event, id: unknown) => { owner(event); return cityPopArchiveItem(text(id, 100)); });
   /** An album's files (each once) and the one to start from. */
   const files = (value: unknown, from: unknown): { names: string[]; start: number } => {
-    if (!Array.isArray(value) || value.length < 1 || value.length > 200) throw new Error("Invalid City Pop selection.");
+    if (!Array.isArray(value) || value.length < 1 || value.length > ARCHIVE_TRACK_LIMIT) throw new Error("Invalid City Pop selection.");
     const names = value.map((name) => text(name));
     if (new Set(names).size !== names.length) throw new Error("Invalid City Pop selection.");
     if (typeof from !== "number" || !Number.isSafeInteger(from) || from < 0 || from >= names.length) throw new Error("Invalid City Pop selection.");

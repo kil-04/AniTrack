@@ -11,6 +11,8 @@ export interface ArchiveItem {
 export interface ArchiveSearchResult { items: ArchiveItem[]; total: number; page: number }
 export type ArchiveMediaFilter = "all" | "audio" | "video";
 export const CITY_POP_ARCHIVE_PAGE_SIZE = 24;
+/** Most tracks one item lists; the play IPC accepts a queue this long, so every listed track plays. */
+export const ARCHIVE_TRACK_LIMIT = 500;
 
 export interface ArchiveTrack {
   itemId: string;
@@ -187,5 +189,5 @@ export function parseArchiveTracks(itemId: string, value: unknown): ArchiveTrack
   const result = [...groups.values()];
   if (result.every((candidate) => candidate.number !== null)) result.sort((a, b) => a.disc - b.disc || a.number! - b.number! || a.index - b.index);
   else result.sort((a, b) => a.index - b.index);
-  return result.slice(0, 500).map((candidate) => candidate.track);
+  return result.slice(0, ARCHIVE_TRACK_LIMIT).map((candidate) => candidate.track);
 }

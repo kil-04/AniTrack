@@ -32,6 +32,8 @@ enum class CityPopArchiveMediaFilter { ALL, AUDIO, VIDEO }
 /** Internet Archive's public search/metadata; mirrors packages/shared/city-pop-archive.ts. */
 object CityPopArchive {
     const val DOWNLOADS_PREF = "city_pop_archive_downloads"
+    /** Most tracks one item lists (ARCHIVE_TRACK_LIMIT on desktop, which also bounds the play queue). */
+    const val TRACK_LIMIT = 500
     private val archiveId = Regex("^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
     private val http = OkHttpClient.Builder().callTimeout(25, TimeUnit.SECONDS).followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false).build()
     private const val MAX_BYTES = 16 * 1024 * 1024
@@ -214,7 +216,7 @@ object CityPopArchive {
         }
         val sorted = if (groups.values.all { it.number != null }) groups.values.sortedWith(compareBy<Candidate> { it.disc }.thenBy { it.number }.thenBy { it.index })
             else groups.values.sortedBy { it.index }
-        return sorted.take(500).map { it.track }
+        return sorted.take(TRACK_LIMIT).map { it.track }
     }
 
     private fun manager(context: Context) = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager

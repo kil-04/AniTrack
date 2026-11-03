@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { archiveSearchUrl, parseArchiveSearch, parseArchiveTracks, archiveFileUrl, validArchiveId, CITY_POP_ARCHIVE_PAGE_SIZE, ArchiveUnavailableError, ARCHIVE_SEARCH_UNAVAILABLE, ARCHIVE_ITEM_UNAVAILABLE } from "../packages/shared/city-pop-archive.ts";
+import { archiveSearchUrl, parseArchiveSearch, parseArchiveTracks, archiveFileUrl, validArchiveId, CITY_POP_ARCHIVE_PAGE_SIZE, ARCHIVE_TRACK_LIMIT, ArchiveUnavailableError, ARCHIVE_SEARCH_UNAVAILABLE, ARCHIVE_ITEM_UNAVAILABLE } from "../packages/shared/city-pop-archive.ts";
 
 // Compact shapes from the public metadata API, checked 24 October 2026.
 const album = (files, metadata = {}) => ({ metadata: { identifier: "test-album", mediatype: "audio", title: "Album", creator: "Artist", ...metadata }, files });
@@ -150,5 +150,6 @@ test("City Pop Archive: an error answer or an item without its file list is unav
 
 test("City Pop Archive: file processing and outputs remain bounded", () => {
   const files = Array.from({ length: 5500 }, (_, i) => file(`song-${i}.mp3`));
-  assert.equal(parseArchiveTracks("test-album", album(files)).length, 500);
+  assert.equal(ARCHIVE_TRACK_LIMIT, 500);
+  assert.equal(parseArchiveTracks("test-album", album(files)).length, ARCHIVE_TRACK_LIMIT);
 });
