@@ -47,6 +47,28 @@ export type {
 
 type AnikotoSubtitleType = "soft" | "hard" | "dub";
 
+/**
+ * Search result cards. The class must be a whole token: `[^"']*\bitem\b` also matched the
+ * sidebar's `m-item` rows, which leaked an unrelated show into searches. A sidebar after
+ * the first card is cut off as well (mirrors Anikoto.kt searchCards).
+ */
+export function anikotoSearchCards(html: string, itemClass: string): string[] {
+  const card = new RegExp(`<div\\s+class=["'](?:[^"']*\\s)?${escapeRegex(itemClass)}(?:\\s[^"']*)?["'][^>]*>`, "i");
+  const first = html.search(card);
+  if (first < 0) return [];
+  const sidebar = html.slice(first).search(/<aside\b[^>]*\bclass=["'](?:[^"']*\s)?sidebar(?:\s[^"']*)?["']/i);
+  return (sidebar < 0 ? html : html.slice(0, first + sidebar)).split(card).slice(1);
+}
+
+/**
+ * Whether a search page links to page 2. A page without any pagination markup (a layout
+ * change) still counts as having one, so results are never silently lost.
+ */
+export function anikotoSearchHasNextPage(html: string): boolean {
+  const at = html.search(/class=["'](?:[^"']*\s)?pagination(?:\s[^"']*)?["']/i);
+  return at < 0 || /[?&;]page=2(?!\d)/i.test(html.slice(at, at + 4000));
+}
+
 function isHardSubtitleLabel(label: string): boolean {
   const normalized = label.toUpperCase().replace(/[\s-]+/g, "");
   return normalized.includes("HARDSUB") || normalized.includes("HSUB");
@@ -148,23 +170,20 @@ export class AnikotoProvider implements StreamProvider {
   async search(query: string): Promise<AnimeInfo[]> {
     const results: AnimeInfo[] = [];
     
-    const fetchPage = async (pageNo: number) => {
+    // Resolves whether the page links to a next one, so one-page searches send one request.
+    const fetchPage = async (pageNo: number): Promise<boolean> => {
       try {
         const resp = await anikotoFetch(anikotoUrl("search", { query, page: pageNo }));
         if (!resp.ok) {
           if (pageNo === 1) throw new Error(`Anikoto search returned HTTP ${resp.status}`);
-          return;
+          return false;
         }
         const html = await resp.text();
-        
-        const itemClass = escapeRegex(anikotoSelector("searchItemClass"));
-        const blocks = html.split(new RegExp(`<div\\s+class=["'][^"']*\\b${itemClass}\\b[^"']*["'][^>]*>`, "i"));
-        for (let i = 1; i < blocks.length; i++) {
-          const block = blocks[i];
-          
+
+        for (const block of anikotoSearchCards(html, anikotoSelector("searchItemClass"))) {
           const hrefValue = htmlAttribute(block, "href") || /href="([^"]+)"/.exec(block)?.[1] || "";
           const href = extractRouteValue(hrefValue, "watch", "animeId");
-          if (!href) continue;
+          if (!href || results.some((result) => result.id === href)) continue;
           
           const imgM = /<img src="([^"]+)" alt="([^"]+)"/.exec(block);
           const imgSrc = imgM ? imgM[1] : null;
@@ -217,13 +236,15 @@ export class AnikotoProvider implements StreamProvider {
             year: parsedYear,
           });
         }
+        return anikotoSearchHasNextPage(html);
       } catch (err) {
         if (pageNo === 1 || err instanceof AnikotoTransportError) throw err;
         console.warn("[Anikoto] Extra search page was unavailable");
+        return false;
       }
     };
 
-    await Promise.all([fetchPage(1), fetchPage(2)]);
+    if (await fetchPage(1)) await fetchPage(2);
     return results;
   }
 

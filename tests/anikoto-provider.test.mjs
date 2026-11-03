@@ -27,7 +27,7 @@ registerHooks({
     }
   },
 });
-const { AnikotoProvider } = await import("../apps/desktop/main/services/providers/anikoto.ts");
+const { AnikotoProvider, anikotoSearchCards, anikotoSearchHasNextPage } = await import("../apps/desktop/main/services/providers/anikoto.ts");
 const { clearResolvedStreamAuthorizations, getResolvedStreamAuthorization } = await import("../apps/desktop/main/services/providers/stream-authorization.ts");
 const episodeId = "ep-1:101:fixture-servers";
 const animeId = "classic-show";
@@ -199,4 +199,36 @@ test("Anikoto forged and oversized stream coordinates fail before any request", 
   ]) await assert.rejects(provider.resolveStream(invalid), /Invalid Anikoto/);
   await assert.rejects(provider.getStreamLinks("ep-1::servers", animeId), /Invalid Anikoto/);
   assert.equal(calls, 0);
+});
+
+// Search page shape (synthetic): div.item cards hold m-item children, a sidebar of m-item rows follows.
+const searchCard = (slug, title) => `<div class="item"><div class="ani poster"><a href="/watch/${slug}"><img src="/p/${slug}.jpg" alt="${title}"></a></div>`
+  + `<div class="m-item rated"><div class="ep-status total"><span>12</span></div></div><a class="name" data-jp="${title}" href="/watch/${slug}">${title}</a></div>`;
+const searchSidebar = `<aside class="sidebar"><div class="m-item"><a href="/watch/stray-sidebar-show">Stray</a></div><div class="item"><a href="/watch/stray-sidebar-card">Stray</a></div></aside>`;
+
+test("Anikoto search keeps only result cards and skips page 2 when page 1 has no next page", async () => {
+  const pages = [];
+  const provider = fixture(async url => {
+    pages.push(new URL(url).searchParams.get("page"));
+    return new Response(`<main>${searchCard("real-show", "Real Show")}<ul class="pagination"></ul></main>${searchSidebar}`);
+  });
+  const results = await provider.search("real");
+  assert.deepEqual(results.map(result => result.id), ["real-show"]);
+  assert.equal(results[0].episodes, 12);
+  assert.deepEqual(pages, ["1"]);
+});
+
+test("Anikoto search reads page 2 only when it is linked, or when pagination markup is missing", async () => {
+  const pages = [];
+  const linked = fixture(async url => {
+    const page = new URL(url).searchParams.get("page");
+    pages.push(page);
+    const cards = page === "1" ? searchCard("first-show", "First") : searchCard("first-show", "First") + searchCard("second-show", "Second");
+    return new Response(`${cards}<ul class="pagination"><li><a class="page-link" href="/filter?keyword=x&amp;page=2">2</a></li></ul>`);
+  });
+  assert.deepEqual((await linked.search("x")).map(result => result.id), ["first-show", "second-show"]);
+  assert.deepEqual(pages, ["1", "2"]);
+  assert.equal(anikotoSearchHasNextPage(`<nav class="pagination"><a href="?page=12">12</a></nav>`), false);
+  assert.equal(anikotoSearchHasNextPage(searchCard("a", "A")), true);
+  assert.deepEqual(anikotoSearchCards(`<div class="m-item">x</div>`, "item"), []);
 });

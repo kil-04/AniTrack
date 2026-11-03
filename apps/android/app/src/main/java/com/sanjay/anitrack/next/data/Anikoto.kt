@@ -213,6 +213,29 @@ object Anikoto {
         out
     }
 
+    /**
+     * Search result cards. The class must be a whole token: `[^"']*\bitem\b` also matched the
+     * sidebar's `m-item` rows, which leaked an unrelated show into searches. A sidebar after
+     * the first card is cut off as well (mirrors anikoto.ts anikotoSearchCards).
+     */
+    internal fun searchCards(html: String, itemClass: String): List<String> {
+        val card = Regex("""<div\s+class=["'](?:[^"']*\s)?${Regex.escape(itemClass)}(?:\s[^"']*)?["'][^>]*>""", RegexOption.IGNORE_CASE)
+        val first = card.find(html)?.range?.first ?: return emptyList()
+        val sidebar = Regex("""<aside\b[^>]*\bclass=["'](?:[^"']*\s)?sidebar(?:\s[^"']*)?["']""", RegexOption.IGNORE_CASE)
+            .find(html, first)?.range?.first
+        return (if (sidebar == null) html else html.substring(0, sidebar)).split(card).drop(1)
+    }
+
+    /**
+     * Whether a search page links to page 2. A page without any pagination markup (a layout
+     * change) still counts as having one, so results are never silently lost.
+     */
+    internal fun searchHasNextPage(html: String): Boolean {
+        val at = Regex("""class=["'](?:[^"']*\s)?pagination(?:\s[^"']*)?["']""", RegexOption.IGNORE_CASE)
+            .find(html)?.range?.first ?: return true
+        return Regex("""[?&;]page=2(?!\d)""", RegexOption.IGNORE_CASE).containsMatchIn(html.substring(at, minOf(html.length, at + 4000)))
+    }
+
     suspend fun search(query: String): List<SearchResult> = withContext(Dispatchers.IO) {
         val out = mutableListOf<SearchResult>()
         for (page in 1..2) {
@@ -223,10 +246,7 @@ object Anikoto {
                 if (page == 1) throw e
                 break
             }
-            val itemClass = Regex.escape(selector("searchItemClass"))
-            val blocks = html.split(Regex("""<div\s+class=["'][^"']*\b$itemClass\b[^"']*["'][^>]*>""", RegexOption.IGNORE_CASE))
-            for (i in 1 until blocks.size) {
-                val block = blocks[i]
+            for (block in searchCards(html, selector("searchItemClass"))) {
                 val href = attribute(block, "href") ?: continue
                 val slug = extractRouteValue(href, "watch", "animeId") ?: continue
                 val jp = attribute(block, selector("searchTitleAttribute"))?.replace("&#039;", "'")
@@ -242,6 +262,8 @@ object Anikoto {
                     out += SearchResult(slug, title, total, parseYear(title), sub, dub)
                 }
             }
+            // One-page searches stop here instead of always asking for page 2.
+            if (!searchHasNextPage(html)) break
         }
         out
     }
