@@ -1,6 +1,7 @@
 package com.sanjay.anitrack.next.ui
 
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.net.Uri
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
@@ -114,6 +115,35 @@ internal fun CityPopArchivePlayer(tracks: List<CityPopArchiveTrack>, uris: List<
     // No taller than a 16:9 video at the dialog's width, so a phone held upright keeps the controls in view.
     val videoWidth = (configuration.screenWidthDp * 0.94f).coerceAtMost(1050f) - 36f
     val videoHeight = minOf(configuration.screenHeightDp * 0.55f, videoWidth * 9f / 16f).dp.coerceIn(160.dp, 520.dp)
+    // The video controller's fullscreen button: landscape, video only, like the episode player.
+    val activity = remember(context) { context.findActivity() }
+    var full by remember { mutableStateOf(false) }
+    fun setFull(on: Boolean) {
+        full = on
+        activity?.requestedOrientation =
+            if (on) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    }
+    // The next song may be audio only, and closing the player never leaves the app sideways.
+    LaunchedEffect(video) { if (!video && full) setFull(false) }
+    DisposableEffect(Unit) { onDispose { if (full) activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED } }
+    if (video && full) {
+        // Back leaves fullscreen first. Only one PlayerView holds the player at a time:
+        // the inline one leaves the composition while this one shows.
+        Dialog(onDismissRequest = { setFull(false) }, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+            DialogSystemBars(hidden = true)
+            AndroidView(
+                factory = { ctx ->
+                    PlayerView(ctx).apply {
+                        this.player = player; useController = true; controllerShowTimeoutMs = 5000
+                        setFullscreenButtonState(true)
+                        setFullscreenButtonClickListener { on -> if (!on) setFull(false) }
+                    }
+                },
+                modifier = Modifier.fillMaxSize().background(Color.Black),
+                update = { it.player = player }, onRelease = { it.player = null },
+            )
+        }
+    }
     fun step(by: Int) {
         val at = index + by
         if (at !in tracks.indices) return
@@ -136,8 +166,16 @@ internal fun CityPopArchivePlayer(tracks: List<CityPopArchiveTrack>, uris: List<
                 IconButton(onClick = onClose) { Icon(Icons.Rounded.Close, "Close player", tint = Color.White) }
             }
             if (video) {
-                AndroidView(
-                    factory = { ctx -> PlayerView(ctx).apply { this.player = player; useController = true; controllerShowTimeoutMs = 5000 } },
+                if (full) Box(Modifier.fillMaxWidth().height(videoHeight).background(Color.Black))
+                else AndroidView(
+                    factory = { ctx ->
+                        PlayerView(ctx).apply {
+                            this.player = player; useController = true; controllerShowTimeoutMs = 5000
+                            // Media3 only shows the fullscreen button once a listener is set.
+                            setFullscreenButtonState(false)
+                            setFullscreenButtonClickListener { on -> if (on) setFull(true) }
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth().height(videoHeight),
                     update = { it.player = player }, onRelease = { it.player = null },
                 )

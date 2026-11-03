@@ -1,8 +1,11 @@
 package com.sanjay.anitrack.next.ui
 
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.net.Uri
+import android.view.View
 import android.view.ViewGroup
 import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
@@ -52,6 +55,7 @@ internal fun CityPopPlayerDialog(tracks: List<CityPopTrack>, start: Int, label: 
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val origin = "https://${context.packageName}"
+    val fullscreen = remember { WebFullscreen(context.findActivity()) }
     val web = remember(tracks, start) {
         WebView(context).apply {
             // A wrap-content WebView lays its page out 0 px tall, so 100vh would be 0 and the
@@ -72,6 +76,9 @@ internal fun CityPopPlayerDialog(tracks: List<CityPopTrack>, start: Int, label: 
             }
             webChromeClient = object : WebChromeClient() {
                 override fun onPermissionRequest(request: PermissionRequest) { request.deny() }
+                // YouTube's fullscreen button: WebView only goes fullscreen through these.
+                override fun onShowCustomView(view: View, callback: WebChromeClient.CustomViewCallback) { fullscreen.show(view, callback) }
+                override fun onHideCustomView() { fullscreen.exit() }
             }
             setDownloadListener { _, _, _, _, _ -> /* Playback-only official embeds have no download endpoint. */ }
             loadDataWithBaseURL("$origin/", cityPopPlayerHtml(tracks, start, origin), "text/html", "utf-8", null)
@@ -90,6 +97,8 @@ internal fun CityPopPlayerDialog(tracks: List<CityPopTrack>, start: Int, label: 
         lifecycle.addObserver(observer)
         onDispose {
             lifecycle.removeObserver(observer)
+            // Leave fullscreen first so the orientation lock never outlives the player.
+            fullscreen.exit()
             web.evaluateJavascript("window.cityPopPause && window.cityPopPause()", null)
             web.stopLoading()
             web.onPause()
@@ -103,6 +112,7 @@ internal fun CityPopPlayerDialog(tracks: List<CityPopTrack>, start: Int, label: 
     val videoWidth = (configuration.screenWidthDp * 0.94f).coerceAtMost(1000f) - 32f
     val videoHeight = if (listen) 220.dp else minOf(configuration.screenHeightDp * 0.54f, videoWidth * 9f / 16f).dp.coerceIn(220.dp, 520.dp)
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        fullscreen.view?.let { video -> WebFullscreenWindow(video, onExit = fullscreen::exit) }
         Column(
             Modifier.widthIn(max = if (listen) 580.dp else 1000.dp).fillMaxWidth(0.94f)
                 .heightIn(max = (configuration.screenHeightDp - 32).coerceAtLeast(240).dp)
@@ -136,6 +146,50 @@ internal fun CityPopPlayerDialog(tracks: List<CityPopTrack>, start: Int, label: 
                     }
                 }) { Text("Open on YouTube", color = Color(0xFF7FE1DB)) }
             }
+        }
+    }
+}
+
+/**
+ * The video view WebView hands over for HTML fullscreen. It shows in a window of its own:
+ * the player is itself a Dialog, so the activity's decor view would sit underneath it.
+ */
+private class WebFullscreen(private val activity: Activity?) {
+    var view by mutableStateOf<View?>(null)
+        private set
+    private var callback: WebChromeClient.CustomViewCallback? = null
+
+    fun show(video: View, done: WebChromeClient.CustomViewCallback) {
+        if (view != null) { done.onCustomViewHidden(); return }
+        view = video
+        callback = done
+        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+    }
+
+    fun exit() {
+        if (view == null) return
+        view = null
+        callback?.onCustomViewHidden()
+        callback = null
+        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    }
+}
+
+/** Fullscreen video over everything, system bars hidden; Back leaves fullscreen first. */
+@Composable
+private fun WebFullscreenWindow(video: View, onExit: () -> Unit) {
+    Dialog(onDismissRequest = onExit, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        DialogSystemBars(hidden = true)
+        key(video) {
+            AndroidView(
+                factory = {
+                    video.apply {
+                        (parent as? ViewGroup)?.removeView(this)
+                        layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                    }
+                },
+                modifier = Modifier.fillMaxSize().background(Color.Black),
+            )
         }
     }
 }

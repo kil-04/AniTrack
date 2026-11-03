@@ -1,6 +1,9 @@
 package com.sanjay.anitrack.next.ui
 
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
+import android.content.pm.ActivityInfo
 import android.view.SoundEffectConstants
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
@@ -86,6 +89,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
@@ -97,6 +101,10 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
@@ -315,16 +323,63 @@ internal fun SongSidePlayer(video: SongVideo, onFull: () -> Unit, onClose: () ->
     }
 }
 
+/** The Activity behind a context: inside a Dialog, LocalContext is a wrapper around it. */
+internal fun Context.findActivity(): Activity? =
+    generateSequence(this) { (it as? ContextWrapper)?.baseContext }.firstOrNull { it is Activity } as Activity?
+
+/**
+ * Hides the system bars of the Dialog window this sits in while [hidden]. A Dialog window
+ * keeps its own bar state, so the activity's immersive mode doesn't cover it.
+ */
+@Composable
+internal fun DialogSystemBars(hidden: Boolean) {
+    val view = LocalView.current
+    DisposableEffect(view, hidden) {
+        val window = (view.parent as? DialogWindowProvider)?.window
+        val bars = window?.let { WindowCompat.getInsetsController(it, it.decorView) }
+        if (hidden) {
+            bars?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            bars?.hide(WindowInsetsCompat.Type.systemBars())
+        }
+        onDispose { if (hidden) bars?.show(WindowInsetsCompat.Type.systemBars()) }
+    }
+}
+
 /** Full screen. [onDock] is null where there's no room for the side panel (phones). */
 @Composable
 internal fun SongFullPlayer(video: SongVideo, onDock: (() -> Unit)?, onClose: () -> Unit, onStep: (Int) -> Unit, onJump: (Int) -> Unit) {
-    Dialog(onDismissRequest = onDock ?: onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    // Phones get a landscape toggle, like the episode player's fullscreen button: a 16:9
+    // video is a letterboxed strip in a portrait phone. Tablets keep their layout.
+    val phone = LocalConfiguration.current.smallestScreenWidthDp < 600
+    val activity = LocalContext.current.findActivity()
+    var landscape by remember { mutableStateOf(false) }
+    fun setLandscape(on: Boolean) {
+        landscape = on
+        activity?.requestedOrientation =
+            if (on) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    }
+    // Closing the player never leaves the app stuck sideways.
+    DisposableEffect(Unit) { onDispose { if (landscape) activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED } }
+    // Back leaves landscape first, then closes (or docks) the player.
+    Dialog(
+        onDismissRequest = { if (landscape) setLandscape(false) else (onDock ?: onClose)() },
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        DialogSystemBars(hidden = landscape)
         BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
             SongVideoSurface(video, Modifier.fillMaxSize(), onSwipe = onStep)
             val buttons = @Composable {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     GlassIconButton(Icons.Rounded.SkipPrevious, "Previous", { onStep(-1) }, size = 40.dp)
                     GlassIconButton(Icons.Rounded.SkipNext, "Next", { onStep(1) }, size = 40.dp)
+                    if (phone && onDock == null) {
+                        GlassIconButton(
+                            if (landscape) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
+                            if (landscape) "Exit full screen" else "Full screen",
+                            { setLandscape(!landscape) },
+                            size = 40.dp,
+                        )
+                    }
                     if (onDock != null) GlassIconButton(Icons.Rounded.FullscreenExit, "Side player", onDock, size = 40.dp)
                     GlassIconButton(Icons.Rounded.Close, "Close", onClose, size = 40.dp)
                 }
