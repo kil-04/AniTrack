@@ -485,3 +485,47 @@ local playback with English subtitles were verified on the desktop and tablet;
 conservative transfer pacing was added after a simultaneous test hit a CDN
 limit. See [download validation](anichan.md#download-validation) for completed
 checks, tested qualities and the sampled mirrors that returned HTTP 502.
+
+# Weeb Central integration: 3 Nov 2026
+
+The user asked for more sources from EverythingMoe. Weeb Central was the
+remaining "usable" manga candidate from the 12 Oct survey that needs neither a
+page session nor title guessing, so it was added to both apps after XComic and
+Toonkotsu. Re-checked from this session's network with AniTrack's honest user
+agent and no browser:
+
+| Step | Request | Observed |
+| --- | --- | --- |
+| Search | `GET /search/data?text=…&sort=Best+Match&display_mode=Full+Display` | HTML cards; `/series/<ULID>/<slug>` links in relevance order |
+| Series | `GET /series/<ULID>` (slug optional) | `<h1>` English title, AniList link, `Type`, `Released`, `Adult Content`, newest chapters |
+| Chapters | `GET /series/<ULID>/full-chapter-list` | Every chapter in one fragment, newest first: One Piece 1,197, Berserk 403 (16 "Prologue N"), Solo Leveling 201 |
+| Pages | `GET /chapters/<ULID>/images?is_prev=False&current_page=1&reading_style=long_strip` | `<img>` tags on `hot.planeptune.us`, `scans-hot.planeptune.us`, `scans.lastation.us` and `official.lowee.us`, all served with no Referer |
+
+Decisions:
+
+- **Matching** is by the series page's AniList link (the shared `sourceMatches`
+  rule). Frieren, One Piece, Solo Leveling and Berserk all matched from their
+  AniList titles.
+- **"Adult Content: Yes"** also marks violent seinen such as Berserk. AniTrack
+  only lists AniList titles that aren't adult, so an AniList-linked series is
+  never rejected for the site's flag; an unlinked one still is.
+- **"Prologue N"** chapters are filed as 0.01–0.16, before chapter 1, as on
+  MangaDex. Other labels without a number (none seen in the samples) are skipped.
+- **Images** are allowed only from `planeptune`, `lastation`, `lowee` and
+  `leanbox` `.us` hosts under `/manga/` (`leanbox` follows the site's naming but
+  was not observed).
+- **Downloads** need no source-specific code in either app: desktop downloads
+  fetch `pageImages` through `fetchPageImage` (now allowing those hosts), and
+  Android's `MangaDownloads` fetches the plain HTTPS `MangaPage` URLs.
+
+Validation done: parser tests on both platforms over saved pages
+(`tests/weebcentral.test.mjs`, `WeebCentralParserTest`); a live run of the shared
+parser through search, match, chapter list, pages and a page-image download for
+the four titles above; desktop type-check. **Not done:** the Android app was not
+compiled here (no Android SDK licence could be accepted in this environment), and
+a completed download was not opened offline in either running app. Both remain
+required before calling the source complete.
+
+Other EverythingMoe candidates still open, unchanged from the earlier sections:
+MangaKatana (plain HTTP) and Kagane (page session) for manga; anv, Xanime and
+ANIMEGG for anime; NovelCool and NovelFire for novels.

@@ -45,6 +45,20 @@ import {
   xcomicSearchUrl,
   xcomicTitleUrl,
 } from "../../../../../packages/shared/xcomic";
+import {
+  isWeebCentralId,
+  isWeebCentralImage,
+  WEEBCENTRAL,
+  weebCentralChapterListUrl,
+  weebCentralChapters,
+  weebCentralDetail,
+  weebCentralImagesUrl,
+  weebCentralLatest,
+  weebCentralPages,
+  weebCentralSearchIds,
+  weebCentralSearchUrl,
+  weebCentralSeriesUrl,
+} from "../../../../../packages/shared/weebcentral";
 import { mangaById } from "./anilist-manga";
 import { readCached, writeCached } from "./disk-cache";
 import { saveMatch, savedMatch } from "./store";
@@ -238,7 +252,8 @@ const listableTitle = (title: SourceTitle) =>
   (title.sourceId === "mangaball" && isMangaBallId(title.id)) || (title.sourceId === "mangadot" && /^\d{1,12}$/.test(title.id)) ||
   (title.sourceId === "comix" && /^[a-zA-Z0-9]{1,32}$/.test(title.id)) ||
   (title.sourceId === "xcomic" && parseXComicTitleRef(title.id) != null) ||
-  (title.sourceId === "toonkotsu" && toonkotsuHid(title.id) != null);
+  (title.sourceId === "toonkotsu" && toonkotsuHid(title.id) != null) ||
+  (title.sourceId === "weebcentral" && isWeebCentralId(title.id));
 
 /** Keeps a fresh chapter list on disk, so the title page can show it at once next time (or offline). */
 function keepList(title: SourceTitle, list: MangaChapter[]) {
@@ -613,7 +628,45 @@ const toonkotsu: Source = {
   pages: viaProtocol("toonkotsu", toonPageImages), pageImages: toonPageImages,
   latest: title => toonRun(async () => { const d = toonkotsuDetail(await toonCatalogue(title.id), title.id); return d ? { chapter: d.latestChapter, at: d.latestAt } : null; }),
 };
-const SOURCES: Source[] = [mangaDot, mangaBall, xcomic, toonkotsu];
+// ── Weeb Central: public HTML, official translations where they exist ───────
+// packages/shared/weebcentral.ts. One request lists every chapter (One Piece's list
+// is ~2 MB), so requests are spaced out like XComic's.
+
+const weebHttp = new SourceHttp("Weeb Central", new Set(WEEBCENTRAL.HOSTS), 700, () => net.fetch, honestAgent());
+const weebLists = new Map<string, { at: number; list: MangaChapter[] }>();
+const WEEB_PAGE_BYTES = 6 * 1024 * 1024;
+
+async function weebPageImages(_title: SourceTitle, chapterId: string): Promise<MangaPageImage[]> {
+  if (!isWeebCentralId(chapterId)) throw new MangaSourceError("Unrecognised Weeb Central chapter.");
+  const pages = weebCentralPages(await weebHttp.get(weebCentralImagesUrl(chapterId), WEEB_PAGE_BYTES))
+    .map((url) => ({ url, width: null, height: null }));
+  if (!pages.length) throw new MangaSourceError("Weeb Central has no pages for this chapter.");
+  return pages;
+}
+
+const weebCentral: Source = {
+  info: { id: "weebcentral", label: "Weeb Central", needsConnect: false },
+  find: matcher(
+    "weebcentral",
+    async (query) => weebCentralSearchIds(await weebHttp.get(weebCentralSearchUrl(query), WEEB_PAGE_BYTES)),
+    async (id) => (isWeebCentralId(id) ? weebCentralDetail(await weebHttp.get(weebCentralSeriesUrl(id), WEEB_PAGE_BYTES), id) : null),
+  ),
+  async chapters(title) {
+    if (!isWeebCentralId(title.id)) throw new MangaSourceError("Unrecognised Weeb Central title.");
+    const hit = weebLists.get(title.id);
+    if (hit && Date.now() - hit.at < CHAPTERS_TTL_MS) return hit.list;
+    const list = weebCentralChapters(await weebHttp.get(weebCentralChapterListUrl(title.id), WEEB_PAGE_BYTES));
+    if (list.length) weebLists.set(title.id, { at: Date.now(), list });
+    if (weebLists.size > 10) weebLists.delete(weebLists.keys().next().value!);
+    keepList(title, list);
+    return list;
+  },
+  pages: viaProtocol("weebcentral", weebPageImages),
+  pageImages: weebPageImages,
+  latest: cachedLatest(async (id) => (isWeebCentralId(id) ? weebCentralLatest(await weebHttp.get(weebCentralSeriesUrl(id), WEEB_PAGE_BYTES)) : null)),
+};
+
+const SOURCES: Source[] = [mangaDot, mangaBall, xcomic, toonkotsu, weebCentral];
 
 export const sourceInfos = (): MangaSourceInfo[] => SOURCES.map((source) => source.info);
 
@@ -709,6 +762,9 @@ export function fetchPageImage(sourceId: string, target: URL, signal?: AbortSign
     return net.fetch(target.toString(), { headers: { Referer: `${MANGABALL.SITE}/`, "User-Agent": honestAgent() }, signal });
   }
   if (sourceId === "xcomic" && isXComicImage(target)) {
+    return net.fetch(target.toString(), { headers: { "User-Agent": honestAgent() }, signal });
+  }
+  if (sourceId === "weebcentral" && isWeebCentralImage(target)) {
     return net.fetch(target.toString(), { headers: { "User-Agent": honestAgent() }, signal });
   }
   if (sourceId === "mangadot" && isMangaDotPage(target)) {
