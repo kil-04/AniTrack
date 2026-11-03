@@ -129,55 +129,70 @@ internal fun NativePlayerControls(
                 )
             }
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onPrevious, enabled = index > 0) {
-                Icon(Icons.Filled.SkipPrevious, "Previous", tint = Color.White)
-            }
-            IconButton(onClick = onTogglePlay) {
-                Icon(
-                    if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                    "Play/Pause",
-                    tint = Color.White,
-                    modifier = Modifier.size(30.dp),
-                )
-            }
-            IconButton(onClick = onNext, enabled = index + 1 < episodeCount) {
-                Icon(Icons.Filled.SkipNext, "Next", tint = Color.White)
-            }
-            IconButton(onClick = onToggleMute) {
-                Icon(
-                    if (muted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
-                    "Mute",
-                    tint = Color.White,
-                )
-            }
-            Text(
-                "${formatPlayerTime(shown)} / ${formatPlayerTime(durationMs)}",
-                style = MaterialTheme.typography.labelMedium,
-                color = Color.White.copy(alpha = 0.85f),
-            )
-            Spacer(Modifier.weight(1f))
-            if (hasSubtitles) {
-                IconButton(onClick = onToggleSubtitles) {
+        // A phone in portrait has about 360 dp: nine 48 dp buttons and the time pushed Fullscreen off
+        // the edge. There the buttons shrink to 40 dp and Mute and PiP step out (the volume keys mute;
+        // leaving the app mid-episode enters picture-in-picture by itself), so Fullscreen stays put.
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val compact = maxWidth < 460.dp
+            val button = if (compact) Modifier.size(40.dp) else Modifier
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onPrevious, enabled = index > 0, modifier = button) {
+                    Icon(Icons.Filled.SkipPrevious, "Previous", tint = Color.White)
+                }
+                IconButton(onClick = onTogglePlay, modifier = button) {
                     Icon(
-                        if (ccOn) Icons.Filled.ClosedCaption else Icons.Filled.ClosedCaptionOff,
-                        "Subtitles",
+                        if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                        "Play/Pause",
+                        tint = Color.White,
+                        modifier = Modifier.size(30.dp),
+                    )
+                }
+                IconButton(onClick = onNext, enabled = index + 1 < episodeCount, modifier = button) {
+                    Icon(Icons.Filled.SkipNext, "Next", tint = Color.White)
+                }
+                if (!compact) {
+                    IconButton(onClick = onToggleMute) {
+                        Icon(
+                            if (muted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
+                            "Mute",
+                            tint = Color.White,
+                        )
+                    }
+                }
+                Text(
+                    "${formatPlayerTime(shown)} / ${formatPlayerTime(durationMs)}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.White.copy(alpha = 0.85f),
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    // The time takes the space between the button groups, so Fullscreen always fits.
+                    modifier = Modifier.weight(1f).padding(start = if (compact) 4.dp else 0.dp),
+                )
+                if (hasSubtitles) {
+                    IconButton(onClick = onToggleSubtitles, modifier = button) {
+                        Icon(
+                            if (ccOn) Icons.Filled.ClosedCaption else Icons.Filled.ClosedCaptionOff,
+                            "Subtitles",
+                            tint = Color.White,
+                        )
+                    }
+                }
+                IconButton(onClick = onToggleSettings, modifier = button) {
+                    Icon(Icons.Filled.Settings, "Settings", tint = Color.White)
+                }
+                if (!compact) {
+                    IconButton(onClick = onPictureInPicture) {
+                        Icon(Icons.Filled.PictureInPictureAlt, "PiP", tint = Color.White)
+                    }
+                }
+                IconButton(onClick = onToggleFullscreen, modifier = button) {
+                    Icon(
+                        if (landscapeLocked) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
+                        "Fullscreen",
                         tint = Color.White,
                     )
                 }
-            }
-            IconButton(onClick = onToggleSettings) {
-                Icon(Icons.Filled.Settings, "Settings", tint = Color.White)
-            }
-            IconButton(onClick = onPictureInPicture) {
-                Icon(Icons.Filled.PictureInPictureAlt, "PiP", tint = Color.White)
-            }
-            IconButton(onClick = onToggleFullscreen) {
-                Icon(
-                    if (landscapeLocked) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
-                    "Fullscreen",
-                    tint = Color.White,
-                )
             }
         }
     }

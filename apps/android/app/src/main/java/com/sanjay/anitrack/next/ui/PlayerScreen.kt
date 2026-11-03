@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package com.sanjay.anitrack.next.ui
 
 import androidx.compose.material.icons.rounded.SkipNext
@@ -14,6 +16,7 @@ import androidx.annotation.OptIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -149,6 +152,10 @@ fun PlayerScreen(
     val inPipMode by PipState.active
     // Old-app layout: episode panel beside the video on wide screens.
     val wide = LocalConfiguration.current.screenWidthDp >= 820
+    // A phone turned sideways (a short landscape screen) plays video-only, like the fullscreen lock;
+    // the portrait layout's 16:9 box would be taller than the screen. Tablets keep the side panel.
+    val shortLandscape = LocalConfiguration.current.let { it.screenWidthDp > it.screenHeightDp && it.screenHeightDp < 480 }
+    val videoOnly = landscapeLocked || shortLandscape
     var watchedMap by remember { mutableStateOf<Map<Float, Int>>(emptyMap()) }
     LaunchedEffect(index) {
         if (saveWatchProgress) runCatching { watchedMap = com.sanjay.anitrack.next.data.Db.positionsFor(PlaySession.animeId) }
@@ -594,9 +601,15 @@ fun PlayerScreen(
     }
 
 
+    // Back leaves the fullscreen lock first, as the button does, before it leaves the player.
+    androidx.activity.compose.BackHandler(enabled = landscapeLocked) {
+        landscapeLocked = false
+        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    }
+
     Column(Modifier.fillMaxSize().background(Color.Black)) {
         // Immersive while PiP'd or locked to landscape (the old app's fullscreen).
-        if (!inPipMode && !landscapeLocked) {
+        if (!inPipMode && !videoOnly) {
             // Desktop-style header: "⌂ Home | <Title> — Episode N" with the
             // title clickable → detail page.
             Row(
@@ -839,7 +852,21 @@ fun PlayerScreen(
 
             // Desktop-style settings panel (anchored above the control bar).
             if (settingsMenu != null) {
-                Box(Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 92.dp)) {
+                // Tapping beside the panel or pressing Back closes it: on a phone it covers the gear.
+                androidx.activity.compose.BackHandler { settingsMenu = null }
+                Box(
+                    Modifier.matchParentSize().clickable(
+                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                        indication = null,
+                    ) { settingsMenu = null },
+                )
+                // A phone's portrait video box is about 200 dp tall: there the panel covers the controls
+                // (it scrolls) instead of squeezing into the 110 dp above them.
+                val compactPanel = !wide && !videoOnly && !inPipMode
+                Box(
+                    Modifier.align(if (compactPanel) Alignment.TopEnd else Alignment.BottomEnd)
+                        .padding(end = if (compactPanel) 8.dp else 16.dp, top = if (compactPanel) 8.dp else 0.dp, bottom = if (compactPanel) 8.dp else 92.dp),
+                ) {
                     PlayerSettingsPanel(
                         menu = settingsMenu!!,
                         onMenu = { settingsMenu = it },
@@ -941,13 +968,16 @@ fun PlayerScreen(
             }
 
             when {
+                // The card scrolls and its buttons wrap, so a phone's short portrait video box can't
+                // squeeze Retry away.
                 error != null -> Column(
                     Modifier
-                        .padding(24.dp)
+                        .padding(if (wide || videoOnly) 24.dp else 10.dp)
                         .widthIn(max = 440.dp)
                         .clip(aniShape(18.dp))
                         .background(Color.Black.copy(alpha = 0.72f))
-                        .padding(horizontal = 22.dp, vertical = 20.dp),
+                        .verticalScroll(androidx.compose.foundation.rememberScrollState())
+                        .padding(horizontal = 22.dp, vertical = if (wide || videoOnly) 20.dp else 12.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Icon(Icons.Rounded.ErrorOutline, null, tint = Color(0xFFFF6B6B), modifier = Modifier.size(34.dp))
@@ -967,7 +997,10 @@ fun PlayerScreen(
                     val nextProvider = providerDescriptors.takeIf { PlaySession.canSwitchServer }
                         ?.let { list -> list.drop(list.indexOfFirst { it.id == provider } + 1) + list }
                         ?.firstOrNull { it.id != provider }
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
                         PillButton(
                             "Retry",
                             onClick = {
@@ -1002,7 +1035,7 @@ fun PlayerScreen(
 
         when {
             // PiP / fullscreen-landscape lock: video only, no chrome.
-            inPipMode || landscapeLocked -> videoArea(Modifier.weight(1f).fillMaxWidth())
+            inPipMode || videoOnly -> videoArea(Modifier.weight(1f).fillMaxWidth())
             // Landscape / tablet: panel beside the video (desktop app layout).
             wide -> Row(Modifier.weight(1f).fillMaxWidth()) {
                 panel(Modifier.width(300.dp).fillMaxHeight())

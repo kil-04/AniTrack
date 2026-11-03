@@ -3,6 +3,7 @@ package com.sanjay.anitrack.next.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -119,7 +120,9 @@ internal fun PlayerSettingsPanel(
     }
 
     Column(
-        Modifier.width(300.dp).clip(aniShape(12.dp)).background(panelBg).padding(vertical = 6.dp),
+        // Scrolls when the space it is given is shorter than the menu (a phone's video box).
+        Modifier.width(300.dp).clip(aniShape(12.dp)).background(panelBg)
+            .verticalScroll(androidx.compose.foundation.rememberScrollState()).padding(vertical = 6.dp),
     ) {
         when (menu) {
             "sleep" -> {
