@@ -330,7 +330,10 @@ fun AppShell() {
             // nav items stay in the bottom bar.
             if (!wideLayout && !hideChrome) {
                 Row(
-                    Modifier.fillMaxWidth().background(Bg).padding(horizontal = 14.dp, vertical = 8.dp),
+                    // The status bar is hidden, so the bar would sit under a punch-hole camera without the cutout inset.
+                    Modifier.fillMaxWidth().background(Bg)
+                        .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     com.sanjay.anitrack.next.ui.AniWordmark(compact = true)
@@ -351,11 +354,6 @@ fun AppShell() {
                             style = MaterialTheme.typography.bodyMedium,
                             maxLines = 1,
                         )
-                    }
-                    // Music sits in the bar on a phone, so nothing floats over the top of each page.
-                    if (com.sanjay.anitrack.next.data.BackgroundMusic.tracks.value.isNotEmpty()) {
-                        Spacer(Modifier.width(10.dp))
-                        com.sanjay.anitrack.next.ui.BackgroundMusicButton(onOpenSettings = { go("settings") })
                     }
                     Spacer(Modifier.width(10.dp))
                     MalProfileButton(
@@ -543,14 +541,18 @@ fun AppShell() {
                         )
                     }
                 }
-                // Wide screens: background music floats just under the top bar, beneath the profile
-                // button (the mirror of Home's Anime | Manga switch, so the tabs and search keep their
-                // room). A phone has it in the top bar, where it covers nothing.
-                if (!hideChrome && wideLayout) {
-                    com.sanjay.anitrack.next.ui.BackgroundMusicBar(
-                        compact = false,
+                // Background music floats just under the top bar, beneath the profile button (the
+                // mirror of Home's Anime | Manga switch, so the tabs and search keep their room). Phones
+                // get the compact pill (no label or order button) on Home, where it sits beside that switch;
+                // other pages put their title there, so a phone shows one round button that opens the pill.
+                if (!hideChrome) {
+                    if (wideLayout || current == "home") com.sanjay.anitrack.next.ui.BackgroundMusicBar(
+                        compact = !wideLayout,
                         onOpenSettings = { go("settings") },
-                        modifier = Modifier.align(Alignment.TopEnd).padding(16.dp),
+                        modifier = Modifier.align(Alignment.TopEnd).padding(if (wideLayout) 16.dp else 10.dp),
+                    ) else com.sanjay.anitrack.next.ui.BackgroundMusicFloat(
+                        onOpenSettings = { go("settings") },
+                        modifier = Modifier.align(Alignment.TopEnd).padding(10.dp),
                     )
                 }
             }

@@ -381,6 +381,52 @@ fun BackgroundMusicButton(onOpenSettings: () -> Unit, modifier: Modifier = Modif
     }
 }
 
+/**
+ * A phone's floating music control off Home: one small round button in the corner, so it hovers
+ * over every page without covering its title. A tap opens the compact pill (previous, pause, next)
+ * for a few seconds; long-press opens Settings.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun BackgroundMusicFloat(onOpenSettings: () -> Unit, modifier: Modifier = Modifier) {
+    val tracks by BackgroundMusic.tracks
+    val enabled by BackgroundMusic.enabled
+    val paused by BackgroundMusic.paused
+    val playing by BackgroundMusic.isPlaying
+    if (tracks.isEmpty()) return
+    var open by remember { mutableStateOf(false) }
+    // Any change while open (pause, skip, off) restarts the wait before it folds back up.
+    val track by BackgroundMusic.trackId
+    LaunchedEffect(open, enabled, paused, track) {
+        if (open) { kotlinx.coroutines.delay(5_000); open = false }
+    }
+    if (open) {
+        BackgroundMusicBar(compact = true, onOpenSettings = onOpenSettings, modifier = modifier)
+        return
+    }
+    val shape = CircleShape
+    Box(
+        modifier.size(44.dp).clip(shape)
+            .background(Color.Black.copy(alpha = 0.62f))
+            .border(1.dp, Color.White.copy(alpha = 0.12f), shape)
+            .combinedClickable(onClickLabel = "Show music controls", onLongClick = onOpenSettings) {
+                if (!enabled) BackgroundMusic.toggle()
+                open = true
+            }
+            .padding(4.dp)
+            .clip(shape)
+            .then(if (enabled) Modifier.background(AniColors.BrandGradient) else Modifier),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            if (enabled && !paused && playing) Icons.Rounded.GraphicEq else Icons.Rounded.MusicNote,
+            contentDescription = if (enabled) "Background music on: ${musicStatus()}" else "Background music off",
+            tint = if (enabled) Color.White else Color.White.copy(alpha = 0.7f),
+            modifier = Modifier.size(17.dp),
+        )
+    }
+}
+
 /** A white icon button the height of the Music segment. */
 @Composable
 private fun PillIcon(icon: ImageVector, description: String, onClick: () -> Unit) {
