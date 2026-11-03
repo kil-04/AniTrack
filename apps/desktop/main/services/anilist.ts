@@ -2,6 +2,7 @@ import { app } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { fetchAniListResponse } from "./anilist-request";
+import { AniListPacer, rateHeaders, type AniListRateHeaders } from "./anilist-pacing";
 import type { AnimeMeta, AnimeRecommendation, RecentEpisode, RecentEpisodesPage, RelatedAnime } from "../../../../packages/shared/types";
 import { classicEraBoost, classicEraLabel } from "../../../../packages/shared/recommendations";
 import { planStory, type PrintMeta, type StoryPlan } from "../../../../packages/shared/story-bridge";
@@ -17,7 +18,7 @@ import {
   type TimeMachineRelationEdge,
 } from "../../../../packages/shared/time-machine";
 
-// Simple TTL cache to stay under AniList's 90 req/min rate limit.
+// Simple TTL cache to stay under AniList's 30 req/min rate limit.
 // Cleared on app restart — fine because AniList metadata doesn't change often.
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const CACHE_MAX_ENTRIES = 500; // bound memory; LRU eviction is overkill here
@@ -172,12 +173,24 @@ let isStartup = true;
 setTimeout(() => { isStartup = false; }, 6000); // 6 seconds for initial app bootup
 
 const MAX_RETRIES = 3;
+/** 429s a job may wait out before it fails; each wait is bounded by the pacer. */
+const MAX_RATE_LIMIT_WAITS = 2;
+const pacer = new AniListPacer();
+
+/** Holds the queue while AniList's per-minute budget is spent or a 429 cooldown runs. */
+async function untilPaced() {
+  for (let wait = pacer.waitMs(); wait > 0; wait = pacer.waitMs()) {
+    await new Promise((r) => setTimeout(r, wait));
+  }
+}
 
 async function gqlPump() {
   if (gqlPumping) return;
   gqlPumping = true;
   try {
     while (gqlHigh.length || gqlLow.length) {
+      // Pick the job only after the wait, so a search queued meanwhile still goes first.
+      await untilPaced();
       const job = (gqlHigh.shift() ?? gqlLow.shift())!;
       await job();
       // Spaced gap to protect rate-limit: 700ms during startup storm, 300ms after.
@@ -225,28 +238,38 @@ export async function gql<T>(
 }
 
 async function _doGql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+  let rateLimitWaits = 0;
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     console.log(`[AniList] request attempt ${attempt}/${MAX_RETRIES}`);
     let res: Awaited<ReturnType<typeof fetchAniListResponse>>;
+    let headers: AniListRateHeaders = {};
+    await untilPaced();
+    pacer.noteStart();
     try {
-      res = await fetchAniListResponse(query, variables);
+      res = await fetchAniListResponse(query, variables, {
+        // Keeps the rate-limit headers the transport doesn't pass on.
+        fetcher: async (input, init) => {
+          const response = await fetch(input, init);
+          headers = rateHeaders(response.headers);
+          return response;
+        },
+      });
     } catch (err) {
       if (attempt < MAX_RETRIES) continue;
       throw err;
     }
+    pacer.noteReply(res.status, { ...headers, retryAfter: res.retryAfter ?? headers.retryAfter });
 
     if (res.status === 429) {
-      if (attempt < MAX_RETRIES) {
-        const retryAfterSec = Number(res.retryAfter);
-        // Cap wait at 5s regardless of what the server says
-        const waitMs = Math.min(5000, isFinite(retryAfterSec) && retryAfterSec > 0
-          ? retryAfterSec * 1000
-          : 1500 * attempt);
-        console.warn(`[AniList] 429 rate-limited, retrying in ${waitMs}ms (attempt ${attempt}/${MAX_RETRIES})`);
-        await new Promise((r) => setTimeout(r, waitMs));
+      // The pacer now holds every queued request until AniList's reset; wait it out
+      // and run this one again rather than spending a network retry on it.
+      if (rateLimitWaits < MAX_RATE_LIMIT_WAITS) {
+        rateLimitWaits++;
+        attempt--;
+        console.warn(`[AniList] 429 rate-limited, retrying in ${pacer.waitMs()}ms`);
         continue;
       }
-      console.error(`[AniList] 429 after ${MAX_RETRIES} attempts, giving up`);
+      console.error(`[AniList] 429 after ${rateLimitWaits} waits, giving up`);
       throw new Error(`AniList 429: Too Many Requests. Please wait a moment and try again.`);
     }
 
@@ -423,7 +446,9 @@ export async function airingBetween(from: number, to: number): Promise<RecentEpi
           }
         }
       }`,
-      { from, to, page },
+      // airingAt_greater is exclusive: from - 1 keeps an episode airing exactly at
+      // midnight on its own day. The cache key stays on the caller's range.
+      { from: from - 1, to, page },
       "high",
     );
     for (const schedule of data.Page.airingSchedules) {

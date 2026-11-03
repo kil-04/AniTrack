@@ -435,7 +435,7 @@ export async function installCapacitorApiBridge() {
                   media { ${MEDIA_FIELDS} isAdult }
                 }
               }
-            }`, { from, to, page }, "high");
+            }`, { from: from - 1, to, page }, "high"); // airingAt_greater is exclusive (desktop anilist.ts twin)
           for (const schedule of data.Page?.airingSchedules ?? []) {
             if (!schedule.media || schedule.media.isAdult) continue;
             out.push({ anime: mapMedia(schedule.media), episode: schedule.episode, airingAt: schedule.airingAt });

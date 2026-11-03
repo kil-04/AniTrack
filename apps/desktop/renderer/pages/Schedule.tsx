@@ -47,7 +47,8 @@ export default function Schedule() {
   // Each day loads when first selected (AniList pages hold 50 episodes, under two days).
   const [byDay, setByDay] = useState<Record<string, RecentEpisode[]>>({});
   const [dayIndex, setDayIndex] = useState(0);
-  const [failed, setFailed] = useState(false);
+  // The day whose load failed, so its error never shows on another day.
+  const [failedDay, setFailedDay] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [onList, setOnList] = useState<Set<number>>(new Set());
   // Shows you're watching without listing them (Continue Watching) count as yours too.
@@ -61,12 +62,12 @@ export default function Schedule() {
   useEffect(() => {
     if (byDay[key]) return;
     let alive = true;
-    setFailed(false);
+    setFailedDay((d) => (d === key ? null : d));
     const from = Math.floor(day.getTime() / 1000);
     const to = Math.floor(new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1).getTime() / 1000);
     window.api.anilist.airingBetween(from, to)
       .then((list) => { if (alive) setByDay((all) => ({ ...all, [key]: list })); })
-      .catch(() => { if (alive) setFailed(true); });
+      .catch(() => { if (alive) setFailedDay(key); });
     return () => { alive = false; };
   }, [key, attempt]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -83,6 +84,7 @@ export default function Schedule() {
 
   const mine = (id: number) => onList.has(id) || watching.has(id);
   const loaded = byDay[key];
+  const failed = failedDay === key && !loaded;
   const shown = (loaded ?? []).filter((a) => !onlyMine || mine(a.anime.id));
   const nowSec = Math.floor(now / 1000);
 

@@ -23,12 +23,14 @@ import kotlin.math.log2
 /**
  * AniList GraphQL client. Lessons inherited from the production app baked in
  * from day one: ONE request in flight at a time with spacing (AniList 429s
- * hard under bursts), bounded TTL cache, 429 retry with backoff, and a
- * hard timeout so nothing can wedge the queue.
+ * hard under bursts), a 30-a-minute budget with 429 cooldowns ([AniListPacer]),
+ * bounded TTL cache, and a hard timeout so nothing can wedge the queue.
  */
 object AniList {
     private const val ENDPOINT = "https://graphql.anilist.co"
     private const val SPACING_MS = 350L
+    /** 429s one request may wait out before it fails; each wait is bounded by the pacer. */
+    private const val MAX_RATE_LIMIT_WAITS = 2
     private const val CACHE_TTL_MS = 5 * 60 * 1000L
     private const val HOME_STALE_MS = 24 * 60 * 60 * 1000L
     /** Responses are reused from disk this long, so screens reopen instantly across restarts. */
@@ -58,7 +60,8 @@ object AniList {
 
     private val lock = Mutex()
     private var lastCallAt = 0L
-    private data class GqlResponse(val data: JSONObject?, val retryAfter: Long? = null)
+    private val pacer = AniListPacer()
+    private data class GqlResponse(val data: JSONObject?, val code: Int, val rate: AniListRateHeaders)
 
     private val cache = object : LinkedHashMap<String, Pair<Long, JSONObject>>(64, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<Long, JSONObject>>) = size > 200
@@ -130,43 +133,67 @@ object AniList {
                     if (System.currentTimeMillis() - at < CACHE_TTL_MS) return@withLock value
                 }
             }
-            val wait = SPACING_MS - (System.currentTimeMillis() - lastCallAt)
-            if (wait > 0) delay(wait)
             try {
-                var lastErr: Exception? = null
-                for (attempt in 1..3) {
+                var attempt = 1
+                var rateLimitWaits = 0
+                while (true) {
+                    // Holds the queue while the per-minute budget is spent or a 429 cooldown runs.
+                    while (true) {
+                        val paced = pacer.waitMs()
+                        if (paced <= 0) break
+                        delay(paced)
+                    }
+                    val wait = SPACING_MS - (System.currentTimeMillis() - lastCallAt)
+                    if (wait > 0) delay(wait)
                     val body = JSONObject().put("query", query).put("variables", variables)
                         .toString().toRequestBody("application/json".toMediaType())
                     val req = Request.Builder().url(ENDPOINT).post(body)
                         .header("Accept", "application/json").build()
-                    try {
-                        val reply = http.newCall(req).readCancellable { res ->
+                    pacer.noteStart()
+                    val reply = try {
+                        http.newCall(req).readCancellable { res ->
+                            val rate = AniListRateHeaders(
+                                retryAfter = res.header("Retry-After"),
+                                remaining = res.header("X-RateLimit-Remaining"),
+                                reset = res.header("X-RateLimit-Reset"),
+                                limit = res.header("X-RateLimit-Limit"),
+                            )
                             if (res.code == 429) {
-                                GqlResponse(null, res.header("Retry-After")?.toLongOrNull())
+                                GqlResponse(null, res.code, rate)
                             } else {
                                 val text = res.body?.string() ?: throw Exception("empty body")
                                 if (!res.isSuccessful) throw Exception("AniList ${res.code}")
                                 val json = JSONObject(text)
                                 if (json.has("errors")) throw Exception(json.getJSONArray("errors").toString())
-                                GqlResponse(json.getJSONObject("data"))
+                                GqlResponse(json.getJSONObject("data"), res.code, rate)
                             }
                         }
-                        val data = reply.data
-                        if (data == null) {
-                            delay(((reply.retryAfter ?: (attempt * 2L)) * 1000).coerceAtMost(5000))
-                            continue
-                        }
-                        synchronized(cache) { cache[key] = System.currentTimeMillis() to data }
-                        writeDisk(key, data)
-                        return@withLock data
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (e: Exception) {
-                        lastErr = e
-                        if (attempt == 3) throw e
+                        if (attempt >= 3) throw e
+                        attempt++
+                        continue
+                    } finally {
+                        lastCallAt = System.currentTimeMillis()
                     }
+                    pacer.noteReply(reply.code, reply.rate)
+                    val data = reply.data
+                    if (data == null) {
+                        // The pacer now holds every request until AniList's reset: wait it
+                        // out and send this one again rather than spending a retry on it.
+                        if (rateLimitWaits >= MAX_RATE_LIMIT_WAITS) {
+                            throw Exception("AniList 429: Too Many Requests. Please wait a moment and try again.")
+                        }
+                        rateLimitWaits++
+                        continue
+                    }
+                    synchronized(cache) { cache[key] = System.currentTimeMillis() to data }
+                    writeDisk(key, data)
+                    return@withLock data
                 }
-                throw lastErr ?: Exception("AniList: exhausted retries")
+                // Not reached: the loop above returns or throws.
+                throw Exception("AniList: exhausted retries")
             } finally {
                 lastCallAt = System.currentTimeMillis()
             }
@@ -341,7 +368,9 @@ object AniList {
                         }
                     }
                 }""",
-                JSONObject().put("from", from).put("to", to).put("page", page),
+                // airingAt_greater is exclusive: from - 1 keeps an episode airing exactly
+                // at midnight on its own day.
+                JSONObject().put("from", from - 1).put("to", to).put("page", page),
             )
             val pageJson = data.getJSONObject("Page")
             val arr = pageJson.getJSONArray("airingSchedules")
@@ -973,5 +1002,75 @@ object AniList {
         } catch (e: Exception) {
             null
         }
+    }
+}
+
+/** Rate-limit headers from one AniList reply (raw strings; any may be missing). */
+internal data class AniListRateHeaders(
+    val retryAfter: String? = null,
+    val remaining: String? = null,
+    val reset: String? = null,
+    val limit: String? = null,
+)
+
+/**
+ * AniList allows 30 requests a minute (live X-RateLimit-Limit: 30). The serial
+ * queue keeps request starts under that budget in any 60 s window, so a cold
+ * Home load still bursts while the budget lasts. A 429, or a reply that says the
+ * budget is spent, pauses every queued request until the server's reset instead
+ * of failing them. Desktop's main/services/anilist-pacing.ts is the twin.
+ */
+internal class AniListPacer(private val now: () -> Long = System::currentTimeMillis) {
+    private val starts = ArrayDeque<Long>()
+    private var cooldownUntil = 0L
+    private var limit = RATE_LIMIT
+
+    /** Milliseconds until the next request may start; 0 means now. */
+    @Synchronized
+    fun waitMs(): Long {
+        val at = now()
+        while (starts.isNotEmpty() && at - starts.first() >= WINDOW_MS) starts.removeFirst()
+        var wait = maxOf(0L, cooldownUntil - at)
+        if (starts.size >= limit) wait = maxOf(wait, starts[starts.size - limit] + WINDOW_MS - at)
+        return wait
+    }
+
+    @Synchronized
+    fun noteStart() {
+        starts.addLast(now())
+    }
+
+    /** Learns from a reply: the server's limit, and when to pause the whole queue. */
+    @Synchronized
+    fun noteReply(code: Int, headers: AniListRateHeaders) {
+        val at = now()
+        headers.limit.headerNumber()?.takeIf { it > 0 }?.let { limit = it.toInt() }
+        // X-RateLimit-Reset is a unix time in seconds.
+        val resetIn = headers.reset.headerNumber()?.takeIf { it > 0 }?.let { (it * 1000).toLong() - at }
+        if (code == 429) {
+            val retryAfter = headers.retryAfter.headerNumber()?.takeIf { it > 0 }
+            pauseFor(at, retryAfter?.let { (it * 1000).toLong() } ?: resetIn ?: WINDOW_MS)
+            return
+        }
+        val remaining = headers.remaining.headerNumber() ?: return
+        if (remaining <= 0) {
+            // Without a reset time, a slot frees when our oldest request in the window ages out.
+            val oldest = starts.firstOrNull { at - it < WINDOW_MS }
+            pauseFor(at, resetIn ?: oldest?.let { it + WINDOW_MS - at } ?: WINDOW_MS)
+        }
+    }
+
+    private fun pauseFor(at: Long, ms: Long) {
+        cooldownUntil = maxOf(cooldownUntil, at + ms.coerceIn(MIN_COOLDOWN_MS, MAX_COOLDOWN_MS))
+    }
+
+    private fun String?.headerNumber(): Double? = this?.trim()?.takeIf { it.isNotEmpty() }?.toDoubleOrNull()
+
+    companion object {
+        const val RATE_LIMIT = 30
+        const val WINDOW_MS = 60_000L
+        /** A per-minute window resets within a minute; no header may pause us for longer. */
+        const val MAX_COOLDOWN_MS = 65_000L
+        private const val MIN_COOLDOWN_MS = 1_000L
     }
 }
