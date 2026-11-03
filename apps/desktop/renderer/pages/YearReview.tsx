@@ -135,7 +135,7 @@ export default function YearReview() {
         </div>
       </section>
 
-      <main className="mx-auto max-w-[1450px] space-y-9 px-6 py-9 lg:px-12">
+      <div className="mx-auto max-w-[1450px] space-y-9 px-6 py-9 lg:px-12">
         <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <Stat icon={Clock} value={time.value} unit={time.unit} label="Watched" />
           <Stat icon={Tv} value={recap.episodes.toLocaleString("en-US")} label={recap.episodes === 1 ? "Episode finished" : "Episodes finished"} />
@@ -209,7 +209,7 @@ export default function YearReview() {
             <p className="text-xs text-white/30">Built from what you played and read in AniTrack on this computer, including progress synced from your other devices. Episodes count once you've watched 85% of them; shows you removed from Continue Watching aren't included.</p>
           </>
         )}
-      </main>
+      </div>
     </div>
   );
 }
