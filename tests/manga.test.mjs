@@ -22,8 +22,10 @@ import {
   rangeStartGroup,
   trackedTitles,
   withUpload,
+  MANGABALL_LIST_LANES,
   MANGABALL_LIST_PAGE,
   MANGABALL_MAX_LIST_PAGES,
+  MANGABALL_PAGE_RETRIES,
   mangaBallChapters,
   mangaBallDetail,
   mangaBallLatest,
@@ -38,6 +40,7 @@ import {
   mangaDotTime,
   normalizeChapters,
   publicHttps,
+  readMangaBallListing,
   resumeTarget,
   sourceMatches,
 } from "../packages/shared/manga.ts";
@@ -76,6 +79,13 @@ test("MangaBall: search hits, identity and matching", () => {
   assert.ok(!sourceMatches(mangaBallDetail(ballDetail({ year: "2022" })), manga()));
   assert.ok(!sourceMatches(mangaBallDetail(ballDetail({ language: "ja" })), manga()));
   assert.ok(!sourceMatches(mangaBallDetail(ballDetail({ name: "Example Saga: Ragnarok" })), manga()));
+  // The live API sends the year (and sometimes the MAL id) as bare numbers.
+  const numeric = mangaBallDetail(ballDetail({ year: 2018, mal: 121496 }));
+  assert.equal(numeric.year, 2018);
+  assert.equal(numeric.malId, 121496);
+  assert.equal(mangaBallDetail(ballDetail({ year: "2018-05-01" })).year, 2018);
+  assert.ok(sourceMatches(mangaBallDetail(ballDetail({ year: 2018 })), manga()));
+  assert.ok(!sourceMatches(mangaBallDetail(ballDetail({ year: 2022 })), manga()));
 });
 
 test("MangaBall: published English uploads and CDN pages only", () => {
@@ -202,6 +212,60 @@ test("MangaBall's chapters are listed a hundred to a page", () => {
   );
   // Android's MangaBallParser.listingPath asks for the same (MangaBallParserTest.kt); 10,000 uploads at most.
   assert.equal(MANGABALL_LIST_PAGE * MANGABALL_MAX_LIST_PAGES, 10_000);
+});
+
+test("MangaBall's listing reads pages two at a time and keeps them when a later page fails", async () => {
+  // Android's MangaBallSource.readListing is the twin: 2 lanes, 1 retry for timeouts and 5xx.
+  assert.equal(MANGABALL_LIST_LANES, 2);
+  assert.equal(MANGABALL_PAGE_RETRIES, 1);
+  const ch = (page) => [{ id: `p${page}`, number: page, title: null, group: null, pageCount: null, uploadedAt: null }];
+  const listing = (fail = {}) => {
+    const calls = [];
+    let inFlight = 0;
+    let peak = 0;
+    const fetchPage = async (page, lane) => {
+      calls.push([page, lane]);
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, page === 2 ? 15 : 5));
+      inFlight--;
+      const left = fail[page];
+      if (left) {
+        fail[page] = left.times - 1 > 0 ? { ...left, times: left.times - 1 } : null;
+        throw Object.assign(new Error(`page ${page}`), { status: left.status });
+      }
+      return { chapters: ch(page), totalPages: 6 };
+    };
+    const retryable = (e) => e.status == null || (e.status >= 500 && e.status !== 503);
+    return { calls, peak: () => peak, run: () => readMangaBallListing(fetchPage, retryable, async () => {}) };
+  };
+
+  const ok = listing();
+  const all = await ok.run();
+  assert.equal(all.failure, null);
+  // Page order is kept even though page 2 finishes after page 3.
+  assert.deepEqual(all.chapters.map((c) => c.id), ["p1", "p2", "p3", "p4", "p5", "p6"]);
+  assert.equal(ok.peak(), 2);
+  assert.ok(ok.calls.some(([, lane]) => lane === 1));
+
+  // A timeout is retried once and the listing completes.
+  const flaky = listing({ 4: { times: 1 } });
+  const healed = await flaky.run();
+  assert.equal(healed.failure, null);
+  assert.equal(healed.chapters.length, 6);
+  assert.equal(flaky.calls.filter(([page]) => page === 4).length, 2);
+
+  // A 429 is not retried: new pages stop, the pages read are kept.
+  const limited = listing({ 3: { times: 9, status: 429 } });
+  const partial = await limited.run();
+  assert.equal(partial.failure.status, 429);
+  assert.equal(limited.calls.filter(([page]) => page === 3).length, 1);
+  assert.ok(partial.chapters.some((c) => c.id === "p1") && partial.chapters.some((c) => c.id === "p2"));
+  assert.ok(!partial.chapters.some((c) => c.id === "p3"));
+  assert.ok(limited.calls.length < 6);
+
+  // Page 1 failing for good still throws (nothing was read).
+  await assert.rejects(listing({ 1: { times: 9, status: 502 } }).run(), /page 1/);
 });
 
 test("MangaBall's newest chapter comes from its newest English uploads", () => {

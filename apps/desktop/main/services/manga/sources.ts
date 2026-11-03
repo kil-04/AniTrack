@@ -3,7 +3,6 @@ import {
   isMangaBallId,
   isMangaDotPage,
   MANGABALL,
-  MANGABALL_MAX_LIST_PAGES,
   mangaBallChapters,
   mangaBallDetail,
   mangaBallLatest,
@@ -16,9 +15,9 @@ import {
   mangaDotImagesPath,
   mangaDotPages,
   mangaDotSuggestions,
-  MAX_CHAPTERS,
   normalizeTitle,
   publicHttps,
+  readMangaBallListing,
   sourceMatches,
   type LatestResult,
   type MangaChapter,
@@ -285,6 +284,11 @@ const latestOf = (detail: SourceDetail | null): SourceLatest | null =>
 // ── MangaBall: public JSON API ───────────────────────────────────────────────
 
 const ballHttp = new SourceHttp("MangaBall", new Set(["api.mangaball.com"]), 250, () => net.fetch, honestAgent());
+/** A second, equally spaced lane for chapter-listing pages (MANGABALL_LIST_LANES). */
+const ballListHttp = new SourceHttp("MangaBall", new Set(["api.mangaball.com"]), 250, () => net.fetch, honestAgent());
+/** Timeouts, network errors and 5xx are worth one more try; a 429, refusal or check is not. */
+const ballRetryable = (error: unknown) =>
+  error instanceof MangaSourceError && !error.verify && (error.status == null || (error.status >= 500 && error.status !== 503));
 const ballChapters = new Map<string, { at: number; list: MangaChapter[] }>();
 const ballDetail = async (id: string) => mangaBallDetail(parseJson(await ballHttp.get(`${MANGABALL.API}/title/detail/${id}`, 2 * 1024 * 1024)));
 
@@ -329,14 +333,18 @@ const mangaBall: Source = {
     // Every English upload, a hundred to a page: bigger pages and the one-call listing
     // (`POST /chapter/chapter-listing-by-title-id`) now take longer than a request may
     // (MANGABALL_LIST_PAGE).
-    const all: MangaChapter[] = [];
-    for (let page = 1; page <= MANGABALL_MAX_LIST_PAGES; page++) {
-      const body = await ballHttp.get(mangaBallListingUrl(title.id, page), 16 * 1024 * 1024);
-      const result = mangaBallChapters(parseJson(body));
-      all.push(...result.chapters);
-      if (page >= result.totalPages || all.length >= MAX_CHAPTERS) break;
-    }
+    const { chapters: all, failure } = await readMangaBallListing(
+      async (page, lane) => mangaBallChapters(parseJson(await (lane ? ballListHttp : ballHttp).get(mangaBallListingUrl(title.id, page), 16 * 1024 * 1024))),
+      ballRetryable,
+    );
     const list = [...new Map(all.map((c) => [c.id, c])).values()];
+    if (failure != null) {
+      // Keep what arrived, on top of the last full list (the listing is oldest first, so a
+      // partial one lacks the newest uploads). Never cached or saved: it isn't complete.
+      console.warn(`[MangaBall] Chapter listing stopped early (${list.length} read):`, failure instanceof Error ? failure.message : failure);
+      const saved = (await savedChapters(title).catch(() => null))?.list ?? hit?.list ?? [];
+      return [...new Map([...saved, ...list].map((c) => [c.id, c])).values()];
+    }
     if (list.length) ballChapters.set(title.id, { at: Date.now(), list });
     keepList(title, list);
     return list;

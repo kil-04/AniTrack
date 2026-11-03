@@ -46,6 +46,17 @@ class MangaBallParserTest {
         assertEquals(1761269719879L, d.updatedAt)
     }
 
+    @Test fun readsNumericYearAndMalId() {
+        // The live API sends `date_published: 2023` as a bare number (desktop's mangaBallDetail reads both too).
+        fun numeric(mal: Int?) = JSONObject(detail().toString()
+            .replace("\"date_published\":\"2018\"", "\"date_published\":2018")
+            .replace("\"myanimelist\":null", "\"myanimelist\":${mal ?: "null"}"))
+        val d = MangaBallParser.detail(numeric(121496))!!
+        assertEquals(2018, d.year)
+        assertEquals(121496, d.malId)
+        assertTrue(MangaBallParser.matches(MangaBallParser.detail(numeric(null))!!, manga()))
+    }
+
     @Test fun latestIsTheNewestEnglishUpload() {
         val json = JSONObject(
             """{"data":[

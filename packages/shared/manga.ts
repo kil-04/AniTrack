@@ -578,13 +578,16 @@ export function mangaBallDetail(json: unknown): SourceDetail | null {
   const d = obj(obj(json)?.data);
   const id = str(d?.id) ?? str(d?._id);
   if (!d || !id || !isMangaBallId(id)) return null;
-  const year = Number((str(d.date_published) ?? "").slice(0, 4));
+  // The live API sends `date_published: 2023` as a number; older rows were "2023-…" strings
+  // (Android's optString reads both).
+  const published = d.date_published;
+  const year = typeof published === "number" ? Math.trunc(published) : Number((str(published) ?? "").slice(0, 4));
   return {
     id,
     title: str(d.name) ?? "",
     altTitles: arr(d.alternateName).slice(0, 60).map(str).filter((name): name is string => !!name),
     anilistId: null,
-    malId: positiveInt(str(obj(d.links)?.myanimelist)),
+    malId: positiveInt(obj(d.links)?.myanimelist), // A number or a numeric string.
     year: year >= 1900 && year <= 2100 ? year : null,
     country: MANGABALL_COUNTRIES[(str(d.originalLanguage) ?? "").toLowerCase()] ?? null,
     adult: d.is18plus === true,
@@ -631,6 +634,56 @@ export const MANGABALL_MAX_LIST_PAGES = 100;
 /** One page of a title's English uploads, oldest first. */
 export const mangaBallListingUrl = (titleId: string, page: number) =>
   `${MANGABALL.API}/title/chapter-listing?title_id=${titleId}&page=${page}&limit=${MANGABALL_LIST_PAGE}&group_by=flat&sort_order=asc&language=en&search=`;
+
+/** Listing pages in flight at once after page 1, each lane with its own request spacing. */
+export const MANGABALL_LIST_LANES = 2;
+/** Extra tries for a listing page that timed out or hit a server error. */
+export const MANGABALL_PAGE_RETRIES = 1;
+const MANGABALL_RETRY_WAIT_MS = 2_000;
+
+/**
+ * Every listing page of a title: page 1 for the page count, then the rest
+ * [MANGABALL_LIST_LANES] at a time (a long series is dozens of 1.5-15 s pages). A page
+ * is retried only when [retryable] says so (timeouts and 5xx, never a 429 or a refusal).
+ * A page that still fails stops new pages but keeps the ones read, in page order, as
+ * [failure]; only page 1 failing throws. Android's MangaBallSource.readListing is the twin.
+ */
+export async function readMangaBallListing(
+  fetchPage: (page: number, lane: number) => Promise<{ chapters: MangaChapter[]; totalPages: number }>,
+  retryable: (error: unknown) => boolean,
+  wait: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+): Promise<{ chapters: MangaChapter[]; failure: unknown }> {
+  const attempt = async (page: number, lane: number) => {
+    for (let tries = 0; ; tries++) {
+      try {
+        return await fetchPage(page, lane);
+      } catch (error) {
+        if (tries >= MANGABALL_PAGE_RETRIES || !retryable(error)) throw error;
+        await wait(MANGABALL_RETRY_WAIT_MS * (tries + 1));
+      }
+    }
+  };
+  const first = await attempt(1, 0);
+  const pages: MangaChapter[][] = [first.chapters];
+  const last = Math.min(first.totalPages, MANGABALL_MAX_LIST_PAGES);
+  let next = 2;
+  let count = first.chapters.length;
+  let failure: unknown = null;
+  const lane = async (index: number) => {
+    while (failure == null && count < MAX_CHAPTERS && next <= last) {
+      const page = next++;
+      try {
+        const result = await attempt(page, index);
+        pages[page - 1] = result.chapters;
+        count += result.chapters.length;
+      } catch (error) {
+        failure ??= error ?? new Error("Listing page failed");
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: MANGABALL_LIST_LANES }, (_, index) => lane(index)));
+  return { chapters: pages.flatMap((page) => page ?? []), failure };
+}
 
 /**
  * The newest English chapter in a newest-first `/title/chapter-listing` page, and

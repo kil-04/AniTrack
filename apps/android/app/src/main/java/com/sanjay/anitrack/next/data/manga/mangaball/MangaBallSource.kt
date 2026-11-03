@@ -10,7 +10,11 @@ import com.sanjay.anitrack.next.data.manga.MangaSourceException
 import com.sanjay.anitrack.next.data.manga.MangaTitles
 import com.sanjay.anitrack.next.data.manga.SourceLatest
 import com.sanjay.anitrack.next.data.manga.SourceTitle
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.URLEncoder
@@ -35,6 +39,13 @@ object MangaBallSource : MangaSource {
     @Volatile private var appContext: Context? = null
 
     private val http = MangaHttp(
+        label = label,
+        hosts = setOf("api.mangaball.com"),
+        userAgent = { MangaHttp.USER_AGENT },
+        spacingMs = 250,
+    )
+    /** A second, equally spaced lane for chapter-listing pages (MANGABALL_LIST_LANES). */
+    private val listHttp = MangaHttp(
         label = label,
         hosts = setOf("api.mangaball.com"),
         userAgent = { MangaHttp.USER_AGENT },
@@ -105,25 +116,36 @@ object MangaBallSource : MangaSource {
     override suspend fun chapters(title: SourceTitle): List<MangaChapter> {
         require(title.sourceId == id)
         if (!MangaBallParser.isId(title.id)) throw MangaSourceException("Unrecognised MangaBall title.")
-        synchronized(chapterCache) { chapterCache[title.id] }?.let { (at, list) ->
+        val cached = synchronized(chapterCache) { chapterCache[title.id] }
+        cached?.let { (at, list) ->
             if (System.currentTimeMillis() - at < CHAPTERS_TTL_MS) return list
         }
-        val chapters = ArrayList<MangaChapter>()
         // Every English upload, a hundred to a page: bigger pages and the one-call listing
         // (`POST /chapter/chapter-listing-by-title-id`) now take longer than a request may
         // (MangaBallParser.LIST_PAGE).
-        var page = 1
-        while (page <= MangaBallParser.MAX_LIST_PAGES) {
-            val body = get(MangaBallParser.listingPath(title.id, page), MAX_JSON)
-            // Long series list thousands of uploads: parse off the UI thread.
-            val result = parse { MangaBallParser.chapters(JSONObject(body)) }
-            chapters += result.chapters
-            if (page >= result.totalPages || chapters.size >= MangaBallParser.MAX_CHAPTERS) break
-            page++
+        val listing = readMangaBallListing(
+            fetchPage = { page, lane ->
+                val body = (if (lane == 0) http else listHttp).get("$API${MangaBallParser.listingPath(title.id, page)}", "application/json", MAX_JSON)
+                // Long series list thousands of uploads: parse off the UI thread.
+                parse { MangaBallParser.chapters(JSONObject(body)) }
+            },
+            retryable = ::retryable,
+        )
+        val list = listing.chapters.distinctBy { it.id }
+        listing.failure?.let { failure ->
+            // Keep what arrived, on top of the last full list (the listing is oldest first, so a
+            // partial one lacks the newest uploads). Never cached: it isn't complete.
+            android.util.Log.w("MangaBall", "Chapter listing stopped early (${list.size} read): ${failure.message?.take(160)}")
+            return (cached?.second.orEmpty() + list).associateBy { it.id }.values.toList()
         }
-        val list = chapters.distinctBy { it.id }
         if (list.isNotEmpty()) synchronized(chapterCache) { chapterCache[title.id] = System.currentTimeMillis() to list }
         return list
+    }
+
+    /** Timeouts, network errors and 5xx are worth one more try; a 429, refusal or check is not. */
+    private fun retryable(error: Throwable): Boolean {
+        val status = (error as? MangaSourceException)?.status
+        return error is MangaSourceException && (status == null || (status >= 500 && status != 503))
     }
 
     override suspend fun pages(title: SourceTitle, chapter: MangaChapter): List<MangaPage> {
@@ -141,4 +163,74 @@ object MangaBallSource : MangaSource {
     private fun <K, V> lru(max: Int) = object : LinkedHashMap<K, V>(16, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<K, V>) = size > max
     }
+}
+
+/** Listing pages in flight at once after page 1, each lane with its own request spacing. */
+internal const val MANGABALL_LIST_LANES = 2
+/** Extra tries for a listing page that timed out or hit a server error. */
+internal const val MANGABALL_PAGE_RETRIES = 1
+private const val MANGABALL_RETRY_WAIT_MS = 2_000L
+
+/** The listing pages read, in page order, and why reading stopped early (null when complete). */
+internal class MangaBallListing(val chapters: List<MangaChapter>, val failure: Throwable?)
+
+/**
+ * Every listing page of a title: page 1 for the page count, then the rest
+ * [MANGABALL_LIST_LANES] at a time (a long series is dozens of 1.5-15 s pages). A page
+ * is retried only when [retryable] says so (timeouts and 5xx, never a 429 or a refusal).
+ * A page that still fails stops new pages but keeps the ones read, in page order, as
+ * [MangaBallListing.failure]; only page 1 failing throws. Twin of readMangaBallListing
+ * in packages/shared/manga.ts.
+ */
+internal suspend fun readMangaBallListing(
+    fetchPage: suspend (page: Int, lane: Int) -> MangaBallParser.ChapterPage,
+    retryable: (Throwable) -> Boolean,
+    wait: suspend (Long) -> Unit = { delay(it) },
+): MangaBallListing {
+    suspend fun attempt(page: Int, lane: Int): MangaBallParser.ChapterPage {
+        var tries = 0
+        while (true) {
+            try {
+                return fetchPage(page, lane)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (tries >= MANGABALL_PAGE_RETRIES || !retryable(e)) throw e
+                wait(MANGABALL_RETRY_WAIT_MS * (tries + 1))
+                tries++
+            }
+        }
+    }
+    val first = attempt(1, 0)
+    val last = minOf(first.totalPages, MangaBallParser.MAX_LIST_PAGES)
+    val pages = arrayOfNulls<List<MangaChapter>>(last)
+    pages[0] = first.chapters
+    // Lanes may resume on different threads: the shared counters change under one lock.
+    val state = Any()
+    var next = 2
+    var count = first.chapters.size
+    var failure: Throwable? = null
+    coroutineScope {
+        repeat(MANGABALL_LIST_LANES) { lane ->
+            launch {
+                while (true) {
+                    val page = synchronized(state) {
+                        if (failure != null || count >= MangaBallParser.MAX_CHAPTERS || next > last) null else next++
+                    } ?: break
+                    try {
+                        val result = attempt(page, lane)
+                        synchronized(state) {
+                            pages[page - 1] = result.chapters
+                            count += result.chapters.size
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        synchronized(state) { if (failure == null) failure = e }
+                    }
+                }
+            }
+        }
+    }
+    return MangaBallListing(pages.flatMap { it.orEmpty() }, failure)
 }
