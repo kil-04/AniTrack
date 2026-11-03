@@ -14,6 +14,7 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Casino
+import androidx.compose.material.icons.rounded.Celebration
 import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.Museum
 import androidx.compose.material.icons.rounded.Refresh
@@ -72,6 +73,7 @@ fun TimeMachineScreen(
     onOpen: (Anime) -> Unit,
     onOpenGenome: () -> Unit = {},
     onOpenMuseum: (Anime) -> Unit = {},
+    onOpenYearReview: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val lastYear = remember { java.time.Year.now().value.coerceAtMost(2029) }
@@ -233,6 +235,11 @@ fun TimeMachineScreen(
                             Spacer(Modifier.width(8.dp))
                             Text("Enter Living Museum", color = Color(0xFFFFD180), fontWeight = FontWeight.Bold)
                         }
+                    }
+                    TextButton(onClick = onOpenYearReview) {
+                        Icon(Icons.Rounded.Celebration, null, tint = Color(0xFF9CC8FF), modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Your year in review", color = Color(0xFF9CC8FF), fontWeight = FontWeight.Bold)
                     }
                 }
             }

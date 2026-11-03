@@ -50,6 +50,7 @@ const Songs            = lazy(() => import("./pages/Songs"));
 const CityPop          = lazy(() => import("./pages/CityPop"));
 const TasteGenome      = lazy(() => import("./pages/TasteGenome"));
 const Museum           = lazy(() => import("./pages/Museum"));
+const YearReview       = lazy(() => import("./pages/YearReview"));
 const MangaHome        = lazy(() => import("./pages/manga/MangaHome"));
 const MangaSearch      = lazy(() => import("./pages/manga/MangaSearch"));
 const MangaList        = lazy(() => import("./pages/manga/MangaList"));
@@ -272,6 +273,7 @@ export default function App() {
               <Route path="/city-pop"           element={<Navigate to="/songs/city-pop" replace />} />
               <Route path="/taste-genome"       element={<PageTransition><TasteGenome /></PageTransition>} />
               <Route path="/museum/:id"         element={<PageTransition><Museum /></PageTransition>} />
+              <Route path="/year-review"        element={<PageTransition><YearReview /></PageTransition>} />
               <Route path="/manga"              element={<PageTransition><MangaHome /></PageTransition>} />
               <Route path="/manga/search"       element={<PageTransition><MangaSearch /></PageTransition>} />
               <Route path="/manga/list"         element={<PageTransition><MangaList /></PageTransition>} />

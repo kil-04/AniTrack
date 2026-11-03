@@ -10,6 +10,7 @@ import type {
   WatchStatus,
 } from "../../../../packages/shared/types";
 import { mergeListEntries, type MergeableEntry } from "../../../../packages/shared/list-merge";
+import type { RecapRead, RecapWatch } from "../../../../packages/shared/year-review";
 
 let db: Database | null = null;
 
@@ -671,6 +672,51 @@ export function getProgressForAnime(animeId: number): PlaybackProgress[] {
     durationSec: row.duration_sec,
     updatedAt: row.updated_at,
   }));
+}
+
+/** Every playback and chapter-reading row on this device, for Year in Review. */
+export function getRecapActivity(): { watches: RecapWatch[]; reads: RecapRead[] } {
+  const d = getDb();
+  const watchRows: any[] = d.all(
+    `SELECT p.anime_id, p.episode, p.position_sec, p.duration_sec, p.updated_at,
+            COALESCE(a.title_english, a.title) AS title, a.cover_image, a.genres
+       FROM playback p LEFT JOIN anime a ON a.id = p.anime_id
+      WHERE p.anime_id != 0`,
+  );
+  const mangaRows: any[] = d.all(
+    `SELECT manga_id, chapter, page, page_count, title, cover, updated_at FROM manga_reading`,
+  );
+  const novelRows: any[] = d.all(
+    `SELECT r.chapter_id, r.paragraph, r.paragraph_count, r.title, r.cover, r.updated_at,
+            COALESCE(t.novel_key, r.source_id || ':' || r.title_id) AS novel_key
+       FROM novel_reading r
+       LEFT JOIN novel_title t ON t.source_id = r.source_id AND t.title_id = r.title_id`,
+  );
+  const fraction = (at: number, count: number) => (count > 0 ? Math.min(1, (at + 1) / count) : 1);
+  return {
+    watches: watchRows.map((row) => ({
+      animeId: row.anime_id,
+      episode: row.episode,
+      positionSec: row.position_sec,
+      durationSec: row.duration_sec,
+      updatedAt: row.updated_at,
+      title: row.title ?? null,
+      cover: row.cover_image ?? null,
+      genres: safeJsonArray(row.genres),
+    })),
+    reads: [
+      ...mangaRows.map((row): RecapRead => ({
+        kind: "manga", key: String(row.manga_id), chapter: String(row.chapter),
+        progress: fraction(row.page, row.page_count), updatedAt: row.updated_at,
+        title: row.title ?? null, cover: row.cover ?? null,
+      })),
+      ...novelRows.map((row): RecapRead => ({
+        kind: "novel", key: row.novel_key, chapter: row.chapter_id,
+        progress: fraction(row.paragraph, row.paragraph_count), updatedAt: row.updated_at,
+        title: row.title ?? null, cover: row.cover ?? null,
+      })),
+    ],
+  };
 }
 
 /** Migrate playback progress, local episodes, and watch lists from an old/stub ID to a new/real ID. */

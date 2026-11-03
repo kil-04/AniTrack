@@ -964,4 +964,50 @@ object Db {
         }
         out
     }
+    // ── Year in Review ────────────────────────────────────────────────────────
+
+    /** Every playback and chapter-reading row on this device, for Year in Review. */
+    suspend fun recapActivity(): Pair<List<RecapWatch>, List<RecapRead>> = withContext(Dispatchers.IO) {
+        val db = helper.readableDatabase
+        val genresOf = { json: String? ->
+            if (json == null) emptyList() else runCatching {
+                val arr = org.json.JSONArray(json)
+                List(arr.length()) { arr.getString(it) }
+            }.getOrDefault(emptyList())
+        }
+        val fraction = { at: Int, count: Int -> if (count > 0) minOf(1.0, (at + 1).toDouble() / count) else 1.0 }
+        val watches = ArrayList<RecapWatch>()
+        db.rawQuery(
+            """SELECT p.anime_id, p.episode, p.position_sec, p.duration_sec, p.updated_at,
+                      COALESCE(p.anime_title, l.title), COALESCE(p.anime_cover, l.cover), l.genres
+               FROM playback p LEFT JOIN list_entry l ON l.anime_id = p.anime_id
+               WHERE p.anime_id != 0""",
+            null,
+        ).use { c ->
+            while (c.moveToNext()) {
+                watches += RecapWatch(
+                    c.getInt(0), c.getFloat(1), c.getDouble(2), c.getDouble(3), c.getLong(4),
+                    c.getString(5), c.getString(6), genresOf(if (c.isNull(7)) null else c.getString(7)),
+                )
+            }
+        }
+        val reads = ArrayList<RecapRead>()
+        db.rawQuery("SELECT manga_id, chapter, page, page_count, title, cover, updated_at FROM reading", null).use { c ->
+            while (c.moveToNext()) {
+                reads += RecapRead("manga", c.getInt(0).toString(), c.getFloat(1).toString(), fraction(c.getInt(2), c.getInt(3)), c.getLong(6), c.getString(4), c.getString(5))
+            }
+        }
+        db.rawQuery(
+            """SELECT r.chapter_id, r.paragraph, r.paragraph_count, r.title, r.cover, r.updated_at,
+                      COALESCE(t.novel_key, r.source_id || ':' || r.title_id)
+               FROM novel_reading r
+               LEFT JOIN novel_title t ON t.source_id = r.source_id AND t.title_id = r.title_id""",
+            null,
+        ).use { c ->
+            while (c.moveToNext()) {
+                reads += RecapRead("novel", c.getString(6), c.getString(0), fraction(c.getInt(1), c.getInt(2)), c.getLong(5), c.getString(3), c.getString(4))
+            }
+        }
+        watches to reads
+    }
 }

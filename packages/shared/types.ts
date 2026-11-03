@@ -196,6 +196,7 @@ export const IPC = {
   PROGRESS_GET: "progress:get",
   PROGRESS_SET: "progress:set",
   CW_DISMISS: "cw:dismiss",
+  RECAP_ACTIVITY: "recap:activity",
   // Provider-neutral streaming API (legacy PAHE_* channels remain during migration)
   PROVIDERS_LIST: "providers:list",
   PROVIDERS_MEDIA_ACCESS_STATUS: "providers:media-access-status",

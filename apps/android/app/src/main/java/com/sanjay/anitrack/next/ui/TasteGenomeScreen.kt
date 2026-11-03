@@ -29,7 +29,7 @@ private val GenomeBlue = Color(0xFF60A5FA)
 private val GenomeGreen = Color(0xFF34D399)
 
 @Composable
-fun TasteGenomeScreen(onOpen: (Int) -> Unit, onOpenTimeMachine: () -> Unit) {
+fun TasteGenomeScreen(onOpen: (Int) -> Unit, onOpenTimeMachine: () -> Unit, onOpenYearReview: () -> Unit = {}) {
     var rows by remember { mutableStateOf<List<Db.ListRow>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
 
@@ -91,6 +91,12 @@ fun TasteGenomeScreen(onOpen: (Int) -> Unit, onOpenTimeMachine: () -> Unit) {
                             Spacer(Modifier.width(6.dp))
                             Icon(Icons.AutoMirrored.Rounded.ArrowForward, null, modifier = Modifier.size(18.dp))
                         }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    TextButton(onClick = onOpenYearReview) {
+                        Text("Your year in review", color = Color.White.copy(alpha = 0.75f), fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.width(6.dp))
+                        Icon(Icons.AutoMirrored.Rounded.ArrowForward, null, tint = Color.White.copy(alpha = 0.75f), modifier = Modifier.size(18.dp))
                     }
                 }
             }

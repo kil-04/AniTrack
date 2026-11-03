@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { CalendarDays, ChevronLeft, ChevronRight, Clapperboard, Clock3, Dices, Gem, History, Landmark, Layers, RefreshCw, Sparkles, Stamp, type LucideIcon } from "lucide-react";
+import { CalendarDays, ChevronLeft, ChevronRight, Clapperboard, Clock3, Dices, Gem, History, Landmark, Layers, PartyPopper, RefreshCw, Sparkles, Stamp, type LucideIcon } from "lucide-react";
 import Card from "../components/Card";
 import Row from "../components/Row";
 import SectionHeader from "../components/SectionHeader";
@@ -264,6 +264,7 @@ export default function TimeMachine() {
             </button>
             <button onClick={() => navigate("/taste-genome")} className="btn btn-lg border border-fuchsia-300/25 bg-fuchsia-400/10 text-fuchsia-100 backdrop-blur-md hover:bg-fuchsia-400/20"><Sparkles size={16} /> View Taste Genome</button>
             <button onClick={() => hero && navigate(`/museum/${hero.id}`)} disabled={!hero} className="btn btn-lg border border-amber-300/25 bg-amber-400/10 text-amber-100 backdrop-blur-md hover:bg-amber-400/20"><Landmark size={16} /> Enter Living Museum</button>
+            <button onClick={() => navigate("/year-review")} className="btn btn-lg border border-sky-300/25 bg-sky-400/10 text-sky-100 backdrop-blur-md hover:bg-sky-400/20"><PartyPopper size={16} /> Your year in review</button>
           </div>
         </div>
       </section>

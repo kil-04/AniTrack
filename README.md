@@ -61,6 +61,7 @@ The two apps are built separately (Electron on Windows, native Kotlin on Android
 - **Continue the story**: see the manga or novel an anime adapts, and where you are in it.
 - **Theme songs** for every show (openings and endings), plus a shuffled **theme radio** of the shows you love.
 - **Time Machine**: browse anime by year, and what premiered on this day.
+- **Year in Review**: a recap of any year you used AniTrack, in both apps: hours watched, episodes finished, your top shows and genres, your busiest month and longest streak, the manga and novels you read most, and a title for the kind of year it was.
 
 ### And more
 - **Background music** while you browse: a built-in piano track, or your own music (audio files or a `.zip`), with play, pause, previous, next and repeat. It pauses itself for episodes and theme songs.

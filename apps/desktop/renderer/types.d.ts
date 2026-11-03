@@ -72,6 +72,8 @@ interface ApiBridge {
     continueWatching(): Promise<ContinueWatchingItem[]>;
     continueWatchingPaged(page: number, pageSize: number): Promise<{ items: ContinueWatchingItem[]; total: number }>;
     dismissContinueWatching(animeId: number): Promise<{ ok: boolean }>;
+    /** Every playback and reading row, for Year in Review. */
+    recapActivity(): Promise<{ watches: import("../../../packages/shared/year-review").RecapWatch[]; reads: import("../../../packages/shared/year-review").RecapRead[] }>;
   };
   progress: {
     get(id: number, ep: number): Promise<PlaybackProgress | null>;

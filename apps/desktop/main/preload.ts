@@ -152,6 +152,7 @@ contextBridge.exposeInMainWorld("api", {
     continueWatchingPaged: (page: number, pageSize: number) =>
       ipcRenderer.invoke(IPC.CW_PAGED, page, pageSize),
     dismissContinueWatching: (animeId: number) => ipcRenderer.invoke(IPC.CW_DISMISS, animeId),
+    recapActivity: () => ipcRenderer.invoke(IPC.RECAP_ACTIVITY),
   },
   progress: {
     get: (id: number, ep: number) =>
