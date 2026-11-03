@@ -529,3 +529,45 @@ required before calling the source complete.
 Other EverythingMoe candidates still open, unchanged from the earlier sections:
 MangaKatana (plain HTTP) and Kagane (page session) for manga; anv, Xanime and
 ANIMEGG for anime; NovelCool and NovelFire for novels.
+
+# Xanime integration: 3 Nov 2026
+
+The user chose Xanime as the next source after anv was set aside (its episode API
+refuses requests without the watch page's session cookie, and replaying that cookie
+was not pursued). Re-checked from this session with AniTrack's honest user agent,
+plain GETs only, no site code run:
+
+| Step | Request | Observed |
+| --- | --- | --- |
+| Search | `GET /search?word=<query>` | Qwik state lists each show with `al_id` (AniList), `ani_id_mal`, year, type, `ep_total`, sub/dub counts and `ep_up_id` (latest episode) |
+| Title | `GET /title/<show id>` | The same show object |
+| Episode | `GET /title/<show id>/<episode id>` | Episode list (the 50-episode page holding that episode) plus that episode's sources: `src_type` sub/dub, `src_name`, `souPath` (signed HLS master, about a day's lifetime), `track[]` captions, `jump` intro/outro |
+| Media | master, rendition (`.ico`), segment (`.gif`/`.jpeg`/…) | `application/vnd.apple.mpegurl` playlists and `video/mp2t` segments (sync byte 0x47), no `EXT-X-KEY`, **no Referer or cookie needed** |
+
+Live run of the shared parser (search → AniList match → episode list → streams →
+master → rendition → segment): Frieren (28/28 episodes), Cowboy Bebop (26/26, sub and
+dub with English captions and 49–144 s intro), Attack on Titan (25/25) and One Piece.
+
+Decisions and limits:
+
+- **Matching** is exact: a search result is accepted only when its `al_id` equals the
+  AniList id being opened (desktop also verifies through `getExternalIds`).
+- **Long shows list only their latest 50-episode page.** Episode ids are not
+  sequential, the sitemap lists only recent episodes, and other pages load through
+  the site's internal Qwik server calls, which AniTrack does not replay. One Piece
+  shows 1151–1180 of 1,180. Shows of 50 episodes or fewer are complete.
+- **No Sub, no streams:** as with shonen.to and AniChan, a Dub is never started
+  unless picked; an episode without a Sub stream offers nothing.
+- **Authorization:** `directory` scope for the master's signed media path; each
+  caption (on a sibling xanivsrc host) is authorized exactly. No headers are sent.
+- **Enablement:** on by default unless the signed configuration names `xanime` and
+  switches it off (like AniChan), because adding it to the signed file needs the
+  signing key. `xanime` was added to both apps' built-in configuration and order.
+- **Downloads** use both apps' existing HLS queues unchanged; image-like segment
+  names are saved as `.ts`.
+
+Validation done: parser tests on both platforms over the saved page states
+(`tests/xanime.test.mjs`, `XanimeTest`), desktop type-check and Node suite, and the
+live run above. **Not done:** the Android adapter was not compiled (no Android SDK
+licence could be accepted here), and no episode was played or downloaded in either
+running app. Both remain required before calling the source complete.

@@ -38,7 +38,7 @@ export const BUILTIN_RUNTIME_CONFIG: RuntimeConfig = {
   schemaVersion: 1,
   revision: 0,
   issuedAt: "2026-08-17T00:00:00.000Z",
-  providerOrder: ["anikoto", "animepahe", "shonen", "anichan"],
+  providerOrder: ["anikoto", "animepahe", "shonen", "anichan", "xanime"],
   providers: {
     anikoto: {
       enabled: true,
@@ -120,6 +120,19 @@ export const BUILTIN_RUNTIME_CONFIG: RuntimeConfig = {
         anime: "/api/catalog/anime/{animeId}",
         episodes: "/api/watch/episodes?anilistId={animeId}",
         servers: "/api/watch/servers?anilistId={animeId}&ep={episode}&category={category}&tier={tier}",
+      },
+      selectors: {},
+    },
+    xanime: {
+      // AniList-linked plain-HTTP catalogue read from page state (packages/shared/xanime.ts); added 3 Nov 2026.
+      enabled: true,
+      baseUrls: ["https://xanime.me"],
+      streamHostFragments: ["xanivsrc"],
+      mediaExtensions: [".m3u8", ".ts", ".vtt"],
+      routes: {
+        search: "/search?word={query}",
+        anime: "/title/{animeId}",
+        episode: "/title/{animeId}/{episodeId}",
       },
       selectors: {},
     },

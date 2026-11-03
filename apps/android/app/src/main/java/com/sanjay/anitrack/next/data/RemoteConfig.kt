@@ -148,7 +148,7 @@ object RemoteConfig {
     private val defaults = AndroidRuntimeConfig(
         revision = 0,
         issuedAt = "2026-08-17T00:00:00.000Z",
-        providerOrder = listOf("anikoto", "animepahe", "shonen", "anichan"),
+        providerOrder = listOf("anikoto", "animepahe", "shonen", "anichan", "xanime"),
         providers = linkedMapOf(
             "anikoto" to defaultProvider,
             "animepahe" to ProviderRuntimeConfig(
@@ -192,6 +192,19 @@ object RemoteConfig {
                     "search" to "/browse?q={query}",
                     "anime" to "/anime/{animeId}",
                     "sources" to "/sources/shonen?id={animeId}&episode={episode}&language={language}",
+                ),
+                selectors = emptyMap(),
+            ),
+            // AniList-linked plain-HTTP catalogue read from page state (connectors/xanime/Xanime.kt); added 3 Nov 2026.
+            "xanime" to ProviderRuntimeConfig(
+                enabled = true,
+                baseUrls = listOf("https://xanime.me"),
+                streamHostFragments = listOf("xanivsrc"),
+                mediaExtensions = listOf(".m3u8", ".ts", ".vtt"),
+                routes = mapOf(
+                    "search" to "/search?word={query}",
+                    "anime" to "/title/{animeId}",
+                    "episode" to "/title/{animeId}/{episodeId}",
                 ),
                 selectors = emptyMap(),
             ),
