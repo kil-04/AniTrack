@@ -106,7 +106,7 @@ async function waitFor(stage, predicate, timeout) {
 async function main() {
   if (selectedTitle.length>200 || !Number.isSafeInteger(selectedAnilistId) || selectedAnilistId<=0) throw new Error("Invalid verification title or AniList identity.");
   if ((switchSource||switchServer) && providerId!=="miruro") throw new Error("The explicit server-switch diagnostic currently supports Miruro only.");
-  if (!["anikoto", "animepahe"].includes(providerId) && !(staged && ["miruro", "mkissa"].includes(providerId))) {
+  if (!["anikoto", "animepahe", "xanime"].includes(providerId) && !(staged && ["miruro", "mkissa"].includes(providerId))) {
     throw new Error("Staged providers require explicit --staged diagnostic opt-in; no release configuration is changed.");
   }
   await app.whenReady();
@@ -114,11 +114,12 @@ async function main() {
   await compiled("remote-config").initRuntimeConfig();
   const pahe = compiled("providers/animepahe");
   const Provider = { animepahe: pahe.AnimePaheProvider, anikoto: compiled("providers/anikoto").AnikotoProvider,
-    miruro: compiled("providers/miruro").MiruroProvider, mkissa: compiled("providers/mkissa").MkissaProvider }[providerId];
+    miruro: compiled("providers/miruro").MiruroProvider, mkissa: compiled("providers/mkissa").MkissaProvider,
+    xanime: compiled("providers/xanime").XanimeProvider }[providerId];
   const provider = new Provider();
   const registry = new (compiled("providers/registry").ProviderRegistry)([provider]);
   const matches = await registry.get(providerId).search(selectedTitle);
-  let show = ["miruro","mkissa"].includes(providerId) ? matches.find(item => Number(item.externalLookupId) === selectedAnilistId) : null;
+  let show = ["miruro","mkissa","xanime"].includes(providerId) ? matches.find(item => Number(item.externalLookupId) === selectedAnilistId) : null;
   if(!show) {
     const named = matches.find(item => item.title.toLowerCase() === selectedTitle.toLowerCase());
     const ids = named && await provider.getExternalIds?.(named.id,named.externalLookupId);
@@ -135,6 +136,7 @@ async function main() {
     return token.c===selectedTrack && (!selectedSource||token.p===selectedSource) && (!selectedServer||token.s===selectedServer);
   }) : providerId === "mkissa" ? links.find(item=>item.audio!=="eng" && (!selectedServer||item.quality===selectedServer))
     : providerId === "anikoto" ? links.find(item => item.variant === "soft")
+    : providerId === "xanime" ? links.find(item => item.variant === "sub")
     : links.filter(item => item.audio !== "eng").sort((a,b)=>(parseInt(b.quality)||0)-(parseInt(a.quality)||0))[0];
   if (!link) throw new Error("Requested stream variant unavailable.");
   report("selected-server", {label:link.quality});

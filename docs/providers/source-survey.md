@@ -521,10 +521,16 @@ Decisions:
 Validation done: parser tests on both platforms over saved pages
 (`tests/weebcentral.test.mjs`, `WeebCentralParserTest`); a live run of the shared
 parser through search, match, chapter list, pages and a page-image download for
-the four titles above; desktop type-check. **Not done:** the Android app was not
-compiled here (no Android SDK licence could be accepted in this environment), and
-a completed download was not opened offline in either running app. Both remain
-required before calling the source complete.
+the four titles above; desktop type-check.
+
+Follow-up the same day: the branch's CI run (workflow_dispatch, run 51) passed
+every step, including the Android unit tests and the debug APK build. In Electron
+32 (Xvfb), the compiled desktop source matched Frieren by AniList id, listed 147
+chapters, served page 1 through the reader's `anitrack-manga://img` protocol
+(PNG), downloaded chapter 1 through the desktop manga queue (39 pages, 16.2 MB)
+and, with every network request refused, read all 39 saved pages back in order
+and decoded them. **Still not done:** a download opened offline in the running
+Android app (no device or emulator here).
 
 Other EverythingMoe candidates still open, unchanged from the earlier sections:
 MangaKatana (plain HTTP) and Kagane (page session) for manga; anv, Xanime and
@@ -568,6 +574,21 @@ Decisions and limits:
 
 Validation done: parser tests on both platforms over the saved page states
 (`tests/xanime.test.mjs`, `XanimeTest`), desktop type-check and Node suite, and the
-live run above. **Not done:** the Android adapter was not compiled (no Android SDK
-licence could be accepted here), and no episode was played or downloaded in either
-running app. Both remain required before calling the source complete.
+live run above.
+
+Follow-up the same day:
+
+- **CI:** the branch's workflow_dispatch run (run 51) passed every step, including
+  the Android unit tests and the debug APK build, so the Android adapter compiles.
+- **Desktop playback** (`electron scripts/electron-playback-smoke.js --provider=xanime`,
+  Electron 32 under Xvfb): Bebop episode 1 Sub played at 1448×1080 with audio and
+  217 English caption cues, sustained 65 media seconds, then resumed after seeking
+  to 13:39 and back to 0:19. HTTP 200 for all 44 media requests.
+- **Desktop download:** the desktop download service saved all 353 segments
+  (305 MB, the 1080p rendition) plus `subs.vtt`; the local playlist has no remote
+  URLs and the image-named segments were saved as `.ts`. With every non-local
+  request refused, the saved episode played at 1448×1080 with its captions from
+  the start and after a seek to 20:05.
+
+**Still not done:** playback and a download in the running Android app (no device
+or emulator here).
