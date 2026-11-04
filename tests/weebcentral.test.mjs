@@ -5,6 +5,7 @@ import {
   isWeebCentralId,
   isWeebCentralImage,
   weebCentralChapterNumber,
+  weebCentralChapterTitle,
   weebCentralChapters,
   weebCentralDetail,
   weebCentralImagesUrl,
@@ -54,6 +55,11 @@ test("the full chapter list keeps every chapter and files prologues before chapt
   assert.equal(list[0].id, "01KX4BFP5E3FEZ50TRS752CT9V");
   assert.ok(list.every((c) => isWeebCentralId(c.id) && isSourceChapterId("weebcentral", c.id)));
   assert.ok(list.every((c) => typeof c.uploadedAt === "number"));
+  // Prologues are titled by name, so a row reads "Prologue 1", not "Chapter 0.01".
+  assert.deepEqual(list.map((c) => c.title), [null, null, "Prologue 2", "Prologue 1"]);
+  // The tenth keeps its name too, though its number (0.1) prints like a tenth.
+  const tenth = weebCentralChapters(fixture("chapter-list.html").replace(/Prologue 2</, "Prologue 10<"));
+  assert.deepEqual([tenth[2].number, tenth[2].title], [0.1, "Prologue 10"]);
 });
 
 test("chapter labels", () => {
@@ -63,6 +69,12 @@ test("chapter labels", () => {
   assert.equal(weebCentralChapterNumber("Prologue 16"), 0.16);
   assert.equal(weebCentralChapterNumber("Special"), null);
   assert.equal(weebCentralChapterNumber("Volume 3 Extra"), null);
+  assert.equal(weebCentralChapterTitle("Prologue 1"), "Prologue 1");
+  assert.equal(weebCentralChapterTitle("Prologue 10"), "Prologue 10");
+  assert.equal(weebCentralChapterTitle("prologue  16 "), "Prologue 16");
+  assert.equal(weebCentralChapterTitle("Chapter 12.5"), null);
+  assert.equal(weebCentralChapterTitle("Prologue 0"), null);
+  assert.equal(weebCentralChapterTitle("Special"), null);
 });
 
 test("chapter pages come in order, only from Weeb Central's image hosts", () => {

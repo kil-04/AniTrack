@@ -74,6 +74,15 @@ export function weebCentralChapterNumber(label: string): number | null {
   return Number.isInteger(n) && n >= 1 && n <= 99 ? n / 100 : null;
 }
 
+/**
+ * A chapter label's title. Prologues keep their own name ("Prologue 10"), so a row
+ * doesn't read "Chapter 0.1"; numbered chapters have none.
+ */
+export function weebCentralChapterTitle(label: string): string | null {
+  const n = weebCentralChapterNumber(label);
+  return n != null && /^\s*prologue\b/i.test(label) ? `Prologue ${Math.round(n * 100)}` : null;
+}
+
 const COUNTRIES: Record<string, string> = { manga: "JP", manhwa: "KR", manhua: "CN" };
 
 /** The value of one "Label: value" row in a series page's facts list. */
@@ -90,11 +99,12 @@ const CHAPTER_ENTRY = /<a href="\/chapters\/([0-9A-HJKMNP-TV-Z]{26})"[^>]*>([\s\
 
 function entryChapter(id: string, body: string): MangaChapter | null {
   const label = /<span class="">([^<]{1,80})<\/span>/.exec(body);
-  const number = label ? weebCentralChapterNumber(decode(label[1])) : null;
+  const text = label ? decode(label[1]) : "";
+  const number = weebCentralChapterNumber(text);
   if (number == null) return null;
   const time = /<time\b[^>]*datetime="([^"]{10,40})"/.exec(body);
   const at = time ? Date.parse(time[1]) : NaN;
-  return { id, number, title: null, group: null, pageCount: null, uploadedAt: Number.isFinite(at) ? at : null };
+  return { id, number, title: weebCentralChapterTitle(text), group: null, pageCount: null, uploadedAt: Number.isFinite(at) ? at : null };
 }
 
 /** A series page as a [SourceDetail]: its AniList link decides matches. */

@@ -85,6 +85,16 @@ object WeebCentralParser {
         return if (n == Math.floor(n) && n in 1.0..99.0) (n / 100).toFloat() else null
     }
 
+    /**
+     * A chapter label's title. Prologues keep their own name ("Prologue 10"), so a row
+     * doesn't read "Chapter 0.1"; numbered chapters have none.
+     */
+    fun chapterTitle(label: String): String? {
+        val n = chapterNumber(label) ?: return null
+        if (!Regex("^\\s*prologue\\b", RegexOption.IGNORE_CASE).containsMatchIn(label)) return null
+        return "Prologue ${Math.round(n * 100.0)}"
+    }
+
     /** The value of one "Label: value" row in a series page's facts list. */
     private fun fact(html: String, label: String): String? {
         val at = html.indexOf("<strong>$label:")
@@ -96,10 +106,11 @@ object WeebCentralParser {
 
     private fun entryChapter(id: String, body: String): MangaChapter? {
         val label = Regex("<span class=\"\">([^<]{1,80})</span>").find(body) ?: return null
-        val number = chapterNumber(decode(label.groupValues[1])) ?: return null
+        val text = decode(label.groupValues[1])
+        val number = chapterNumber(text) ?: return null
         val at = Regex("<time\\b[^>]*datetime=\"([^\"]{10,40})\"").find(body)?.groupValues?.get(1)
             ?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() }
-        return MangaChapter(id, number, null, null, null, at)
+        return MangaChapter(id, number, chapterTitle(text), null, null, at)
     }
 
     private fun latestEntry(html: String): MangaChapter? =

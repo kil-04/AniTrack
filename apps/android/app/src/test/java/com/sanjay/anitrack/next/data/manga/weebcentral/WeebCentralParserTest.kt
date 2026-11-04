@@ -53,6 +53,11 @@ class WeebCentralParserTest {
         assertEquals(listOf(386f, 385f, 0.02f, 0.01f), list.map { it.number })
         assertEquals("01KX4BFP5E3FEZ50TRS752CT9V", list.first().id)
         assertTrue(list.all { WeebCentralParser.isId(it.id) && it.uploadedAt != null })
+        // Prologues are titled by name, so a row reads "Prologue 1", not "Chapter 0.01".
+        assertEquals(listOf(null, null, "Prologue 2", "Prologue 1"), list.map { it.title })
+        // The tenth keeps its name too, though its number (0.1) prints like a tenth.
+        val tenth = WeebCentralParser.chapters(fixture("chapter-list.html").replaceFirst("Prologue 2<", "Prologue 10<"))
+        assertEquals(0.1f to "Prologue 10", tenth[2].number to tenth[2].title)
     }
 
     @Test fun chapterLabels() {
@@ -62,6 +67,12 @@ class WeebCentralParserTest {
         assertEquals(0.16f, WeebCentralParser.chapterNumber("Prologue 16"))
         assertNull(WeebCentralParser.chapterNumber("Special"))
         assertNull(WeebCentralParser.chapterNumber("Volume 3 Extra"))
+        assertEquals("Prologue 1", WeebCentralParser.chapterTitle("Prologue 1"))
+        assertEquals("Prologue 10", WeebCentralParser.chapterTitle("Prologue 10"))
+        assertEquals("Prologue 16", WeebCentralParser.chapterTitle("prologue  16 "))
+        assertNull(WeebCentralParser.chapterTitle("Chapter 12.5"))
+        assertNull(WeebCentralParser.chapterTitle("Prologue 0"))
+        assertNull(WeebCentralParser.chapterTitle("Special"))
     }
 
     @Test fun chapterPagesComeInOrderOnlyFromItsImageHosts() {

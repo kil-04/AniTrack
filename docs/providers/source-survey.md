@@ -545,6 +545,15 @@ and decoded them.
   range (16 MB). In airplane mode the saved chapter opened and scrolled through to
   "End of chapter 1" with every page drawn.
 
+**Prologue labels, fixed 4 Nov 2026:** the parsers filed Berserk's "Prologue 1" to
+"Prologue 16" as chapters 0.01 to 0.16 with no title, so rows read "Chapter 0.01" …
+"Chapter 0.16" and the tenth "Chapter 0.1". Both parsers now give each prologue the
+title "Prologue N"; the numbers and order are unchanged. A row now reads "0.01 ·
+Prologue 1" on desktop and "Ch. 0.01 · Prologue 1" on Android, like other titled
+chapters. Covered by the parser tests on both platforms (the saved full chapter
+list, plus a "Prologue 10" entry). **Still not done:** checking the rows on the
+phone.
+
 Other EverythingMoe candidates still open, unchanged from the earlier sections:
 MangaKatana (plain HTTP) and Kagane (page session) for manga; anv, Xanime and
 ANIMEGG for anime; NovelCool and NovelFire for novels.
