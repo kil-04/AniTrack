@@ -38,6 +38,7 @@ import {
 import { discoverProviderSources } from "../components/provider/providerDiscovery";
 import Hls from "hls.js";
 import { hlsAccessRejectionStatus, protectedHlsLoadPolicies } from "../components/player/hlsRequestPolicy";
+import { dropCaptionOnError } from "../components/player/sideCaptions";
 import { secondsToTimestamp } from "../lib/format";
 import { fetchAnimeSkipTimes, type SkipTimes } from "../lib/skip-times";
 import { useMediaQuery } from "../hooks/useMediaQuery";
@@ -929,6 +930,10 @@ export default function StreamPlayer({
         track.kind = sub.kind || "captions";
         track.label = sub.label || "English";
         track.srclang = "en";
+        // A caption file that doesn't load (missing on the host) leaves the player and its menu.
+        dropCaptionOnError(track, video, () => {
+          if (isCurrent()) setAvailableSubtitles((prev) => prev.filter((s: any) => s.file !== sub.file));
+        });
 
         if (isCapacitor) {
           const subRef = refererRef.current;

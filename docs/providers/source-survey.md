@@ -630,3 +630,19 @@ Follow-up the same day:
 
   Episode 1 downloaded (304 MB) and played in airplane mode with its subtitles.
   No crashes in the crash log during the run.
+
+**Missing captions, fixed 4 Nov 2026:** the Dub's 404 caption showed as an empty
+"English" track on desktop, and on Android ExoPlayer kept retrying it. Both players
+now cope with a dead side caption from any provider, not just Xanime:
+
+- **Desktop:** a caption `<track>` whose file fails to load is removed from the
+  video and from the captions menu (`components/player/sideCaptions.ts`, tested in
+  `tests/desktop-player.test.mjs`). The browser doesn't retry it.
+- **Android:** a side caption that gets an HTTP error (404, 403, 5xx) is not
+  retried. The player error that follows reloads the same stream without that
+  caption, at the same position. This happens before the player screen would count
+  the error as the server refusing the stream (`SideCaptions`,
+  `PlayerHolder.dropFailedCaption`, tested in `SideCaptionsTest`). The other
+  captions stay.
+
+**Still not done:** playing Bebop's Dub on the phone with this change.

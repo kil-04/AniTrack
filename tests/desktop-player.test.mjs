@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { hlsAccessRejectionStatus, protectedHlsLoadPolicies } from "../apps/desktop/renderer/components/player/hlsRequestPolicy.ts";
+import { dropCaptionOnError } from "../apps/desktop/renderer/components/player/sideCaptions.ts";
 import {
   capturePlaybackPosition,
   currentMediaAccessRejection,
@@ -337,4 +338,48 @@ test("Miruro, MKissa and manifest access rejections also survive IPC and stop au
     assert.equal(requiresManualProviderRetry(error), true);
     assert.equal(providerPlaybackErrorMessage(error), "Stop this attempt.");
   }
+});
+
+// A <track> stand-in: an EventTarget with a parent and a src attribute.
+class FakeTrack extends EventTarget {
+  constructor(parent) { super(); this.parentNode = parent; this.attrs = {}; }
+  getAttribute(name) { return this.attrs[name] ?? null; }
+  remove() { this.parentNode = null; }
+}
+
+test("a side caption whose file doesn't load leaves the player once, and the video is untouched", () => {
+  const video = { paused: false };
+  const track = new FakeTrack(video);
+  let dropped = 0;
+  dropCaptionOnError(track, video, () => dropped++);
+
+  // Chromium reports an error while the track has no source yet: not a dead caption.
+  track.dispatchEvent(new Event("error"));
+  assert.equal(dropped, 0);
+  assert.equal(track.parentNode, video);
+
+  // The caption URL answers 404: the track and its menu entry go, nothing retries it.
+  track.attrs.src = "https://xanivsrc1.example/media/ep1/eng.vtt";
+  track.dispatchEvent(new Event("error"));
+  track.dispatchEvent(new Event("error"));
+  assert.equal(dropped, 1);
+  assert.equal(track.parentNode, null);
+  assert.equal(video.paused, false);
+});
+
+test("a caption track from an earlier stream is not dropped from the new one's menu", () => {
+  const video = {};
+  const track = new FakeTrack(video);
+  let dropped = 0;
+  dropCaptionOnError(track, video, () => dropped++);
+  track.attrs.src = "blob:captions";
+  track.remove(); // the next stream cleared the old tracks
+  track.dispatchEvent(new Event("error"));
+  assert.equal(dropped, 0);
+});
+
+test("the stream player drops dead side captions where it adds them", () => {
+  const at = streamPlayerSource.indexOf('const track = document.createElement("track");');
+  const wired = streamPlayerSource.indexOf("dropCaptionOnError(track, video,", at);
+  assert.ok(at > 0 && wired > at && wired < streamPlayerSource.indexOf("video.appendChild(track);", at));
 });

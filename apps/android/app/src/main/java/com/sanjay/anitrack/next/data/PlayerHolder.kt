@@ -10,9 +10,12 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
+import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
 import com.sanjay.anitrack.next.BuildConfig
 import com.sanjay.anitrack.next.data.providers.SeekMode
 import com.sanjay.anitrack.next.data.providers.StreamAuthorizationScope
@@ -243,9 +246,54 @@ object PlayerHolder {
             // The connector's mime type wins over the URL (shonen.to's playlists end in /m3u8?t=…).
             val item = MediaItem.Builder().setUri(s.url).setMimeType(s.mimeType)
                 .setSubtitleConfigurations(subtitleConfigs).build()
-            p.setMediaSource(DefaultMediaSourceFactory(streamFactory).createMediaSource(item))
+            p.setMediaSource(
+                DefaultMediaSourceFactory(streamFactory)
+                    .setLoadErrorHandlingPolicy(SideCaptionErrorPolicy(s.subtitles.map { it.url }.toSet()))
+                    .createMediaSource(item),
+            )
         }
         p.prepare()
+    }
+
+    /**
+     * The usual retries, except for a side-loaded caption that got an HTTP answer: a missing
+     * file answers 404 every time, so it fails at once (and [dropFailedCaption] takes it out)
+     * instead of being re-requested while the stream waits on it.
+     */
+    private class SideCaptionErrorPolicy(
+        private val captions: Set<String>,
+        private val base: LoadErrorHandlingPolicy = DefaultLoadErrorHandlingPolicy(),
+    ) : LoadErrorHandlingPolicy by base {
+        override fun getRetryDelayMsFor(info: LoadErrorHandlingPolicy.LoadErrorInfo): Long =
+            if (info.loadEventInfo.dataSpec.uri.toString() in captions &&
+                !SideCaptions.retries(responseCode(info.exception))
+            ) C.TIME_UNSET else base.getRetryDelayMsFor(info)
+    }
+
+    private fun responseCode(error: Throwable?): Int? =
+        generateSequence(error) { it.cause }.take(8)
+            .firstNotNullOfOrNull { (it as? HttpDataSource.InvalidResponseCodeException)?.responseCode }
+
+    private fun failedUri(error: Throwable?): String? =
+        generateSequence(error) { it.cause }.take(8)
+            .firstNotNullOfOrNull { (it as? HttpDataSource.HttpDataSourceException)?.dataSpec?.uri?.toString() }
+
+    /**
+     * When [error] is a side-loaded caption that didn't load, reload the same stream without
+     * it, at the same position, and return true; the video keeps playing with the captions
+     * that work. Any other error returns false for the player screen to handle.
+     */
+    fun dropFailedCaption(ctx: Context, error: Throwable): Boolean {
+        val p = player ?: return false
+        val stream = SideCaptions.withoutFailed(lastResolved, failedUri(error)) ?: return false
+        val position = p.currentPosition
+        val play = p.playWhenReady
+        Log.w("AniTrackNext", "caption didn't load (http=${responseCode(error)}); playing without it")
+        setMedia(ctx, stream)
+        lastResolved = stream
+        if (position > 0) p.seekTo(position)
+        p.playWhenReady = play
+        return true
     }
 
     /** Stop and free everything (mini player ✕, or app teardown). */
