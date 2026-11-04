@@ -58,7 +58,8 @@ import { connectToonkotsu, toonkotsuGet, fetchToonkotsuImage, ToonkotsuSessionEr
 
 /** A reading-source failure whose message is safe to show; [verify] asks for the source's one-time check. */
 export class MangaSourceError extends Error {
-  constructor(message: string, readonly status?: number, readonly verify = false) {
+  /** [status] 0: no answer at all (offline, reset, timeout). [retryAfter]: the source's Retry-After. */
+  constructor(message: string, readonly status?: number, readonly verify = false, readonly retryAfter: string | null = null) {
     super(message);
   }
 }
@@ -119,7 +120,7 @@ export class SourceHttp {
       try {
         res = await this.fetcher()(target.toString(), init);
       } catch {
-        throw new MangaSourceError(`${this.label} couldn't be reached. Check your connection and retry.`);
+        throw new MangaSourceError(`${this.label} couldn't be reached. Check your connection and retry.`, 0);
       }
       const final = publicHttps(res.url || target.toString());
       if (!final || !this.hosts.has(final.hostname)) throw new MangaSourceError(`${this.label} redirected somewhere unexpected.`);
@@ -128,7 +129,7 @@ export class SourceHttp {
       }
       const text = await readCapped(res, maxBytes, this.label);
       if (res.status === 404) throw new MangaSourceError(`${this.label} doesn't have this anymore.`, 404);
-      if (res.status === 429) throw new MangaSourceError(`${this.label} is limiting requests. Wait a minute, then retry.`, 429);
+      if (res.status === 429) throw new MangaSourceError(`${this.label} is limiting requests. Wait a minute, then retry.`, 429, false, res.headers.get("retry-after"));
       if (res.status === 403 || res.status === 503) {
         if (this.verifiable && CHALLENGE.test(text.slice(0, 16_384))) {
           throw new MangaSourceError(`${this.label} needs a quick check. Use Connect ${this.label}, complete it, then retry.`, 403, true);

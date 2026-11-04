@@ -26,7 +26,8 @@ import kotlin.coroutines.resumeWithException
 
 /** A reading-source failure whose message is safe to show the user. */
 /** [status] is the HTTP status when the failure was an HTTP response. */
-open class MangaSourceException(message: String, val status: Int? = null) : Exception(message)
+/** [status] 0: no answer at all (offline, reset, timeout). [retryAfter]: the source's Retry-After. */
+open class MangaSourceException(message: String, val status: Int? = null, val retryAfter: String? = null) : Exception(message)
 
 /**
  * The source's site is showing a human-verification check (e.g. Cloudflare).
@@ -137,7 +138,7 @@ internal class MangaHttp(
             } catch (e: MangaSourceException) {
                 throw e
             } catch (e: IOException) {
-                throw MangaSourceException("$label couldn't be reached. Check your connection and retry.")
+                throw MangaSourceException("$label couldn't be reached. Check your connection and retry.", 0)
             } finally {
                 lastCallAt = System.currentTimeMillis()
             }
@@ -155,7 +156,7 @@ internal class MangaHttp(
         when (response.code) {
             in 200..299 -> Unit
             404 -> throw MangaSourceException("$label doesn't have this anymore.", 404)
-            429 -> throw MangaSourceException("$label is limiting requests. Wait a minute, then retry.", 429)
+            429 -> throw MangaSourceException("$label is limiting requests. Wait a minute, then retry.", 429, response.header("Retry-After"))
             403, 503 -> {
                 val page = runCatching { response.peekBody(16 * 1024).string() }.getOrDefault("")
                 if (verifiable && CHALLENGE.containsMatchIn(page)) throw MangaVerificationRequired(label)

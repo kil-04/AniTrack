@@ -1,16 +1,11 @@
 package com.sanjay.anitrack.next.data
 
 import android.content.Context
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
 import com.sanjay.anitrack.next.data.providers.EpisodeOrigin
 import com.sanjay.anitrack.next.data.providers.OriginCapture
 import com.sanjay.anitrack.next.data.providers.PlaybackPreferences
 import com.sanjay.anitrack.next.data.providers.Providers
 import com.sanjay.anitrack.next.data.providers.ResolvedMedia
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicInteger
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.snapshots.SnapshotStateList
@@ -369,25 +364,9 @@ object Downloads {
 
     // ── Network ─────────────────────────────────────────────────────────────
 
-    private val networkBack = Channel<Unit>(Channel.CONFLATED)
+    private fun watchNetwork() = NetworkWatch.init(appCtx)
 
-    private fun watchNetwork() {
-        val connectivity = appCtx.getSystemService(ConnectivityManager::class.java) ?: return
-        runCatching {
-            connectivity.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
-                override fun onAvailable(network: Network) { networkBack.trySend(Unit) }
-                override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
-                    if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) networkBack.trySend(Unit)
-                }
-            })
-        }
-    }
-
-    private fun online(): Boolean {
-        val connectivity = appCtx.getSystemService(ConnectivityManager::class.java) ?: return true
-        val caps = connectivity.getNetworkCapabilities(connectivity.activeNetwork) ?: return false
-        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-    }
+    private fun online(): Boolean = NetworkWatch.online()
 
     /** Returns once a network is up (at once when it already is). */
     private suspend fun awaitNetwork(id: String) {
@@ -395,9 +374,7 @@ object Downloads {
         val p = currentProgress(id)
         setStatus(id, Status.QUEUED, p, "Waiting for the network" + if (p > 0) " · $p% saved" else "")
         DownloadResumeWorker.schedule(appCtx)
-        while (!online()) {
-            withTimeoutOrNull(30_000) { networkBack.receive() }
-        }
+        NetworkWatch.awaitOnline()
         setStatus(id, Status.DOWNLOADING, p)
     }
 

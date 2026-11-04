@@ -4,7 +4,9 @@ import android.content.Context
 import android.graphics.BitmapFactory
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.snapshots.SnapshotStateList
+import com.sanjay.anitrack.next.data.DownloadResume
 import com.sanjay.anitrack.next.data.Manga
+import com.sanjay.anitrack.next.data.NetworkWatch
 import com.sanjay.anitrack.next.data.manga.comix.ComixCachedPageCopy
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -14,6 +16,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -31,6 +34,14 @@ import java.util.concurrent.atomic.AtomicInteger
  * filesDir/manga-downloads/<anilistId>/<chapter>/ with a meta.json, one chapter
  * at a time. The reader opens them from disk (long strips are sliced from the
  * local file), so downloaded chapters read without a connection.
+ *
+ * Interrupted chapters resume (DownloadResume, the twin of
+ * packages/shared/download-resume.ts): each saved page is appended to
+ * download.ledger, and a later run keeps the pages that still verify (same
+ * size and image format, and they decode) for the same page list, fetching only
+ * the rest in their places. A chapter waits out rate limits and network drops,
+ * fetches its page list again when page addresses expire, and carries on after
+ * the app is closed or killed.
  */
 object MangaDownloads {
     enum class Status { QUEUED, DOWNLOADING, DONE, FAILED }
@@ -108,14 +119,36 @@ object MangaDownloads {
         comixPageCopy = ComixCachedPageCopy(File(context.cacheDir, "comix-pages"))
         toonkotsuPageCopy = ComixCachedPageCopy(File(context.cacheDir, "toonkotsu-pages"), "toonkotsu")
         root = dir
+        // Only the main process downloads; WebView helper processes (:comix) just read.
+        val main = NetworkWatch.isMainProcess(context)
+        if (main) NetworkWatch.init(context)
+        val app = context.applicationContext
         scope.launch {
             val restored = dir.listFiles().orEmpty().filter { it.isDirectory }.flatMap { mangaDir ->
                 mangaDir.listFiles().orEmpty().filter { it.isDirectory }.mapNotNull { chapterDir -> restore(chapterDir) }
             }
-            withContext(Dispatchers.Main) {
+            val resumed = withContext(Dispatchers.Main) {
                 restored.forEach { item -> if (items.none { it.key == item.key }) items += item }
+                // Unfinished chapters carry on where they stopped.
+                if (main) restored.filter { it.status == Status.QUEUED }.count { resume(it) } else 0
             }
+            if (resumed > 0) com.sanjay.anitrack.next.data.DownloadResumeWorker.schedule(app)
         }
+    }
+
+    /** Queues a restored, unfinished chapter again (main thread); false when its source is gone. */
+    private fun resume(item: Item): Boolean {
+        val source = MangaSources.byId(item.sourceId)
+        if (source == null) {
+            val index = items.indexOfFirst { it.key == item.key }
+            if (index >= 0) items[index] = item.copy(status = Status.FAILED, error = "Download was interrupted. Download it again.")
+            return false
+        }
+        val generation = nextGeneration.incrementAndGet()
+        generations[item.key] = generation
+        queue.trySend(Pending(item, source, SourceTitle(item.sourceId, item.sourceTitleId, item.sourceTitle), generation))
+        if (worker?.isActive != true) worker = scope.launch { for (pending in queue) run(pending) }
+        return true
     }
 
     private fun restore(chapterDir: File): Item? = runCatching {
@@ -137,10 +170,11 @@ object MangaDownloads {
             sourceTitleId = meta.getString("sourceTitleId"),
             sourceTitle = meta.optString("sourceTitle"),
             chapter = chapter,
-            status = if (complete) Status.DONE else Status.FAILED,
+            // Unfinished: queued again, keeping the pages its ledger lists.
+            status = if (complete) Status.DONE else Status.QUEUED,
             done = if (complete) chapter.pageCount ?: 0 else 0,
             total = chapter.pageCount ?: 0,
-            error = if (complete) null else "Download was interrupted. Download it again.",
+            error = null,
             sizeBytes = chapterDir.listFiles().orEmpty().sumOf { it.length() },
         )
     }.getOrElse {
@@ -244,52 +278,170 @@ object MangaDownloads {
         if (index >= 0) items[index] = item
     }
 
+    private class Interrupt(val step: DownloadResume.Step) : Exception()
+
     private suspend fun run(pending: Pending) {
         if (!live(pending)) return // removed or cancelled while queued
         var item = pending.item
         val dir = folder(item.mangaId, item.chapter.id)
         try {
-            dir.deleteRecursively()
+            // The folder is kept: pages an earlier run saved are reused below.
             dir.mkdirs()
             writeMeta(dir, item, JSONArray(), complete = false)
-            val pages = pending.source.pages(pending.title, item.chapter)
-            item = item.copy(status = Status.DOWNLOADING, total = pages.size, done = 0)
-            update(pending, item)
-            val downloading = item
-            val saved = arrayOfNulls<JSONObject>(pages.size)
-            val next = AtomicInteger(0)
-            val finished = AtomicInteger(0)
-            // One failed page cancels the other workers before the chapter fails.
-            coroutineScope {
-                repeat(minOf(PAGE_WORKERS, pages.size)) {
-                    launch {
-                        while (live(pending)) {
-                            val index = next.getAndIncrement()
-                            if (index >= pages.size) break
-                            val resolved = pending.source.resolvePage(pages[index])
-                            val name = "%03d.%s".format(index + 1, extensionOf(resolved.url))
-                            val file = File(dir, name)
-                            fetch(pending, resolved, file)
-                            val (w, h) = resolved.width?.let { it to (resolved.height ?: 0) } ?: bounds(file)
-                            saved[index] = JSONObject().put("file", name).put("w", w).put("h", h)
-                            finished.incrementAndGet()
-                            // Read the count on the main thread so progress never steps back.
-                            updateWith(pending) { downloading.copy(done = finished.get()) }
-                        }
+            var reResolves = 0
+            while (true) {
+                try {
+                    item = saveChapter(pending, item, dir, reResolves)
+                    break
+                } catch (e: Interrupt) {
+                    if (!live(pending)) throw CancellationException("removed")
+                    when (val step = e.step) {
+                        DownloadResume.Step.ReResolve -> reResolves++
+                        is DownloadResume.Step.Pause -> waitOut(pending, step)
+                        else -> throw e
                     }
                 }
             }
-            if (!live(pending)) throw CancellationException("removed")
-            writeMeta(dir, item, JSONArray().apply { for (page in saved) put(page) }, complete = true)
-            update(pending, item.copy(status = Status.DONE, done = pages.size, sizeBytes = dir.listFiles().orEmpty().sumOf { it.length() }, error = null))
+            update(pending, item.copy(status = Status.DONE, sizeBytes = dir.listFiles().orEmpty().sumOf { it.length() }, error = null))
         } catch (e: CancellationException) {
-            dir.deleteRecursively()
+            if (!live(pending)) dir.deleteRecursively()
+            if (e.message != "removed") throw e
         } catch (e: Exception) {
             if (com.sanjay.anitrack.next.BuildConfig.DEBUG) {
                 android.util.Log.d("MangaDownloads", "Chapter download failed (${pending.source.id}): ${e.javaClass.simpleName}: ${e.message?.take(160)}")
             }
-            update(pending, item.copy(status = Status.FAILED, error = e.message ?: "Download failed. Try again."))
+            // The saved pages stay: downloading the chapter again continues from them.
+            updateWith(pending) { (items.firstOrNull { it.key == pending.item.key } ?: item).copy(status = Status.FAILED, error = e.message ?: "Download failed. Try again.") }
         }
+    }
+
+    /** Shows why a chapter is waiting, then returns once it may continue. */
+    private suspend fun waitOut(pending: Pending, step: DownloadResume.Step.Pause) {
+        updateWith(pending) {
+            val current = items.first { it.key == pending.item.key }
+            val saved = if (current.done > 0) " (${current.done} of ${current.total} pages saved)" else ""
+            current.copy(
+                status = Status.QUEUED,
+                error = when (step.reason) {
+                    DownloadResume.PauseReason.NETWORK -> "Waiting for the network$saved."
+                    DownloadResume.PauseReason.RATE_LIMIT -> "The source asked to wait; continuing automatically$saved."
+                    DownloadResume.PauseReason.SERVER -> "The source is busy; continuing automatically$saved."
+                },
+            )
+        }
+        step.resumeAt?.let { at -> delay((at - System.currentTimeMillis()).coerceAtLeast(0)) }
+        NetworkWatch.awaitOnline()
+    }
+
+    /** [work] with the shared retry rules; throws [Interrupt] when the chapter has to stop. */
+    private suspend fun <T> withRetry(reResolves: Int, work: suspend () -> T): T {
+        var attempt = 0
+        while (true) {
+            val failure = try {
+                return work()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: MangaVerificationRequired) {
+                throw e
+            } catch (e: MangaSourceException) {
+                val status = e.status ?: throw e
+                if (status == 0) DownloadResume.Failure.Network else DownloadResume.Failure.Http(status, e.retryAfter)
+            } catch (e: java.io.IOException) {
+                DownloadResume.Failure.Network
+            }
+            when (val step = DownloadResume.nextStep(failure, attempt, reResolves, System.currentTimeMillis())) {
+                is DownloadResume.Step.Retry -> { delay(step.delayMs); attempt++ }
+                DownloadResume.Step.Fail -> throw MangaSourceException(
+                    if (failure is DownloadResume.Failure.Http && failure.status == 404) "A page is missing at the source." else "A page didn't download (HTTP ${(failure as? DownloadResume.Failure.Http)?.status}).",
+                    (failure as? DownloadResume.Failure.Http)?.status,
+                )
+                else -> throw Interrupt(step)
+            }
+        }
+    }
+
+    private val PAGE_FILE = Regex("^\\d{3,4}\\.(?:jpg|jpeg|png|webp|gif|avif|img)$")
+
+    private fun readHead(file: File): DownloadResume.Disk? = runCatching {
+        if (!file.isFile) return null
+        file.inputStream().use { input ->
+            val buffer = ByteArray(minOf(DownloadResume.HEAD_BYTES.toLong(), file.length()).toInt())
+            var read = 0
+            while (read < buffer.size) {
+                val n = input.read(buffer, read, buffer.size - read)
+                if (n < 0) break
+                read += n
+            }
+            DownloadResume.Disk(file.length(), buffer.copyOf(read))
+        }
+    }.getOrNull()
+
+    /** One pass at a chapter: keeps what's saved for the same page list, fetches the rest. */
+    private suspend fun saveChapter(pending: Pending, start: Item, dir: File, reResolves: Int): Item {
+        var item = start
+        val pages = withRetry(reResolves) { pending.source.pages(pending.title, item.chapter) }
+        if (!live(pending)) throw CancellationException("removed")
+        val pieces = pages.map { DownloadResume.Piece(DownloadResume.Kind.PAGE, it.url) }
+        val rendition = DownloadResume.renditionId("chapter ${item.chapter.id}", pieces)
+        val ledgerFile = File(dir, DownloadResume.LEDGER_FILE)
+        val previous = withContext(Dispatchers.IO) { runCatching { DownloadResume.parseLedger(ledgerFile.readText()) }.getOrNull() }
+        val plan = withContext(Dispatchers.IO) { DownloadResume.resumePlan(pieces, rendition, previous) { name -> readHead(File(dir, name)) } }
+        val ledger = if (plan.restart) null else previous
+        val saved = arrayOfNulls<JSONObject>(pages.size)
+        val fetch = plan.fetch.toMutableList()
+        withContext(Dispatchers.IO) {
+            if (plan.restart) {
+                // Another page list (or none recorded): start the chapter clean.
+                dir.listFiles().orEmpty().filter { PAGE_FILE.matches(it.name) || it.name.endsWith(".part") }.forEach { it.delete() }
+                ledgerFile.writeText(DownloadResume.ledgerHeader(rendition, pages.size))
+            } else {
+                dir.listFiles().orEmpty().filter { it.name.endsWith(".part") }.forEach { it.delete() }
+            }
+            for (index in plan.keep) {
+                val name = ledger!!.pieces.getValue(index).file
+                val (w, h) = pages[index].width?.let { it to (pages[index].height ?: 0) } ?: bounds(File(dir, name))
+                // A kept page must still decode.
+                if (bounds(File(dir, name)).first <= 0) { fetch += index; continue }
+                saved[index] = JSONObject().put("file", name).put("w", w).put("h", h)
+            }
+        }
+        fetch.sort()
+        val keptCount = pages.size - fetch.size
+        item = item.copy(status = Status.DOWNLOADING, total = pages.size, done = keptCount, error = null)
+        update(pending, item)
+        val downloading = item
+        val next = AtomicInteger(0)
+        val finished = AtomicInteger(keptCount)
+        val ledgerLock = Any()
+        // One failed page cancels the other workers before the chapter fails.
+        coroutineScope {
+            repeat(minOf(PAGE_WORKERS, fetch.size)) {
+                launch {
+                    while (live(pending)) {
+                        val at = next.getAndIncrement()
+                        if (at >= fetch.size) break
+                        val index = fetch[at]
+                        val resolved = withRetry(reResolves) { pending.source.resolvePage(pages[index]) }
+                        val name = "%03d.%s".format(index + 1, extensionOf(resolved.url))
+                        val file = File(dir, name)
+                        withRetry(reResolves) { fetch(pending, resolved, file) }
+                        val (w, h) = resolved.width?.let { it to (resolved.height ?: 0) } ?: bounds(file)
+                        val head = readHead(file)?.head ?: ByteArray(0)
+                        val tag = DownloadResume.pieceTag(pieces[index], head)
+                        withContext(Dispatchers.IO) {
+                            synchronized(ledgerLock) { ledgerFile.appendText(DownloadResume.ledgerLine(index, name, file.length(), tag)) }
+                        }
+                        saved[index] = JSONObject().put("file", name).put("w", w).put("h", h)
+                        finished.incrementAndGet()
+                        // Read the count on the main thread so progress never steps back.
+                        updateWith(pending) { downloading.copy(done = finished.get()) }
+                    }
+                }
+            }
+        }
+        if (!live(pending)) throw CancellationException("removed")
+        writeMeta(dir, item, JSONArray().apply { for (page in saved) put(page) }, complete = true)
+        return item.copy(done = pages.size)
     }
 
     private suspend fun fetch(pending: Pending, page: MangaPage, target: File) {
@@ -307,25 +459,37 @@ object MangaDownloads {
         val url = MangaUrlPolicy.publicHttps(page.url)?.toASCIIString()
             ?: throw MangaSourceException("Refused an unsafe page address.")
         val request = Request.Builder().url(url).apply { page.headers.forEach { (k, v) -> header(k, v) } }.build()
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw MangaSourceException("A page didn't download (HTTP ${response.code}).")
-            val body = response.body ?: throw MangaSourceException("A page came back empty.")
-            if (body.contentLength() > MAX_PAGE_BYTES) throw MangaSourceException("A page is too large.")
-            val partial = File(target.parentFile, target.name + ".part")
-            partial.outputStream().use { out ->
-                body.byteStream().use { input ->
-                    val buffer = ByteArray(64 * 1024)
-                    var total = 0L
-                    while (true) {
-                        val n = input.read(buffer)
-                        if (n < 0) break
-                        total += n
-                        if (total > MAX_PAGE_BYTES) throw MangaSourceException("A page is too large.")
-                        out.write(buffer, 0, n)
-                    }
-                }
+        withContext(Dispatchers.IO) {
+            val response = try {
+                client.newCall(request).execute()
+            } catch (e: java.io.IOException) {
+                throw MangaSourceException("The download was interrupted. Check your connection and try again.", 0)
             }
-            if (!partial.renameTo(target)) throw MangaSourceException("Couldn't save a page.")
+            response.use {
+                if (!response.isSuccessful) throw MangaSourceException("A page didn't download (HTTP ${response.code}).", response.code, response.header("Retry-After"))
+                val body = response.body ?: throw MangaSourceException("A page came back empty.")
+                if (body.contentLength() > MAX_PAGE_BYTES) throw MangaSourceException("A page is too large.")
+                val partial = File(target.parentFile, target.name + ".part")
+                try {
+                    partial.outputStream().use { out ->
+                        body.byteStream().use { input ->
+                            val buffer = ByteArray(64 * 1024)
+                            var total = 0L
+                            while (true) {
+                                val n = input.read(buffer)
+                                if (n < 0) break
+                                total += n
+                                if (total > MAX_PAGE_BYTES) throw MangaSourceException("A page is too large.")
+                                out.write(buffer, 0, n)
+                            }
+                        }
+                    }
+                } catch (e: java.io.IOException) {
+                    partial.delete()
+                    throw MangaSourceException("The download was interrupted. Check your connection and try again.", 0)
+                }
+                if (!partial.renameTo(target)) throw MangaSourceException("Couldn't save a page.")
+            }
         }
     }
 
