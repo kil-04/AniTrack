@@ -577,7 +577,9 @@ const xcomic: Source = {
  */
 async function toonRun<T>(work: () => Promise<T>): Promise<T> {
   try { return await work(); } catch (e) {
-    if (e instanceof ToonkotsuSessionError || e instanceof PageVerificationError) throw new MangaSourceError(e.message, undefined, e instanceof PageVerificationError || e.verify);
+    if (e instanceof ToonkotsuSessionError || e instanceof PageVerificationError) {
+      throw new MangaSourceError(e.message, e instanceof ToonkotsuSessionError && e.rate ? 429 : undefined, e instanceof PageVerificationError || e.verify);
+    }
     if (e instanceof MangaSourceError) throw e;
     throw new MangaSourceError("Toonkotsu couldn't load this title. Retry or choose another source.");
   }
@@ -704,7 +706,7 @@ export function connectMangaSource(sourceId: unknown, parent: BrowserWindow | nu
  * needs, or null for an address the source doesn't serve pages from.
  */
 export function fetchPageImage(sourceId: string, target: URL, signal?: AbortSignal): Promise<Response> | null {
-  if (sourceId === "toonkotsu") return fetchToonkotsuImage(target, signal);
+  if (sourceId === "toonkotsu") return fetchToonkotsuImage(target, signal)?.catch((error: unknown) => { throw toonkotsuPageError(error); }) ?? null;
   if (sourceId === "comix") return fetchComixImage(target.toString(), signal);
   if (sourceId === "mangaball" && ballImageHosts.has(target.hostname.toLowerCase())) {
     return net.fetch(target.toString(), { headers: { Referer: `${MANGABALL.SITE}/`, "User-Agent": honestAgent() }, signal });
@@ -717,6 +719,19 @@ export function fetchPageImage(sourceId: string, target: URL, signal?: AbortSign
     return dotFetch(target.toString(), "image/avif,image/webp,image/apng,image/*;q=0.8", true);
   }
   return null;
+}
+
+/**
+ * A Toonkotsu page failure as the source's own verdict, so a download never takes
+ * it for a network drop: its check (fail, asking for Connect), its rate limit
+ * (wait), or a page it couldn't load (fail). A cancelled request stays as it is.
+ */
+function toonkotsuPageError(error: unknown): unknown {
+  if (error instanceof ToonkotsuSessionError) return new MangaSourceError(error.message, error.rate ? 429 : undefined, error.verify);
+  if (error instanceof PageVerificationError) return new MangaSourceError(error.message, undefined, true);
+  if ((error as { name?: unknown } | null)?.name === "AbortError") return error;
+  const message = error instanceof Error && /^Toonkotsu /.test(error.message) ? error.message : "Toonkotsu couldn't load this page. Retry or choose another source.";
+  return new MangaSourceError(message);
 }
 
 /** Serves a page image to the renderer with the headers (and session) its source needs. */

@@ -65,7 +65,8 @@ internal object ToonkotsuSession {
         return read(url, JSONObject().put("operation", "image").put("ref", ref.ref).put("chapterId", ref.chapterId).put("page", ref.page))
     }
     private suspend fun read(url: String?, request: JSONObject): JSONObject = lane.withLock {
-        if (System.currentTimeMillis() < cooldownUntil) throw MangaSourceException("Toonkotsu is limiting requests. Wait a minute, then retry.")
+        // 429: a rate limit (downloads wait it out), not a page that failed.
+        if (System.currentTimeMillis() < cooldownUntil) throw MangaSourceException("Toonkotsu is limiting requests. Wait a minute, then retry.", 429)
         withContext(Dispatchers.Main) {
             withTimeoutOrNull(60_000) {
                 val browser = view()
@@ -99,7 +100,8 @@ internal object ToonkotsuSession {
                                 ?: runCatching { java.time.ZonedDateTime.parse(retry, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli() - System.currentTimeMillis() }.getOrNull()
                             cooldownUntil = System.currentTimeMillis() + (wait ?: 60_000).coerceIn(60_000,86_400_000)
                         }
-                        if (result.has("error")) throw MangaSourceException(if (result.optString("error") == "rate") "Toonkotsu is limiting requests. Wait a minute, then retry." else "Toonkotsu could not load this page. Retry or choose another source.")
+                        if (result.optString("error") == "rate") throw MangaSourceException("Toonkotsu is limiting requests. Wait a minute, then retry.", 429)
+                        if (result.has("error")) throw MangaSourceException("Toonkotsu could not load this page. Retry or choose another source.")
                         result
                     } ?: throw MangaSourceException("Toonkotsu took too long. Retry or choose another source.")
                 } finally { evaluate(browser, "delete window[$quoted]") }

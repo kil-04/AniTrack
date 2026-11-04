@@ -84,11 +84,14 @@ internal object MangaPublicDns : Dns {
     override fun lookup(hostname: String): List<InetAddress> {
         val addresses = Dns.SYSTEM.lookup(hostname)
         if (addresses.isEmpty() || addresses.any { !MangaUrlPolicy.isPublicAddress(it) }) {
-            throw IOException("Refused a local-network address")
+            throw RefusedAddressException()
         }
         return addresses
     }
 }
+
+/** A host that resolves to a local-network address: refused for safety, never a network drop to wait out. */
+class RefusedAddressException : IOException("Refused a local-network address")
 
 /**
  * Catalogue HTTP for one reading source: fixed hosts, serialized requests with a

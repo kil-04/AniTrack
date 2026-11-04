@@ -25,6 +25,7 @@ import { fetchPageImage, MangaSourceError, sourceById } from "./sources";
 import {
   HEAD_BYTES,
   LEDGER_FILE,
+  afterStop,
   ledgerHeader,
   ledgerLine,
   nextStep,
@@ -32,6 +33,7 @@ import {
   pieceTag,
   renditionId,
   resumePlan,
+  stalledMessage,
   type Failure,
   type Ledger,
   type PlanPiece,
@@ -50,7 +52,9 @@ import {
  * still verify (same size and image format) for the same page list, fetching
  * only the rest in their places. A chapter waits out rate limits and network
  * drops, fetches its page list again when page addresses expire, and carries
- * on after the app is restarted.
+ * on after the app is restarted. Every wait has an end: an attempt that saves
+ * no page is a stall, and a few in a row fail the chapter (the shared
+ * afterStop), except while the device is offline.
  */
 
 const MAX_PAGE_BYTES = 40 * 1024 * 1024;
@@ -81,6 +85,8 @@ let retryScale = 1;
 export function setMangaRetryScale(scale: number): void { retryScale = scale; }
 
 interface Pending { key: string; generation: number; title: SourceTitle }
+/** What one attempt at a chapter did, for the stall count. */
+interface Attempt { saved: number; startedOver: boolean }
 
 const items = new Map<string, MangaDownload>();
 // The live request per chapter: a queued or running download whose generation no
@@ -333,18 +339,27 @@ async function run(pending: Pending): Promise<void> {
       await fs.promises.mkdir(dir, { recursive: true });
       await writeMeta(dir, { manga, title: pending.title, chapter, pages: [], complete: false, sizeBytes: 0 });
     });
+    // Attempts in a row that saved no page (stalls), and when the first one stopped.
     let reResolves = 0;
+    let stalledSince: number | null = null;
     for (;;) {
+      const attempt: Attempt = { saved: 0, startedOver: false };
       try {
-        item = await saveChapter(pending, item, dir, controller.signal, reResolves, live);
+        item = await saveChapter(pending, item, dir, controller.signal, reResolves, live, attempt);
         break;
       } catch (error) {
         if (!(error instanceof Interrupt) || !live()) throw error;
-        if (error.step.action === "re-resolve") { reResolves++; continue; }
-        if (error.step.action !== "pause") throw error;
+        const step = error.step;
+        if (step.action !== "re-resolve" && step.action !== "pause") throw error;
+        const reason = step.action === "pause" ? step.reason : "expired";
+        const verdict = afterStop(reason, reResolves, stalledSince, attempt.saved > 0 && !attempt.startedOver, Date.now());
+        if (verdict.action === "fail") throw new DownloadError(stalledMessage(verdict.reason, "chapter"));
+        reResolves = verdict.reResolves;
+        stalledSince = verdict.stalledSince;
+        if (step.action === "re-resolve") continue;
         const latest = items.get(pending.key) ?? item;
-        item = update(pending, { ...latest, status: "queued", error: waitingLabel(error.step, latest) });
-        await waitOut(error.step, controller.signal);
+        item = update(pending, { ...latest, status: "queued", error: waitingLabel(step, latest) });
+        await waitOut(step, controller.signal);
         if (!live()) throw new Stopped();
       }
     }
@@ -379,14 +394,26 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+/**
+ * A request that got no answer at all (offline, reset, refused, DNS, TLS, a
+ * timeout), as opposed to a source, decoding or storage error, which is never
+ * retried as though it were the network.
+ */
+function noAnswer(error: unknown): boolean {
+  const e = error as { name?: unknown; message?: unknown; code?: unknown; cause?: { code?: unknown } } | null;
+  if (!e || typeof e !== "object") return false;
+  if (e.name === "TimeoutError") return true;
+  const text = `${String(e.message ?? "")} ${String(e.code ?? "")} ${String(e.cause?.code ?? "")}`;
+  return /net::ERR_|\bfetch failed\b|\bfailed to fetch\b|\b(?:ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|EPIPE|UND_ERR_[A-Z_]+)\b|socket hang up/i.test(text);
+}
+
+/** The shared rules' view of a failure, or null when retrying can't help (it fails the chapter). */
 function failureOf(error: unknown): Failure | null {
   if (error instanceof MangaSourceError) {
     if (error.verify || error.status == null) return null;
     return error.status === 0 ? { network: true, online: net.isOnline() } : { status: error.status, retryAfter: error.retryAfter };
   }
-  const e = error as { name?: unknown } | null;
-  if (e?.name === "TimeoutError" || e?.name === "TypeError") return { network: true, online: net.isOnline() };
-  return null;
+  return noAnswer(error) ? { network: true, online: net.isOnline() } : null;
 }
 
 /** [work] with the shared retry rules; throws [Interrupt] when the chapter has to stop. */
@@ -408,7 +435,7 @@ async function withRetry<T>(work: () => Promise<T>, reResolves: number, signal: 
 
 /** One pass at a chapter: keeps what's saved for the same page list, fetches the rest. */
 async function saveChapter(
-  pending: Pending, start: MangaDownload, dir: string, stop: AbortSignal, reResolves: number, live: () => boolean,
+  pending: Pending, start: MangaDownload, dir: string, stop: AbortSignal, reResolves: number, live: () => boolean, attempt: Attempt,
 ): Promise<MangaDownload> {
   let item = start;
   const chapter = item.chapter;
@@ -426,6 +453,8 @@ async function saveChapter(
   }
   const plan = resumePlan(pieces, rendition, previous, (file) => heads.get(file) ?? null);
   const ledger: Ledger | null = plan.restart ? null : previous;
+  // Pages saved for another page list are discarded: this attempt isn't progress.
+  if (plan.restart && (previous?.pieces.size ?? 0) > 0) attempt.startedOver = true;
   if (plan.restart) {
     // Another page list (or none recorded): start the chapter clean.
     for (const name of await fs.promises.readdir(dir)) {
@@ -457,6 +486,7 @@ async function saveChapter(
       await fs.promises.appendFile(ledgerFile, ledgerLine(index, result.page.file, result.bytes, result.tag));
       saved[index] = result.page;
       size += result.bytes;
+      attempt.saved++;
       item = update(pending, { ...item, done: item.done + 1 });
     }
   };
@@ -490,8 +520,12 @@ async function savePage(
     response = await pending;
   } catch (error) {
     if (stop.aborted) throw new Stopped();
-    // No answer at all (offline, reset, timeout): the network, not the page.
-    throw new MangaSourceError("The download was interrupted. Check your connection and try again.", 0);
+    // The source's own verdict (its check, its rate limit, a page it refused).
+    if (error instanceof MangaSourceError) throw error;
+    // No answer at all (offline, reset, timeout): the network, not the page. While
+    // offline any failure waits for the network; online it is judged on what it is.
+    if (noAnswer(error) || !net.isOnline()) throw new MangaSourceError("The download was interrupted. Check your connection and try again.", 0);
+    throw new DownloadError(`Page ${index + 1} couldn't be downloaded from the source.`);
   }
   const type = response.headers.get("content-type") ?? "";
   if (!response.ok || !type.toLowerCase().startsWith("image/")) {

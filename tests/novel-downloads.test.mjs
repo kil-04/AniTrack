@@ -136,6 +136,57 @@ test("a chapter the source no longer has still fails, and three in a row stop th
   assert.match(t.error, /Downloading stopped/);
 });
 
+test("a chapter whose source keeps failing fails after three stalls instead of waiting forever", async () => {
+  const id = "Broken01";
+  let calls = 0;
+  harness.chapter = async () => { calls++; throw new NovelSourceError("NovelBuddy returned an error (HTTP 502).", 502); };
+  await N.enqueueNovelChapters(detail(id), chapters.slice(0, 1), chapters);
+  const t = await idle(id);
+  assert.equal(t.saved, 0);
+  assert.equal(t.failed, 1);
+  assert.equal(t.error, "The source kept failing on part of this chapter. Try again later.");
+  assert.equal(calls, 3 * 7, "three runs of six retries each");
+});
+
+test("no answer while online is a stall too: it fails rather than waiting for a network that is there", async () => {
+  const id = "Unreach01";
+  harness.chapter = async () => { throw new NovelSourceError("NovelBuddy couldn't be reached. Check your connection and retry.", 0); };
+  await N.enqueueNovelChapters(detail(id), chapters.slice(0, 1), chapters);
+  const t = await idle(id);
+  assert.equal(t.failed, 1);
+  assert.match(t.error, /kept failing/);
+  assert.ok(!events.some((e) => e.titleId === id && /Waiting for the network/.test(e.error ?? "")), "it never claimed to wait for the network");
+});
+
+test("removing or cancelling a title ends its chapter's wait at once, and the worker moves on", async () => {
+  for (const stop of ["remove", "cancel"]) {
+    const id = `Waiting${stop}`;
+    const next = `After${stop}`;
+    harness.chapter = async (chapterId) => {
+      if (chapterId === "ch1abc") throw new NovelSourceError("NovelBuddy is limiting requests. Wait a minute, then retry.", 429, false, "999999");
+      return text(chapterId);
+    };
+    await N.enqueueNovelChapters(detail(id), chapters.slice(0, 1), chapters);
+    await N.enqueueNovelChapters(detail(next), chapters.slice(1, 2), chapters);
+    // Six hours (scaled to 21.6 s) of Retry-After: far longer than this test may take.
+    await waitFor(async () => /Continuing automatically/.test((await titleOf(id))?.error ?? ""), "the rate-limit wait");
+    const started = Date.now();
+    if (stop === "remove") await N.removeNovelDownloads("novelbuddy", id);
+    else await N.cancelNovelDownloads("novelbuddy", id);
+    const t = await idle(next);
+    assert.equal(t.saved, 1);
+    assert.ok(Date.now() - started < 5000, `the worker moved on after ${Date.now() - started} ms`);
+    if (stop === "cancel") {
+      const cancelled = await titleOf(id);
+      assert.equal(cancelled.queued, 0);
+      assert.equal(cancelled.failed, 0, "a cancelled chapter isn't a failure");
+      await waitFor(() => !fs.existsSync(path.join(folder(id), "pending.json")), "nothing left to resume");
+    } else {
+      assert.equal(await titleOf(id), undefined);
+    }
+  }
+});
+
 after(() => {
   const resolved = path.resolve(storageRoot);
   if (path.dirname(resolved) !== path.resolve(os.tmpdir()) || !path.basename(resolved).startsWith("anitrack-novel-dl-test-")) throw new Error("Invalid fixture cleanup path");

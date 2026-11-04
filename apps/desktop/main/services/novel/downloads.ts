@@ -13,7 +13,7 @@ import {
   type NovelSourceId,
 } from "../../../../../packages/shared/novel";
 import { NovelSourceError, novelChapter } from "./sources";
-import { nextStep, type Failure } from "../../../../../packages/shared/download-resume";
+import { afterStop, nextStep, stalledMessage, type Failure } from "../../../../../packages/shared/download-resume";
 
 /*
  * Offline novel chapters: userData/novel_downloads/<source>-<hex title id>/ holds
@@ -25,7 +25,9 @@ import { nextStep, type Failure } from "../../../../../packages/shared/download-
  * pending.json lists the chapters still to fetch, so downloads carry on after
  * the app is restarted. A chapter that hits a rate limit or a network drop waits
  * (Retry-After, backoff, the network coming back) and continues, using the
- * rules shared with the other downloads (packages/shared/download-resume.ts).
+ * rules shared with the other downloads (packages/shared/download-resume.ts):
+ * a chapter that stalls a few times in a row (offline waits aside) fails.
+ * Removing or cancelling a title ends a chapter's wait at once.
  */
 
 interface Title {
@@ -40,6 +42,8 @@ interface Title {
   updatedAt: number;
   /** Failures in a row; three stop the title's queue. */
   failStreak: number;
+  /** Bumped by cancel: the chapter in progress (and its wait) stops. */
+  generation: number;
 }
 
 type Listener = (event: NovelDownloadTitle | { removed: string }) => void;
@@ -56,6 +60,8 @@ const folder = (sourceId: string, titleId: string) => path.join(root(), `${sourc
 const chapterFile = (sourceId: string, titleId: string, chapterId: string) => path.join(folder(sourceId, titleId), `c-${hex(chapterId)}.json`);
 const pendingFile = (sourceId: string, titleId: string) => path.join(folder(sourceId, titleId), "pending.json");
 const NETWORK_POLL_MS = 15_000;
+/** Waits are slept in slices this long, so a removed or cancelled title stops waiting at once. */
+const WAIT_SLICE_MS = 1_000;
 let retryScale = 1;
 /** Tests shrink backoff and Retry-After waits; the app never calls this. */
 export function setNovelRetryScale(scale: number): void { retryScale = scale; }
@@ -130,7 +136,7 @@ function load(): Promise<void> {
           .map((id) => byId.get(id)!);
         titles.set(novelTitleKey(meta.detail.sourceId, meta.detail.id), {
           detail: meta.detail, chapters, saved, queue: [...new Map(queue.map((c) => [c.id, c])).values()], failed: new Map(),
-          current: null, sizeBytes: size, error: null, updatedAt: Date.now(), failStreak: 0,
+          current: null, sizeBytes: size, error: null, updatedAt: Date.now(), failStreak: 0, generation: 0,
         });
       } catch {
         /* a folder without readable metadata is skipped */
@@ -180,7 +186,7 @@ export async function enqueueNovelChapters(detail: NovelDetail, chapters: NovelC
   const key = novelTitleKey(detail.sourceId, detail.id);
   let t = titles.get(key);
   if (!t) {
-    t = { detail, chapters: fullList, saved: new Set(), queue: [], failed: new Map(), current: null, sizeBytes: 0, error: null, updatedAt: Date.now(), failStreak: 0 };
+    t = { detail, chapters: fullList, saved: new Set(), queue: [], failed: new Map(), current: null, sizeBytes: 0, error: null, updatedAt: Date.now(), failStreak: 0, generation: 0 };
     titles.set(key, t);
   }
   t.detail = detail;
@@ -204,12 +210,16 @@ export async function enqueueNovelChapters(detail: NovelDetail, chapters: NovelC
   return added;
 }
 
-/** Stops a title's waiting chapters (the one in progress finishes); saved ones stay. */
+/**
+ * Stops a title's waiting chapters; saved ones stay. The one in progress finishes,
+ * unless it is waiting (a rate limit, the network): that wait ends now.
+ */
 export async function cancelNovelDownloads(sourceId: NovelSourceId, titleId: string): Promise<void> {
   await load();
   const t = titles.get(novelTitleKey(sourceId, titleId));
   if (!t) return;
   t.queue = [];
+  t.generation++;
   emit(t);
   await savePending(t);
 }
@@ -249,9 +259,12 @@ async function pump(): Promise<void> {
       t.current = chapter;
       emit(t);
       const { sourceId, id } = t.detail;
+      const generation = t.generation;
       const live = () => titles.get(novelTitleKey(sourceId, id)) === t;
+      // Still wanted: the title is there and wasn't cancelled since this chapter started.
+      const wanted = () => live() && t.generation === generation;
       try {
-        const text = await fetchChapter(t, chapter, live);
+        const text = await fetchChapter(t, chapter, wanted);
         const body = JSON.stringify({ id: chapter.id, label: chapter.label, paragraphs: text.paragraphs });
         // The title may have been removed while this chapter was on its way.
         if (live()) {
@@ -293,13 +306,28 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Sleeps [ms] in short slices; throws [Removed] as soon as the chapter is no longer [wanted]. */
+async function waitWhile(ms: number, wanted: () => boolean): Promise<void> {
+  const until = Date.now() + ms;
+  for (;;) {
+    if (!wanted()) throw new Removed();
+    const left = until - Date.now();
+    if (left <= 0) return;
+    await sleep(Math.min(left, WAIT_SLICE_MS));
+  }
+}
+
 /**
  * Fetches one chapter, waiting out rate limits (Retry-After) and network drops
- * with the shared rules; other failures are thrown for the chapter to fail.
+ * with the shared rules; other failures, and a chapter that stalls a few times
+ * in a row (afterStop), are thrown for the chapter to fail.
  */
-async function fetchChapter(t: Title, chapter: NovelChapter, live: () => boolean): Promise<NovelChapterText> {
+async function fetchChapter(t: Title, chapter: NovelChapter, wanted: () => boolean): Promise<NovelChapterText> {
+  // Pauses in a row for this chapter (each one a stall: no chapter saved), and when the first began.
+  let stalls = 0;
+  let stalledSince: number | null = null;
   for (let attempt = 0; ; attempt++) {
-    if (!live()) throw new Removed();
+    if (!wanted()) throw new Removed();
     try {
       return await novelChapter(t.detail.sourceId, t.detail.id, chapter.id, "back");
     } catch (error) {
@@ -308,15 +336,19 @@ async function fetchChapter(t: Title, chapter: NovelChapter, live: () => boolean
       if (status !== 0 && status !== 429 && status !== 503 && status !== 408 && !(status >= 500 && status <= 599)) throw error;
       const failure: Failure = status === 0 ? { network: true, online: net.isOnline() } : { status, retryAfter: error.retryAfter };
       const step = nextStep(failure, attempt, 0, Date.now());
-      if (step.action === "retry") { await sleep(step.delayMs * retryScale); continue; }
+      if (step.action === "retry") { await waitWhile(step.delayMs * retryScale, wanted); continue; }
       if (step.action !== "pause") throw error;
+      const verdict = afterStop(step.reason, stalls, stalledSince, false, Date.now());
+      if (verdict.action === "fail") throw new NovelSourceError(stalledMessage(verdict.reason, "chapter"));
+      stalls = verdict.reResolves;
+      stalledSince = verdict.stalledSince;
       t.error = step.reason === "network"
         ? "Waiting for the network; downloading continues when it's back."
         : `${error.message.replace(/ Wait a minute, then retry\.$/, "")} Continuing automatically.`;
       emit(t);
-      if (step.resumeAt) await sleep(Math.max(0, step.resumeAt - Date.now()) * retryScale);
-      while (!net.isOnline()) await sleep(NETWORK_POLL_MS * retryScale);
-      if (!live()) throw new Removed();
+      if (step.resumeAt) await waitWhile(Math.max(0, step.resumeAt - Date.now()) * retryScale, wanted);
+      while (!net.isOnline()) await waitWhile(NETWORK_POLL_MS * retryScale, wanted);
+      if (!wanted()) throw new Removed();
       t.error = null;
       emit(t);
       attempt = -1;

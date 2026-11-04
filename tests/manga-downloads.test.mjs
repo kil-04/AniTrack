@@ -194,6 +194,77 @@ test("a chapter whose page list changed starts over rather than mixing pages", a
   for (let i = 0; i < 4; i++) assert.deepEqual(fs.readFileSync(path.join(dir(id), `00${i + 1}.jpg`)), jpeg(10 + i));
 });
 
+test("a source's own refusals fail the chapter instead of passing for a network drop", async () => {
+  const { MangaSourceError } = await import(sources);
+  const cases = [
+    { why: "its one-time check", error: () => new MangaSourceError("Toonkotsu needs a quick check. Use Connect Toonkotsu, complete it, then retry.", undefined, true), message: /needs a quick check/ },
+    { why: "a page it couldn't load", error: () => new MangaSourceError("Toonkotsu couldn't load this page. Retry or choose another source."), message: /couldn't load this page/ },
+    { why: "an invalid image (not a network error)", error: () => new Error("Toonkotsu sent an invalid image."), message: /Page 1 couldn't be downloaded from the source/ },
+    { why: "a refused local-network address", error: () => new Error("Unsafe Comix image destination."), message: /Page 1 couldn't be downloaded/ },
+  ];
+  let n = 10;
+  for (const c of cases) {
+    const id = `refused${n}`;
+    let calls = 0;
+    harness.pages = () => pageUrls("a", 1);
+    harness.fetch = async () => { calls++; throw c.error(); };
+    await M.downloadChapter(manga, title, chapter(id, n++));
+    const failed = await settled(`${manga.id}:${id}`);
+    assert.equal(failed.status, "failed", c.why);
+    assert.match(failed.error, c.message, c.why);
+    assert.equal(calls, 1, `${c.why}: never retried as a network drop`);
+  }
+  // A bug in a source's page list isn't the network either.
+  const id = "pagelist1";
+  harness.pages = () => { throw new TypeError("Cannot read properties of undefined (reading 'url')"); };
+  await M.downloadChapter(manga, title, chapter(id, 30));
+  assert.equal((await settled(`${manga.id}:${id}`)).status, "failed");
+});
+
+test("a page that keeps returning 5xx fails the chapter after three stalls, keeping its pages", async () => {
+  const id = "broken1";
+  let calls = 0;
+  harness.pages = () => pageUrls("a", 2);
+  harness.fetch = async (url) => {
+    if (indexOf(url) === 1) { calls++; return new Response("", { status: 502 }); }
+    return image(indexOf(url));
+  };
+  await M.downloadChapter(manga, title, chapter(id, 40));
+  const failed = await settled(`${manga.id}:${id}`);
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.error, "The source kept failing on part of this chapter. Try again later.");
+  assert.ok(calls >= 3 * 7, `three runs of six retries: ${calls}`);
+  assert.ok(fs.existsSync(path.join(dir(id), "001.jpg")), "the saved page stays for the next try");
+});
+
+test("no answer while online is a stall, not a wait for the network, and fails after three", async () => {
+  const id = "unreach1";
+  harness.pages = () => pageUrls("a", 1);
+  harness.fetch = async () => { throw new TypeError("net::ERR_CONNECTION_REFUSED"); };
+  await M.downloadChapter(manga, title, chapter(id, 41));
+  const failed = await settled(`${manga.id}:${id}`);
+  assert.equal(failed.status, "failed");
+  assert.match(failed.error, /kept failing/);
+  const labels = events.map((e) => e.item).filter((item) => item?.key === `${manga.id}:${id}` && item.status === "queued").map((item) => item.error ?? "");
+  assert.ok(labels.length && labels.every((label) => !/network/.test(label)), `it never claimed to wait for the network: ${labels}`);
+});
+
+test("removing a chapter that waits out a long rate limit ends the wait and frees the worker", async () => {
+  const id = "limited9";
+  const after = "after9";
+  harness.pages = () => pageUrls("a", 1);
+  harness.fetch = async (url) => (url.includes("/c/") && harness.limit ? new Response("", { status: 429, headers: { "retry-after": "999999" } }) : image(indexOf(url)));
+  harness.limit = true;
+  await M.downloadChapter(manga, title, chapter(id, 50));
+  await waitFor(() => events.some((e) => e.item?.key === `${manga.id}:${id}` && /asked to wait/.test(e.item.error ?? "")), "the rate-limit wait");
+  harness.limit = false;
+  await M.downloadChapter(manga, title, chapter(after, 51));
+  const started = Date.now();
+  await M.removeMangaDownload(`${manga.id}:${id}`);
+  assert.equal((await settled(`${manga.id}:${after}`)).status, "done");
+  assert.ok(Date.now() - started < 5000, "the next chapter didn't wait six hours");
+});
+
 after(() => {
   const resolved = path.resolve(storageRoot);
   if (path.dirname(resolved) !== path.resolve(os.tmpdir()) || !path.basename(resolved).startsWith("anitrack-manga-dl-test-")) throw new Error("Invalid fixture cleanup path");
