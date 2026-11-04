@@ -2,6 +2,7 @@ package com.sanjay.anitrack.next.data.manga.weebcentral
 
 import com.sanjay.anitrack.next.data.Manga
 import com.sanjay.anitrack.next.data.manga.MangaChapter
+import com.sanjay.anitrack.next.data.manga.MangaPage
 import com.sanjay.anitrack.next.data.manga.MangaTitles
 import com.sanjay.anitrack.next.data.manga.SourceLatest
 import java.net.URI
@@ -162,4 +163,12 @@ object WeebCentralParser {
         }
         return urls
     }
+
+    /**
+     * The pages the reader, tall-page slicer and downloads fetch. They carry AniTrack's own
+     * user agent: the image CDN refuses OkHttp's default one (HTTP 403), which is what the
+     * image loader sends otherwise. The desktop app already sends AniTrack's agent.
+     */
+    fun pageList(html: String, userAgent: String): List<MangaPage> =
+        pages(html).map { MangaPage(url = it, headers = mapOf("User-Agent" to userAgent)) }
 }

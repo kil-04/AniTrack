@@ -75,6 +75,14 @@ class WeebCentralParserTest {
         )
     }
 
+    @Test fun everyPageCarriesAniTracksUserAgent() {
+        // The image CDN answers OkHttp's default user agent with HTTP 403.
+        val pages = WeebCentralParser.pageList(fixture("chapter-images.html"), "AniTrack/9.9.9 (Android)")
+        assertEquals(19, pages.size)
+        assertEquals(WeebCentralParser.pages(fixture("chapter-images.html")), pages.map { it.url })
+        assertTrue(pages.all { it.headers == mapOf("User-Agent" to "AniTrack/9.9.9 (Android)") })
+    }
+
     @Test fun imageHostRules() {
         listOf(
             "https://scans-hot.planeptune.us/manga/One-Piece/1197-001.png",

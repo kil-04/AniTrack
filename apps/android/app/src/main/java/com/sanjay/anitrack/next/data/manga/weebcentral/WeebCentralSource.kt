@@ -94,8 +94,7 @@ object WeebCentralSource : MangaSource {
     override suspend fun pages(title: SourceTitle, chapter: MangaChapter): List<MangaPage> {
         require(title.sourceId == id)
         if (!WeebCentralParser.isId(chapter.id)) throw MangaSourceException("Unrecognised Weeb Central chapter.")
-        return parse { WeebCentralParser.pages(get(WeebCentralParser.imagesUrl(chapter.id))) }
-            .map { MangaPage(it) }
+        return parse { WeebCentralParser.pageList(get(WeebCentralParser.imagesUrl(chapter.id)), MangaHttp.USER_AGENT) }
             .ifEmpty { throw MangaSourceException("Weeb Central has no pages for this chapter.") }
     }
 
