@@ -529,8 +529,21 @@ every step, including the Android unit tests and the debug APK build. In Electro
 chapters, served page 1 through the reader's `anitrack-manga://img` protocol
 (PNG), downloaded chapter 1 through the desktop manga queue (39 pages, 16.2 MB)
 and, with every network request refused, read all 39 saved pages back in order
-and decoded them. **Still not done:** a download opened offline in the running
-Android app (no device or emulator here).
+and decoded them.
+
+**Verified on devices, 4 Nov 2026** (user's Windows PC and Galaxy A54, debug app):
+
+- **Desktop:** a QA copy of the built branch matched Frieren and listed 147
+  chapters, and chapter 1 read all 39 pages. With every request sent to a dead
+  proxy, the saved chapter (39 pages, 16 MB) read back 001-039 in order. Berserk
+  lists its 16 prologues first, labelled "Chapter 0.01" to "Chapter 0.16".
+- **Android:** the first run showed "Page N didn't load" for every page. The image
+  CDN answers OkHttp's default user agent with HTTP 403, which Coil sent; AniTrack's
+  agent gets 200. Fixed in a21ecec: Weeb Central pages carry `MangaHttp.USER_AGENT`
+  as a page header, which the reader, the tall-page slicer and downloads all send.
+  After the fix, chapter 1 read to page 39 of 39 and downloaded through Download
+  range (16 MB). In airplane mode the saved chapter opened and scrolled through to
+  "End of chapter 1" with every page drawn.
 
 Other EverythingMoe candidates still open, unchanged from the earlier sections:
 MangaKatana (plain HTTP) and Kagane (page session) for manga; anv, Xanime and
@@ -590,5 +603,21 @@ Follow-up the same day:
   request refused, the saved episode played at 1448×1080 with its captions from
   the start and after a seek to 20:05.
 
-**Still not done:** playback and a download in the running Android app (no device
-or emulator here).
+**Verified on devices, 4 Nov 2026** (user's Windows PC and Galaxy A54, debug app):
+
+- **Desktop:** in a QA copy of the built branch, Bebop episode 1 played as follows:
+  - Sub at 1448×1080 with 217 English cues;
+  - Skip Intro jumped past 2:24, and seeks resumed;
+  - Dub loaded its own master playlist.
+
+  The Sub download (320 MB with `subs.vtt`) played offline through a dead proxy,
+  with captions, and after a seek to 20:05. Two details:
+  - The Dub's listed caption returns 404 on every xanivsrc host (missing on the site).
+  - A download follows the last Sub/Dub pick (`anitrack-provider-xanime-variant`).
+- **Android:** episode 1 played as follows:
+  - Highest (1080p), with English subtitles;
+  - Skip Intro worked, and seeking worked;
+  - the Dub played. ExoPlayer logged retries for the Dub's missing caption.
+
+  Episode 1 downloaded (304 MB) and played in airplane mode with its subtitles.
+  No crashes in the crash log during the run.
