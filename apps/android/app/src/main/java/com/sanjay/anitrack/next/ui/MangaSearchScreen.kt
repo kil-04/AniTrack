@@ -78,56 +78,64 @@ fun MangaSearchScreen(initialQuery: String = "", onOpen: (Manga) -> Unit) {
         searching = false
     }
     val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 820
+    // A phone can't fit the header and the tall filter card above a pinned grid (the results
+    // got less than one cover row), so there they scroll with the results, as in Browse anime.
+    val narrow = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 600
     val apply: () -> Unit = { page = 1; reload++ }
-
-    Row(Modifier.fillMaxSize()) {
-        Column(Modifier.weight(1f).padding(horizontal = 24.dp, vertical = 20.dp)) {
-            ScreenHeader("Browse manga", scene = PixelScene.GREEN_SHOP, subtitle = "Filter AniList's manga, manhwa and manhua.", icon = Icons.Rounded.MenuBook)
-            Spacer(Modifier.height(18.dp))
-            val filtered = query.isNotBlank() || genre != null || year != null || type != (null to null) ||
-                status != null || sort != "TRENDING_DESC"
-            AniCard(padding = PaddingValues(16.dp)) {
-                @OptIn(ExperimentalLayoutApi::class)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    FilterSearchField(query, { query = it }, "Search manga…", onSearch = apply)
-                    FilterDropdown("Select genre", genre, listOf("Select genre" to null) + MANGA_GENRES.map { it to it }) { genre = it; apply() }
-                    FilterDropdown(
-                        "Select type",
-                        MANGA_TYPES.firstOrNull { it.second == type }?.first?.takeIf { type != (null to null) },
-                        MANGA_TYPES,
-                    ) { type = it; apply() }
-                    FilterDropdown("Select year", year?.toString(), listOf("Select year" to null) + (2026 downTo 1950).map { it.toString() to it }) { year = it; apply() }
-                    FilterDropdown(
-                        "Select status",
-                        MANGA_STATUSES.entries.firstOrNull { it.value == status }?.key?.takeIf { status != null },
-                        MANGA_STATUSES.map { it.key to it.value },
-                    ) { status = it; apply() }
-                    FilterDropdown(
-                        "Default sort",
-                        MANGA_SORTS.entries.firstOrNull { it.value == sort }?.key?.takeIf { sort != "TRENDING_DESC" },
-                        MANGA_SORTS.map { it.key to it.value },
-                    ) { sort = it ?: "TRENDING_DESC"; apply() }
-                    PillButton("Filter", apply, icon = Icons.Rounded.FilterList, style = PillStyle.Primary)
-                    if (filtered) {
-                        PillButton("Reset", {
-                            query = ""; genre = null; year = null; type = null to null; status = null; sort = "TRENDING_DESC"
-                            apply()
-                        }, icon = Icons.Rounded.RestartAlt, style = PillStyle.Ghost)
-                    }
+    val filtered = query.isNotBlank() || genre != null || year != null || type != (null to null) ||
+        status != null || sort != "TRENDING_DESC"
+    val top: @Composable () -> Unit = {
+        ScreenHeader("Browse manga", scene = PixelScene.GREEN_SHOP, subtitle = "Filter AniList's manga, manhwa and manhua.", icon = Icons.Rounded.MenuBook)
+        Spacer(Modifier.height(18.dp))
+        AniCard(padding = PaddingValues(16.dp)) {
+            @OptIn(ExperimentalLayoutApi::class)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                FilterSearchField(query, { query = it }, "Search manga…", onSearch = apply, modifier = if (narrow) Modifier.fillMaxWidth() else Modifier.width(260.dp))
+                FilterDropdown("Select genre", genre, listOf("Select genre" to null) + MANGA_GENRES.map { it to it }) { genre = it; apply() }
+                FilterDropdown(
+                    "Select type",
+                    MANGA_TYPES.firstOrNull { it.second == type }?.first?.takeIf { type != (null to null) },
+                    MANGA_TYPES,
+                ) { type = it; apply() }
+                FilterDropdown("Select year", year?.toString(), listOf("Select year" to null) + (2026 downTo 1950).map { it.toString() to it }) { year = it; apply() }
+                FilterDropdown(
+                    "Select status",
+                    MANGA_STATUSES.entries.firstOrNull { it.value == status }?.key?.takeIf { status != null },
+                    MANGA_STATUSES.map { it.key to it.value },
+                ) { status = it; apply() }
+                FilterDropdown(
+                    "Default sort",
+                    MANGA_SORTS.entries.firstOrNull { it.value == sort }?.key?.takeIf { sort != "TRENDING_DESC" },
+                    MANGA_SORTS.map { it.key to it.value },
+                ) { sort = it ?: "TRENDING_DESC"; apply() }
+                PillButton("Filter", apply, icon = Icons.Rounded.FilterList, style = PillStyle.Primary)
+                if (filtered) {
+                    PillButton("Reset", {
+                        query = ""; genre = null; year = null; type = null to null; status = null; sort = "TRENDING_DESC"
+                        apply()
+                    }, icon = Icons.Rounded.RestartAlt, style = PillStyle.Ghost)
                 }
             }
-            Spacer(Modifier.height(16.dp))
-            if (searching && results.isEmpty()) {
-                LinearProgressIndicator(Modifier.fillMaxWidth().clip(aniShape(50)), color = AniColors.Accent, trackColor = AniColors.SurfaceHigh)
-            } else if (!searching && results.isEmpty()) {
-                EmptyState(Icons.Rounded.SearchOff, "No results", "Nothing matches these filters. Try removing one or searching another title.")
-            }
+        }
+        Spacer(Modifier.height(16.dp))
+        if (searching && results.isEmpty()) {
+            LinearProgressIndicator(Modifier.fillMaxWidth().clip(aniShape(50)), color = AniColors.Accent, trackColor = AniColors.SurfaceHigh)
+        } else if (!searching && results.isEmpty()) {
+            EmptyState(Icons.Rounded.SearchOff, "No results", "Nothing matches these filters. Try removing one or searching another title.")
+        }
+    }
+
+    Row(Modifier.fillMaxSize()) {
+        Column(Modifier.weight(1f).padding(horizontal = 24.dp, vertical = if (narrow) 0.dp else 20.dp)) {
+            if (!narrow) top()
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(140.dp),
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp),
+                contentPadding = PaddingValues(vertical = if (narrow) 20.dp else 0.dp),
                 modifier = Modifier.weight(1f),
             ) {
+                if (narrow) item(span = { GridItemSpan(maxLineSpan) }) { Column { top() } }
                 items(results, key = { it.id }) { manga -> MangaCard(manga, onOpen, width = null) }
                 if (results.isNotEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
                     PageControls(page, hasNext, onPrevious = { page-- }, onNext = { page++ })
