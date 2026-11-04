@@ -52,6 +52,7 @@ internal fun PlayerEpisodePanel(
     var range by remember(current, count) { mutableStateOf(current / EPISODE_RANGE_SIZE) }
     var find by remember { mutableStateOf("") }
     var serverMenuOpen by remember(provider, current, selectedVariantId, variantsLoading) { mutableStateOf(false) }
+    var sourceMenuOpen by remember(provider, current) { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
     LaunchedEffect(current, range) {
@@ -63,25 +64,49 @@ internal fun PlayerEpisodePanel(
 
     Column(modifier.background(Color(0xFF0E0E12))) {
         Text(
-            "SOURCES",
+            "SOURCE",
             style = MaterialTheme.typography.labelSmall,
             color = Color.White.copy(alpha = 0.45f),
             modifier = Modifier.padding(start = 14.dp, top = 10.dp, bottom = 6.dp),
         )
-        FlowRow(
-            Modifier.padding(horizontal = 14.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            providers.forEach { descriptor ->
-                FilterChip(
-                    selected = provider == descriptor.id,
+        // A dropdown like the Server one below: six or more sources took two rows of chips on a phone.
+        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f)) {
+                OutlinedButton(
+                    onClick = { sourceMenuOpen = true },
                     enabled = canSwitch && !switching,
-                    onClick = { onServer(descriptor.id) },
-                    label = { Text(descriptor.name) },
-                )
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = aniShape(8.dp),
+                ) {
+                    Text(
+                        providers.firstOrNull { it.id == provider }?.name ?: "Choose a source",
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Icon(Icons.Rounded.ExpandMore, contentDescription = "Choose source")
+                }
+                DropdownMenu(
+                    expanded = sourceMenuOpen && canSwitch && !switching,
+                    onDismissRequest = { sourceMenuOpen = false },
+                    modifier = Modifier.widthIn(min = 200.dp, max = 320.dp).heightIn(max = 360.dp),
+                ) {
+                    providers.forEach { descriptor ->
+                        DropdownMenuItem(
+                            text = { Text(descriptor.name) },
+                            trailingIcon = if (provider == descriptor.id) ({
+                                Icon(Icons.Rounded.Check, contentDescription = "Selected")
+                            }) else null,
+                            onClick = {
+                                sourceMenuOpen = false
+                                if (descriptor.id != provider) onServer(descriptor.id)
+                            },
+                        )
+                    }
+                }
             }
             if (switching) {
+                Spacer(Modifier.width(10.dp))
                 CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = EpisodePanelAccent)
             }
         }

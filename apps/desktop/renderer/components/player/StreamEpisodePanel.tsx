@@ -63,26 +63,24 @@ export function StreamEpisodePanel({
     <div className={`flex flex-col ${mobile ? "flex-1 overflow-hidden" : "w-[260px] flex-shrink-0 border-r border-white/10"} bg-bg`}>
       {sources.length > 0 && (
         <div className="border-b border-white/10 p-2">
-          <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-white/50">Sources</div>
-          <div className="flex flex-wrap gap-2">
-            {sources.map((source) => {
-              const id = source.providerId || "animepahe";
-              const active = id === providerId;
-              return (
-                <button
-                  key={id}
-                  onClick={() => { if (!active) onSwitchProvider(source); }}
-                  className={`flex h-8 items-center gap-2 rounded px-3 text-xs font-medium transition-colors ${
-                    active
-                      ? "bg-accent text-white"
-                      : "bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"
-                  }`}
-                >
-                  {providerLabel(id)}
-                </button>
-              );
-            })}
-          </div>
+          {/* A dropdown like the Server one below: the source buttons wrapped onto several rows. */}
+          <label className="block">
+            <span className="mb-2 block text-[10px] font-semibold uppercase tracking-wider text-white/50">Source</span>
+            <SelectField
+              value={sources.some((source) => (source.providerId || "animepahe") === providerId) ? providerId : ""}
+              onChange={(value) => {
+                const source = sources.find((item) => (item.providerId || "animepahe") === value);
+                if (source && value !== providerId) onSwitchProvider(source);
+              }}
+              title="Source"
+            >
+              {!sources.some((source) => (source.providerId || "animepahe") === providerId) && <option value="" disabled>Choose a source</option>}
+              {sources.map((source) => {
+                const id = source.providerId || "animepahe";
+                return <option key={id} value={id}>{providerLabel(id)}</option>;
+              })}
+            </SelectField>
+          </label>
         </div>
       )}
       {streamVariants === "server" && links.length > 0 && (

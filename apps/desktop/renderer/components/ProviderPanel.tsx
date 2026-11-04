@@ -5,6 +5,7 @@ import type { PlaybackProgress } from "../../../../packages/shared/types";
 import type { ProviderDescriptor } from "../../../../packages/shared/provider-types";
 import { orderProviderIds, providerClient, providerName } from "../lib/provider-api";
 import { useProviderMatches } from "./provider/useProviderMatches";
+import SelectField from "./SelectField";
 import {
   downloadsSupported,
   subscribeDownloads,
@@ -323,26 +324,22 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
               const providers = getResultProviderIds();
               if (providers.length < 2) return null;
               return (
-                <div className="mb-3 flex items-center gap-2">
-                  <span className="text-xs font-medium uppercase tracking-wider text-white/50">Server</span>
-                  {providers.map((pid) => {
-                    const isActive = (selected.providerId ?? "animepahe") === pid;
-                    const name = getProviderName(pid);
-                    return (
-                      <button
-                        key={pid}
-                        onClick={() => {
-                          if (isActive) return;
-                          const chosen = results.find((r: any) => (r.providerId ?? "animepahe") === pid);
-                          if (chosen) setSelected(chosen);
-                        }}
-                        className={`chip ${isActive ? "chip-active" : ""}`}
-                      >
-                        {name}
-                      </button>
-                    );
-                  })}
-                </div>
+                // A dropdown like the player's: the chips ran off the row once there were six sources.
+                <label className="mb-3 flex items-center gap-3">
+                  <span className="text-xs font-medium uppercase tracking-wider text-white/50">Source</span>
+                  <SelectField
+                    className="w-56"
+                    value={selected.providerId ?? "animepahe"}
+                    onChange={(pid) => {
+                      if (pid === (selected.providerId ?? "animepahe")) return;
+                      const chosen = results.find((r: any) => (r.providerId ?? "animepahe") === pid);
+                      if (chosen) setSelected(chosen);
+                    }}
+                    title="Source"
+                  >
+                    {providers.map((pid) => <option key={pid} value={pid}>{getProviderName(pid)}</option>)}
+                  </SelectField>
+                </label>
               );
             })()}
             <div className="mb-4 flex flex-wrap items-center gap-2">

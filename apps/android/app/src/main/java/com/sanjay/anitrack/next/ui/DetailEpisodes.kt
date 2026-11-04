@@ -14,6 +14,8 @@ import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.foundation.combinedClickable
 import kotlinx.coroutines.launch
 import androidx.compose.material.icons.rounded.Checklist
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.DownloadDone
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -183,13 +185,13 @@ internal fun EpisodesSection(
             }
         })
         Column(Modifier.padding(horizontal = 24.dp)) {
-            // Server picker
+            // Source picker: a dropdown, so the chosen source is always in view (a scrolling row of
+            // six pills hid it off-screen on a phone).
             Row(verticalAlignment = Alignment.CenterVertically) {
-                PillTabs(
+                SourceDropdown(
                     enabledProviders.map { it.descriptor.id to it.descriptor.name },
                     selected = server,
                     onSelect = { server = it },
-                    compact = true,
                     modifier = Modifier.weight(1f, fill = false),
                 )
                 if (loading) {
@@ -442,3 +444,52 @@ internal fun EpisodesSection(
 
 /** "12" for whole episode numbers, "12.5" otherwise. */
 private fun epLabel(number: Float): String = if (number % 1f == 0f) number.toInt().toString() else number.toString()
+
+/** The show page's source picker: the chosen source by name, the others in a menu. */
+@Composable
+private fun SourceDropdown(
+    options: List<Pair<String, String>>,
+    selected: String,
+    onSelect: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var open by remember { mutableStateOf(false) }
+    Box(modifier) {
+        Row(
+            Modifier.height(44.dp)
+                .clip(aniShape(12.dp))
+                .background(AniColors.SurfaceHigh)
+                .border(1.dp, AniColors.BorderSoft, aniShape(12.dp))
+                .clickable(onClickLabel = "Choose source") { open = true }
+                .padding(start = 14.dp, end = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Source", style = MaterialTheme.typography.labelLarge, color = AniColors.TextTertiary)
+            Spacer(Modifier.width(10.dp))
+            Text(
+                options.firstOrNull { it.first == selected }?.second ?: "Choose",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = AniColors.Text,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            Spacer(Modifier.width(4.dp))
+            Icon(Icons.Rounded.ExpandMore, null, tint = AniColors.TextTertiary, modifier = Modifier.size(20.dp))
+        }
+        DropdownMenu(
+            expanded = open, onDismissRequest = { open = false },
+            shape = aniShape(14.dp), containerColor = AniColors.Surface,
+            modifier = Modifier.widthIn(min = 200.dp).heightIn(max = 420.dp),
+        ) {
+            options.forEach { (id, name) ->
+                DropdownMenuItem(
+                    text = { Text(name, fontWeight = if (id == selected) FontWeight.Bold else FontWeight.Normal) },
+                    trailingIcon = if (id == selected) ({ Icon(Icons.Rounded.Check, contentDescription = "Selected") }) else null,
+                    onClick = { open = false; if (id != selected) onSelect(id) },
+                )
+            }
+        }
+    }
+}
