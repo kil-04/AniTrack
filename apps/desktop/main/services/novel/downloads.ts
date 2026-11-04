@@ -1,4 +1,4 @@
-import { app } from "electron";
+import { app, net } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -13,6 +13,7 @@ import {
   type NovelSourceId,
 } from "../../../../../packages/shared/novel";
 import { NovelSourceError, novelChapter } from "./sources";
+import { nextStep, type Failure } from "../../../../../packages/shared/download-resume";
 
 /*
  * Offline novel chapters: userData/novel_downloads/<source>-<hex title id>/ holds
@@ -20,6 +21,11 @@ import { NovelSourceError, novelChapter } from "./sources";
  * c-<hex chapter id>.json per saved chapter. Ids are hex-encoded because NovelBuddy
  * ids are case-sensitive and Windows file names aren't. One worker fetches one
  * chapter at a time on the sources' slower background lane.
+ *
+ * pending.json lists the chapters still to fetch, so downloads carry on after
+ * the app is restarted. A chapter that hits a rate limit or a network drop waits
+ * (Retry-After, backoff, the network coming back) and continues, using the
+ * rules shared with the other downloads (packages/shared/download-resume.ts).
  */
 
 interface Title {
@@ -48,6 +54,11 @@ const hex = (value: string) => Buffer.from(value, "utf-8").toString("hex");
 const unhex = (value: string) => Buffer.from(value, "hex").toString("utf-8");
 const folder = (sourceId: string, titleId: string) => path.join(root(), `${sourceId}-${hex(titleId)}`);
 const chapterFile = (sourceId: string, titleId: string, chapterId: string) => path.join(folder(sourceId, titleId), `c-${hex(chapterId)}.json`);
+const pendingFile = (sourceId: string, titleId: string) => path.join(folder(sourceId, titleId), "pending.json");
+const NETWORK_POLL_MS = 15_000;
+let retryScale = 1;
+/** Tests shrink backoff and Retry-After waits; the app never calls this. */
+export function setNovelRetryScale(scale: number): void { retryScale = scale; }
 
 export function onNovelDownload(fn: Listener) {
   listener = fn;
@@ -80,6 +91,16 @@ async function writeAtomic(file: string, text: string) {
   await fs.promises.rename(temp, file);
 }
 
+/** Records the chapters still to fetch (waiting and in progress), so a restart resumes them. */
+async function savePending(t: Title): Promise<void> {
+  const ids = [...(t.current ? [t.current.id] : []), ...t.queue.map((c) => c.id)];
+  const file = pendingFile(t.detail.sourceId, t.detail.id);
+  try {
+    if (ids.length) await writeAtomic(file, JSON.stringify(ids));
+    else await fs.promises.rm(file, { force: true });
+  } catch { /* best-effort: the folder may have been removed */ }
+}
+
 /** Reads what's on disk once (titles and their saved chapters). */
 function load(): Promise<void> {
   loading ??= (async () => {
@@ -100,14 +121,22 @@ function load(): Promise<void> {
           saved.add(unhex(match[1]));
           size += (await fs.promises.stat(path.join(base, name)).catch(() => null))?.size ?? 0;
         }
+        const chapters: NovelChapter[] = Array.isArray(meta.chapters) ? meta.chapters : [];
+        // Chapters that were still on their way when the app closed carry on, in order.
+        const pending = await fs.promises.readFile(path.join(base, "pending.json"), "utf-8").then((text) => JSON.parse(text) as unknown).catch(() => []);
+        const byId = new Map(chapters.map((c) => [c.id, c]));
+        const queue = (Array.isArray(pending) ? pending : [])
+          .filter((id): id is string => typeof id === "string" && !saved.has(id) && byId.has(id) && isNovelChapterId(meta.detail.sourceId, id))
+          .map((id) => byId.get(id)!);
         titles.set(novelTitleKey(meta.detail.sourceId, meta.detail.id), {
-          detail: meta.detail, chapters: Array.isArray(meta.chapters) ? meta.chapters : [], saved, queue: [], failed: new Map(),
+          detail: meta.detail, chapters, saved, queue: [...new Map(queue.map((c) => [c.id, c])).values()], failed: new Map(),
           current: null, sizeBytes: size, error: null, updatedAt: Date.now(), failStreak: 0,
         });
       } catch {
         /* a folder without readable metadata is skipped */
       }
     }
+    if ([...titles.values()].some((t) => t.queue.length)) void pump();
   })();
   return loading;
 }
@@ -170,6 +199,7 @@ export async function enqueueNovelChapters(detail: NovelDetail, chapters: NovelC
   t.error = null;
   t.failStreak = 0;
   emit(t);
+  await savePending(t);
   void pump();
   return added;
 }
@@ -181,6 +211,7 @@ export async function cancelNovelDownloads(sourceId: NovelSourceId, titleId: str
   if (!t) return;
   t.queue = [];
   emit(t);
+  await savePending(t);
 }
 
 /** Deletes some (or, without [chapterIds], all) of a title's saved chapters. */
@@ -218,33 +249,74 @@ async function pump(): Promise<void> {
       t.current = chapter;
       emit(t);
       const { sourceId, id } = t.detail;
+      const live = () => titles.get(novelTitleKey(sourceId, id)) === t;
       try {
-        const text = await novelChapter(sourceId, id, chapter.id, "back");
+        const text = await fetchChapter(t, chapter, live);
         const body = JSON.stringify({ id: chapter.id, label: chapter.label, paragraphs: text.paragraphs });
         // The title may have been removed while this chapter was on its way.
-        if (titles.get(novelTitleKey(sourceId, id)) === t) {
+        if (live()) {
           await writeAtomic(chapterFile(sourceId, id, chapter.id), body);
           t.saved.add(chapter.id);
           t.sizeBytes += Buffer.byteLength(body);
           t.failStreak = 0;
+          t.error = null;
         }
       } catch (error) {
+        if (error instanceof Removed) continue;
         const message = error instanceof NovelSourceError ? error.message : "Couldn't save this chapter.";
         t.failed.set(chapter.id, message);
         t.error = message;
         t.failStreak++;
-        // A source that keeps refusing (or limiting) gets left alone instead of hammered.
-        if (t.failStreak >= 3 || (error instanceof NovelSourceError && error.status === 429)) {
+        // A source that keeps refusing gets left alone instead of hammered. (Rate
+        // limits and network drops are waited out in fetchChapter instead.)
+        if (t.failStreak >= 3) {
           for (const rest of t.queue) t.failed.set(rest.id, message);
           t.queue = [];
           t.error = `${message} Downloading stopped; try again later.`;
         }
       } finally {
         t.current = null;
-        if (titles.get(novelTitleKey(sourceId, id)) === t) emit(t);
+        if (live()) { emit(t); await savePending(t); }
       }
     }
   } finally {
     running = false;
+  }
+}
+
+class Removed extends Error {}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Fetches one chapter, waiting out rate limits (Retry-After) and network drops
+ * with the shared rules; other failures are thrown for the chapter to fail.
+ */
+async function fetchChapter(t: Title, chapter: NovelChapter, live: () => boolean): Promise<NovelChapterText> {
+  for (let attempt = 0; ; attempt++) {
+    if (!live()) throw new Removed();
+    try {
+      return await novelChapter(t.detail.sourceId, t.detail.id, chapter.id, "back");
+    } catch (error) {
+      if (!(error instanceof NovelSourceError) || error.verify || error.status == null) throw error;
+      const status = error.status;
+      if (status !== 0 && status !== 429 && status !== 503 && status !== 408 && !(status >= 500 && status <= 599)) throw error;
+      const failure: Failure = status === 0 ? { network: true } : { status, retryAfter: error.retryAfter };
+      const step = nextStep(failure, attempt, 0, Date.now());
+      if (step.action === "retry") { await sleep(step.delayMs * retryScale); continue; }
+      if (step.action !== "pause") throw error;
+      t.error = step.reason === "network"
+        ? "Waiting for the network; downloading continues when it's back."
+        : `${error.message.replace(/ Wait a minute, then retry\.$/, "")} Continuing automatically.`;
+      emit(t);
+      if (step.resumeAt) await sleep(Math.max(0, step.resumeAt - Date.now()) * retryScale);
+      while (!net.isOnline()) await sleep(NETWORK_POLL_MS * retryScale);
+      if (!live()) throw new Removed();
+      t.error = null;
+      emit(t);
+      attempt = -1;
+    }
   }
 }

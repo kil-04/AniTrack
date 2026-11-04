@@ -3,7 +3,10 @@ package com.sanjay.anitrack.next.data.novel
 import android.content.Context
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.snapshots.SnapshotStateList
+import com.sanjay.anitrack.next.data.DownloadResume
+import com.sanjay.anitrack.next.data.NetworkWatch
 import com.sanjay.anitrack.next.data.manga.MangaSourceException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -21,6 +24,11 @@ import java.io.File
  * meta.json (the title's details and full chapter list when it was queued) and one
  * c-<hex chapter id>.json per saved chapter. One worker saves one chapter at a time
  * on the sources' slower background lane. Mirrors desktop's services/novel/downloads.ts.
+ *
+ * pending.json lists the chapters still to fetch, so downloads carry on after
+ * the app is closed or killed. A chapter that hits a rate limit or a network
+ * drop waits (Retry-After, backoff, the network coming back) and continues,
+ * using the rules shared with the other downloads (DownloadResume).
  */
 object NovelDownloads {
     /** One source copy's offline state, for the UI. */
@@ -72,10 +80,26 @@ object NovelDownloads {
     private fun unhex(value: String) = String(value.chunked(2).map { it.toInt(16).toByte() }.toByteArray())
     private fun folder(source: NovelSourceId, id: String) = File(root ?: error("not initialised"), "${source.key}-${hex(id)}")
     private fun chapterFile(source: NovelSourceId, id: String, chapterId: String) = File(folder(source, id), "c-${hex(chapterId)}.json")
+    private fun pendingFile(source: NovelSourceId, id: String) = File(folder(source, id), "pending.json")
+
+    /** Records the chapters still to fetch (in progress and waiting), so a restart resumes them. Call under [lock]. */
+    private suspend fun savePending(state: State) = withContext(Dispatchers.IO) {
+        val ids = listOfNotNull(state.current?.id) + state.queue.map { it.id }
+        val file = pendingFile(state.detail.card.source, state.detail.card.id)
+        runCatching {
+            if (ids.isEmpty()) file.delete()
+            else {
+                val temp = File(file.parentFile, "pending.json.tmp")
+                temp.writeText(JSONArray(ids).toString())
+                if (!temp.renameTo(file)) { file.writeText(JSONArray(ids).toString()); temp.delete() }
+            }
+        }
+    }
 
     fun init(context: Context) {
         if (root != null) return
         root = File(context.filesDir, "novel-downloads")
+        NetworkWatch.init(context)
         loaded = scope.launch {
             lock.withLock {
                 for (dir in root!!.listFiles().orEmpty().filter { it.isDirectory }) {
@@ -90,11 +114,24 @@ object NovelDownloads {
                             state.saved += unhex(match.groupValues[1])
                             state.sizeBytes += file.length()
                         }
+                        // Chapters that were still on their way when the app closed carry on, in order.
+                        val pending = runCatching { JSONArray(File(dir, "pending.json").readText()) }.getOrNull()
+                        val byId = state.chapters.associateBy { it.id }
+                        val waiting = LinkedHashSet<String>()
+                        for (i in 0 until (pending?.length() ?: 0)) {
+                            val chapterId = pending!!.optString(i)
+                            if (chapterId !in state.saved && Novels.isChapterId(source, chapterId) && byId.containsKey(chapterId)) waiting += chapterId
+                        }
+                        waiting.forEach { state.queue.addLast(byId.getValue(it)) }
                         states[key(source, id)] = state
                     }
                 }
             }
             publish()
+            if (lock.withLock { states.values.any { it.queue.isNotEmpty() } } && worker?.isActive != true) {
+                worker = scope.launch { pump() }
+                com.sanjay.anitrack.next.data.DownloadResumeWorker.schedule(context.applicationContext)
+            }
         }
     }
 
@@ -180,6 +217,7 @@ object NovelDownloads {
             state.error = null
             state.failStreak = 0
             state.updatedAt = System.currentTimeMillis()
+            savePending(state)
             n
         }
         publish()
@@ -189,7 +227,7 @@ object NovelDownloads {
 
     /** Stops a title's waiting chapters (the one in progress finishes); saved ones stay. */
     suspend fun cancel(source: NovelSourceId, id: String) {
-        lock.withLock { states[key(source, id)]?.queue?.clear() }
+        lock.withLock { states[key(source, id)]?.let { it.queue.clear(); savePending(it) } }
         publish()
     }
 
@@ -232,7 +270,7 @@ object NovelDownloads {
             val source = state.detail.card.source
             val id = state.detail.card.id
             try {
-                val text = NovelSources.chapter(source, id, chapter.id, NovelSources.Lane.Back)
+                val text = fetchChapter(state, source, id, chapter) ?: continue
                 val body = JSONObject().put("label", chapter.label).put("paragraphs", JSONArray(text.paragraphs)).toString()
                 lock.withLock {
                     // The title may have been removed while this chapter was on its way.
@@ -246,6 +284,7 @@ object NovelDownloads {
                         }
                         state.saved += chapter.id
                         state.failStreak = 0
+                        state.error = null
                     }
                 }
             } catch (e: Exception) {
@@ -255,8 +294,9 @@ object NovelDownloads {
                     state.failed[chapter.id] = message
                     state.error = message
                     state.failStreak++
-                    // A source that keeps refusing (or limiting) gets left alone instead of hammered.
-                    if (state.failStreak >= 3 || (e as? MangaSourceException)?.status == 429) {
+                    // A source that keeps refusing gets left alone instead of hammered. (Rate
+                    // limits and network drops are waited out in fetchChapter instead.)
+                    if (state.failStreak >= 3) {
                         state.queue.forEach { state.failed[it.id] = message }
                         state.queue.clear()
                         state.error = "$message Downloading stopped; try again later."
@@ -266,8 +306,46 @@ object NovelDownloads {
                 lock.withLock {
                     state.current = null
                     state.updatedAt = System.currentTimeMillis()
+                    if (states[key(source, id)] === state) savePending(state)
                 }
                 publish()
+            }
+        }
+    }
+
+    /**
+     * One chapter, waiting out rate limits (Retry-After) and network drops with the
+     * shared rules; null when the title was removed meanwhile. Other failures are thrown.
+     */
+    private suspend fun fetchChapter(state: State, source: NovelSourceId, id: String, chapter: NovelChapter): NovelChapterText? {
+        var attempt = 0
+        while (true) {
+            if (lock.withLock { states[key(source, id)] !== state }) return null
+            val error = try {
+                return NovelSources.chapter(source, id, chapter.id, NovelSources.Lane.Back)
+            } catch (e: com.sanjay.anitrack.next.data.manga.MangaVerificationRequired) {
+                throw e
+            } catch (e: MangaSourceException) {
+                e
+            }
+            val status = error.status ?: throw error
+            if (status != 0 && status != 429 && status != 503 && status != 408 && status !in 500..599) throw error
+            val failure = if (status == 0) DownloadResume.Failure.Network else DownloadResume.Failure.Http(status, error.retryAfter)
+            when (val step = DownloadResume.nextStep(failure, attempt, 0, System.currentTimeMillis())) {
+                is DownloadResume.Step.Retry -> { delay(step.delayMs); attempt++ }
+                is DownloadResume.Step.Pause -> {
+                    lock.withLock {
+                        state.error = if (step.reason == DownloadResume.PauseReason.NETWORK) "Waiting for the network; downloading continues when it's back."
+                            else "${error.message?.removeSuffix(" Wait a minute, then retry.")} Continuing automatically."
+                    }
+                    publish()
+                    step.resumeAt?.let { at -> delay((at - System.currentTimeMillis()).coerceAtLeast(0)) }
+                    NetworkWatch.awaitOnline()
+                    lock.withLock { state.error = null }
+                    publish()
+                    attempt = 0
+                }
+                else -> throw error
             }
         }
     }
