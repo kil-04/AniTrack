@@ -1,0 +1,1166 @@
+{
+  "_comment": "Shared cases for packages/shared/download-resume.ts (tests/download-resume.test.mjs) and DownloadResume.kt (DownloadResumeTest.kt). A head is 'ts:N' (N bytes with the TS sync byte every 188), 'zero:N', 'hex:…' or 'text:…'.",
+  "fnv64": [
+    {
+      "text": "",
+      "hash": "cbf29ce484222325"
+    },
+    {
+      "text": "a",
+      "hash": "af63dc4c8601ec8c"
+    },
+    {
+      "text": "AniTrack ✓",
+      "hash": "220bf774750a50f3"
+    }
+  ],
+  "stableUrl": [
+    {
+      "url": "https://cdn1.example/show/1080/seg-0.ts?token=abc&expires=1790000000",
+      "stable": "/show/1080/seg-0.ts"
+    },
+    {
+      "url": "https://edge-7.cdn.example:8443/show/1080/seg-0.ts?expires=1790000999&token=zzz#t=3",
+      "stable": "/show/1080/seg-0.ts"
+    },
+    {
+      "url": "https://cdn.example/play?file=ep1-720.ts&sig=1&X-Amz-Signature=2&q=hd",
+      "stable": "/play?file=ep1-720.ts&q=hd"
+    },
+    {
+      "url": "https://cdn.example/a/b.m4s?Policy=x&Key-Pair-Id=y&x-goog-date=z",
+      "stable": "/a/b.m4s"
+    },
+    {
+      "url": "seg-3.ts?t=99",
+      "stable": "seg-3.ts"
+    }
+  ],
+  "variantAttributes": [
+    {
+      "line": "#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=5000000,RESOLUTION=1920x1080,CODECS=\"avc1.640028,mp4a.40.2\"",
+      "attributes": "BANDWIDTH=5000000,RESOLUTION=1920x1080,CODECS=\"avc1.640028,mp4a.40.2\""
+    },
+    {
+      "line": "#EXT-X-STREAM-INF:BANDWIDTH=800000",
+      "attributes": "BANDWIDTH=800000,RESOLUTION=,CODECS="
+    },
+    {
+      "line": "",
+      "attributes": "BANDWIDTH=,RESOLUTION=,CODECS="
+    }
+  ],
+  "rendition": {
+    "variant": "BANDWIDTH=5000000,RESOLUTION=1920x1080,CODECS=",
+    "pieces": [
+      {
+        "kind": "key",
+        "url": "https://cdn1.example/k/key.bin?token=abc",
+        "file": "key00.key"
+      },
+      {
+        "kind": "segment",
+        "url": "https://cdn1.example/show/1080/seg-0.ts?token=abc&expires=1790000000",
+        "file": "seg00000.ts",
+        "duration": "10.010",
+        "encrypted": true
+      },
+      {
+        "kind": "segment",
+        "url": "https://cdn1.example/show/1080/seg-1.ts?token=abc&expires=1790000000",
+        "file": "seg00001.ts",
+        "duration": "4.004",
+        "encrypted": true
+      }
+    ],
+    "id": "a71a4acc3692a01e",
+    "same": [
+      {
+        "why": "re-signed on another edge host",
+        "variant": "BANDWIDTH=5000000,RESOLUTION=1920x1080,CODECS=",
+        "pieces": [
+          {
+            "kind": "key",
+            "url": "https://cdn9.example/k/key.bin?token=new",
+            "file": "key00.key"
+          },
+          {
+            "kind": "segment",
+            "url": "https://cdn9.example/show/1080/seg-0.ts?token=new&expires=1790099999",
+            "file": "seg00000.ts",
+            "duration": "10.010",
+            "encrypted": true
+          },
+          {
+            "kind": "segment",
+            "url": "https://cdn9.example/show/1080/seg-1.ts?expires=1790099999&token=new",
+            "file": "seg00001.ts",
+            "duration": "4.004",
+            "encrypted": true
+          }
+        ]
+      }
+    ],
+    "different": [
+      {
+        "why": "another quality",
+        "variant": "BANDWIDTH=2500000,RESOLUTION=1280x720,CODECS=",
+        "pieces": [
+          {
+            "kind": "key",
+            "url": "https://cdn1.example/k/key.bin?token=abc",
+            "file": "key00.key"
+          },
+          {
+            "kind": "segment",
+            "url": "https://cdn1.example/show/720/seg-0.ts?token=abc",
+            "file": "seg00000.ts",
+            "duration": "10.010",
+            "encrypted": true
+          },
+          {
+            "kind": "segment",
+            "url": "https://cdn1.example/show/720/seg-1.ts?token=abc",
+            "file": "seg00001.ts",
+            "duration": "4.004",
+            "encrypted": true
+          }
+        ]
+      },
+      {
+        "why": "same paths, another encode (different durations)",
+        "variant": "BANDWIDTH=5000000,RESOLUTION=1920x1080,CODECS=",
+        "pieces": [
+          {
+            "kind": "key",
+            "url": "https://cdn1.example/k/key.bin?token=abc",
+            "file": "key00.key"
+          },
+          {
+            "kind": "segment",
+            "url": "https://cdn1.example/show/1080/seg-0.ts",
+            "file": "seg00000.ts",
+            "duration": "6.006",
+            "encrypted": true
+          },
+          {
+            "kind": "segment",
+            "url": "https://cdn1.example/show/1080/seg-1.ts",
+            "file": "seg00001.ts",
+            "duration": "8.008",
+            "encrypted": true
+          }
+        ]
+      },
+      {
+        "why": "same file served unencrypted",
+        "variant": "BANDWIDTH=5000000,RESOLUTION=1920x1080,CODECS=",
+        "pieces": [
+          {
+            "kind": "key",
+            "url": "https://cdn1.example/k/key.bin?token=abc",
+            "file": "key00.key"
+          },
+          {
+            "kind": "segment",
+            "url": "https://cdn1.example/show/1080/seg-0.ts",
+            "file": "seg00000.ts",
+            "duration": "10.010",
+            "encrypted": false
+          },
+          {
+            "kind": "segment",
+            "url": "https://cdn1.example/show/1080/seg-1.ts",
+            "file": "seg00001.ts",
+            "duration": "4.004",
+            "encrypted": true
+          }
+        ]
+      }
+    ]
+  },
+  "tags": [
+    {
+      "head": "ts:376",
+      "media": "ts",
+      "image": null,
+      "errorPage": false
+    },
+    {
+      "head": "ts:188",
+      "media": null,
+      "image": null,
+      "errorPage": false
+    },
+    {
+      "head": "hex:0000001c667479706d703432",
+      "media": "fmp4",
+      "image": null,
+      "errorPage": false
+    },
+    {
+      "head": "hex:49443304000000000000",
+      "media": "id3",
+      "image": null,
+      "errorPage": false
+    },
+    {
+      "head": "hex:ffd8ffe000104a464946",
+      "media": null,
+      "image": "jpeg",
+      "errorPage": false
+    },
+    {
+      "head": "hex:89504e470d0a1a0a0000000d",
+      "media": null,
+      "image": "png",
+      "errorPage": false
+    },
+    {
+      "head": "hex:524946462400000057454250565038",
+      "media": null,
+      "image": "webp",
+      "errorPage": false
+    },
+    {
+      "head": "hex:000000206674797061766966",
+      "media": "fmp4",
+      "image": "avif",
+      "errorPage": false
+    },
+    {
+      "head": "text:GIF89a....",
+      "media": null,
+      "image": "gif",
+      "errorPage": false
+    },
+    {
+      "head": "text:<!DOCTYPE html><html><title>429</title>",
+      "media": null,
+      "image": null,
+      "errorPage": true
+    },
+    {
+      "head": "text:  {\"error\":\"expired\"}",
+      "media": null,
+      "image": null,
+      "errorPage": true
+    },
+    {
+      "head": "text:Access Denied",
+      "media": null,
+      "image": null,
+      "errorPage": true
+    },
+    {
+      "head": "zero:64",
+      "media": null,
+      "image": null,
+      "errorPage": false
+    }
+  ],
+  "pieceTag": [
+    {
+      "piece": {
+        "kind": "key",
+        "url": "k"
+      },
+      "head": "text:0123456789abcdef",
+      "tag": "2e373913e5ad677d"
+    },
+    {
+      "piece": {
+        "kind": "segment",
+        "url": "s",
+        "encrypted": true
+      },
+      "head": "ts:376",
+      "tag": "enc"
+    },
+    {
+      "piece": {
+        "kind": "segment",
+        "url": "s"
+      },
+      "head": "ts:376",
+      "tag": "ts"
+    },
+    {
+      "piece": {
+        "kind": "segment",
+        "url": "s"
+      },
+      "head": "hex:89504e470d0a1a0a0000000d",
+      "tag": "raw"
+    },
+    {
+      "piece": {
+        "kind": "init",
+        "url": "i"
+      },
+      "head": "hex:0000001c667479706d703432",
+      "tag": "fmp4"
+    },
+    {
+      "piece": {
+        "kind": "page",
+        "url": "p"
+      },
+      "head": "hex:ffd8ffe000104a464946",
+      "tag": "jpeg"
+    },
+    {
+      "piece": {
+        "kind": "page",
+        "url": "p"
+      },
+      "head": "zero:16",
+      "tag": "raw"
+    }
+  ],
+  "stillValid": [
+    {
+      "why": "TS segment, same size",
+      "kind": "segment",
+      "tag": "ts",
+      "head": "ts:1504",
+      "size": 1504000,
+      "recorded": 1504000,
+      "valid": true
+    },
+    {
+      "why": "truncated (killed mid-write after rename)",
+      "kind": "segment",
+      "tag": "ts",
+      "head": "ts:1504",
+      "size": 752000,
+      "recorded": 1504000,
+      "valid": false
+    },
+    {
+      "why": "lost its sync byte",
+      "kind": "segment",
+      "tag": "ts",
+      "head": "zero:1504",
+      "size": 1504000,
+      "recorded": 1504000,
+      "valid": false
+    },
+    {
+      "why": "empty file",
+      "kind": "segment",
+      "tag": "ts",
+      "head": "zero:0",
+      "size": 0,
+      "recorded": 0,
+      "valid": false
+    },
+    {
+      "why": "encrypted, whole AES blocks",
+      "kind": "segment",
+      "tag": "enc",
+      "head": "zero:1504",
+      "size": 1503232,
+      "recorded": 1503232,
+      "valid": true
+    },
+    {
+      "why": "encrypted, not whole AES blocks",
+      "kind": "segment",
+      "tag": "enc",
+      "head": "zero:1504",
+      "size": 1503233,
+      "recorded": 1503233,
+      "valid": false
+    },
+    {
+      "why": "encrypted but now an error page",
+      "kind": "segment",
+      "tag": "enc",
+      "head": "text:<html><body>Forbidden",
+      "size": 1024,
+      "recorded": 1024,
+      "valid": false
+    },
+    {
+      "why": "keys are always fetched again",
+      "kind": "key",
+      "tag": "2e373913e5ad677d",
+      "head": "text:0123456789abcdef",
+      "size": 16,
+      "recorded": 16,
+      "valid": false
+    },
+    {
+      "why": "page still a JPEG",
+      "kind": "page",
+      "tag": "jpeg",
+      "head": "hex:ffd8ffe000104a464946",
+      "size": 81234,
+      "recorded": 81234,
+      "valid": true
+    },
+    {
+      "why": "page now a PNG (a different file)",
+      "kind": "page",
+      "tag": "jpeg",
+      "head": "hex:89504e470d0a1a0a0000000d",
+      "size": 81234,
+      "recorded": 81234,
+      "valid": false
+    },
+    {
+      "why": "raw bytes that aren't an error page",
+      "kind": "segment",
+      "tag": "raw",
+      "head": "hex:89504e470d0a1a0a0000000d",
+      "size": 9000,
+      "recorded": 9000,
+      "valid": true
+    },
+    {
+      "why": "unknown tag",
+      "kind": "segment",
+      "tag": "zzz",
+      "head": "ts:1504",
+      "size": 9000,
+      "recorded": 9000,
+      "valid": false
+    }
+  ],
+  "ledgers": [
+    {
+      "why": "a complete ledger",
+      "text": "anitrack-ledger v1 a71a4acc3692a01e 3\n0 key00.key 16 2e373913e5ad677d\n1 seg00000.ts 1503232 enc\n",
+      "ledger": {
+        "version": 1,
+        "rendition": "a71a4acc3692a01e",
+        "total": 3,
+        "pieces": {
+          "0": [
+            "key00.key",
+            16,
+            "2e373913e5ad677d"
+          ],
+          "1": [
+            "seg00000.ts",
+            1503232,
+            "enc"
+          ]
+        }
+      }
+    },
+    {
+      "why": "the last line was cut off when the app was killed",
+      "text": "anitrack-ledger v1 a71a4acc3692a01e 3\n1 seg00000.ts 1503232 enc\n2 seg00001.ts 60",
+      "ledger": {
+        "version": 1,
+        "rendition": "a71a4acc3692a01e",
+        "total": 3,
+        "pieces": {
+          "1": [
+            "seg00000.ts",
+            1503232,
+            "enc"
+          ]
+        }
+      }
+    },
+    {
+      "why": "a later line wins; garbage and out-of-range lines are ignored",
+      "text": "anitrack-ledger v1 a71a4acc3692a01e 2\n0 seg00000.ts 10 ts\nnot a line\n9 seg00009.ts 10 ts\n0 seg00000.ts 12 ts\n",
+      "ledger": {
+        "version": 1,
+        "rendition": "a71a4acc3692a01e",
+        "total": 2,
+        "pieces": {
+          "0": [
+            "seg00000.ts",
+            12,
+            "ts"
+          ]
+        }
+      }
+    },
+    {
+      "why": "the old download.plan hash",
+      "text": "3f2c9e0d7a1b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5",
+      "ledger": null
+    },
+    {
+      "why": "an unterminated header",
+      "text": "anitrack-ledger v1 a71a4acc3692a01e 3",
+      "ledger": null
+    },
+    {
+      "why": "a file name that would leave the folder",
+      "text": "anitrack-ledger v1 a71a4acc3692a01e 2\n0 ../../x 10 ts\n",
+      "ledger": {
+        "version": 1,
+        "rendition": "a71a4acc3692a01e",
+        "total": 2,
+        "pieces": {}
+      }
+    },
+    {
+      "why": "a dot-name such as '..' isn't a piece file",
+      "text": "anitrack-ledger v1 a71a4acc3692a01e 2\n0 .. 10 ts\n1 .hidden 10 ts\n",
+      "ledger": {
+        "version": 1,
+        "rendition": "a71a4acc3692a01e",
+        "total": 2,
+        "pieces": {}
+      }
+    }
+  ],
+  "headerAndLine": {
+    "header": "anitrack-ledger v1 a71a4acc3692a01e 3\n",
+    "line": "1 seg00000.ts 1503232 enc\n"
+  },
+  "resumePlans": [
+    {
+      "why": "continues from the first missing segment; keys are fetched again",
+      "rendition": "a71a4acc3692a01e",
+      "pieces": [
+        {
+          "kind": "key",
+          "url": "k",
+          "file": "key00.key"
+        },
+        {
+          "kind": "segment",
+          "url": "s0",
+          "file": "seg00000.ts"
+        },
+        {
+          "kind": "segment",
+          "url": "s1",
+          "file": "seg00001.ts"
+        },
+        {
+          "kind": "segment",
+          "url": "s2",
+          "file": "seg00002.ts"
+        },
+        {
+          "kind": "segment",
+          "url": "s3",
+          "file": "seg00003.ts"
+        }
+      ],
+      "ledger": "anitrack-ledger v1 a71a4acc3692a01e 5\n0 key00.key 16 2e373913e5ad677d\n1 seg00000.ts 1504 ts\n2 seg00001.ts 1504 ts\n",
+      "disk": {
+        "key00.key": {
+          "size": 16,
+          "head": "text:0123456789abcdef"
+        },
+        "seg00000.ts": {
+          "size": 1504,
+          "head": "ts:1504"
+        },
+        "seg00001.ts": {
+          "size": 1504,
+          "head": "ts:1504"
+        }
+      },
+      "plan": {
+        "restart": false,
+        "keep": [
+          1,
+          2
+        ],
+        "fetch": [
+          0,
+          3,
+          4
+        ],
+        "firstMissing": 3
+      }
+    },
+    {
+      "why": "a gap in the middle (two workers) and a truncated file are fetched; the rest is kept",
+      "rendition": "a71a4acc3692a01e",
+      "pieces": [
+        {
+          "kind": "segment",
+          "url": "s0",
+          "file": "seg00000.ts"
+        },
+        {
+          "kind": "segment",
+          "url": "s1",
+          "file": "seg00001.ts"
+        },
+        {
+          "kind": "segment",
+          "url": "s2",
+          "file": "seg00002.ts"
+        },
+        {
+          "kind": "segment",
+          "url": "s3",
+          "file": "seg00003.ts"
+        }
+      ],
+      "ledger": "anitrack-ledger v1 a71a4acc3692a01e 4\n0 seg00000.ts 1504 ts\n2 seg00002.ts 1504 ts\n3 seg00003.ts 1504 ts\n",
+      "disk": {
+        "seg00000.ts": {
+          "size": 1504,
+          "head": "ts:1504"
+        },
+        "seg00002.ts": {
+          "size": 1504,
+          "head": "ts:1504"
+        },
+        "seg00003.ts": {
+          "size": 900,
+          "head": "ts:900"
+        }
+      },
+      "plan": {
+        "restart": false,
+        "keep": [
+          0,
+          2
+        ],
+        "fetch": [
+          1,
+          3
+        ],
+        "firstMissing": 1
+      }
+    },
+    {
+      "why": "another rendition: nothing is kept",
+      "rendition": "ffffffffffffffff",
+      "pieces": [
+        {
+          "kind": "segment",
+          "url": "s0",
+          "file": "seg00000.ts"
+        },
+        {
+          "kind": "segment",
+          "url": "s1",
+          "file": "seg00001.ts"
+        }
+      ],
+      "ledger": "anitrack-ledger v1 a71a4acc3692a01e 2\n0 seg00000.ts 1504 ts\n1 seg00001.ts 1504 ts\n",
+      "disk": {
+        "seg00000.ts": {
+          "size": 1504,
+          "head": "ts:1504"
+        },
+        "seg00001.ts": {
+          "size": 1504,
+          "head": "ts:1504"
+        }
+      },
+      "plan": {
+        "restart": true,
+        "keep": [],
+        "fetch": [
+          0,
+          1
+        ],
+        "firstMissing": 0
+      }
+    },
+    {
+      "why": "the playlist grew or shrank: nothing is kept",
+      "rendition": "a71a4acc3692a01e",
+      "pieces": [
+        {
+          "kind": "segment",
+          "url": "s0",
+          "file": "seg00000.ts"
+        }
+      ],
+      "ledger": "anitrack-ledger v1 a71a4acc3692a01e 2\n0 seg00000.ts 1504 ts\n",
+      "disk": {
+        "seg00000.ts": {
+          "size": 1504,
+          "head": "ts:1504"
+        }
+      },
+      "plan": {
+        "restart": true,
+        "keep": [],
+        "fetch": [
+          0
+        ],
+        "firstMissing": 0
+      }
+    },
+    {
+      "why": "no ledger (a download from before this version)",
+      "rendition": "a71a4acc3692a01e",
+      "pieces": [
+        {
+          "kind": "segment",
+          "url": "s0",
+          "file": "seg00000.ts"
+        }
+      ],
+      "ledger": null,
+      "disk": {
+        "seg00000.ts": {
+          "size": 1504,
+          "head": "ts:1504"
+        }
+      },
+      "plan": {
+        "restart": true,
+        "keep": [],
+        "fetch": [
+          0
+        ],
+        "firstMissing": 0
+      }
+    },
+    {
+      "why": "manga pages keep their order and saved file names; a page that no longer decodes is fetched",
+      "rendition": "1111111111111111",
+      "pieces": [
+        {
+          "kind": "page",
+          "url": "p1"
+        },
+        {
+          "kind": "page",
+          "url": "p2"
+        },
+        {
+          "kind": "page",
+          "url": "p3"
+        }
+      ],
+      "ledger": "anitrack-ledger v1 1111111111111111 3\n0 001.jpg 5000 jpeg\n1 002.webp 6000 webp\n2 003.png 7000 png\n",
+      "disk": {
+        "001.jpg": {
+          "size": 5000,
+          "head": "hex:ffd8ffe000104a464946"
+        },
+        "002.webp": {
+          "size": 6000,
+          "head": "hex:524946462400000057454250565038"
+        },
+        "003.png": {
+          "size": 7000,
+          "head": "zero:12"
+        }
+      },
+      "plan": {
+        "restart": false,
+        "keep": [
+          0,
+          1
+        ],
+        "fetch": [
+          2
+        ],
+        "firstMissing": 2
+      }
+    },
+    {
+      "why": "a piece renamed by a newer plan isn't trusted",
+      "rendition": "a71a4acc3692a01e",
+      "pieces": [
+        {
+          "kind": "segment",
+          "url": "s0",
+          "file": "seg00000.m4s"
+        }
+      ],
+      "ledger": "anitrack-ledger v1 a71a4acc3692a01e 1\n0 seg00000.ts 1504 ts\n",
+      "disk": {
+        "seg00000.ts": {
+          "size": 1504,
+          "head": "ts:1504"
+        }
+      },
+      "plan": {
+        "restart": false,
+        "keep": [],
+        "fetch": [
+          0
+        ],
+        "firstMissing": 0
+      }
+    }
+  ],
+  "keyStillMatches": [
+    {
+      "ledger": "anitrack-ledger v1 a71a4acc3692a01e 2\n0 key00.key 16 2e373913e5ad677d\n",
+      "index": 0,
+      "tag": "2e373913e5ad677d",
+      "matches": true
+    },
+    {
+      "ledger": "anitrack-ledger v1 a71a4acc3692a01e 2\n0 key00.key 16 2e373913e5ad677d\n",
+      "index": 0,
+      "tag": "0000000000000000",
+      "matches": false
+    },
+    {
+      "ledger": "anitrack-ledger v1 a71a4acc3692a01e 2\n",
+      "index": 0,
+      "tag": "0000000000000000",
+      "matches": true
+    },
+    {
+      "ledger": null,
+      "index": 0,
+      "tag": "0000000000000000",
+      "matches": true
+    }
+  ],
+  "backoff": [
+    [
+      0,
+      1000
+    ],
+    [
+      1,
+      2000
+    ],
+    [
+      3,
+      8000
+    ],
+    [
+      5,
+      32000
+    ],
+    [
+      6,
+      60000
+    ],
+    [
+      40,
+      60000
+    ]
+  ],
+  "retryAfter": [
+    {
+      "header": "10",
+      "now": 1793793600000,
+      "ms": 10000
+    },
+    {
+      "header": " 0 ",
+      "now": 1793793600000,
+      "ms": 0
+    },
+    {
+      "header": "Wed, 04 Nov 2026 12:00:10 GMT",
+      "now": 1793793600000,
+      "ms": 10000
+    },
+    {
+      "header": "Wed, 04 Nov 2026 11:59:00 GMT",
+      "now": 1793793600000,
+      "ms": 0
+    },
+    {
+      "header": "-5",
+      "now": 1793793600000,
+      "ms": null
+    },
+    {
+      "header": "soon",
+      "now": 1793793600000,
+      "ms": null
+    },
+    {
+      "header": null,
+      "now": 1793793600000,
+      "ms": null
+    }
+  ],
+  "steps": [
+    {
+      "why": "network drop: retry with backoff",
+      "failure": {
+        "network": true
+      },
+      "attempt": 0,
+      "reResolves": 0,
+      "now": 1000,
+      "step": {
+        "action": "retry",
+        "delayMs": 1000
+      }
+    },
+    {
+      "why": "network still down: pause until it's back",
+      "failure": {
+        "network": true
+      },
+      "attempt": 4,
+      "reResolves": 0,
+      "now": 1000,
+      "step": {
+        "action": "pause",
+        "reason": "network",
+        "resumeAt": null
+      }
+    },
+    {
+      "why": "429 honours Retry-After",
+      "failure": {
+        "status": 429,
+        "retryAfter": "10"
+      },
+      "attempt": 0,
+      "reResolves": 0,
+      "now": 1000,
+      "step": {
+        "action": "retry",
+        "delayMs": 10000
+      }
+    },
+    {
+      "why": "429 without Retry-After backs off",
+      "failure": {
+        "status": 429
+      },
+      "attempt": 2,
+      "reResolves": 0,
+      "now": 1000,
+      "step": {
+        "action": "retry",
+        "delayMs": 4000
+      }
+    },
+    {
+      "why": "429 asking for an hour: pause until then",
+      "failure": {
+        "status": 429,
+        "retryAfter": "3600"
+      },
+      "attempt": 0,
+      "reResolves": 0,
+      "now": 1000,
+      "step": {
+        "action": "pause",
+        "reason": "rate-limit",
+        "resumeAt": 3601000
+      }
+    },
+    {
+      "why": "429 asking for two days: capped at six hours",
+      "failure": {
+        "status": 429,
+        "retryAfter": "172800"
+      },
+      "attempt": 0,
+      "reResolves": 0,
+      "now": 1000,
+      "step": {
+        "action": "pause",
+        "reason": "rate-limit",
+        "resumeAt": 21601000
+      }
+    },
+    {
+      "why": "still limited after eight tries: pause five minutes",
+      "failure": {
+        "status": 429,
+        "retryAfter": "10"
+      },
+      "attempt": 8,
+      "reResolves": 0,
+      "now": 1000,
+      "step": {
+        "action": "pause",
+        "reason": "rate-limit",
+        "resumeAt": 301000
+      }
+    },
+    {
+      "why": "503 counts as a rate limit",
+      "failure": {
+        "status": 503,
+        "retryAfter": "2"
+      },
+      "attempt": 1,
+      "reResolves": 0,
+      "now": 1000,
+      "step": {
+        "action": "retry",
+        "delayMs": 2000
+      }
+    },
+    {
+      "why": "502 retries with backoff",
+      "failure": {
+        "status": 502
+      },
+      "attempt": 1,
+      "reResolves": 0,
+      "now": 1000,
+      "step": {
+        "action": "retry",
+        "delayMs": 2000
+      }
+    },
+    {
+      "why": "server keeps failing: pause",
+      "failure": {
+        "status": 500
+      },
+      "attempt": 6,
+      "reResolves": 0,
+      "now": 1000,
+      "step": {
+        "action": "pause",
+        "reason": "server",
+        "resumeAt": 301000
+      }
+    },
+    {
+      "why": "expired token: resolve again",
+      "failure": {
+        "status": 403
+      },
+      "attempt": 0,
+      "reResolves": 0,
+      "now": 1000,
+      "step": {
+        "action": "re-resolve"
+      }
+    },
+    {
+      "why": "410 gone: resolve again",
+      "failure": {
+        "status": 410
+      },
+      "attempt": 0,
+      "reResolves": 1,
+      "now": 1000,
+      "step": {
+        "action": "re-resolve"
+      }
+    },
+    {
+      "why": "still refused after two fresh streams",
+      "failure": {
+        "status": 401
+      },
+      "attempt": 0,
+      "reResolves": 2,
+      "now": 1000,
+      "step": {
+        "action": "fail"
+      }
+    },
+    {
+      "why": "404 resolves once (signed paths rotate)",
+      "failure": {
+        "status": 404
+      },
+      "attempt": 0,
+      "reResolves": 0,
+      "now": 1000,
+      "step": {
+        "action": "re-resolve"
+      }
+    },
+    {
+      "why": "404 again: really missing",
+      "failure": {
+        "status": 404
+      },
+      "attempt": 0,
+      "reResolves": 1,
+      "now": 1000,
+      "step": {
+        "action": "fail"
+      }
+    },
+    {
+      "why": "other client errors fail",
+      "failure": {
+        "status": 400
+      },
+      "attempt": 0,
+      "reResolves": 0,
+      "now": 1000,
+      "step": {
+        "action": "fail"
+      }
+    }
+  ],
+  "expiry": [
+    {
+      "url": "https://cdn.example/a.m3u8?token=x&expires=1793797200",
+      "at": 1793797200000
+    },
+    {
+      "url": "https://cdn.example/a.m3u8?Expires=1793797200000",
+      "at": 1793797200000
+    },
+    {
+      "url": "https://cdn.example/a.m3u8?e=1793797200&st=abc",
+      "at": 1793797200000
+    },
+    {
+      "url": "https://x/a.m3u8?X-Amz-Date=20261104T120000Z&X-Amz-Expires=3600",
+      "at": 1793797200000
+    },
+    {
+      "url": "https://x/a.m3u8?hdnts=st%3D1793793600~exp%3D1793797200~acl%3D%2F*~hmac%3Dab",
+      "at": 1793797200000
+    },
+    {
+      "url": "https://x/a.m3u8?exp=soon",
+      "at": null
+    },
+    {
+      "url": "https://x/a.m3u8?e=12",
+      "at": null
+    },
+    {
+      "url": "https://x/a.m3u8",
+      "at": null
+    }
+  ],
+  "reResolveBeforeFetch": [
+    {
+      "why": "expires in an hour",
+      "url": "https://cdn.example/a.m3u8?expires=1793797200",
+      "resolvedAt": 1793793000000,
+      "now": 1793793600000,
+      "reResolve": false
+    },
+    {
+      "why": "expires in 30 s",
+      "url": "https://cdn.example/a.m3u8?expires=1793797200",
+      "resolvedAt": 1793793000000,
+      "now": 1793797170000,
+      "reResolve": true
+    },
+    {
+      "why": "already expired",
+      "url": "https://cdn.example/a.m3u8?expires=1793797200",
+      "resolvedAt": 1793793000000,
+      "now": 1793800000000,
+      "reResolve": true
+    },
+    {
+      "why": "no expiry, resolved 5 h ago",
+      "url": "https://cdn.example/a.m3u8",
+      "resolvedAt": 1793775600000,
+      "now": 1793793600000,
+      "reResolve": false
+    },
+    {
+      "why": "no expiry, resolved 7 h ago (Xanime's master lasts about a day; Anikoto's less)",
+      "url": "https://cdn.example/a.m3u8",
+      "resolvedAt": 1793768400000,
+      "now": 1793793600000,
+      "reResolve": true
+    }
+  ]
+}

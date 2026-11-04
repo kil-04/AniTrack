@@ -383,37 +383,65 @@ internal object DownloadTransport {
 
     fun text(url: String, ref: String, ua: String, maxRetries: Int = 6): String = String(getBytes(url, ref, ua, maxRetries))
 
-    fun bytes(url: String, ref: String, ua: String, maxRetries: Int = 2): ByteArray = getBytes(url, ref, ua, maxRetries)
+    /**
+     * One request, no retry: the caller decides what a failure means (see
+     * DownloadResume.nextStep). [status] is 0 when the request never got an
+     * answer; a 2xx body is saved to [file] through a .part file.
+     */
+    private fun header(headers: Map<String, List<String>>, name: String): String? =
+        headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value?.firstOrNull()
 
-    fun toFile(url: String, file: File, ref: String, ua: String, maxRetries: Int = 6) {
+    fun attemptToFile(url: String, file: File, ref: String, ua: String): HlsDownload.Attempt {
         val tmp = File(file.parentFile, file.name + ".part")
+        tmp.delete()
+        val cookie = runCatching { android.webkit.CookieManager.getInstance().getCookie(url) }.getOrNull()
         val engine = cronetEngine()
-        var attempt = 0
-        while (true) {
+        val retryAfter = arrayOfNulls<String>(1)
+        val code = try {
+            if (engine != null) cronetToFile(engine, url, tmp, ref, ua, cookie, retryAfter) else okHttpToFile(url, tmp, ref, ua, cookie, retryAfter)
+        } catch (e: InterruptedException) {
             tmp.delete()
-            val cookie = runCatching { android.webkit.CookieManager.getInstance().getCookie(url) }.getOrNull()
-            val code = if (engine != null) {
-                cronetToFile(engine, url, tmp, ref, ua, cookie)
-            } else {
-                okHttpToFile(url, tmp, ref, ua, cookie)
-            }
-            if (isRetryableStatus(code) && attempt < maxRetries) {
-                tmp.delete()
-                Thread.sleep((1000L * (attempt + 1)).coerceAtMost(8000))
-                attempt++
-                continue
-            }
-            if (code !in 200..299) {
-                tmp.delete()
-                throw Exception("HTTP $code for $url")
-            }
-            break
+            throw e
+        } catch (e: Exception) {
+            tmp.delete()
+            return HlsDownload.Attempt(0, null)
         }
+        if (code !in 200..299) {
+            tmp.delete()
+            return HlsDownload.Attempt(code, retryAfter[0])
+        }
+        val size = tmp.length()
         if (!tmp.renameTo(file)) {
             tmp.delete()
-            throw Exception("Could not finalize ${file.name}")
+            throw IOException("Could not finalize ${file.name}")
+        }
+        return HlsDownload.Attempt(code, null, size)
+    }
+
+    /** Like [attemptToFile], for a small body kept in memory (playlists, captions). */
+    fun attemptBytes(url: String, ref: String, ua: String): Pair<HlsDownload.Attempt, ByteArray?> {
+        val cookie = runCatching { android.webkit.CookieManager.getInstance().getCookie(url) }.getOrNull()
+        val engine = cronetEngine()
+        return try {
+            if (engine != null) {
+                val f = cronetGetFull(engine, url, ref, ua, cookie)
+                HlsDownload.Attempt(f.status, f.headers.entries.firstOrNull { it.key.equals("retry-after", true) }?.value) to f.body.takeIf { f.status in 200..299 }
+            } else {
+                val req = Request.Builder().url(url).header("User-Agent", ua)
+                    .apply { if (ref.isNotBlank()) header("Referer", ref.trimEnd('/') + "/") }.header("Accept", "*/*")
+                    .apply { if (!cookie.isNullOrBlank()) header("Cookie", cookie) }.build()
+                http.newCall(req).execute().use { resp ->
+                    HlsDownload.Attempt(resp.code, resp.header("Retry-After")) to (if (resp.isSuccessful) resp.body?.bytes() else null)
+                }
+            }
+        } catch (e: InterruptedException) {
+            throw e
+        } catch (e: Exception) {
+            HlsDownload.Attempt(0, null) to null
         }
     }
+
+    fun bytes(url: String, ref: String, ua: String, maxRetries: Int = 2): ByteArray = getBytes(url, ref, ua, maxRetries)
 
     /** Stream a response directly to disk. The previous ByteArray path kept
      * six complete video segments in RAM at once, which could push tablets
@@ -425,6 +453,7 @@ internal object DownloadTransport {
         ref: String,
         ua: String,
         cookie: String?,
+        retryAfter: Array<String?> = arrayOfNulls(1),
     ): Int {
         val latch = CountDownLatch(1)
         val output = file.outputStream().buffered(64 * 1024)
@@ -450,6 +479,7 @@ internal object DownloadTransport {
                 info: org.chromium.net.UrlResponseInfo,
             ) {
                 status = info.httpStatusCode
+                retryAfter[0] = header(info.allHeaders, "Retry-After")
                 request.read(java.nio.ByteBuffer.allocateDirect(64 * 1024))
             }
 
@@ -529,11 +559,13 @@ internal object DownloadTransport {
         ref: String,
         ua: String,
         cookie: String?,
+        retryAfter: Array<String?> = arrayOfNulls(1),
     ): Int {
         val request = Request.Builder().url(url).header("User-Agent", ua)
             .apply { if (ref.isNotBlank()) header("Referer", ref.trimEnd('/') + "/") }.header("Accept", "*/*")
             .apply { if (!cookie.isNullOrBlank()) header("Cookie", cookie) }.build()
         http.newCall(request).execute().use { response ->
+            retryAfter[0] = response.header("Retry-After")
             if (response.isSuccessful) {
                 val body = response.body ?: throw IOException("empty response for $url")
                 body.byteStream().use { input ->

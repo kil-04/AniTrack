@@ -34,9 +34,11 @@ registerHooks({
   },
 });
 
-const { startDownload, removeDownload, setDownloadEmitter, downloadRetryDelay } = await import("../apps/desktop/main/services/downloads.ts");
+const { startDownload, removeDownload, setDownloadEmitter, setDownloadRetryScale, listDownloads } = await import("../apps/desktop/main/services/downloads.ts");
 const { authorizeResolvedStream, clearResolvedStreamAuthorizations } = await import("../apps/desktop/main/services/providers/stream-authorization.ts");
 setDownloadEmitter((item) => harness.events.push(item));
+// Backoff and Retry-After waits run at 1/1000 speed (a 10 s wait takes 10 ms).
+setDownloadRetryScale(0.001);
 let sequence = 0;
 function options(extra = {}) {
   return {
@@ -62,7 +64,8 @@ async function waitUntil(condition, timeout = 3000) {
 }
 async function terminal(opts, timeout = 3000) {
   startDownload(opts);
-  await waitUntil(() => harness.events.some((item) => item.id === opts.id && ["done", "failed"].includes(item.status)), timeout);
+  // Settled: finished, failed, or stopped with its files kept to resume later.
+  await waitUntil(() => harness.events.some((item) => item.id === opts.id && (["done", "failed"].includes(item.status) || item.resume)), timeout);
   return harness.events.findLast((item) => item.id === opts.id);
 }
 const mediaPlaylist = (...assets) => `#EXTM3U\n#EXT-X-TARGETDURATION:6\n${assets.map((asset) => `#EXTINF:6,\n${asset}`).join("\n")}\n#EXT-X-ENDLIST\n`;
@@ -129,31 +132,42 @@ test("redirects use the destination authorization and its URL for relative media
   assert.deepEqual(requests.find((item) => item.url.endsWith("/part.ts")).headers, { "X-New": "destination" });
 });
 
-test("HTTP 403 and 429 stop immediately with errors that contain no signed URL", async () => {
-  for (const status of [403, 429]) {
-    let calls = 0;
-    resetFixture(async () => { calls++; return new Response(null, { status, headers: { "retry-after": "999999" } }); });
-    const item = await terminal(options({ hlsUrl: "https://media.example/index.m3u8?secret=fixture" }));
-    assert.equal(calls, 1);
-    assert.equal(item.status, "failed");
-    assert.match(item.error, new RegExp(`HTTP ${status}`));
-    assert.doesNotMatch(item.error, /https?:|secret|fixture/);
-  }
+test("HTTP 403 stops for a fresh stream and a long Retry-After pauses, keeping no signed URL", async () => {
+  let calls = 0;
+  resetFixture(async () => { calls++; return new Response(null, { status: 403 }); });
+  const expired = await terminal(options({ hlsUrl: "https://media.example/index.m3u8?secret=fixture" }));
+  assert.equal(calls, 1);
+  assert.equal(expired.status, "queued");
+  assert.deepEqual(expired.resume, { reason: "expired", reResolves: 1 });
+  calls = 0;
+  const before = Date.now();
+  resetFixture(async () => { calls++; return new Response(null, { status: 429, headers: { "retry-after": "999999" } }); });
+  const limited = await terminal(options({ hlsUrl: "https://media.example/index.m3u8?secret=fixture" }));
+  assert.equal(calls, 1, "a wait longer than ten minutes pauses instead of holding the worker");
+  assert.equal(limited.status, "queued");
+  assert.equal(limited.resume.reason, "rate-limit");
+  assert.ok(limited.resume.at >= before + 6 * 3600_000 - 1000 && limited.resume.at <= Date.now() + 6 * 3600_000, "capped at six hours");
+  for (const item of [expired, limited]) assert.doesNotMatch(JSON.stringify([item.error, item.resume]), /https?:|secret|fixture/);
 });
 
-test("temporary HTTP errors retry within bounds and large Retry-After values are clamped", async () => {
+test("temporary HTTP errors and 429 retry with backoff, honouring Retry-After", async () => {
   let calls = 0;
-  resetFixture(async () => {
-    calls++;
-    return calls === 1 ? new Response(null, { status: 503 }) : new Response(mediaPlaylist("part.ts"));
+  const waits = [];
+  let last = 0;
+  resetFixture(async (url) => {
+    if (url.endsWith("part.ts")) {
+      calls++;
+      if (last) waits.push(Date.now() - last);
+      last = Date.now();
+      if (calls === 1) return new Response(null, { status: 503 });
+      if (calls === 2) return new Response(null, { status: 429, headers: { "retry-after": "40" } });
+      return new Response("media");
+    }
+    return new Response(mediaPlaylist("part.ts"));
   });
-  // Asset requests return bytes rather than another playlist.
-  const fetcher = harness.fetch;
-  harness.fetch = (url, init) => url.endsWith("part.ts") ? Promise.resolve(new Response("media")) : fetcher(url, init);
   assert.equal((await terminal(options())).status, "done");
-  assert.equal(calls, 2);
-  assert.equal(downloadRetryDelay("999999", 0), 5000);
-  assert.equal(downloadRetryDelay("invalid", 20), 5000);
+  assert.equal(calls, 3);
+  assert.ok(waits[1] >= 38, `Retry-After: 40 (scaled to 40 ms) was honoured, waited ${waits[1]} ms`);
 });
 
 test("oversized bodies and unsafe redirects fail without reaching the unsafe address", async () => {
@@ -202,10 +216,11 @@ test("a failed worker aborts its peers before emitting a settled failure", async
   });
   const opts = options();
   const item = await terminal(opts);
-  assert.equal(item.status, "failed");
+  assert.equal(item.status, "queued");
+  assert.equal(item.resume.reason, "expired");
   assert.equal(cancelledReaders, 1, "the peer worker's in-flight reader is aborted");
-  assert.equal(harness.events.filter((event) => event.status === "failed").length, 1);
-  assert.ok(fs.readdirSync(folder(opts.id)).every((file) => ["meta.json", "index.m3u8", "download.plan"].includes(file)));
+  assert.equal(harness.events.filter((event) => event.resume).length, 1);
+  assert.ok(fs.readdirSync(folder(opts.id)).every((file) => ["meta.json", "index.m3u8", "download.ledger"].includes(file)));
 });
 
 test("resume reuses matching media but never mixes numbered files from another server", async () => {
@@ -350,21 +365,152 @@ test("AniChan signed proxy playlists, disguised segments and captions become sel
   assert.match(fs.readFileSync(path.join(folder(opts.id), "subs.vtt"), "utf8"), /AniChan offline caption/);
 });
 
-test("hanging requests time out even when their transport ignores cancellation", async (context) => {
+test("hanging requests time out and are tried again even when their transport ignores cancellation", async (context) => {
   context.mock.timers.enable({ apis: ["setTimeout"] });
   for (const [conservativeNetwork, timeout] of [[false, 30_000], [true, 90_000]]) {
-    resetFixture(async () => new Promise(() => {}));
+    let calls = 0;
+    resetFixture(async () => { calls++; return new Promise(() => {}); });
     const opts = options({ conservativeNetwork });
     startDownload(opts);
+    await settle();
     context.mock.timers.tick(timeout - 1);
     await settle();
     assert.equal(harness.events.findLast(event => event.id === opts.id).status, "downloading");
+    assert.equal(calls, 1);
     context.mock.timers.tick(2);
     await settle();
-    const item = harness.events.findLast((event) => event.id === opts.id);
-    assert.equal(item.status, "failed");
-    assert.match(item.error, /timed out/);
+    if (conservativeNetwork) {
+      // A rate-sensitive stream is never retried at once: it pauses for the network.
+      const item = harness.events.findLast((event) => event.id === opts.id);
+      assert.equal(item.status, "queued");
+      assert.deepEqual(item.resume, { reason: "network", at: null, reResolves: 0 });
+    } else {
+      context.mock.timers.tick(10);
+      await settle();
+      assert.equal(calls, 2, "a timeout counts as a network failure and is retried");
+      removeDownload(opts.id);
+    }
   }
+});
+
+const ts = (fill) => { const b = Buffer.alloc(376, fill); b[0] = b[188] = 0x47; return b; };
+const signed = (token, n) => Array.from({ length: n }, (_, i) => `https://cdn${token}.example/show/1080/seg-${i}.ts?token=${token}&expires=4102444800`);
+
+test("an interrupted episode keeps its segments and continues from the first missing one with re-signed URLs", async () => {
+  let token = "a";
+  let online = true;
+  const fetched = [];
+  resetFixture(async (url) => {
+    if (url.endsWith("master.m3u8") || url.includes("master.m3u8?")) return new Response(mediaPlaylist(...signed(token, 6)));
+    if (!online) throw new TypeError("net::ERR_INTERNET_DISCONNECTED");
+    const index = Number(/seg-(\d+)/.exec(url)[1]);
+    fetched.push(index);
+    if (index === 3) online = false; // the connection drops after segment 3
+    return new Response(ts(index));
+  });
+  const opts = options();
+  const paused = await terminal(opts, 6000);
+  assert.equal(paused.status, "queued");
+  assert.equal(paused.resume.reason, "network");
+  assert.ok(paused.doneSegments >= 3 && paused.doneSegments < 6, `kept ${paused.doneSegments} of 6`);
+  const kept = new Set(fetched);
+  // The app starts it again later with a freshly resolved, differently signed stream.
+  token = "b";
+  online = true;
+  fetched.length = 0;
+  harness.events.length = 0;
+  const done = await terminal({ ...opts, hlsUrl: "https://master.example/show/master.m3u8?token=b", reResolves: paused.resume.reResolves });
+  assert.equal(done.status, "done");
+  assert.equal(done.doneSegments, 6);
+  assert.ok(fetched.every((index) => !kept.has(index) || index === 3), `only missing segments were fetched again: ${fetched}`);
+  assert.ok(fetched.length <= 6 - paused.doneSegments + 1);
+  for (let i = 0; i < 6; i++) assert.deepEqual(fs.readFileSync(path.join(folder(opts.id), `seg${String(i).padStart(5, "0")}.ts`)), ts(i));
+  assert.match(fs.readFileSync(path.join(folder(opts.id), "index.m3u8"), "utf8"), /seg00000\.ts[\s\S]*seg00005\.ts/);
+});
+
+test("a truncated or corrupted segment is fetched again; another quality starts over", async () => {
+  let quality = "1080";
+  const fetched = [];
+  resetFixture(async (url) => {
+    if (url.includes("master.m3u8")) return new Response(mediaPlaylist(...[0, 1, 2].map((i) => `https://cdn.example/${quality}/seg-${i}.ts`)));
+    fetched.push(url);
+    return new Response(ts(quality === "1080" ? 1 : 2));
+  });
+  const opts = options();
+  assert.equal((await terminal(opts)).status, "done");
+  fs.truncateSync(path.join(folder(opts.id), "seg00001.ts"), 100);
+  fs.writeFileSync(path.join(folder(opts.id), "seg00002.ts"), Buffer.alloc(376, 0));
+  fetched.length = 0;
+  harness.events.length = 0;
+  assert.equal((await terminal(opts)).status, "done");
+  assert.deepEqual(fetched.map((url) => url.slice(-8)), ["seg-1.ts", "seg-2.ts"]);
+  quality = "720";
+  fetched.length = 0;
+  harness.events.length = 0;
+  assert.equal((await terminal(opts)).status, "done");
+  assert.equal(fetched.length, 3, "segments of another rendition are never mixed in");
+  for (let i = 0; i < 3; i++) assert.deepEqual(fs.readFileSync(path.join(folder(opts.id), `seg0000${i}.ts`)), ts(2));
+});
+
+test("a key that changed on the server discards the segments it encrypted", async () => {
+  let keyBytes = Buffer.alloc(16, 1);
+  const fetched = [];
+  const playlist = '#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="https://cdn.example/k.key?token=x"\n#EXTINF:6,\nhttps://cdn.example/a.ts\n#EXTINF:6,\nhttps://cdn.example/b.ts\n#EXT-X-ENDLIST\n';
+  resetFixture(async (url) => {
+    if (url.includes("master.m3u8")) return new Response(playlist);
+    fetched.push(url.replace(/\?.*/, "").split("/").pop());
+    return new Response(url.includes("k.key") ? keyBytes : Buffer.alloc(32, 7));
+  });
+  const opts = options();
+  assert.equal((await terminal(opts)).status, "done");
+  fetched.length = 0;
+  harness.events.length = 0;
+  assert.equal((await terminal(opts)).status, "done");
+  assert.deepEqual(fetched, ["k.key"], "the key is checked again, the encrypted segments are kept");
+  keyBytes = Buffer.alloc(16, 2);
+  fetched.length = 0;
+  harness.events.length = 0;
+  assert.equal((await terminal(opts)).status, "done");
+  assert.deepEqual(fetched, ["k.key", "k.key", "a.ts", "b.ts"]);
+});
+
+test("a stream expiring mid-episode stops for a fresh one before its URLs are refused", async () => {
+  const soon = Math.floor((Date.now() + 30_000) / 1000);
+  resetFixture(async (url) => url.includes("master.m3u8")
+    ? new Response(mediaPlaylist(`https://cdn.example/a.ts?expires=${soon}`))
+    : new Response(ts(1)));
+  const item = await terminal(options());
+  assert.equal(item.status, "queued");
+  assert.deepEqual(item.resume, { reason: "expired", reResolves: 1 });
+});
+
+test("after a restart, an unfinished episode with a ledger comes back queued to resume", async () => {
+  resetFixture(async (url) => {
+    if (url.includes("master.m3u8")) return new Response(mediaPlaylist("https://cdn.example/a.ts", "https://cdn.example/b.ts"));
+    return new Promise(() => {}); // the app is closed while this hangs
+  });
+  const opts = options({ animeSession: "show-1", episodeSession: "ep-1" });
+  startDownload(opts);
+  await waitUntil(() => fs.existsSync(path.join(folder(opts.id), "download.ledger")));
+  // Simulate the next launch: no worker owns the folder any more.
+  const meta = JSON.parse(fs.readFileSync(path.join(folder(opts.id), "meta.json"), "utf8"));
+  const other = { ...opts, id: `${opts.animeId}:${opts.episode}.5` };
+  fs.mkdirSync(folder(other.id), { recursive: true });
+  fs.writeFileSync(path.join(folder(other.id), "meta.json"), JSON.stringify({ ...meta, id: other.id, status: "downloading" }));
+  fs.copyFileSync(path.join(folder(opts.id), "download.ledger"), path.join(folder(other.id), "download.ledger"));
+  const legacy = { ...opts, id: `${opts.animeId}:${opts.episode}.25` };
+  fs.mkdirSync(folder(legacy.id), { recursive: true });
+  fs.writeFileSync(path.join(folder(legacy.id), "meta.json"), JSON.stringify({ ...meta, id: legacy.id, status: "downloading" }));
+  const listed = listDownloads().items;
+  const resumed = listed.find((item) => item.id === other.id);
+  assert.equal(resumed.status, "queued");
+  assert.deepEqual(resumed.resume, { reason: "restart", reResolves: 0 });
+  const old = listed.find((item) => item.id === legacy.id);
+  assert.equal(old.status, "failed", "a folder without a ledger (an older download) can't resume");
+  assert.equal(listed.find((item) => item.id === opts.id).status, "downloading", "a live job is left alone");
+  removeDownload(opts.id);
+  removeDownload(other.id);
+  removeDownload(legacy.id);
 });
 
 after(() => {

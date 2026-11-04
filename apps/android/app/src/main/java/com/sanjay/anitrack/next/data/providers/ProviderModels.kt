@@ -1,5 +1,9 @@
 package com.sanjay.anitrack.next.data.providers
 
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.coroutineContext
+
 data class ProviderCapabilities(
     val latest: Boolean = false,
     val top: Boolean = false,
@@ -84,16 +88,47 @@ class ProviderEpisode(
     private val variantResolver: (suspend (String, PlaybackPreferences) -> ResolvedMedia)? = null,
     private val resolver: suspend (PlaybackPreferences) -> ResolvedMedia,
 ) {
+    /** The series this episode belongs to, set by [ProviderSeries]. */
+    @Volatile internal var origin: EpisodeOrigin? = null
+
     suspend fun variants(): List<ProviderStreamVariant> = variantsResolver()
 
     suspend fun resolve(
         preferences: PlaybackPreferences = PlaybackPreferences(),
         variantId: String? = null,
-    ): ResolvedMedia = if (variantId != null && variantResolver != null) {
-        variantResolver.invoke(variantId, preferences)
-    } else {
-        resolver(preferences)
+    ): ResolvedMedia {
+        val media = if (variantId != null && variantResolver != null) {
+            variantResolver.invoke(variantId, preferences)
+        } else {
+            resolver(preferences)
+        }
+        coroutineContext[OriginCapture]?.let { capture ->
+            capture.origin = origin?.copy(episode = number, variantId = variantId ?: media.variantId, preferHardSub = preferences.preferHardSub)
+        }
+        return media
     }
+}
+
+/**
+ * Where a resolved episode came from: enough to find and resolve it again later
+ * (Downloads resumes an interrupted episode after a restart this way).
+ */
+data class EpisodeOrigin(
+    val providerId: String,
+    val resumeKey: String,
+    val episode: Float = 0f,
+    val variantId: String? = null,
+    val preferHardSub: Boolean = false,
+)
+
+/**
+ * Put in a coroutine's context, it receives the [EpisodeOrigin] of the episode
+ * resolved inside it, so callers that only hold a resolve lambda can still
+ * persist where the stream came from.
+ */
+class OriginCapture : AbstractCoroutineContextElement(OriginCapture) {
+    companion object Key : CoroutineContext.Key<OriginCapture>
+    @Volatile var origin: EpisodeOrigin? = null
 }
 
 data class ProviderSeries(
@@ -103,6 +138,10 @@ data class ProviderSeries(
     val verified: Boolean = false,
     val badges: List<String> = emptyList(),
 ) {
+    init {
+        episodes.forEach { it.origin = EpisodeOrigin(providerId, resumeKey) }
+    }
+
     fun episodeIndex(number: Float, fallback: Int = 0): Int =
         episodes.indexOfFirst { kotlin.math.abs(it.number - number) < 0.01f }
             .takeIf { it >= 0 }

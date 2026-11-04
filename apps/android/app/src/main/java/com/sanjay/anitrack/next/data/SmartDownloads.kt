@@ -224,17 +224,27 @@ object SmartDownloads {
         return cleared
     }
 
-    /** Smart downloads that failed are dropped so the next pass can try again, quietly. */
+    /**
+     * Failed smart downloads are tried again by the next pass, keeping what they
+     * already saved; one for an episode or chapter finished meanwhile is dropped.
+     */
     private suspend fun dropFailed(context: Context) {
         val anime = owned(context, KEY_OWNED)
         Downloads.items.toList().filter { it.id in anime && it.status == Downloads.Status.FAILED }.forEach {
-            Downloads.remove(it.id)
-            anime -= it.id
+            if ((Db.positionsFor(it.animeId)[it.episode] ?: 0) >= WATCHED_PERCENT) {
+                Downloads.remove(it.id)
+                anime -= it.id
+            }
         }
         saveOwned(context, KEY_OWNED, anime)
         val manga = owned(context, KEY_OWNED_MANGA)
+        val failed = withContext(Dispatchers.Main) {
+            MangaDownloads.items.toList().filter { it.key in manga && it.status == MangaDownloads.Status.FAILED }
+        }
+        val reads = mutableMapOf<Int, Map<Float, ReadState>>()
+        val finished = failed.filter { reads.getOrPut(it.mangaId) { Db.readingFor(it.mangaId) }[it.chapter.number]?.finished == true }
         withContext(Dispatchers.Main) {
-            MangaDownloads.items.toList().filter { it.key in manga && it.status == MangaDownloads.Status.FAILED }.forEach {
+            finished.forEach {
                 MangaDownloads.remove(it.key)
                 manga -= it.key
             }
@@ -279,15 +289,7 @@ object SmartDownloads {
     }
 
     /** What a download needs from an episode, with its preferred caption track. */
-    private suspend fun sourceFor(episode: ProviderEpisode): Downloads.Source {
-        val media = episode.resolve()
-        check(media.downloadable) { "Downloads are not supported by this server" }
-        val captions = media.subtitles.filter { it.mimeType == "text/vtt" }
-        val caption = captions.firstOrNull { it.default }
-            ?: captions.firstOrNull { it.language == "en" || it.label.contains("english", ignoreCase = true) }
-            ?: captions.firstOrNull()
-        return Downloads.Source(media.url, media.referer, media.userAgent, caption?.url)
-    }
+    private suspend fun sourceFor(episode: ProviderEpisode): Downloads.Source = Downloads.sourceOf(episode.resolve())
 
     private suspend fun queueChapters(context: Context, queued: MutableSet<String>): Int {
         val now = System.currentTimeMillis()

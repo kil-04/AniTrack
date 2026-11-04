@@ -9,6 +9,7 @@ import {
   getDownloads,
   removeDownload,
   enqueueDownload,
+  resumeLabel,
 } from "../lib/downloads";
 import type { DownloadItem } from "../../../../packages/shared/types";
 
@@ -157,7 +158,7 @@ export default function Downloads() {
                         <div className={`text-xs ${it.status === "failed" ? "text-red-300" : "text-ink-3"}`}>
                           {it.status === "done" && fmtSize(it.sizeBytes)}
                           {it.status === "downloading" && `Downloading… ${it.progress}%`}
-                          {it.status === "queued" && "Queued"}
+                          {it.status === "queued" && (resumeLabel(it) ?? "Queued")}
                           {it.status === "failed" && (it.error || "Failed")}
                         </div>
                         {it.status === "downloading" && (

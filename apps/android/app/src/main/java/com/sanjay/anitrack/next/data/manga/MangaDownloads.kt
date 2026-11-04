@@ -149,6 +149,9 @@ object MangaDownloads {
         null
     }
 
+    /** Chapters queued, downloading or waiting to resume (main thread). */
+    fun hasPending(): Boolean = items.any { it.status == Status.QUEUED || it.status == Status.DOWNLOADING }
+
     fun statusOf(mangaId: Int, chapterId: String): Item? = items.firstOrNull { it.key == keyOf(mangaId, chapterId) }
 
     fun enqueue(manga: Manga, source: MangaSource, title: SourceTitle, chapter: MangaChapter) {

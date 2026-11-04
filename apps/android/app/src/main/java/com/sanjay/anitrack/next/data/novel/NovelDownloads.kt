@@ -115,6 +115,12 @@ object NovelDownloads {
         }
     }
 
+    /** Whether any title has chapters waiting or in progress. */
+    suspend fun hasPending(): Boolean {
+        ready()
+        return lock.withLock { states.values.any { it.queue.isNotEmpty() || it.current != null } }
+    }
+
     fun stateOf(source: NovelSourceId, id: String): Title? = titles.firstOrNull { it.source == source && it.titleId == id }
 
     /** A title's chapter ids saved on disk. */
