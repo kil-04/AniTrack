@@ -54,6 +54,12 @@ import java.util.concurrent.atomic.AtomicLong
  * provider and resume key, so after the app is closed or killed the download
  * carries on at the next start, or from [DownloadResumeWorker] once a network
  * is available.
+ *
+ * Every wait has an end and holds only what it must: an episode waits parked
+ * (QUEUED, outside the queue lock) so others download meanwhile; a rate limit
+ * also holds its provider's other episodes; and a run that saves no segment is
+ * a stall, a few of which in a row fail the episode ([DownloadResume.afterStop]),
+ * offline waits aside. A failure is final until the episode is asked for again.
  */
 object Downloads {
     enum class Status { QUEUED, DOWNLOADING, DONE, FAILED }
@@ -82,8 +88,9 @@ object Downloads {
 
     private lateinit var appCtx: Context
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private val queueLock = Mutex()
     private val jobs = ConcurrentHashMap<String, Job>()
+    /** Whether the app is in front (set by MainActivity): sources with a WebView session resolve only then. */
+    @Volatile private var appVisible = false
     private val operationGeneration = ConcurrentHashMap<String, Long>()
     private val nextGeneration = AtomicLong()
 
@@ -120,13 +127,19 @@ object Downloads {
                         val id = o.getString("id")
                         val complete = File(dir, "index.m3u8").exists()
                         val origin = originOf(o)
-                        val canResume = !complete && origin != null && File(dir, DownloadResume.LEDGER_FILE).isFile
+                        // A failure is final: it stays failed (pieces kept) until the episode is asked for again.
+                        val failed = o.optString("failed").takeIf { it.isNotEmpty() }
+                        val canResume = !complete && failed == null && origin != null && File(dir, DownloadResume.LEDGER_FILE).isFile
                         val item = Item(
                             id, o.getInt("animeId"), o.getDouble("episode").toFloat(),
                             o.optString("title"), o.optString("cover").takeIf { it.isNotEmpty() },
                             when { complete -> Status.DONE; canResume -> Status.QUEUED; else -> Status.FAILED },
                             if (complete) 100 else savedProgress(dir) ?: o.optInt("progress", 0).coerceIn(0, 99),
-                            error = if (complete || canResume) null else "Download was interrupted. Start it again from the episode list.",
+                            error = when {
+                                complete || canResume -> null
+                                failed != null -> failed
+                                else -> "Download was interrupted. Start it again from the episode list."
+                            },
                             sizeBytes = sizeOf(id),
                         )
                         restored += item
@@ -143,7 +156,7 @@ object Downloads {
             }
             // Unfinished episodes carry on where they stopped (resolved afresh).
             resumable.forEach { (item, origin) -> start(item, resolverFor(origin), resumed = true) }
-            if (resumable.isNotEmpty()) DownloadResumeWorker.schedule(appCtx)
+            if (resumable.isNotEmpty()) DownloadResumeWorker.reschedule(appCtx)
         }
     }
 
@@ -166,7 +179,31 @@ object Downloads {
     /** Unfinished downloads that are queued, running or waiting to resume. */
     fun hasPending(): Boolean = withItems { any { it.status == Status.QUEUED || it.status == Status.DOWNLOADING } }
 
+    /** An episode is downloading, or ready to (not parked for a pause, the network or the app). */
+    fun busy(): Boolean = withItems { any { (it.status == Status.QUEUED || it.status == Status.DOWNLOADING) && !queue.parked(it.id) } }
+
+    /** The earliest moment a parked episode continues on its own, or null. */
+    fun nextWake(): Long? = queue.nextWake()
+
+    /** Whether an episode waits for the network (WorkManager's network constraint covers it). */
+    fun waitingForNetwork(): Boolean = queue.waitingForNetwork()
+
+    /**
+     * The app is in front (MainActivity, after its sources are attached): episodes
+     * waiting for it (AnimePahe, AniChan or Miruro resolved without the app) continue.
+     */
+    fun resumeWaiting() {
+        appVisible = true
+    }
+
+    /** The app went to the background: a source that needs it waits instead of failing. */
+    fun appHidden() {
+        appVisible = false
+    }
+
     fun remove(id: String) {
+        // Its wait (the job is cancelled below) and any rate-limit hold it set end with it.
+        queue.forget(id)
         withItems { removeAll { it.id == id } }
         val generation = nextGeneration.incrementAndGet()
         val job = synchronized(jobs) {
@@ -202,6 +239,8 @@ object Downloads {
 
     /** Finds an episode again from its persisted origin and resolves it, as the first run did. */
     private fun resolverFor(origin: EpisodeOrigin): suspend () -> Source = {
+        // Without the app, a source that needs it can't be resolved: wait for it instead of failing.
+        if (waitsForApp(origin.providerId)) throw EpisodeQueue.NeedsAppException()
         val series = Providers.registry.resume(origin.providerId, origin.resumeKey, RemoteConfig.current())
             ?: throw Exception("Couldn't find this episode's source again. Start it again from the episode list.")
         val episode = series.episodes.firstOrNull { kotlin.math.abs(it.number - origin.episode) < 0.01f }
@@ -209,8 +248,7 @@ object Downloads {
         sourceOf(episode.resolve(PlaybackPreferences(origin.preferHardSub), origin.variantId))
     }
 
-    private const val SUBTITLE_FILE = "subs.vtt"
-    private const val MAX_SUBTITLE_BYTES = 2 * 1024 * 1024
+    private const val SUBTITLE_FILE = HlsDownload.CAPTION_FILE
 
     /** Captions saved beside a downloaded episode, if any. */
     fun localSubtitle(playlist: File): File? = File(playlist.parentFile, SUBTITLE_FILE).takeIf { it.isFile }
@@ -248,7 +286,12 @@ object Downloads {
                 true
             }
         }
-        if (!queued) return
+        if (!queued) {
+            // Asking again for an episode parked on a pause starts it now instead of waiting (and lifts
+            // its hold). One waiting for the network still waits for it.
+            queue.wake(id)
+            return
+        }
         start(item, resolve, resumed = false)
     }
 
@@ -262,9 +305,8 @@ object Downloads {
             if (jobs[id]?.isActive == true) return
             operationGeneration[id] = generation
         }
-        val job = scope.launch(start = CoroutineStart.LAZY) {
-            queueLock.withLock { run(item, resolve, resumed) }
-        }
+        // The queue takes its lock for each turn itself, and waits without it.
+        val job = scope.launch(start = CoroutineStart.LAZY) { queue.run(item, resolve, resumed) }
         val registered = synchronized(jobs) {
             if (operationGeneration[id] == generation) {
                 jobs[id] = job
@@ -280,62 +322,41 @@ object Downloads {
         if (registered) job.start() else job.cancel()
     }
 
-    /** One download from first resolve to DONE or FAILED, waiting and resolving again as needed. */
-    private suspend fun run(item: Item, resolve: suspend () -> Source, resumed: Boolean) {
-        val id = item.id
-        setStatus(id, Status.DOWNLOADING, currentProgress(id))
-        var origin: EpisodeOrigin? = readOrigin(id)
-        var reResolves = 0
-        try {
-            // Persist metadata first so a process/device restart can surface
-            // (and resume) an interrupted item instead of leaking invisible files.
-            writeMeta(id, item.animeId, item.episode, item.title, item.cover, origin, currentProgress(id))
-            while (true) {
-                if (resumed || reResolves > 0) awaitNetwork(id)
-                val capture = OriginCapture()
-                val source = try {
-                    withContext(capture) { resolve() }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    // Offline while resolving: wait for the network, then try again.
-                    if (!online()) { awaitNetwork(id); continue }
-                    throw e
-                }
-                capture.origin?.let { found ->
-                    if (found != origin) {
-                        origin = found
-                        writeMeta(id, item.animeId, item.episode, item.title, item.cover, origin, currentProgress(id))
-                    }
-                }
-                setStatus(id, Status.DOWNLOADING, currentProgress(id))
-                when (val outcome = download(id, source, reResolves, System.currentTimeMillis()) { p -> setStatus(id, Status.DOWNLOADING, p) }) {
-                    is HlsDownload.Outcome.Done -> break
-                    is HlsDownload.Outcome.ReResolve -> {
-                        reResolves = if (outcome.progressed) 1 else reResolves + 1
-                        continue
-                    }
-                    is HlsDownload.Outcome.Pause -> {
-                        if (outcome.progressed) reResolves = 0
-                        waitOut(id, outcome)
-                        // The next pass resolves the stream again: signed URLs may have expired meanwhile.
-                        continue
-                    }
-                }
-            }
-            withItems {
-                val i = indexOfFirst { it.id == id }
-                if (i >= 0) this[i] = this[i].copy(status = Status.DONE, progress = 100, error = null, sizeBytes = sizeOf(id))
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            val message = e.message?.replace(Regex("https?://\\S+"), "the media server") ?: "The download failed. Start it again to continue."
-            // The saved pieces stay: asking for the episode again continues from them.
-            setStatus(id, Status.FAILED, currentProgress(id), message)
-            writeProgress(id)
-        }
+    /** Without the app in front, whether [providerId] can't resolve: AnimePahe needs its Activity, AniChan and Miruro their WebView session. */
+    private fun waitsForApp(providerId: String?): Boolean {
+        if (providerId == null || appVisible) return false
+        if (providerId == "animepahe") return !Pahe.attached()
+        return Providers.registry.enabled(providerId, RemoteConfig.current())?.access != null
     }
+
+    /** The queue (one episode at a time, waits parked outside it); this object is its Android host. */
+    private val queue = EpisodeQueue(object : EpisodeQueue.Host {
+        override fun now() = System.currentTimeMillis()
+        override suspend fun sleep(ms: Long) = delay(ms)
+        override fun online() = NetworkWatch.online()
+        override suspend fun awaitOnline() = NetworkWatch.awaitOnline()
+        override fun appVisible() = appVisible
+        override fun waitsForApp(providerId: String?) = Downloads.waitsForApp(providerId)
+        override fun show(id: String, status: Status, progress: Int, error: String?) {
+            if (status == Status.DONE) {
+                withItems {
+                    val i = indexOfFirst { it.id == id }
+                    if (i >= 0) this[i] = this[i].copy(status = Status.DONE, progress = 100, error = null, sizeBytes = sizeOf(id))
+                }
+            } else setStatus(id, status, progress, error)
+        }
+        override fun progress(id: String) = currentProgress(id)
+        override suspend fun download(id: String, source: Source, reResolves: Int, resolvedAt: Long) =
+            Downloads.download(id, source, reResolves, resolvedAt) { p -> setStatus(id, Status.DOWNLOADING, p) }
+        override fun readOrigin(id: String) = Downloads.readOrigin(id)
+        override fun readStall(id: String) = Downloads.readStall(id)
+        override fun writeMeta(item: Item, origin: EpisodeOrigin?, stall: EpisodeQueue.Stall) =
+            Downloads.writeMeta(item.id, item.animeId, item.episode, item.title, item.cover, origin, currentProgress(item.id), stall)
+        override fun writeStall(id: String, stall: EpisodeQueue.Stall) = updateMeta(id) { it.putStall(stall) }
+        override fun writeFailure(id: String, message: String) = updateMeta(id) { it.put("progress", currentProgress(id)).put("failed", message) }
+        override fun writeProgress(id: String) = Downloads.writeProgress(id)
+        override suspend fun parked() = DownloadResumeWorker.reschedule(appCtx)
+    })
 
     /** How much of an unfinished download its ledger says is saved (0..99). */
     private fun savedProgress(dir: File): Int? = runCatching {
@@ -345,38 +366,9 @@ object Downloads {
 
     private fun currentProgress(id: String): Int = withItems { firstOrNull { it.id == id }?.progress ?: 0 }
 
-    /** Waits until a paused download may continue; it shows as queued meanwhile. */
-    private suspend fun waitOut(id: String, pause: HlsDownload.Outcome.Pause) {
-        val p = currentProgress(id)
-        val label = when (pause.reason) {
-            DownloadResume.PauseReason.NETWORK -> "Waiting for the network"
-            DownloadResume.PauseReason.RATE_LIMIT -> "The server asked to wait"
-            DownloadResume.PauseReason.SERVER -> "The server is busy"
-        } + if (p > 0) " · $p% saved" else ""
-        setStatus(id, Status.QUEUED, p, label)
-        writeProgress(id)
-        // Should the process die while waiting, the worker carries on once there's a network.
-        DownloadResumeWorker.schedule(appCtx, pause.resumeAt?.let { it - System.currentTimeMillis() } ?: 0L)
-        pause.resumeAt?.let { at -> delay((at - System.currentTimeMillis()).coerceAtLeast(0)) }
-        awaitNetwork(id)
-        setStatus(id, Status.DOWNLOADING, p)
-    }
-
     // ── Network ─────────────────────────────────────────────────────────────
 
     private fun watchNetwork() = NetworkWatch.init(appCtx)
-
-    private fun online(): Boolean = NetworkWatch.online()
-
-    /** Returns once a network is up (at once when it already is). */
-    private suspend fun awaitNetwork(id: String) {
-        if (online()) return
-        val p = currentProgress(id)
-        setStatus(id, Status.QUEUED, p, "Waiting for the network" + if (p > 0) " · $p% saved" else "")
-        DownloadResumeWorker.schedule(appCtx)
-        NetworkWatch.awaitOnline()
-        setStatus(id, Status.DOWNLOADING, p)
-    }
 
     // ── Metadata ────────────────────────────────────────────────────────────
 
@@ -399,9 +391,30 @@ object Downloads {
     private fun readOrigin(id: String): EpisodeOrigin? =
         runCatching { originOf(JSONObject(File(folder(id), "meta.json").readText())) }.getOrNull()
 
-    private fun writeMeta(id: String, animeId: Int, episode: Float, title: String, cover: String?, origin: EpisodeOrigin?, progress: Int) {
+    /** The stall streak (and a pause still to wait out) a resumed episode carries on with. */
+    private fun readStall(id: String): EpisodeQueue.Stall = runCatching {
+        val o = JSONObject(File(folder(id), "meta.json").readText())
+        val resumeAt = if (o.has("resumeAt")) o.getLong("resumeAt").takeIf { it > System.currentTimeMillis() } else null
+        EpisodeQueue.Stall(
+            reResolves = o.optInt("reResolves", 0).coerceAtLeast(0),
+            stalledSince = if (o.has("stalledSince")) o.getLong("stalledSince") else null,
+            resumeAt = resumeAt,
+            reason = resumeAt?.let { DownloadResume.PauseReason.entries.firstOrNull { r -> r.wire == o.optString("pauseReason") } },
+        )
+    }.getOrDefault(EpisodeQueue.Stall())
+
+    private fun JSONObject.putStall(stall: EpisodeQueue.Stall): JSONObject {
+        listOf("reResolves", "stalledSince", "resumeAt", "pauseReason").forEach { remove(it) }
+        if (stall.reResolves > 0) put("reResolves", stall.reResolves)
+        stall.stalledSince?.let { put("stalledSince", it) }
+        stall.resumeAt?.let { put("resumeAt", it) }
+        stall.reason?.let { put("pauseReason", it.wire) }
+        return this
+    }
+
+    private fun writeMeta(id: String, animeId: Int, episode: Float, title: String, cover: String?, origin: EpisodeOrigin?, progress: Int, stall: EpisodeQueue.Stall) {
         val o = JSONObject().put("id", id).put("animeId", animeId).put("episode", episode.toDouble())
-            .put("title", title).put("cover", cover ?: "").put("progress", progress)
+            .put("title", title).put("cover", cover ?: "").put("progress", progress).putStall(stall)
         origin?.let {
             o.put("providerId", it.providerId).put("resumeKey", it.resumeKey).put("preferHardSub", it.preferHardSub)
             it.variantId?.let { variant -> o.put("variantId", variant) }
@@ -417,46 +430,33 @@ object Downloads {
     }
 
     /** Records the progress shown after a restart (best-effort). */
-    private fun writeProgress(id: String) {
+    private fun writeProgress(id: String) = updateMeta(id) { it.put("progress", currentProgress(id)) }
+
+    /** Changes some fields of [id]'s meta.json (best-effort). */
+    private fun updateMeta(id: String, change: (JSONObject) -> JSONObject) {
         runCatching {
             val file = File(folder(id), "meta.json")
-            val o = JSONObject(file.readText()).put("progress", currentProgress(id))
+            val o = change(JSONObject(file.readText()))
             val temp = File(folder(id), "meta.json.part")
             temp.writeText(o.toString())
             if (!temp.renameTo(file)) temp.delete()
         }
     }
 
-    /**
-     * Soft-sub episodes are unwatchable offline without their captions, so save
-     * them beside the video. Best-effort: a caption failure never fails the
-     * already-complete video download.
-     */
-    private suspend fun saveSubtitle(id: String, url: String, referer: String, ua: String, conservativeNetwork: Boolean) = withContext(Dispatchers.IO) {
-        runCatching {
-            if (java.net.URI(url).scheme != "https") return@runCatching
-            if (conservativeNetwork) delay(500)
-            val bytes = runInterruptible { DownloadTransport.bytes(url, referer, ua, maxRetries = if (conservativeNetwork) 0 else 2) }
-            if (bytes.size > MAX_SUBTITLE_BYTES) return@runCatching
-            if (!String(bytes, Charsets.UTF_8).trimStart('﻿').trimStart().startsWith("WEBVTT")) return@runCatching
-            val dir = folder(id)
-            val temp = File(dir, "$SUBTITLE_FILE.part")
-            temp.writeBytes(bytes)
-            if (!temp.renameTo(File(dir, SUBTITLE_FILE))) temp.delete()
-        }.onFailure { error -> if (error is CancellationException) throw error }
-    }
-
     // ── HLS download ────────────────────────────────────────────────────────────
 
+    /**
+     * One pass at the stream, then its captions: soft-sub episodes are unwatchable
+     * offline without them, so they're saved beside the video, best-effort.
+     */
     private suspend fun download(
         id: String, source: Source, reResolves: Int, resolvedAt: Long, onProgress: (Int) -> Unit,
     ): HlsDownload.Outcome = withContext(Dispatchers.IO) {
         val fetcher = HlsDownload.Fetcher(
             bytes = { url -> DownloadTransport.attemptBytes(url, source.referer, source.userAgent) },
             toFile = { url, file -> DownloadTransport.attemptToFile(url, file, source.referer, source.userAgent) },
+            online = NetworkWatch::online,
         )
-        HlsDownload.run(folder(id).apply { mkdirs() }, source.url, source.conservativeNetwork, reResolves, resolvedAt, fetcher, onProgress) {
-            source.subtitleUrl?.let { saveSubtitle(id, it, source.referer, source.userAgent, source.conservativeNetwork) }
-        }
+        HlsDownload.run(folder(id).apply { mkdirs() }, source.url, source.conservativeNetwork, reResolves, resolvedAt, fetcher, onProgress, source.subtitleUrl)
     }
 }

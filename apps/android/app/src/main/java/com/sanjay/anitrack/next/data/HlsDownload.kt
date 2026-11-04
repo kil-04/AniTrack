@@ -11,14 +11,15 @@ import java.util.concurrent.atomic.AtomicInteger
  * The HLS part of [Downloads], free of Android so it runs in unit tests with
  * fake fetchers: reads the playlist chain, plans the pieces with
  * [DownloadResume], keeps what an earlier run saved for the same rendition,
- * fetches the rest with the shared retry rules and writes the local playlist.
+ * fetches the rest with the shared retry rules, saves the captions
+ * (best-effort) and writes the local playlist.
  */
 internal object HlsDownload {
     private const val SEGMENT_WORKERS = 6
-    /** A rate-sensitive (conservative) stream is never retried at once: it waits at least this long. */
-    private const val CONSERVATIVE_PAUSE_MS = 30_000L
+    const val CAPTION_FILE = "subs.vtt"
+    private const val MAX_CAPTION_BYTES = 2 * 1024 * 1024
 
-    /** One request's answer; [status] is 0 when none came (offline, reset, timeout). */
+    /** One request's answer; [status] is 0 when none came (offline, reset, refused, timeout). */
     class Attempt(val status: Int, val retryAfter: String?, val bytes: Long = 0)
 
     /** How the run reaches the network (and the clock), replaced by fakes in tests. */
@@ -27,13 +28,18 @@ internal object HlsDownload {
         val toFile: (String, File) -> Attempt,
         val wait: suspend (Long) -> Unit = { delay(it) },
         val now: () -> Long = System::currentTimeMillis,
+        /** Whether the device has a network: only without one is a missing answer the network's fault. */
+        val online: () -> Boolean = { true },
     )
 
     private data class Dl(val url: String, val file: File, val piece: DownloadResume.Piece)
 
     sealed class Outcome {
         object Done : Outcome()
-        /** The stream expired or was refused: resolve it again and continue. */
+        /**
+         * The stream expired or was refused: resolve it again and continue. [progressed]: this run
+         * saved a media piece (keys don't count, nor does a run that discarded another rendition's pieces).
+         */
         data class ReResolve(val progressed: Boolean) : Outcome()
         data class Pause(val reason: DownloadResume.PauseReason, val resumeAt: Long?, val progressed: Boolean) : Outcome()
     }
@@ -44,7 +50,9 @@ internal object HlsDownload {
     /** Per-run request state shared by the segment workers. */
     private class RunState(val reResolves: Int, val resolvedAt: Long, val conservative: Boolean) {
         @Volatile var cooldownUntil = 0L
-        @Volatile var progressed = false
+        @Volatile var savedMedia = false
+        @Volatile var startedOver = false
+        val progressed get() = savedMedia && !startedOver
     }
 
     /** One request with the shared retry rules; throws [Interrupt] when the run has to stop. */
@@ -59,17 +67,11 @@ internal object HlsDownload {
             if (state.conservative) fetcher.wait(500)
             val (result, value) = runInterruptible { attempt() }
             if (result.status in 200..299 && value != null) return value
-            val failure = if (result.status == 0) DownloadResume.Failure.Network else DownloadResume.Failure.Http(result.status, result.retryAfter)
+            val failure = failureOf(result, fetcher)
             val now = fetcher.now()
             var step = DownloadResume.nextStep(failure, failures, state.reResolves, now)
-            if (state.conservative && step is DownloadResume.Step.Retry) {
-                step = when {
-                    failure is DownloadResume.Failure.Network -> DownloadResume.Step.Pause(DownloadResume.PauseReason.NETWORK, null)
-                    (failure as DownloadResume.Failure.Http).status == 429 || failure.status == 503 ->
-                        DownloadResume.Step.Pause(DownloadResume.PauseReason.RATE_LIMIT, now + maxOf(step.delayMs, CONSERVATIVE_PAUSE_MS))
-                    else -> DownloadResume.Step.Pause(DownloadResume.PauseReason.SERVER, now + maxOf(step.delayMs, CONSERVATIVE_PAUSE_MS))
-                }
-            }
+            // A rate-sensitive stream is never retried at once: it pauses, longer with each stall.
+            if (state.conservative) step = DownloadResume.conservativeStep(step, failure, state.reResolves, now)
             when (step) {
                 is DownloadResume.Step.Retry -> {
                     val http = failure as? DownloadResume.Failure.Http
@@ -83,14 +85,55 @@ internal object HlsDownload {
         }
     }
 
+    private fun failureOf(result: Attempt, fetcher: Fetcher): DownloadResume.Failure =
+        if (result.status == 0) DownloadResume.Failure.Network(fetcher.online()) else DownloadResume.Failure.Http(result.status, result.retryAfter)
+
+    /**
+     * Captions, best-effort ([DownloadResume.captionStep]): a couple of short retries, never a
+     * pause for the server or a fresh stream; then the episode finishes without them. Offline,
+     * the run stops for the network instead (keeping every piece), so a dropped connection doesn't
+     * cost a soft-subbed episode its captions.
+     */
+    private suspend fun saveCaptions(state: RunState, fetcher: Fetcher, url: String, dir: File) {
+        if (runCatching { java.net.URI(url).scheme }.getOrNull() != "https") return
+        var attempt = 0
+        while (true) {
+            if (state.conservative) fetcher.wait(500)
+            val (result, body) = try {
+                runInterruptible { fetcher.bytes(url) }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                return // an address the transport refuses: no captions
+            }
+            if (result.status in 200..299 && body != null) {
+                val text = String(body, Charsets.UTF_8)
+                if (body.size <= MAX_CAPTION_BYTES && text.trimStart('\uFEFF').trimStart().startsWith("WEBVTT")) {
+                    val temp = File(dir, "$CAPTION_FILE.part")
+                    runCatching {
+                        temp.writeBytes(body)
+                        if (!temp.renameTo(File(dir, CAPTION_FILE))) temp.delete()
+                    }.onFailure { temp.delete() }
+                }
+                return
+            }
+            when (val step = DownloadResume.captionStep(failureOf(result, fetcher), attempt, state.conservative, fetcher.now())) {
+                is DownloadResume.Step.Retry -> { fetcher.wait(step.delayMs); attempt++ }
+                is DownloadResume.Step.Pause -> throw Interrupt(step)
+                else -> return
+            }
+        }
+    }
+
     /**
      * Downloads the HLS stream at [url] into [dir], keeping what an earlier run
-     * saved for the same rendition. Returns Done, or why it stopped (its files
-     * stay); throws for a failure resuming can't help.
+     * saved for the same rendition, then its captions ([captionUrl], best-effort).
+     * Returns Done, or why it stopped (its files stay); throws for a failure
+     * resuming can't help. [reResolves]: runs in a row before this one that stalled.
      */
     suspend fun run(
         dir: File, url: String, conservative: Boolean, reResolves: Int, resolvedAt: Long,
-        fetcher: Fetcher, onProgress: (Int) -> Unit, afterPieces: suspend () -> Unit = {},
+        fetcher: Fetcher, onProgress: (Int) -> Unit, captionUrl: String? = null,
     ): Outcome {
         val state = RunState(reResolves, resolvedAt, conservative)
         try {
@@ -176,13 +219,16 @@ internal object HlsDownload {
                 val tag = DownloadResume.pieceTag(d.piece, head?.head ?: ByteArray(0))
                 if (d.piece.kind == DownloadResume.Kind.KEY && !DownloadResume.keyStillMatches(ledger, index, tag)) throw KeyChanged()
                 synchronized(ledgerLock) { ledgerFile.appendText(DownloadResume.ledgerLine(index, d.file.name, d.file.length(), tag)) }
-                state.progressed = true
+                // Keys are fetched again every run: only media counts as progress.
+                if (d.piece.kind != DownloadResume.Kind.KEY) state.savedMedia = true
             }
 
             var pass = 0
             while (true) {
                 val previous = if (pass == 0 && ledgerFile.isFile) DownloadResume.parseLedger(ledgerFile.readText()) else null
                 val plan = DownloadResume.resumePlan(pieces, rendition, previous) { name -> readHead(File(dir, name)) }
+                // Discarding what an earlier run saved (another rendition, a changed key) isn't progress.
+                if (plan.restart && (pass > 0 || (previous?.pieces?.size ?: 0) > 0)) state.startedOver = true
                 if (plan.restart) {
                     // Another rendition (or none recorded): never mix its files into this one.
                     dir.listFiles().orEmpty().filter { PIECE_FILE.matches(it.name) || it.name.endsWith(".part") }.forEach { it.delete() }
@@ -219,7 +265,7 @@ internal object HlsDownload {
                 }
                 break
             }
-            afterPieces()
+            captionUrl?.let { saveCaptions(state, fetcher, it, dir) }
             // Write the rewritten local playlist last, so a partial download is
             // detectable (no index.m3u8 = incomplete).
             val playlistTemp = File(dir, "index.m3u8.part")

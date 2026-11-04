@@ -31,8 +31,25 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
+/**
+ * A download file couldn't be written (storage full, no permission, a failing
+ * close): a hard failure with a clear message, never mistaken for the network.
+ */
+class StorageException(message: String, cause: Throwable?) : IOException(message, cause)
+
 internal object DownloadTransport {
     private lateinit var appCtx: Context
+
+    /** [error] while writing [file], as a [StorageException] that says whether storage is full. */
+    private fun storageFailure(error: Throwable, file: File): StorageException {
+        if (error is StorageException) return error
+        val full = generateSequence(error) { it.cause }.take(6).any {
+            (it as? android.system.ErrnoException)?.errno == android.system.OsConstants.ENOSPC ||
+                it.message?.contains("ENOSPC") == true || it.message?.contains("No space left", ignoreCase = true) == true
+        }
+        val message = if (full) "There isn't enough free storage for this download." else "AniTrack couldn't save the download files."
+        return StorageException(message, IOException("${file.name}: ${error.message}", error))
+    }
     private val http = OkHttpClient.Builder().callTimeout(120, TimeUnit.SECONDS).build()
 
     fun init(context: Context) {
@@ -370,7 +387,7 @@ internal object DownloadTransport {
         try {
             if (!latch.await(90, TimeUnit.SECONDS)) {
                 request.cancel()
-                throw Exception("request timed out")
+                throw java.net.SocketTimeoutException("request timed out")
             }
         } catch (e: InterruptedException) {
             request.cancel()
@@ -383,14 +400,17 @@ internal object DownloadTransport {
 
     fun text(url: String, ref: String, ua: String, maxRetries: Int = 6): String = String(getBytes(url, ref, ua, maxRetries))
 
-    /**
-     * One request, no retry: the caller decides what a failure means (see
-     * DownloadResume.nextStep). [status] is 0 when the request never got an
-     * answer; a 2xx body is saved to [file] through a .part file.
-     */
     private fun header(headers: Map<String, List<String>>, name: String): String? =
         headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value?.firstOrNull()
 
+    /**
+     * One request, no retry: the caller decides what a failure means (see
+     * DownloadResume.nextStep). [status] is 0 only when the request got no
+     * answer (no route, refused, reset, DNS, TLS, a Cronet network error, a
+     * timeout); a 2xx body is saved to [file] through a .part file. A local
+     * write failure throws [StorageException], and anything else is thrown as
+     * it is, so neither is retried as though it were the network.
+     */
     fun attemptToFile(url: String, file: File, ref: String, ua: String): HlsDownload.Attempt {
         val tmp = File(file.parentFile, file.name + ".part")
         tmp.delete()
@@ -402,9 +422,16 @@ internal object DownloadTransport {
         } catch (e: InterruptedException) {
             tmp.delete()
             throw e
-        } catch (e: Exception) {
+        } catch (e: StorageException) {
+            tmp.delete()
+            throw e
+        } catch (e: IOException) {
+            // The transport's own failures (OkHttp's IOExceptions, Cronet's NetworkException): no answer.
             tmp.delete()
             return HlsDownload.Attempt(0, null)
+        } catch (e: Exception) {
+            tmp.delete()
+            throw e
         }
         if (code !in 200..299) {
             tmp.delete()
@@ -413,7 +440,7 @@ internal object DownloadTransport {
         val size = tmp.length()
         if (!tmp.renameTo(file)) {
             tmp.delete()
-            throw IOException("Could not finalize ${file.name}")
+            throw StorageException("AniTrack couldn't save the download files.", IOException("Could not finalize ${file.name}"))
         }
         return HlsDownload.Attempt(code, null, size)
     }
@@ -436,7 +463,8 @@ internal object DownloadTransport {
             }
         } catch (e: InterruptedException) {
             throw e
-        } catch (e: Exception) {
+        } catch (e: IOException) {
+            // No answer (see attemptToFile); anything else is thrown as it is.
             HlsDownload.Attempt(0, null) to null
         }
     }
@@ -456,14 +484,19 @@ internal object DownloadTransport {
         retryAfter: Array<String?> = arrayOfNulls(1),
     ): Int {
         val latch = CountDownLatch(1)
-        val output = file.outputStream().buffered(64 * 1024)
+        val output = try {
+            file.outputStream().buffered(64 * 1024)
+        } catch (e: IOException) {
+            throw storageFailure(e, file)
+        }
         val finished = AtomicBoolean(false)
         var status = 0
         var failure: Exception? = null
         val finish: (Exception?) -> Unit = { error ->
             if (finished.compareAndSet(false, true)) {
-                failure = error
-                runCatching { output.close() }
+                // Closing flushes the buffer: a full disk can fail here, after every write "succeeded".
+                val closed = runCatching { output.close() }.exceptionOrNull()
+                failure = error ?: closed?.let { storageFailure(it, file) }
                 latch.countDown()
             }
         }
@@ -496,7 +529,11 @@ internal object DownloadTransport {
                     buffer.flip()
                     val bytes = ByteArray(buffer.remaining())
                     buffer.get(bytes)
-                    output.write(bytes)
+                    try {
+                        output.write(bytes)
+                    } catch (e: IOException) {
+                        throw storageFailure(e, file)
+                    }
                     buffer.clear()
                     request.read(buffer)
                 } catch (e: Exception) {
@@ -541,7 +578,7 @@ internal object DownloadTransport {
         try {
             if (!latch.await(90, TimeUnit.SECONDS)) {
                 request.cancel()
-                finish(IOException("timeout for $url"))
+                finish(java.net.SocketTimeoutException("timeout for $url"))
             }
         } catch (e: InterruptedException) {
             request.cancel()
@@ -568,8 +605,30 @@ internal object DownloadTransport {
             retryAfter[0] = response.header("Retry-After")
             if (response.isSuccessful) {
                 val body = response.body ?: throw IOException("empty response for $url")
-                body.byteStream().use { input ->
-                    file.outputStream().buffered(64 * 1024).use { output -> input.copyTo(output, 64 * 1024) }
+                // Reading is the network's; writing (and the final flush) is the storage's.
+                val output = try {
+                    file.outputStream().buffered(64 * 1024)
+                } catch (e: IOException) {
+                    throw storageFailure(e, file)
+                }
+                var failed = true
+                try {
+                    body.byteStream().use { input ->
+                        val buffer = ByteArray(64 * 1024)
+                        while (true) {
+                            val n = input.read(buffer)
+                            if (n < 0) break
+                            try {
+                                output.write(buffer, 0, n)
+                            } catch (e: IOException) {
+                                throw storageFailure(e, file)
+                            }
+                        }
+                    }
+                    failed = false
+                } finally {
+                    val closed = runCatching { output.close() }.exceptionOrNull()
+                    if (!failed && closed != null) throw storageFailure(closed, file)
                 }
             }
             return response.code

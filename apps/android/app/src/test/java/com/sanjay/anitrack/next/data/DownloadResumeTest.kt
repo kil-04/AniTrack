@@ -141,6 +141,11 @@ class DownloadResumeTest {
         else -> Step.Fail
     }
 
+    private fun failure(f: JSONObject): Failure =
+        if (f.optBoolean("network")) Failure.Network(f.getBoolean("online")) else Failure.Http(f.getInt("status"), f.str("retryAfter"))
+
+    private fun stopReason(wire: String) = DownloadResume.StopReason.entries.first { it.wire == wire }
+
     @Test fun backoffRetryAfterAndTheStepAfterAFailure() {
         val backoff = cases.getJSONArray("backoff")
         for (i in 0 until backoff.length()) {
@@ -149,12 +154,43 @@ class DownloadResumeTest {
         }
         cases.getJSONArray("retryAfter").objects().forEach {
             val expected = if (it.isNull("ms")) null else it.getLong("ms")
-            assertEquals(it.str("header").toString(), expected, DownloadResume.retryAfterMs(it.str("header"), it.getLong("now")))
+            assertEquals(it.str("why") ?: it.str("header").toString(), expected, DownloadResume.retryAfterMs(it.str("header"), it.getLong("now")))
         }
         cases.getJSONArray("steps").objects().forEach {
-            val f = it.getJSONObject("failure")
-            val failure = if (f.optBoolean("network")) Failure.Network else Failure.Http(f.getInt("status"), f.str("retryAfter"))
+            val failure = failure(it.getJSONObject("failure"))
             assertEquals(it.getString("why"), step(it.getJSONObject("step")), DownloadResume.nextStep(failure, it.getInt("attempt"), it.getInt("reResolves"), it.getLong("now")))
+        }
+        cases.getJSONArray("conservativeSteps").objects().forEach {
+            assertEquals(
+                it.getString("why"), step(it.getJSONObject("result")),
+                DownloadResume.conservativeStep(step(it.getJSONObject("step")), failure(it.getJSONObject("failure")), it.getInt("reResolves"), it.getLong("now")),
+            )
+        }
+    }
+
+    @Test fun everyStopHasAFinalState() {
+        cases.getJSONArray("afterStop").objects().forEach {
+            val v = it.getJSONObject("verdict")
+            val expected = if (v.getString("action") == "fail") DownloadResume.Verdict.Fail(stopReason(v.getString("reason")))
+                else DownloadResume.Verdict.Wait(v.getInt("reResolves"), if (v.isNull("stalledSince")) null else v.getLong("stalledSince"))
+            val since = if (it.isNull("stalledSince")) null else it.getLong("stalledSince")
+            assertEquals(
+                it.getString("why"), expected,
+                DownloadResume.afterStop(stopReason(it.getString("reason")), it.getInt("reResolves"), since, it.getBoolean("progressed"), it.getLong("now")),
+            )
+        }
+        cases.getJSONArray("stalledMessages").objects().forEach {
+            val item = DownloadResume.Subject.entries.first { s -> s.wire == it.getString("item") }
+            assertEquals(it.getString("message"), DownloadResume.stalledMessage(stopReason(it.getString("reason")), item))
+        }
+    }
+
+    @Test fun captionsAreBestEffort() {
+        cases.getJSONArray("captionSteps").objects().forEach {
+            assertEquals(
+                it.getString("why"), step(it.getJSONObject("step")),
+                DownloadResume.captionStep(failure(it.getJSONObject("failure")), it.getInt("attempt"), it.getBoolean("conservative"), it.getLong("now")),
+            )
         }
     }
 

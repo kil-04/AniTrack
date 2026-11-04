@@ -186,6 +186,14 @@ object MangaDownloads {
     /** Chapters queued, downloading or waiting to resume (main thread). */
     fun hasPending(): Boolean = items.any { it.status == Status.QUEUED || it.status == Status.DOWNLOADING }
 
+    /** A chapter is downloading or ready to (main thread). */
+    fun busy(): Boolean = hasPending()
+
+    /** When a waiting chapter continues on its own, or null. */
+    fun nextWake(): Long? = null
+
+    fun waitingForNetwork(): Boolean = false
+
     fun statusOf(mangaId: Int, chapterId: String): Item? = items.firstOrNull { it.key == keyOf(mangaId, chapterId) }
 
     fun enqueue(manga: Manga, source: MangaSource, title: SourceTitle, chapter: MangaChapter) {
@@ -345,9 +353,9 @@ object MangaDownloads {
                 throw e
             } catch (e: MangaSourceException) {
                 val status = e.status ?: throw e
-                if (status == 0) DownloadResume.Failure.Network else DownloadResume.Failure.Http(status, e.retryAfter)
+                if (status == 0) DownloadResume.Failure.Network(NetworkWatch.online()) else DownloadResume.Failure.Http(status, e.retryAfter)
             } catch (e: java.io.IOException) {
-                DownloadResume.Failure.Network
+                DownloadResume.Failure.Network(NetworkWatch.online())
             }
             when (val step = DownloadResume.nextStep(failure, attempt, reResolves, System.currentTimeMillis())) {
                 is DownloadResume.Step.Retry -> { delay(step.delayMs); attempt++ }

@@ -56,7 +56,15 @@ const pageUrls = (token, n) => Array.from({ length: n }, (_, i) => ({ url: `http
 const indexOf = (url) => Number(/\/p(\d+)\.jpg/.exec(url)[1]) - 1;
 const image = (i) => new Response(jpeg(i), { headers: { "content-type": "image/jpeg" } });
 const dir = (chapterId) => path.join(storageRoot, "manga_downloads", String(manga.id), chapterId);
-async function settled(key, timeout = 4000) {
+/** Polls until [condition] holds (timing differs under load and on Windows; never assert a moment). */
+async function waitFor(condition, what, timeout = 8000) {
+  const started = Date.now();
+  while (!(await condition())) {
+    if (Date.now() - started > timeout) throw new Error(`Timed out waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+async function settled(key, timeout = 8000) {
   const started = Date.now();
   for (;;) {
     const item = (await M.listMangaDownloads()).find((d) => d.key === key);
@@ -104,13 +112,14 @@ test("a chapter waits for the network to come back and continues from the first 
     const i = indexOf(url);
     if (!harness.online) throw new TypeError("net::ERR_INTERNET_DISCONNECTED");
     fetched.push(i);
-    if (i === 2) {
-      harness.online = false; // the connection drops after page 3
-      setTimeout(() => { harness.online = true; }, 150);
-    }
+    if (i === 2) harness.online = false; // the connection drops after page 3
     return image(i);
   };
   assert.equal(await M.downloadChapter(manga, title, chapter(id, 2)), true);
+  // Offline until it shows it is waiting: no race with its retries.
+  const waitingNow = () => events.some((e) => e.item?.key === `${manga.id}:${id}` && e.item.status === "queued" && /network/.test(e.item.error ?? ""));
+  await waitFor(waitingNow, "the network wait");
+  harness.online = true;
   const done = await settled(`${manga.id}:${id}`);
   assert.equal(done.status, "done");
   assert.deepEqual(new Set(fetched), new Set([0, 1, 2, 3, 4, 5]));

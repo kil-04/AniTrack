@@ -158,6 +158,14 @@ object NovelDownloads {
         return lock.withLock { states.values.any { it.queue.isNotEmpty() || it.current != null } }
     }
 
+    /** A chapter is downloading or ready to. */
+    suspend fun busy(): Boolean = hasPending()
+
+    /** When a waiting chapter continues on its own, or null. */
+    fun nextWake(): Long? = null
+
+    fun waitingForNetwork(): Boolean = false
+
     fun stateOf(source: NovelSourceId, id: String): Title? = titles.firstOrNull { it.source == source && it.titleId == id }
 
     /** A title's chapter ids saved on disk. */
@@ -330,7 +338,7 @@ object NovelDownloads {
             }
             val status = error.status ?: throw error
             if (status != 0 && status != 429 && status != 503 && status != 408 && status !in 500..599) throw error
-            val failure = if (status == 0) DownloadResume.Failure.Network else DownloadResume.Failure.Http(status, error.retryAfter)
+            val failure = if (status == 0) DownloadResume.Failure.Network(NetworkWatch.online()) else DownloadResume.Failure.Http(status, error.retryAfter)
             when (val step = DownloadResume.nextStep(failure, attempt, 0, System.currentTimeMillis())) {
                 is DownloadResume.Step.Retry -> { delay(step.delayMs); attempt++ }
                 is DownloadResume.Step.Pause -> {

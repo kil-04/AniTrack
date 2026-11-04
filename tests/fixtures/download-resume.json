@@ -1,5 +1,5 @@
 {
-  "_comment": "Shared cases for packages/shared/download-resume.ts (tests/download-resume.test.mjs) and DownloadResume.kt (DownloadResumeTest.kt). A head is 'ts:N' (N bytes with the TS sync byte every 188), 'zero:N', 'hex:…' or 'text:…'.",
+  "_comment": "Shared cases for packages/shared/download-resume.ts (tests/download-resume.test.mjs) and DownloadResume.kt (DownloadResumeTest.kt). A head is 'ts:N' (N bytes with the TS sync byte every 188), 'zero:N', 'hex:…' or 'text:…'. A network failure carries 'online': whether the device had a network when the request gave up.",
   "fnv64": [
     {
       "text": "",
@@ -359,16 +359,43 @@
       "why": "encrypted, whole AES blocks",
       "kind": "segment",
       "tag": "enc",
-      "head": "zero:1504",
+      "head": "hex:3f8a6c21d4e5f60718293a4b5c6d7e8f9a0b1c2d3e4f50617283940a1b2c3d4e",
       "size": 1503232,
       "recorded": 1503232,
       "valid": true
     },
     {
-      "why": "encrypted, not whole AES blocks",
+      "why": "encrypted but zero-filled (a power cut kept the rename, not the data)",
       "kind": "segment",
       "tag": "enc",
       "head": "zero:1504",
+      "size": 1503232,
+      "recorded": 1503232,
+      "valid": false
+    },
+    {
+      "why": "encrypted with some zero bytes is still kept",
+      "kind": "segment",
+      "tag": "enc",
+      "head": "hex:00000000000000000000000000000001",
+      "size": 16,
+      "recorded": 16,
+      "valid": true
+    },
+    {
+      "why": "a short zero-filled encrypted piece",
+      "kind": "segment",
+      "tag": "enc",
+      "head": "zero:16",
+      "size": 16,
+      "recorded": 16,
+      "valid": false
+    },
+    {
+      "why": "encrypted, not whole AES blocks",
+      "kind": "segment",
+      "tag": "enc",
+      "head": "hex:3f8a6c21d4e5f60718293a4b5c6d7e8f9a0b1c2d3e4f50617283940a1b2c3d4e",
       "size": 1503233,
       "recorded": 1503233,
       "valid": false
@@ -417,6 +444,24 @@
       "size": 9000,
       "recorded": 9000,
       "valid": true
+    },
+    {
+      "why": "raw bytes, zero-filled after a power cut",
+      "kind": "segment",
+      "tag": "raw",
+      "head": "zero:1504",
+      "size": 9000,
+      "recorded": 9000,
+      "valid": false
+    },
+    {
+      "why": "a raw init segment, zero-filled",
+      "kind": "init",
+      "tag": "raw",
+      "head": "zero:16",
+      "size": 16,
+      "recorded": 16,
+      "valid": false
     },
     {
       "why": "unknown tag",
@@ -787,6 +832,69 @@
         ],
         "firstMissing": 0
       }
+    },
+    {
+      "why": "an encrypted segment zero-filled by a power cut is fetched again; the others are kept",
+      "pieces": [
+        {
+          "kind": "key",
+          "url": "https://cdn.example/k.key",
+          "file": "key00.key"
+        },
+        {
+          "kind": "segment",
+          "url": "https://cdn.example/a.ts",
+          "file": "seg00000.ts",
+          "duration": "6.000",
+          "encrypted": true
+        },
+        {
+          "kind": "segment",
+          "url": "https://cdn.example/b.ts",
+          "file": "seg00001.ts",
+          "duration": "6.000",
+          "encrypted": true
+        },
+        {
+          "kind": "segment",
+          "url": "https://cdn.example/c.ts",
+          "file": "seg00002.ts",
+          "duration": "6.000",
+          "encrypted": true
+        }
+      ],
+      "rendition": "2222222222222222",
+      "ledger": "anitrack-ledger v1 2222222222222222 4\n0 key00.key 16 2e373913e5ad677d\n1 seg00000.ts 32 enc\n2 seg00001.ts 32 enc\n3 seg00002.ts 32 enc\n",
+      "disk": {
+        "key00.key": {
+          "size": 16,
+          "head": "text:0123456789abcdef"
+        },
+        "seg00000.ts": {
+          "size": 32,
+          "head": "hex:3f8a6c21d4e5f60718293a4b5c6d7e8f9a0b1c2d3e4f50617283940a1b2c3d4e"
+        },
+        "seg00001.ts": {
+          "size": 32,
+          "head": "zero:32"
+        },
+        "seg00002.ts": {
+          "size": 32,
+          "head": "hex:3f8a6c21d4e5f60718293a4b5c6d7e8f9a0b1c2d3e4f50617283940a1b2c3d4e"
+        }
+      },
+      "plan": {
+        "restart": false,
+        "keep": [
+          1,
+          3
+        ],
+        "fetch": [
+          0,
+          2
+        ],
+        "firstMissing": 2
+      }
     }
   ],
   "keyStillMatches": [
@@ -876,13 +984,116 @@
       "header": null,
       "now": 1793793600000,
       "ms": null
+    },
+    {
+      "why": "RFC 850 date",
+      "header": "Wednesday, 04-Nov-26 12:00:10 GMT",
+      "now": 1793793600000,
+      "ms": 10000
+    },
+    {
+      "why": "RFC 850: a two-digit year over 50 years ahead is last century",
+      "header": "Thursday, 05-Nov-99 12:00:00 GMT",
+      "now": 1793793600000,
+      "ms": 0
+    },
+    {
+      "why": "asctime, single-digit day padded with a space",
+      "header": "Wed Nov  4 12:00:10 2026",
+      "now": 1793793600000,
+      "ms": 10000
+    },
+    {
+      "why": "asctime, two-digit day",
+      "header": "Wed Nov 04 12:00:10 2026",
+      "now": 1793793600000,
+      "ms": 10000
+    },
+    {
+      "why": "names in any case",
+      "header": "wed, 04 nov 2026 12:00:10 gmt",
+      "now": 1793793600000,
+      "ms": 10000
+    },
+    {
+      "why": "the day name isn't checked against the date",
+      "header": "Mon, 04 Nov 2026 12:00:10 GMT",
+      "now": 1793793600000,
+      "ms": 10000
+    },
+    {
+      "why": "ISO 8601 is not an HTTP-date",
+      "header": "2026-11-04T12:00:10Z",
+      "now": 1793793600000,
+      "ms": null
+    },
+    {
+      "why": "a numeric zone is not GMT",
+      "header": "Wed, 04 Nov 2026 12:00:10 +0000",
+      "now": 1793793600000,
+      "ms": null
+    },
+    {
+      "why": "UTC is not GMT",
+      "header": "Wed, 04 Nov 2026 12:00:10 UTC",
+      "now": 1793793600000,
+      "ms": null
+    },
+    {
+      "why": "IMF-fixdate needs a two-digit day",
+      "header": "Wed, 4 Nov 2026 12:00:10 GMT",
+      "now": 1793793600000,
+      "ms": null
+    },
+    {
+      "why": "there is no 31 November",
+      "header": "Wed, 31 Nov 2026 12:00:10 GMT",
+      "now": 1793793600000,
+      "ms": null
+    },
+    {
+      "why": "there is no hour 24",
+      "header": "Wed, 04 Nov 2026 24:00:00 GMT",
+      "now": 1793793600000,
+      "ms": null
+    },
+    {
+      "why": "a leap second isn't accepted",
+      "header": "Wed, 04 Nov 2026 12:00:60 GMT",
+      "now": 1793793600000,
+      "ms": null
+    },
+    {
+      "why": "tabs around delta seconds",
+      "header": "\t15\t",
+      "now": 1793793600000,
+      "ms": 15000
+    },
+    {
+      "why": "leading zeros",
+      "header": "0000000030",
+      "now": 1793793600000,
+      "ms": 30000
+    },
+    {
+      "why": "more than nine digits saturate",
+      "header": "4000000000",
+      "now": 1793793600000,
+      "ms": 999999999000
+    },
+    {
+      "why": "a decimal is neither form",
+      "header": "1.5",
+      "now": 1793793600000,
+      "ms": null
     }
   ],
   "steps": [
     {
       "why": "network drop: retry with backoff",
       "failure": {
-        "network": true
+        "network": true,
+        "online": true
       },
       "attempt": 0,
       "reResolves": 0,
@@ -893,9 +1104,10 @@
       }
     },
     {
-      "why": "network still down: pause until it's back",
+      "why": "offline after the retries: pause until the network is back",
       "failure": {
-        "network": true
+        "network": true,
+        "online": false
       },
       "attempt": 4,
       "reResolves": 0,
@@ -904,6 +1116,21 @@
         "action": "pause",
         "reason": "network",
         "resumeAt": null
+      }
+    },
+    {
+      "why": "no answer while online (dead host, refused, timeout): a server stall, not a network wait",
+      "failure": {
+        "network": true,
+        "online": true
+      },
+      "attempt": 4,
+      "reResolves": 0,
+      "now": 1000,
+      "step": {
+        "action": "pause",
+        "reason": "server",
+        "resumeAt": 61000
       }
     },
     {
@@ -1161,6 +1388,454 @@
       "resolvedAt": 1793768400000,
       "now": 1793793600000,
       "reResolve": true
+    }
+  ],
+  "afterStop": [
+    {
+      "why": "a run that saved a media piece ends the streak",
+      "reason": "server",
+      "reResolves": 2,
+      "stalledSince": 1000,
+      "progressed": true,
+      "now": 900000,
+      "verdict": {
+        "action": "wait",
+        "reResolves": 0,
+        "stalledSince": null
+      }
+    },
+    {
+      "why": "the first stall waits and starts the streak",
+      "reason": "server",
+      "reResolves": 0,
+      "stalledSince": null,
+      "progressed": false,
+      "now": 5000,
+      "verdict": {
+        "action": "wait",
+        "reResolves": 1,
+        "stalledSince": 5000
+      }
+    },
+    {
+      "why": "the second stall waits",
+      "reason": "server",
+      "reResolves": 1,
+      "stalledSince": 5000,
+      "progressed": false,
+      "now": 400000,
+      "verdict": {
+        "action": "wait",
+        "reResolves": 2,
+        "stalledSince": 5000
+      }
+    },
+    {
+      "why": "the third stall in a row gives up",
+      "reason": "server",
+      "reResolves": 2,
+      "stalledSince": 5000,
+      "progressed": false,
+      "now": 800000,
+      "verdict": {
+        "action": "fail",
+        "reason": "server"
+      }
+    },
+    {
+      "why": "a stream that keeps expiring gives up too",
+      "reason": "expired",
+      "reResolves": 2,
+      "stalledSince": 5000,
+      "progressed": false,
+      "now": 6000,
+      "verdict": {
+        "action": "fail",
+        "reason": "expired"
+      }
+    },
+    {
+      "why": "an expired stop counts as a stall",
+      "reason": "expired",
+      "reResolves": 0,
+      "stalledSince": null,
+      "progressed": false,
+      "now": 7000,
+      "verdict": {
+        "action": "wait",
+        "reResolves": 1,
+        "stalledSince": 7000
+      }
+    },
+    {
+      "why": "waiting offline never counts, however long",
+      "reason": "network",
+      "reResolves": 2,
+      "stalledSince": 5000,
+      "progressed": false,
+      "now": 999999999999,
+      "verdict": {
+        "action": "wait",
+        "reResolves": 2,
+        "stalledSince": 5000
+      }
+    },
+    {
+      "why": "an offline stop after progress starts afresh",
+      "reason": "network",
+      "reResolves": 2,
+      "stalledSince": 5000,
+      "progressed": true,
+      "now": 9000,
+      "verdict": {
+        "action": "wait",
+        "reResolves": 0,
+        "stalledSince": null
+      }
+    },
+    {
+      "why": "rate limits keep waiting within the hour",
+      "reason": "rate-limit",
+      "reResolves": 5,
+      "stalledSince": 1000,
+      "progressed": false,
+      "now": 3541000,
+      "verdict": {
+        "action": "wait",
+        "reResolves": 6,
+        "stalledSince": 1000
+      }
+    },
+    {
+      "why": "a rate limit an hour into the streak gives up",
+      "reason": "rate-limit",
+      "reResolves": 1,
+      "stalledSince": 1000,
+      "progressed": false,
+      "now": 3601000,
+      "verdict": {
+        "action": "fail",
+        "reason": "rate-limit"
+      }
+    },
+    {
+      "why": "even a six-hour Retry-After is tried once more",
+      "reason": "rate-limit",
+      "reResolves": 0,
+      "stalledSince": null,
+      "progressed": false,
+      "now": 1000,
+      "verdict": {
+        "action": "wait",
+        "reResolves": 1,
+        "stalledSince": 1000
+      }
+    },
+    {
+      "why": "…and gives up when still limited after it",
+      "reason": "rate-limit",
+      "reResolves": 1,
+      "stalledSince": 1000,
+      "progressed": false,
+      "now": 21601000,
+      "verdict": {
+        "action": "fail",
+        "reason": "rate-limit"
+      }
+    },
+    {
+      "why": "at most twelve rate-limit stalls in a row, whatever the clock says",
+      "reason": "rate-limit",
+      "reResolves": 12,
+      "stalledSince": 1000,
+      "progressed": false,
+      "now": 2000,
+      "verdict": {
+        "action": "fail",
+        "reason": "rate-limit"
+      }
+    },
+    {
+      "why": "a server error after rate limits counts the whole streak",
+      "reason": "server",
+      "reResolves": 3,
+      "stalledSince": 1000,
+      "progressed": false,
+      "now": 5000,
+      "verdict": {
+        "action": "fail",
+        "reason": "server"
+      }
+    }
+  ],
+  "stalledMessages": [
+    {
+      "reason": "server",
+      "item": "episode",
+      "message": "The server kept failing on part of this episode. Try another server."
+    },
+    {
+      "reason": "rate-limit",
+      "item": "episode",
+      "message": "The server kept asking to wait. Try again later or choose another server."
+    },
+    {
+      "reason": "expired",
+      "item": "episode",
+      "message": "The stream kept expiring before any of it could be saved. Try another server."
+    },
+    {
+      "reason": "server",
+      "item": "chapter",
+      "message": "The source kept failing on part of this chapter. Try again later."
+    },
+    {
+      "reason": "rate-limit",
+      "item": "chapter",
+      "message": "The source kept asking to wait. Try again later."
+    },
+    {
+      "reason": "expired",
+      "item": "chapter",
+      "message": "The source's page addresses kept expiring before any page could be saved. Try again later."
+    }
+  ],
+  "conservativeSteps": [
+    {
+      "why": "a step that doesn't retry is unchanged",
+      "step": {
+        "action": "fail"
+      },
+      "failure": {
+        "status": 400
+      },
+      "reResolves": 0,
+      "now": 1000,
+      "result": {
+        "action": "fail"
+      }
+    },
+    {
+      "why": "a fresh stream is unchanged",
+      "step": {
+        "action": "re-resolve"
+      },
+      "failure": {
+        "status": 403
+      },
+      "reResolves": 0,
+      "now": 1000,
+      "result": {
+        "action": "re-resolve"
+      }
+    },
+    {
+      "why": "offline: wait for the network",
+      "step": {
+        "action": "retry",
+        "delayMs": 1000
+      },
+      "failure": {
+        "network": true,
+        "online": false
+      },
+      "reResolves": 0,
+      "now": 1000,
+      "result": {
+        "action": "pause",
+        "reason": "network",
+        "resumeAt": null
+      }
+    },
+    {
+      "why": "no answer while online: pause 30 s",
+      "step": {
+        "action": "retry",
+        "delayMs": 1000
+      },
+      "failure": {
+        "network": true,
+        "online": true
+      },
+      "reResolves": 0,
+      "now": 1000,
+      "result": {
+        "action": "pause",
+        "reason": "server",
+        "resumeAt": 31000
+      }
+    },
+    {
+      "why": "a 429 waits at least its Retry-After",
+      "step": {
+        "action": "retry",
+        "delayMs": 40000
+      },
+      "failure": {
+        "status": 429,
+        "retryAfter": "40"
+      },
+      "reResolves": 0,
+      "now": 1000,
+      "result": {
+        "action": "pause",
+        "reason": "rate-limit",
+        "resumeAt": 41000
+      }
+    },
+    {
+      "why": "a 502 after two stalls waits two minutes",
+      "step": {
+        "action": "retry",
+        "delayMs": 2000
+      },
+      "failure": {
+        "status": 502
+      },
+      "reResolves": 2,
+      "now": 1000,
+      "result": {
+        "action": "pause",
+        "reason": "server",
+        "resumeAt": 121000
+      }
+    },
+    {
+      "why": "longer with each stall, up to ten minutes",
+      "step": {
+        "action": "retry",
+        "delayMs": 1000
+      },
+      "failure": {
+        "status": 503
+      },
+      "reResolves": 6,
+      "now": 1000,
+      "result": {
+        "action": "pause",
+        "reason": "rate-limit",
+        "resumeAt": 601000
+      }
+    }
+  ],
+  "captionSteps": [
+    {
+      "why": "a missing caption file: finish without it",
+      "failure": {
+        "status": 404
+      },
+      "attempt": 0,
+      "conservative": false,
+      "now": 1000,
+      "step": {
+        "action": "fail"
+      }
+    },
+    {
+      "why": "a refused caption never fetches a fresh stream",
+      "failure": {
+        "status": 403
+      },
+      "attempt": 0,
+      "conservative": false,
+      "now": 1000,
+      "step": {
+        "action": "fail"
+      }
+    },
+    {
+      "why": "a busy caption server is retried shortly",
+      "failure": {
+        "status": 503,
+        "retryAfter": "2"
+      },
+      "attempt": 0,
+      "conservative": false,
+      "now": 1000,
+      "step": {
+        "action": "retry",
+        "delayMs": 2000
+      }
+    },
+    {
+      "why": "a long Retry-After: finish without captions",
+      "failure": {
+        "status": 429,
+        "retryAfter": "120"
+      },
+      "attempt": 0,
+      "conservative": false,
+      "now": 1000,
+      "step": {
+        "action": "fail"
+      }
+    },
+    {
+      "why": "still failing after two retries: finish without captions",
+      "failure": {
+        "status": 500
+      },
+      "attempt": 2,
+      "conservative": false,
+      "now": 1000,
+      "step": {
+        "action": "fail"
+      }
+    },
+    {
+      "why": "no answer: retried with backoff",
+      "failure": {
+        "network": true,
+        "online": true
+      },
+      "attempt": 1,
+      "conservative": false,
+      "now": 1000,
+      "step": {
+        "action": "retry",
+        "delayMs": 2000
+      }
+    },
+    {
+      "why": "no answer while online after the retries: finish without captions",
+      "failure": {
+        "network": true,
+        "online": true
+      },
+      "attempt": 2,
+      "conservative": false,
+      "now": 1000,
+      "step": {
+        "action": "fail"
+      }
+    },
+    {
+      "why": "offline after the retries: wait for the network, then fetch them",
+      "failure": {
+        "network": true,
+        "online": false
+      },
+      "attempt": 2,
+      "conservative": false,
+      "now": 1000,
+      "step": {
+        "action": "pause",
+        "reason": "network",
+        "resumeAt": null
+      }
+    },
+    {
+      "why": "a rate-sensitive stream waits 30 s between caption tries",
+      "failure": {
+        "status": 502
+      },
+      "attempt": 0,
+      "conservative": true,
+      "now": 1000,
+      "step": {
+        "action": "retry",
+        "delayMs": 30000
+      }
     }
   ]
 }

@@ -69,8 +69,20 @@ test("resume: the plan continues from the first missing piece and never mixes re
 
 test("resume: backoff, Retry-After and the step after a failure", () => {
   for (const [attempt, ms] of cases.backoff) assert.equal(R.backoffMs(attempt), ms);
-  for (const c of cases.retryAfter) assert.equal(R.retryAfterMs(c.header, c.now), c.ms, String(c.header));
+  for (const c of cases.retryAfter) assert.equal(R.retryAfterMs(c.header, c.now), c.ms, c.why ?? String(c.header));
   for (const c of cases.steps) assert.deepEqual(R.nextStep(c.failure, c.attempt, c.reResolves, c.now), c.step, c.why);
+  for (const c of cases.conservativeSteps) assert.deepEqual(R.conservativeStep(c.step, c.failure, c.reResolves, c.now), c.result, c.why);
+});
+
+test("resume: every stop has a final state (stalls, rate limits, offline waits)", () => {
+  for (const c of cases.afterStop) {
+    assert.deepEqual(R.afterStop(c.reason, c.reResolves, c.stalledSince, c.progressed, c.now), c.verdict, c.why);
+  }
+  for (const c of cases.stalledMessages) assert.equal(R.stalledMessage(c.reason, c.item), c.message, `${c.reason} ${c.item}`);
+});
+
+test("resume: captions are best-effort", () => {
+  for (const c of cases.captionSteps) assert.deepEqual(R.captionStep(c.failure, c.attempt, c.conservative, c.now), c.step, c.why);
 });
 
 test("resume: when to resolve the stream again", () => {

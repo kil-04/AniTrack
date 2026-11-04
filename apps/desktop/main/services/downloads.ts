@@ -7,6 +7,9 @@ import {
   HEAD_BYTES,
   LEDGER_FILE,
   MAX_RE_RESOLVES,
+  afterStop,
+  captionStep,
+  conservativeStep,
   keyStillMatches,
   ledgerHeader,
   ledgerLine,
@@ -16,11 +19,11 @@ import {
   reResolveBeforeFetch,
   renditionId,
   resumePlan,
+  stalledMessage,
   variantAttributes,
   type Failure,
   type Ledger,
   type PlanPiece,
-  type Step,
 } from "../../../../packages/shared/download-resume";
 import { getRuntimeConfig } from "./remote-config";
 import {
@@ -41,7 +44,9 @@ import { getResolvedStreamAuthorization } from "./providers/stream-authorization
  * pieces that still verify for the same rendition and continues from the first
  * missing one. A run that has to stop (offline, rate-limited, stream expired)
  * keeps its files and reports why in `resume`; the renderer queue starts it
- * again with a freshly resolved stream.
+ * again with a freshly resolved stream. Every stop has a final state: a run
+ * that stops without saving a segment is a stall, and the shared rules
+ * (afterStop) fail the download after a few in a row, except while offline.
  */
 
 type Emit = (item: DownloadItem) => void;
@@ -85,16 +90,16 @@ interface DownloadJob {
   lastRequestAt: number;
   /** When the stream was resolved; a resumed run past a signed URL's life resolves it again. */
   resolvedAt: number;
-  /** Fresh streams fetched for this download so far without progress. */
+  /** Runs in a row before this one that stopped without saving a media piece (stalls)… */
   reResolves: number;
+  /** …and when the first of them stopped. */
+  stalledSince: number | null;
   /** Rate-limited: no worker starts a request before this (epoch ms). */
   cooldownUntil: number;
 }
 const running = new Map<string, DownloadJob>();
 const REQUEST_TIMEOUT_MS = 30_000;
 const CONSERVATIVE_REQUEST_TIMEOUT_MS = 90_000;
-/** A rate-sensitive (conservative) stream is never retried at once: it waits at least this long. */
-const CONSERVATIVE_PAUSE_MS = 30_000;
 const MAX_PLAYLIST_BYTES = 2 * 1024 * 1024;
 const MAX_ASSET_BYTES = 32 * 1024 * 1024;
 const MAX_DOWNLOAD_BYTES = 10 * 1024 * 1024 * 1024;
@@ -112,6 +117,8 @@ export function setDownloadRetryScale(scale: number): void { retryScale = scale;
 
 class DownloadTransportError extends Error {}
 class DownloadStoppedError extends Error {}
+/** The request itself got no answer (offline, reset, refused, DNS, TLS, timeout): the network or the server, not the file. */
+class NoAnswer extends Error {}
 /** The run stops but keeps its files: [hint] says when and how to continue. */
 class DownloadInterrupt extends Error {
   readonly hint: DownloadResumeHint;
@@ -127,8 +134,9 @@ export interface StartOpts {
   conservativeNetwork?: boolean;
   /** Epoch ms the stream was resolved (defaults to now). */
   resolvedAt?: number;
-  /** Fresh streams already fetched without progress (from the last run's resume hint). */
+  /** Stalls in a row so far, and when the first one stopped (from the last run's resume hint). */
   reResolves?: number;
+  stalledSince?: number | null;
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -142,7 +150,7 @@ export function startDownload(opts: StartOpts): void {
   }
   const job: DownloadJob = {
     controller: new AbortController(), removed: false, conservativeNetwork: opts.conservativeNetwork === true, lastRequestAt: 0,
-    resolvedAt: opts.resolvedAt ?? Date.now(), reResolves: opts.reResolves ?? 0, cooldownUntil: 0,
+    resolvedAt: opts.resolvedAt ?? Date.now(), reResolves: opts.reResolves ?? 0, stalledSince: opts.stalledSince ?? null, cooldownUntil: 0,
   };
   running.set(opts.id, job);
   void runDownload(opts, job);
@@ -211,6 +219,9 @@ export function assertStartOpts(value: unknown): asserts value is StartOpts {
   if (o.resolvedAt != null && (typeof o.resolvedAt !== "number" || !Number.isSafeInteger(o.resolvedAt) || o.resolvedAt < 0)) throw new Error("Invalid resolve time");
   if (o.reResolves != null && (typeof o.reResolves !== "number" || !Number.isInteger(o.reResolves) || o.reResolves < 0 || o.reResolves > 100)) {
     throw new Error("Invalid resume count");
+  }
+  if (o.stalledSince != null && (typeof o.stalledSince !== "number" || !Number.isSafeInteger(o.stalledSince) || o.stalledSince < 0)) {
+    throw new Error("Invalid resume time");
   }
 }
 
@@ -281,7 +292,10 @@ function clearPieces(dir: string): void {
 
 async function runDownload(o: StartOpts, job: DownloadJob): Promise<void> {
   const dir = itemDir(o.id);
-  let done = 0, total = 0, progressed = false;
+  // Progress for the stall count: a media piece saved (keys are always fetched
+  // again, so they don't count), and not in a run that discarded what an
+  // earlier one saved (another rendition, or a key that changed).
+  let done = 0, total = 0, savedMedia = false, startedOver = false;
   try {
     assertJobActive(job);
     fs.mkdirSync(dir, { recursive: true });
@@ -373,12 +387,13 @@ async function runDownload(o: StartOpts, job: DownloadJob): Promise<void> {
       fs.appendFileSync(ledgerFile, ledgerLine(index, asset.piece.file!, size, tag));
       downloadedBytes += size;
       if (downloadedBytes > MAX_DOWNLOAD_BYTES) throw new DownloadTransportError("This download exceeded the supported size limit.");
-      progressed = true;
+      if (asset.piece.kind !== "key") savedMedia = true;
     };
 
     for (let pass = 0; ; pass++) {
       const previous = pass === 0 && fs.existsSync(ledgerFile) ? parseLedger(fs.readFileSync(ledgerFile, "utf8")) : null;
       const plan = resumePlan(pieces, rendition, previous, (file) => readHead(path.join(dir, file)));
+      if (plan.restart && (pass > 0 || (previous?.pieces.size ?? 0) > 0)) startedOver = true;
       if (plan.restart) {
         clearPieces(dir);
         fs.writeFileSync(ledgerFile, ledgerHeader(rendition, total));
@@ -420,13 +435,9 @@ async function runDownload(o: StartOpts, job: DownloadJob): Promise<void> {
     assertJobActive(job);
     fs.rmSync(path.join(dir, "download.plan"), { force: true });
 
-    if (o.subtitleUrl) {
-      // Best-effort as before, except that a run interrupted here resumes (its
-      // segments are kept) instead of finishing without its captions.
-      try { await httpDownloadSubtitle(o.subtitleUrl, path.join(dir, "subs.vtt"), o.providerId, job); } catch (error) {
-        if (error instanceof DownloadInterrupt || error instanceof DownloadStoppedError) throw error;
-      }
-    }
+    // Best-effort: a couple of short retries, then the episode finishes without
+    // them. Only a dropped network makes it wait (keeping every segment) to fetch them.
+    if (o.subtitleUrl) await saveCaptions(o.subtitleUrl, path.join(dir, "subs.vtt"), o.providerId, job);
 
     assertJobActive(job);
     let sizeBytes = 0;
@@ -435,9 +446,13 @@ async function runDownload(o: StartOpts, job: DownloadJob): Promise<void> {
   } catch (error: unknown) {
     if (job.removed) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } }
     else if (error instanceof DownloadInterrupt) {
-      // The files stay; the queue starts this download again when [hint] allows.
-      const reResolves = (progressed ? 0 : job.reResolves) + (error.hint.reason === "expired" ? 1 : 0);
-      emit(o, "queued", total ? Math.floor((done * 100) / total) : 0, done, total, 0, undefined, { ...error.hint, reResolves });
+      // The files stay. The queue starts this download again when [hint] allows,
+      // unless it has stalled too often: then it fails (and Retry continues from its files).
+      const reason = error.hint.reason === "restart" ? "expired" : error.hint.reason;
+      const verdict = afterStop(reason, job.reResolves, job.stalledSince, savedMedia && !startedOver, Date.now());
+      const pct = total ? Math.floor((done * 100) / total) : 0;
+      if (verdict.action === "fail") emit(o, "failed", pct, done, total, 0, stalledMessage(verdict.reason, "episode"));
+      else emit(o, "queued", pct, done, total, 0, undefined, { ...error.hint, reResolves: verdict.reResolves, stalledSince: verdict.stalledSince });
     } else emit(o, "failed", total ? Math.floor((done * 100) / total) : 0, done, total, 0, downloadFailureMessage(error));
   } finally {
     if (running.get(o.id) === job) running.delete(o.id);
@@ -454,7 +469,7 @@ function reqHeaders(url: string, providerId: string): Record<string, string> {
   const headers: Record<string, string> = {};
   if (pahe.referer) {
     headers.Referer = pahe.referer.replace(/\/$/, "") + "/";
-    headers.Origin = new URL(pahe.referer).origin;
+    try { headers.Origin = new URL(pahe.referer).origin; } catch { /* no Origin for an unreadable referer */ }
   }
   if (pahe.cookie) headers.Cookie = pahe.cookie;
   return headers;
@@ -466,11 +481,13 @@ function assertJobActive(job: DownloadJob): void {
 
 function downloadFailureMessage(error: unknown): string {
   if (error instanceof DownloadTransportError) return error.message;
+  if (error instanceof RenditionChanged) return "The stream's encryption key keeps changing. Try another server.";
   if (error && typeof error === "object" && "code" in error) {
     if (error.code === "ENOSPC") return "There is not enough free disk space for this download.";
     if (error.code === "EACCES" || error.code === "EPERM") return "AniTrack could not write the download files.";
+    return "A storage error stopped the download. Retry to continue.";
   }
-  return "A network or storage error interrupted the download. Retry to continue.";
+  return "The download stopped unexpectedly. Retry to continue.";
 }
 
 function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -535,14 +552,68 @@ async function responseBytes(response: Response, maxBytes: number, signal: Abort
   }
 }
 
-/** A step that would retry at once becomes a pause for a rate-sensitive stream. */
-function conservativeStep(step: Step, failure: Failure, now: number): Step {
-  if (step.action !== "retry") return step;
-  const reason = "network" in failure ? "network" : failure.status === 429 || failure.status === 503 ? "rate-limit" : "server";
-  return { action: "pause", reason, resumeAt: reason === "network" ? null : now + Math.max(step.delayMs, CONSERVATIVE_PAUSE_MS) };
+/** Marks a rejection of the request itself: no answer (offline, reset, refused, DNS, TLS, a timeout). */
+async function transport<T>(work: Promise<T>): Promise<T> {
+  try {
+    return await work;
+  } catch (error) {
+    if (error instanceof DownloadTransportError) throw error;
+    throw new NoAnswer(error instanceof Error ? error.message : String(error));
+  }
 }
 
-async function readWithRetry(url: string, providerId: string, job: DownloadJob, maxBytes: number): Promise<{ bytes: Buffer; url: string; contentType: string }> {
+interface Answer { bytes: Buffer; url: string; contentType: string }
+
+/**
+ * One request, following its redirects: the answer, or why there was none
+ * (an HTTP status, or no answer with whether the device is online). Anything
+ * else (an unsafe address, a size limit, a bug) is thrown, so a deterministic
+ * failure is never mistaken for the network and retried forever.
+ */
+async function fetchOnce(url: string, providerId: string, job: DownloadJob, maxBytes: number): Promise<Answer | Failure> {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  job.controller.signal.addEventListener("abort", abort, { once: true });
+  const timer = setTimeout(() => controller.abort(), job.conservativeNetwork ? CONSERVATIVE_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS);
+  try {
+    let requestUrl = downloadMediaUrl(url);
+    let response: Response;
+    for (let redirects = 0; ; redirects++) {
+      if (job.conservativeNetwork) {
+        const wait = job.lastRequestAt + 500 - Date.now();
+        if (wait > 0) await retryWait(wait, job.controller.signal);
+        job.lastRequestAt = Date.now();
+      }
+      const init: RequestInit = { headers: reqHeaders(requestUrl, providerId), signal: controller.signal, redirect: "manual", credentials: "omit" };
+      response = await transport(abortable(net.fetch(requestUrl, init), controller.signal));
+      if (![301, 302, 303, 307, 308].includes(response.status)) break;
+      void response.body?.cancel().catch(() => {});
+      const location = response.headers.get("location");
+      if (!location || redirects >= 3) throw new DownloadTransportError("The download returned too many redirects.");
+      let next: string;
+      try { next = new URL(location, requestUrl).toString(); } catch { throw new DownloadTransportError("The download returned an invalid media address."); }
+      requestUrl = downloadMediaUrl(next);
+    }
+    if (response.ok) {
+      return {
+        bytes: await transport(responseBytes(response, maxBytes, controller.signal)), url: requestUrl,
+        contentType: response.headers.get("content-type") ?? "",
+      };
+    }
+    void response.body?.cancel().catch(() => {});
+    return { status: response.status, retryAfter: response.headers.get("retry-after") };
+  } catch (error) {
+    if (!(error instanceof NoAnswer) || job.removed || job.controller.signal.aborted) throw error;
+    // Offline, it waits for the network; online, the server isn't answering (a stall).
+    return { network: true, online: net.isOnline() };
+  } finally {
+    clearTimeout(timer);
+    job.controller.signal.removeEventListener("abort", abort);
+    controller.abort();
+  }
+}
+
+async function readWithRetry(url: string, providerId: string, job: DownloadJob, maxBytes: number): Promise<Answer> {
   for (let attempt = 0; ; attempt++) {
     assertJobActive(job);
     const cooling = job.cooldownUntil - Date.now();
@@ -552,51 +623,16 @@ async function readWithRetry(url: string, providerId: string, job: DownloadJob, 
     if (job.reResolves < MAX_RE_RESOLVES && reResolveBeforeFetch(url, job.resolvedAt, Date.now())) {
       throw new DownloadInterrupt({ reason: "expired" });
     }
-    const controller = new AbortController();
-    const abort = () => controller.abort();
-    job.controller.signal.addEventListener("abort", abort, { once: true });
-    const timer = setTimeout(() => controller.abort(), job.conservativeNetwork ? CONSERVATIVE_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS);
-    let failure: Failure;
-    try {
-      let requestUrl = downloadMediaUrl(url);
-      let response: Response;
-      for (let redirects = 0; ; redirects++) {
-        if (job.conservativeNetwork) {
-          const wait = job.lastRequestAt + 500 - Date.now();
-          if (wait > 0) await retryWait(wait, job.controller.signal);
-          job.lastRequestAt = Date.now();
-        }
-        response = await abortable(net.fetch(requestUrl, {
-          headers: reqHeaders(requestUrl, providerId), signal: controller.signal,
-          redirect: "manual", credentials: "omit",
-        }), controller.signal);
-        if (![301, 302, 303, 307, 308].includes(response.status)) break;
-        void response.body?.cancel().catch(() => {});
-        const location = response.headers.get("location");
-        if (!location || redirects >= 3) throw new DownloadTransportError("The download returned too many redirects.");
-        requestUrl = downloadMediaUrl(new URL(location, requestUrl).toString());
-      }
-      if (response.ok) return {
-        bytes: await responseBytes(response, maxBytes, controller.signal), url: requestUrl,
-        contentType: response.headers.get("content-type") ?? "",
-      };
-      void response.body?.cancel().catch(() => {});
-      failure = { status: response.status, retryAfter: response.headers.get("retry-after") };
-    } catch (error) {
-      if (error instanceof DownloadTransportError || job.removed || job.controller.signal.aborted) throw error;
-      // A dropped connection, DNS failure or timeout: the network, not the file.
-      failure = { network: true };
-    } finally {
-      clearTimeout(timer);
-      job.controller.signal.removeEventListener("abort", abort);
-      controller.abort();
-    }
+    const result = await fetchOnce(url, providerId, job, maxBytes);
+    if ("bytes" in result) return result;
+    const failure: Failure = result;
     const now = Date.now();
     let step = nextStep(failure, attempt, job.reResolves, now);
-    if (job.conservativeNetwork) step = conservativeStep(step, failure, now);
+    // A rate-sensitive stream is never retried at once: it pauses, longer with each stall.
+    if (job.conservativeNetwork) step = conservativeStep(step, failure, job.reResolves, now);
     if (step.action === "retry") {
       const wait = step.delayMs * retryScale;
-      if (!("network" in failure) && (failure.status === 429 || failure.status === 503)) job.cooldownUntil = Math.max(job.cooldownUntil, now + wait);
+      if ("status" in failure && (failure.status === 429 || failure.status === 503)) job.cooldownUntil = Math.max(job.cooldownUntil, now + wait);
       await retryWait(wait, job.controller.signal);
       continue;
     }
@@ -624,13 +660,37 @@ async function httpDownloadToFile(asset: Asset, providerId: string, job: Downloa
   return { size: buf.length, tag: pieceTag(asset.piece, buf) };
 }
 
-async function httpDownloadSubtitle(url: string, file: string, providerId: string, job: DownloadJob): Promise<void> {
-  const { bytes, contentType } = await readWithRetry(url, providerId, job, MAX_PLAYLIST_BYTES);
-  assertJobActive(job);
-  assertDownloadedAsset(bytes, contentType);
-  const tmp = file + ".part";
-  fs.writeFileSync(tmp, bytes);
-  fs.renameSync(tmp, file);
+/**
+ * Captions, best-effort (shared captionStep): a couple of short retries, never
+ * a pause for the server or a fresh stream; then the episode finishes without
+ * them. Offline, the run stops for the network instead (its segments are kept),
+ * so a dropped connection doesn't cost a soft-subbed episode its captions.
+ */
+async function saveCaptions(url: string, file: string, providerId: string, job: DownloadJob): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    assertJobActive(job);
+    let result: Answer | Failure;
+    try {
+      result = await fetchOnce(url, providerId, job, MAX_PLAYLIST_BYTES);
+    } catch (error) {
+      if (error instanceof DownloadStoppedError || job.removed || job.controller.signal.aborted) throw error;
+      return; // an unsafe address, an oversized body: no captions
+    }
+    if ("bytes" in result) {
+      try { assertDownloadedAsset(result.bytes, result.contentType); } catch { return; } // an error page: no captions
+      assertJobActive(job);
+      const tmp = file + ".part";
+      try {
+        fs.writeFileSync(tmp, result.bytes);
+        fs.renameSync(tmp, file);
+      } catch { fs.rmSync(tmp, { force: true }); }
+      return;
+    }
+    const step = captionStep(result, attempt, job.conservativeNetwork, Date.now());
+    if (step.action === "retry") { await retryWait(step.delayMs * retryScale, job.controller.signal); continue; }
+    if (step.action === "pause") throw new DownloadInterrupt({ reason: "network", at: null });
+    return;
+  }
 }
 
 const FMP4_BOX_TYPES = new Set(["ftyp", "styp", "moof", "moov", "sidx", "emsg", "prft"]);

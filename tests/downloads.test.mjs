@@ -9,11 +9,12 @@ const storageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "anitrack-download-tes
 const harness = {
   pahe: new Map(),
   events: [],
+  online: true,
   fetch: async () => { throw new Error("Unexpected fixture request"); },
 };
 globalThis.__anitrackDownloadFixture = harness;
 harness.app = { getPath: () => storageRoot };
-harness.net = { fetch: (...args) => harness.fetch(...args) };
+harness.net = { fetch: (...args) => harness.fetch(...args), isOnline: () => harness.online };
 const moduleUrl = (source) => `data:text/javascript,${encodeURIComponent(source)}`;
 const electron = moduleUrl("export const app = globalThis.__anitrackDownloadFixture.app; export const net = globalThis.__anitrackDownloadFixture.net;");
 const pahe = moduleUrl("export function getAuthorizedPaheRequestHeaders(url) { return globalThis.__anitrackDownloadFixture.pahe.get(url) ?? null; }");
@@ -50,6 +51,7 @@ function options(extra = {}) {
 function resetFixture(fetcher) {
   harness.events.length = 0;
   harness.pahe.clear();
+  harness.online = true;
   clearResolvedStreamAuthorizations();
   harness.fetch = fetcher;
 }
@@ -138,7 +140,9 @@ test("HTTP 403 stops for a fresh stream and a long Retry-After pauses, keeping n
   const expired = await terminal(options({ hlsUrl: "https://media.example/index.m3u8?secret=fixture" }));
   assert.equal(calls, 1);
   assert.equal(expired.status, "queued");
-  assert.deepEqual(expired.resume, { reason: "expired", reResolves: 1 });
+  assert.equal(expired.resume.reason, "expired");
+  assert.equal(expired.resume.reResolves, 1, "a stop without progress is a stall");
+  assert.equal(typeof expired.resume.stalledSince, "number");
   calls = 0;
   const before = Date.now();
   resetFixture(async () => { calls++; return new Response(null, { status: 429, headers: { "retry-after": "999999" } }); });
@@ -367,9 +371,10 @@ test("AniChan signed proxy playlists, disguised segments and captions become sel
 
 test("hanging requests time out and are tried again even when their transport ignores cancellation", async (context) => {
   context.mock.timers.enable({ apis: ["setTimeout"] });
-  for (const [conservativeNetwork, timeout] of [[false, 30_000], [true, 90_000]]) {
+  for (const [conservativeNetwork, timeout, online] of [[false, 30_000, true], [true, 90_000, true], [true, 90_000, false]]) {
     let calls = 0;
     resetFixture(async () => { calls++; return new Promise(() => {}); });
+    harness.online = online;
     const opts = options({ conservativeNetwork });
     startDownload(opts);
     await settle();
@@ -380,10 +385,17 @@ test("hanging requests time out and are tried again even when their transport ig
     context.mock.timers.tick(2);
     await settle();
     if (conservativeNetwork) {
-      // A rate-sensitive stream is never retried at once: it pauses for the network.
+      // A rate-sensitive stream is never retried at once. Offline it waits for the
+      // network; online the server didn't answer: a stall that pauses 30 s.
       const item = harness.events.findLast((event) => event.id === opts.id);
       assert.equal(item.status, "queued");
-      assert.deepEqual(item.resume, { reason: "network", at: null, reResolves: 0 });
+      if (online) {
+        assert.equal(item.resume.reason, "server");
+        assert.ok(item.resume.at >= Date.now() + 25_000, "at least 30 s");
+        assert.equal(item.resume.reResolves, 1);
+      } else {
+        assert.deepEqual(item.resume, { reason: "network", at: null, reResolves: 0, stalledSince: null });
+      }
     } else {
       context.mock.timers.tick(10);
       await settle();
@@ -398,14 +410,13 @@ const signed = (token, n) => Array.from({ length: n }, (_, i) => `https://cdn${t
 
 test("an interrupted episode keeps its segments and continues from the first missing one with re-signed URLs", async () => {
   let token = "a";
-  let online = true;
   const fetched = [];
   resetFixture(async (url) => {
     if (url.endsWith("master.m3u8") || url.includes("master.m3u8?")) return new Response(mediaPlaylist(...signed(token, 6)));
-    if (!online) throw new TypeError("net::ERR_INTERNET_DISCONNECTED");
+    if (!harness.online) throw new TypeError("net::ERR_INTERNET_DISCONNECTED");
     const index = Number(/seg-(\d+)/.exec(url)[1]);
     fetched.push(index);
-    if (index === 3) online = false; // the connection drops after segment 3
+    if (index === 3) harness.online = false; // the connection drops after segment 3
     return new Response(ts(index));
   });
   const opts = options();
@@ -414,12 +425,13 @@ test("an interrupted episode keeps its segments and continues from the first mis
   assert.equal(paused.resume.reason, "network");
   assert.ok(paused.doneSegments >= 3 && paused.doneSegments < 6, `kept ${paused.doneSegments} of 6`);
   const kept = new Set(fetched);
+  assert.equal(paused.resume.reResolves, 0, "a run that saved segments isn't a stall");
   // The app starts it again later with a freshly resolved, differently signed stream.
   token = "b";
-  online = true;
+  harness.online = true;
   fetched.length = 0;
   harness.events.length = 0;
-  const done = await terminal({ ...opts, hlsUrl: "https://master.example/show/master.m3u8?token=b", reResolves: paused.resume.reResolves });
+  const done = await terminal({ ...opts, hlsUrl: "https://master.example/show/master.m3u8?token=b", reResolves: paused.resume.reResolves, stalledSince: paused.resume.stalledSince });
   assert.equal(done.status, "done");
   assert.equal(done.doneSegments, 6);
   assert.ok(fetched.every((index) => !kept.has(index) || index === 3), `only missing segments were fetched again: ${fetched}`);
@@ -481,7 +493,8 @@ test("a stream expiring mid-episode stops for a fresh one before its URLs are re
     : new Response(ts(1)));
   const item = await terminal(options());
   assert.equal(item.status, "queued");
-  assert.deepEqual(item.resume, { reason: "expired", reResolves: 1 });
+  assert.equal(item.resume.reason, "expired");
+  assert.equal(item.resume.reResolves, 1);
 });
 
 test("after a restart, an unfinished episode with a ledger comes back queued to resume", async () => {
@@ -511,6 +524,167 @@ test("after a restart, an unfinished episode with a ledger comes back queued to 
   removeDownload(opts.id);
   removeDownload(other.id);
   removeDownload(legacy.id);
+});
+
+/** Runs [opts] again the way the queue does after a stop: with the hint's stall count. */
+async function again(opts, previous) {
+  harness.events.length = 0;
+  return terminal({ ...opts, reResolves: previous.resume.reResolves, stalledSince: previous.resume.stalledSince });
+}
+
+test("no answer while online is a stall, not a network wait, and the third in a row fails with its files kept", async () => {
+  let calls = 0;
+  resetFixture(async (url) => {
+    if (url.includes("master.m3u8")) return new Response(mediaPlaylist("https://dead-cdn.example/a.ts"));
+    calls++;
+    throw new TypeError("net::ERR_CONNECTION_REFUSED");
+  });
+  const opts = options();
+  const first = await terminal(opts);
+  assert.equal(first.status, "queued");
+  assert.equal(first.resume.reason, "server", "online: it doesn't wait for a network that is already there");
+  assert.ok(first.resume.at > Date.now(), "it waits a while before the next run");
+  assert.equal(first.resume.reResolves, 1);
+  assert.equal(calls, 5, "four retries with backoff first");
+  const second = await again(opts, first);
+  assert.equal(second.resume.reResolves, 2);
+  assert.equal(second.resume.stalledSince, first.resume.stalledSince);
+  const third = await again(opts, second);
+  assert.equal(third.status, "failed");
+  assert.equal(third.error, "The server kept failing on part of this episode. Try another server.");
+  assert.equal(third.resume, undefined);
+  assert.ok(fs.existsSync(path.join(folder(opts.id), "download.ledger")), "Retry continues from what was saved");
+});
+
+test("offline, a stop waits for the network and never counts as a stall", async () => {
+  resetFixture(async (url) => {
+    if (url.includes("master.m3u8")) return new Response(mediaPlaylist("https://cdn.example/a.ts"));
+    throw new TypeError("net::ERR_INTERNET_DISCONNECTED");
+  });
+  harness.online = false;
+  const opts = options();
+  let item = await terminal(opts);
+  for (let run = 0; run < 4; run++) {
+    assert.equal(item.status, "queued");
+    assert.deepEqual(item.resume, { reason: "network", at: null, reResolves: 0, stalledSince: null });
+    item = await again(opts, item);
+  }
+});
+
+test("a segment that keeps returning 5xx fails after three stalls instead of pausing forever", async () => {
+  let calls = 0;
+  resetFixture(async (url) => {
+    if (url.includes("master.m3u8")) return new Response(mediaPlaylist("https://cdn.example/a.ts"));
+    calls++;
+    return new Response(null, { status: 502 });
+  });
+  const opts = options();
+  const first = await terminal(opts);
+  assert.equal(first.resume.reason, "server");
+  assert.equal(calls, 7, "six retries with backoff, then a pause");
+  const second = await again(opts, first);
+  assert.equal(second.resume.reason, "server");
+  const third = await again(opts, second);
+  assert.equal(third.status, "failed");
+  assert.match(third.error, /kept failing/);
+});
+
+test("re-fetched AES keys aren't progress: an encrypted stream whose segments return 403 fails", async () => {
+  const fetched = [];
+  const playlist = '#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="https://cdn.example/k.key"\n#EXTINF:6,\nhttps://cdn.example/a.ts\n#EXT-X-ENDLIST\n';
+  resetFixture(async (url) => {
+    if (url.includes("master.m3u8")) return new Response(playlist);
+    fetched.push(url.split("/").pop());
+    return url.endsWith("k.key") ? new Response(Buffer.alloc(16, 1)) : new Response(null, { status: 403 });
+  });
+  const opts = options();
+  let item = await terminal(opts);
+  const counts = [];
+  while (item.status === "queued" && counts.length < 6) {
+    assert.equal(item.resume.reason, "expired");
+    counts.push(item.resume.reResolves);
+    item = await again(opts, item);
+  }
+  assert.deepEqual(counts, [1, 2], "the key fetched again each run didn't reset the count");
+  assert.equal(item.status, "failed");
+  assert.match(item.error, /HTTP 403/);
+  assert.equal(fetched.filter((name) => name === "k.key").length, 3);
+});
+
+test("a run that started over for another rendition isn't progress either", async () => {
+  let run = 0;
+  resetFixture(async (url) => {
+    if (url.includes("master.m3u8")) { run++; return new Response(mediaPlaylist(`https://cdn.example/r${run}/a.ts`, `https://cdn.example/r${run}/b.ts`)); }
+    if (url.endsWith("/b.ts")) { await new Promise((resolve) => setTimeout(resolve, 20)); return new Response(null, { status: 403 }); }
+    return new Response(ts(run));
+  });
+  const opts = options();
+  const first = await terminal(opts);
+  assert.equal(first.resume.reason, "expired");
+  assert.equal(first.resume.reResolves, 0, "the first run saved a segment of its own");
+  const second = await again(opts, first);
+  assert.equal(second.resume.reResolves, 1, "the second discarded it for another rendition: no progress");
+  const third = await again(opts, second);
+  assert.equal(third.resume.reResolves, 2);
+  const fourth = await again(opts, third);
+  assert.equal(fourth.status, "failed");
+});
+
+test("captions are best-effort: a failing caption host finishes the episode without them", async () => {
+  for (const caption of [
+    async () => new Response(null, { status: 503 }),
+    async () => new Response(null, { status: 404 }),
+    async () => new Response(null, { status: 429, headers: { "retry-after": "3600" } }),
+    async () => { throw new TypeError("net::ERR_NAME_NOT_RESOLVED"); },
+  ]) {
+    let captionCalls = 0;
+    resetFixture(async (url) => {
+      if (url.includes("master.m3u8")) return new Response(mediaPlaylist("https://cdn.example/a.ts"));
+      if (url.includes("captions")) { captionCalls++; return caption(); }
+      return new Response(ts(1));
+    });
+    const opts = options({ subtitleUrl: "https://captions.example/en.vtt" });
+    const item = await terminal(opts);
+    assert.equal(item.status, "done", `finished without captions after ${captionCalls} tries`);
+    assert.ok(captionCalls <= 3, "a couple of retries at most");
+    assert.equal(item.resume, undefined);
+    assert.equal(fs.existsSync(path.join(folder(opts.id), "subs.vtt")), false);
+  }
+});
+
+test("captions lost to a dropped network are fetched when it's back, keeping every segment", async () => {
+  const fetched = [];
+  resetFixture(async (url) => {
+    if (url.includes("master.m3u8")) return new Response(mediaPlaylist("https://cdn.example/a.ts", "https://cdn.example/b.ts"));
+    if (url.includes("captions")) {
+      if (!harness.online) throw new TypeError("net::ERR_INTERNET_DISCONNECTED");
+      return new Response("WEBVTT\n\n00:00.000 --> 00:01.000\nBack online\n");
+    }
+    fetched.push(url.split("/").pop());
+    if (url.endsWith("b.ts")) harness.online = false; // drops right after the last segment
+    return new Response(ts(1));
+  });
+  const opts = options({ subtitleUrl: "https://captions.example/en.vtt" });
+  const paused = await terminal(opts);
+  assert.equal(paused.status, "queued");
+  assert.equal(paused.resume.reason, "network");
+  harness.online = true;
+  fetched.length = 0;
+  const done = await again(opts, paused);
+  assert.equal(done.status, "done");
+  assert.deepEqual(fetched, [], "no segment was fetched again");
+  assert.match(fs.readFileSync(path.join(folder(opts.id), "subs.vtt"), "utf8"), /Back online/);
+});
+
+test("a deterministic error is a failure, not a network drop retried forever", async () => {
+  let calls = 0;
+  const root = "https://cdn.example/pahe/index.m3u8";
+  resetFixture(async () => { calls++; return new Response(mediaPlaylist("a.ts")); });
+  harness.pahe.set(root, { get referer() { throw new Error("broken lookup"); } });
+  const item = await terminal(options({ providerId: "animepahe", hlsUrl: root }));
+  assert.equal(item.status, "failed");
+  assert.equal(calls, 0, "never sent, never retried");
+  assert.doesNotMatch(item.error, /network/i);
 });
 
 after(() => {

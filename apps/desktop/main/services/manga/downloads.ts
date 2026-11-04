@@ -382,10 +382,10 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 function failureOf(error: unknown): Failure | null {
   if (error instanceof MangaSourceError) {
     if (error.verify || error.status == null) return null;
-    return error.status === 0 ? { network: true } : { status: error.status, retryAfter: error.retryAfter };
+    return error.status === 0 ? { network: true, online: net.isOnline() } : { status: error.status, retryAfter: error.retryAfter };
   }
   const e = error as { name?: unknown } | null;
-  if (e?.name === "TimeoutError" || e?.name === "TypeError") return { network: true };
+  if (e?.name === "TimeoutError" || e?.name === "TypeError") return { network: true, online: net.isOnline() };
   return null;
 }
 

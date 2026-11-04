@@ -65,6 +65,9 @@ object Pahe {
         prefs = act.applicationContext.getSharedPreferences("anitrack_next", Context.MODE_PRIVATE)
     }
 
+    /** Whether an Activity attached AnimePahe: without one (a background job's fresh process) nothing resolves. */
+    fun attached(): Boolean = activity != null && ::prefs.isInitialized
+
     private fun baseUrl(): String {
         val config = RemoteConfig.current()
         check(config.animepahe.enabled && config.features.animepaheStreaming) {

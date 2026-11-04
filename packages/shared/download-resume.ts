@@ -139,14 +139,23 @@ export function pieceTag(piece: PlanPiece, bytes: Uint8Array): string {
   return mediaTag(bytes) ?? "raw";
 }
 
+/**
+ * Bytes that are all zero. After a power cut, a file whose rename reached the
+ * disk before its data can come back at the right size but zero-filled.
+ */
+export function zeroFilled(bytes: Uint8Array): boolean {
+  return bytes.every((byte) => byte === 0);
+}
+
 /** Whether a saved piece of [size] bytes, starting with [head], is still the one the ledger recorded. */
 export function pieceStillValid(kind: PieceKind, tag: string, head: Uint8Array, size: number, recordedSize: number): boolean {
   if (kind === "key" || size <= 0 || size !== recordedSize) return false;
   switch (tag) {
     case "ts": case "fmp4": case "id3": return mediaTag(head) === tag;
     case "jpeg": case "png": case "gif": case "webp": case "avif": case "bmp": return imageTag(head) === tag;
-    case "enc": return size % 16 === 0 && !looksLikeErrorPage(head);
-    case "raw": return !looksLikeErrorPage(head);
+    // No signature to check: a zero-filled head is a file lost to a power cut, not media.
+    case "enc": return size % 16 === 0 && !zeroFilled(head) && !looksLikeErrorPage(head);
+    case "raw": return !zeroFilled(head) && !looksLikeErrorPage(head);
     default: return false;
   }
 }
@@ -238,6 +247,11 @@ export function keyStillMatches(ledger: Ledger | null, index: number, tag: strin
 export const NETWORK_RETRIES = 4;
 export const RATE_LIMIT_RETRIES = 8;
 export const SERVER_RETRIES = 6;
+/**
+ * Runs in a row that may stop without saving a media piece (stalls) before the
+ * next one gives up: a 401/403/410 then fails, and so does any stop but a rate
+ * limit or an offline wait ([afterStop]).
+ */
 export const MAX_RE_RESOLVES = 2;
 export const MAX_RETRY_AFTER_MS = 10 * 60_000;
 export const PAUSE_MS = 5 * 60_000;
@@ -246,12 +260,31 @@ export const EXPIRY_MARGIN_MS = 60_000;
 /** A resolved stream older than this is resolved again before a resumed run. */
 export const MAX_RESOLVED_AGE_MS = 6 * 60 * 60_000;
 
-export type Failure = { status: number; retryAfter?: string | null } | { network: true };
+/** A request that got no answer while the device is online waits this long before the next run. */
+export const UNREACHABLE_PAUSE_MS = 60_000;
+/** Rate-limit stops keep waiting for at most about this long after the first one without progress. */
+export const MAX_RATE_LIMITED_MS = 60 * 60_000;
+/** …and for at most this many of them in a row, whatever the clock says. */
+export const MAX_RATE_LIMIT_STALLS = 12;
+/** The least a rate-sensitive (conservative) stream waits before trying again; it doubles with each stall. */
+export const CONSERVATIVE_PAUSE_MS = 30_000;
+/** Captions are best-effort: this many quick retries, each at most [MAX_CAPTION_WAIT_MS] away. */
+export const CAPTION_RETRIES = 2;
+export const MAX_CAPTION_WAIT_MS = 30_000;
+
+/**
+ * Why a request failed: an HTTP status, or no answer at all (offline, reset,
+ * refused, timed out). [online] is whether the device had a network when it
+ * gave up: only then is a missing answer the server's fault rather than the network's.
+ */
+export type Failure = { status: number; retryAfter?: string | null } | { network: true; online: boolean };
+
+export type PauseReason = "network" | "rate-limit" | "server";
 
 export type Step =
   | { action: "retry"; delayMs: number }
   | { action: "re-resolve" }
-  | { action: "pause"; reason: "network" | "rate-limit" | "server"; resumeAt: number | null }
+  | { action: "pause"; reason: PauseReason; resumeAt: number | null }
   | { action: "fail" };
 
 /** Exponential backoff: 1 s, 2 s, 4 s… capped at a minute. */
@@ -259,23 +292,78 @@ export function backoffMs(attempt: number): number {
   return Math.min(60_000, 1000 * 2 ** Math.max(0, Math.min(attempt, 16)));
 }
 
-/** Retry-After as milliseconds from [now] (delta seconds or an HTTP date), or null. */
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+const DAY = "(?:mon|tue|wed|thu|fri|sat|sun)";
+const LONG_DAY = "(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)";
+const MONTH = "(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)";
+const TIME = "(\\d{2}):(\\d{2}):(\\d{2})";
+// Matched against the value with ASCII letters lowercased (names may come in any case).
+/** IMF-fixdate: Sun, 06 Nov 1994 08:49:37 GMT */
+const IMF_FIXDATE = new RegExp(`^${DAY}, (\\d{2}) ${MONTH} (\\d{4}) ${TIME} gmt$`);
+/** RFC 850: Sunday, 06-Nov-94 08:49:37 GMT */
+const RFC_850 = new RegExp(`^${LONG_DAY}, (\\d{2})-${MONTH}-(\\d{2}) ${TIME} gmt$`);
+/** asctime: Sun Nov  6 08:49:37 1994 (always GMT) */
+const ASCTIME = new RegExp(`^${DAY} ${MONTH} ( \\d|\\d{2}) ${TIME} (\\d{4})$`);
+
+/** UTC epoch ms of a calendar date and time, or null when it isn't one (31 Nov, 24:00, a leap second). */
+function utc(year: number, month: number, day: number, hour: number, minute: number, second: number): number | null {
+  if (month < 0 || month > 11 || hour > 23 || minute > 59 || second > 59) return null;
+  // setUTCFullYear, not Date.UTC: that one reads years 0-99 as 1900-1999.
+  const date = new Date(0);
+  date.setUTCFullYear(year, month, day);
+  date.setUTCHours(hour, minute, second, 0);
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month && date.getUTCDate() === day ? date.getTime() : null;
+}
+
+/**
+ * An HTTP-date (RFC 9110: IMF-fixdate, or the obsolete RFC 850 and asctime
+ * forms; GMT only, names in any case) as epoch ms, or null for anything else.
+ * RFC 850's two-digit year is the one nearest [now] that isn't over 50 years ahead.
+ */
+export function httpDateMs(header: string, now: number): number | null {
+  const value = header.replace(/[A-Z]/g, (c) => c.toLowerCase());
+  let m = IMF_FIXDATE.exec(value);
+  if (m) return utc(Number(m[3]), MONTHS.indexOf(m[2]), Number(m[1]), Number(m[4]), Number(m[5]), Number(m[6]));
+  m = RFC_850.exec(value);
+  if (m) {
+    const thisYear = new Date(now).getUTCFullYear();
+    let year = thisYear - (thisYear % 100) + Number(m[3]);
+    if (year > thisYear + 50) year -= 100;
+    return utc(year, MONTHS.indexOf(m[2]), Number(m[1]), Number(m[4]), Number(m[5]), Number(m[6]));
+  }
+  m = ASCTIME.exec(value);
+  if (m) return utc(Number(m[6]), MONTHS.indexOf(m[1]), Number(m[2].trim()), Number(m[3]), Number(m[4]), Number(m[5]));
+  return null;
+}
+
+/**
+ * Retry-After as milliseconds from [now], or null: delta seconds (more than
+ * nine digits count as 999999999 s), or an HTTP-date ([httpDateMs]; one in the past is 0).
+ */
 export function retryAfterMs(header: string | null | undefined, now: number): number | null {
-  const value = header?.trim();
+  const value = header?.replace(/^[ \t]+|[ \t]+$/g, "");
   if (!value) return null;
-  if (/^\d+$/.test(value)) return Number(value) * 1000;
-  if (!/[a-z]/i.test(value)) return null;
-  const at = Date.parse(value);
-  return Number.isFinite(at) ? Math.max(0, at - now) : null;
+  if (/^\d+$/.test(value)) {
+    const digits = value.replace(/^0+(?=\d)/, "");
+    return (digits.length > 9 ? 999_999_999 : Number(digits)) * 1000;
+  }
+  const at = httpDateMs(value, now);
+  return at == null ? null : Math.max(0, at - now);
 }
 
 /**
  * What to do after a request failed: [attempt] failures of this request so far
- * (0 for the first), [reResolves] fresh streams already fetched in this run.
+ * (0 for the first), [reResolves] runs in a row before this one that stopped
+ * without saving a media piece (each starts with a freshly resolved stream).
  */
 export function nextStep(failure: Failure, attempt: number, reResolves: number, now: number): Step {
   if ("network" in failure) {
-    return attempt < NETWORK_RETRIES ? { action: "retry", delayMs: backoffMs(attempt) } : { action: "pause", reason: "network", resumeAt: null };
+    if (attempt < NETWORK_RETRIES) return { action: "retry", delayMs: backoffMs(attempt) };
+    // Offline: wait for the network, however long. Online, the server isn't
+    // answering (a dead host, a refused connection, a timeout): that is a stall.
+    return failure.online
+      ? { action: "pause", reason: "server", resumeAt: now + UNREACHABLE_PAUSE_MS }
+      : { action: "pause", reason: "network", resumeAt: null };
   }
   const { status } = failure;
   if (status === 429 || status === 503) {
@@ -291,6 +379,84 @@ export function nextStep(failure: Failure, attempt: number, reResolves: number, 
   if (status === 401 || status === 403 || status === 410) return reResolves < MAX_RE_RESOLVES ? { action: "re-resolve" } : { action: "fail" };
   if (status === 404) return reResolves < 1 ? { action: "re-resolve" } : { action: "fail" };
   return { action: "fail" };
+}
+
+/**
+ * A rate-sensitive (conservative) stream is never retried at once: a step that
+ * would retry becomes a pause of at least [CONSERVATIVE_PAUSE_MS], doubling with
+ * each run in a row that stalled ([reResolves]), up to [MAX_RETRY_AFTER_MS].
+ */
+export function conservativeStep(step: Step, failure: Failure, reResolves: number, now: number): Step {
+  if (step.action !== "retry") return step;
+  if ("network" in failure && !failure.online) return { action: "pause", reason: "network", resumeAt: null };
+  const least = Math.min(MAX_RETRY_AFTER_MS, CONSERVATIVE_PAUSE_MS * 2 ** Math.max(0, Math.min(reResolves, 8)));
+  const limited = "status" in failure && (failure.status === 429 || failure.status === 503);
+  return { action: "pause", reason: limited ? "rate-limit" : "server", resumeAt: now + Math.max(step.delayMs, least) };
+}
+
+/** Why a run stopped with its pieces kept: a pause's reason, or "expired" (resolve the stream again). */
+export type StopReason = PauseReason | "expired";
+
+export type Verdict =
+  | { action: "wait"; reResolves: number; stalledSince: number | null }
+  | { action: "fail"; reason: Exclude<StopReason, "network"> };
+
+/**
+ * After a run stopped without finishing: wait and try again, or give up.
+ *
+ * A run that stops without saving a media piece is a stall (keys don't count,
+ * nor does a run that discarded what was saved for another rendition).
+ * [reResolves] stalls in a row came before this run, the first of them at
+ * [stalledSince]; [progressed]: this run saved a piece, which ends the streak.
+ *
+ * - Waiting for the network while offline never counts, however long it lasts.
+ * - A rate limit keeps waiting until about [MAX_RATE_LIMITED_MS] after the
+ *   streak began (or [MAX_RATE_LIMIT_STALLS] stalls), so even a six-hour
+ *   Retry-After is tried once more before giving up.
+ * - Anything else (a server error, no answer while online, a stream that keeps
+ *   expiring) gives up at the third stall in a row.
+ */
+export function afterStop(reason: StopReason, reResolves: number, stalledSince: number | null, progressed: boolean, now: number): Verdict {
+  if (progressed) return { action: "wait", reResolves: 0, stalledSince: null };
+  if (reason === "network") return { action: "wait", reResolves, stalledSince };
+  const since = stalledSince ?? now;
+  if (reason === "rate-limit") {
+    if ((reResolves > 0 && now - since >= MAX_RATE_LIMITED_MS) || reResolves >= MAX_RATE_LIMIT_STALLS) return { action: "fail", reason };
+  } else if (reResolves >= MAX_RE_RESOLVES) {
+    return { action: "fail", reason };
+  }
+  return { action: "wait", reResolves: reResolves + 1, stalledSince: since };
+}
+
+/** The message a download that gave up ([afterStop]'s reason) shows, for an episode or a manga/novel chapter. */
+export function stalledMessage(reason: Exclude<StopReason, "network">, item: "episode" | "chapter"): string {
+  const from = item === "episode" ? "server" : "source";
+  if (reason === "rate-limit") return `The ${from} kept asking to wait. Try again later${item === "episode" ? " or choose another server" : ""}.`;
+  if (reason === "expired") {
+    return item === "episode"
+      ? "The stream kept expiring before any of it could be saved. Try another server."
+      : "The source's page addresses kept expiring before any page could be saved. Try again later.";
+  }
+  return `The ${from} kept failing on part of this ${item}. ${item === "episode" ? "Try another server." : "Try again later."}`;
+}
+
+/**
+ * Captions are best-effort: after a caption request failed ([attempt] failures
+ * so far), retry a couple of times when the wait is short, never pause for the
+ * server or resolve the stream again. "fail" means finish without captions.
+ * Offline, the episode instead waits for the network ("pause"), so a dropped
+ * connection doesn't cost it its captions.
+ */
+export function captionStep(failure: Failure, attempt: number, conservative: boolean, now: number): Step {
+  const transient = "network" in failure
+    || failure.status === 408 || failure.status === 425 || failure.status === 429 || (failure.status >= 500 && failure.status <= 599);
+  if (!transient) return { action: "fail" };
+  if (attempt < CAPTION_RETRIES) {
+    const asked = "status" in failure ? retryAfterMs(failure.retryAfter, now) : null;
+    const delayMs = Math.max(asked ?? backoffMs(attempt), conservative ? CONSERVATIVE_PAUSE_MS : 0);
+    if (delayMs <= MAX_CAPTION_WAIT_MS) return { action: "retry", delayMs };
+  }
+  return "network" in failure && !failure.online ? { action: "pause", reason: "network", resumeAt: null } : { action: "fail" };
 }
 
 const EXPIRY_PARAMS = new Set(["expires", "expiry", "expire", "exp", "e", "validto"]);

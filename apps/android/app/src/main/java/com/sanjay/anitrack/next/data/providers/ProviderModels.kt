@@ -97,6 +97,8 @@ class ProviderEpisode(
         preferences: PlaybackPreferences = PlaybackPreferences(),
         variantId: String? = null,
     ): ResolvedMedia {
+        // Known before resolving, so a caller can tell which source failed.
+        coroutineContext[OriginCapture]?.providerId = origin?.providerId
         val media = if (variantId != null && variantResolver != null) {
             variantResolver.invoke(variantId, preferences)
         } else {
@@ -129,6 +131,8 @@ data class EpisodeOrigin(
 class OriginCapture : AbstractCoroutineContextElement(OriginCapture) {
     companion object Key : CoroutineContext.Key<OriginCapture>
     @Volatile var origin: EpisodeOrigin? = null
+    /** The source of the episode being resolved, set before it resolves (also when that fails). */
+    @Volatile var providerId: String? = null
 }
 
 data class ProviderSeries(

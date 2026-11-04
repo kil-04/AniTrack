@@ -91,9 +91,9 @@ async function writeAtomic(file: string, text: string) {
   await fs.promises.rename(temp, file);
 }
 
-/** Records the chapters still to fetch (waiting and in progress), so a restart resumes them. */
-async function savePending(t: Title): Promise<void> {
-  const ids = [...(t.current ? [t.current.id] : []), ...t.queue.map((c) => c.id)];
+/** Records the chapters still to fetch (waiting and in progress, but not [finished]), so a restart resumes them. */
+async function savePending(t: Title, finished?: NovelChapter): Promise<void> {
+  const ids = [...(t.current && t.current !== finished ? [t.current.id] : []), ...t.queue.map((c) => c.id)];
   const file = pendingFile(t.detail.sourceId, t.detail.id);
   try {
     if (ids.length) await writeAtomic(file, JSON.stringify(ids));
@@ -275,8 +275,11 @@ async function pump(): Promise<void> {
           t.error = `${message} Downloading stopped; try again later.`;
         }
       } finally {
+        // What's left goes to disk before the chapter shows as settled, so a
+        // quit (or anyone reading the list) never sees a stale pending.json.
+        if (live()) await savePending(t, chapter);
         t.current = null;
-        if (live()) { emit(t); await savePending(t); }
+        if (live()) emit(t);
       }
     }
   } finally {
@@ -303,7 +306,7 @@ async function fetchChapter(t: Title, chapter: NovelChapter, live: () => boolean
       if (!(error instanceof NovelSourceError) || error.verify || error.status == null) throw error;
       const status = error.status;
       if (status !== 0 && status !== 429 && status !== 503 && status !== 408 && !(status >= 500 && status <= 599)) throw error;
-      const failure: Failure = status === 0 ? { network: true } : { status, retryAfter: error.retryAfter };
+      const failure: Failure = status === 0 ? { network: true, online: net.isOnline() } : { status, retryAfter: error.retryAfter };
       const step = nextStep(failure, attempt, 0, Date.now());
       if (step.action === "retry") { await sleep(step.delayMs * retryScale); continue; }
       if (step.action !== "pause") throw error;

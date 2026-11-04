@@ -224,27 +224,40 @@ object SmartDownloads {
         return cleared
     }
 
+    /** The shows a pass downloads ahead for: watched in the last three weeks. */
+    private suspend fun recentShows(now: Long) = Db.continueWatching(12).filter { now - it.updatedAt in 0..RECENT_MS }.take(MAX_SHOWS)
+
+    private suspend fun recentSeries(now: Long) = Db.continueReading(12).filter { now - it.updatedAt in 0..RECENT_MS }.take(MAX_MANGA)
+
     /**
      * Failed smart downloads are tried again by the next pass, keeping what they
-     * already saved; one for an episode or chapter finished meanwhile is dropped.
+     * already saved. One stays only while it is still wanted: it goes, with its
+     * saved pieces, once its episode or chapter is finished or its show or series
+     * has left the recent window (and a pass drops one its plan no longer wants).
+     * A failure stays failed across restarts, so nothing retries it but a pass.
      */
     private suspend fun dropFailed(context: Context) {
+        val now = System.currentTimeMillis()
         val anime = owned(context, KEY_OWNED)
+        val shows = recentShows(now).map { it.animeId }.toSet()
         Downloads.items.toList().filter { it.id in anime && it.status == Downloads.Status.FAILED }.forEach {
-            if ((Db.positionsFor(it.animeId)[it.episode] ?: 0) >= WATCHED_PERCENT) {
+            if (it.animeId !in shows || (Db.positionsFor(it.animeId)[it.episode] ?: 0) >= WATCHED_PERCENT) {
                 Downloads.remove(it.id)
                 anime -= it.id
             }
         }
         saveOwned(context, KEY_OWNED, anime)
         val manga = owned(context, KEY_OWNED_MANGA)
+        val series = recentSeries(now).map { it.mangaId }.toSet()
         val failed = withContext(Dispatchers.Main) {
             MangaDownloads.items.toList().filter { it.key in manga && it.status == MangaDownloads.Status.FAILED }
         }
         val reads = mutableMapOf<Int, Map<Float, ReadState>>()
-        val finished = failed.filter { reads.getOrPut(it.mangaId) { Db.readingFor(it.mangaId) }[it.chapter.number]?.finished == true }
+        val stale = failed.filter {
+            it.mangaId !in series || reads.getOrPut(it.mangaId) { Db.readingFor(it.mangaId) }[it.chapter.number]?.finished == true
+        }
         withContext(Dispatchers.Main) {
-            finished.forEach {
+            stale.forEach {
                 MangaDownloads.remove(it.key)
                 manga -= it.key
             }
@@ -260,7 +273,7 @@ object SmartDownloads {
         val now = System.currentTimeMillis()
         val ahead = episodesAhead(context)
         val owned = owned(context, KEY_OWNED)
-        val shows = Db.continueWatching(12).filter { now - it.updatedAt in 0..RECENT_MS }.take(MAX_SHOWS)
+        val shows = recentShows(now)
         for (row in shows) {
             try {
                 val anime = AniList.byId(row.animeId) ?: continue
@@ -268,6 +281,10 @@ object SmartDownloads {
                 val wanted = SmartPlan.nextEpisodes(
                     series.episodes.map { it.number }, row.episode, Db.positionsFor(anime.id), ahead,
                 )
+                // A failed smart download the plan no longer wants goes, with its saved pieces.
+                Downloads.items.toList()
+                    .filter { it.animeId == anime.id && it.id in owned && it.status == Downloads.Status.FAILED && wanted.none { w -> kotlin.math.abs(w - it.episode) < 0.01f } }
+                    .forEach { Downloads.remove(it.id); owned -= it.id }
                 val have = Downloads.items.toList().filter { it.animeId == anime.id && it.status != Downloads.Status.FAILED }
                     .map { it.episode }.toSet()
                 for (number in wanted) {
@@ -296,7 +313,7 @@ object SmartDownloads {
         val ahead = chaptersAhead(context)
         val owned = owned(context, KEY_OWNED_MANGA)
         val prefs = prefs(context)
-        val series = Db.continueReading(12).filter { now - it.updatedAt in 0..RECENT_MS }.take(MAX_MANGA)
+        val series = recentSeries(now)
         for (row in series) {
             try {
                 // A background job never opens Comix's foreground loading window.
@@ -305,6 +322,12 @@ object SmartDownloads {
                 val title = source.find(manga) ?: continue
                 val chapters = MangaChapters.normalize(source.chapters(title), prefs.getString("manga_group_${manga.id}", null))
                 val wanted = SmartPlan.nextChapters(chapters.map { it.number }, Db.readingFor(manga.id), ahead).toSet()
+                // A failed smart chapter the plan no longer wants goes, with its saved pages.
+                withContext(Dispatchers.Main) {
+                    MangaDownloads.items.toList()
+                        .filter { it.mangaId == manga.id && it.key in owned && it.status == MangaDownloads.Status.FAILED && it.chapter.number !in wanted }
+                        .forEach { MangaDownloads.remove(it.key); owned -= it.key }
+                }
                 val targets = withContext(Dispatchers.Main) {
                     val held = MangaDownloads.held(manga.id).keys
                     chapters.filter { it.number in wanted && it.number !in held }.also {

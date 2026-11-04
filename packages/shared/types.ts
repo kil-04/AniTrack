@@ -165,12 +165,20 @@ export interface DownloadItem {
 }
 
 export interface DownloadResumeHint {
-  /** network: offline · rate-limit/server: wait until [at] · expired: resolve the stream again · restart: the app was closed. */
+  /**
+   * network: offline (only ever while the device has no network) · rate-limit/server: wait until [at] ·
+   * expired: resolve the stream again · restart: the app was closed.
+   */
   reason: "network" | "rate-limit" | "server" | "expired" | "restart";
   /** Epoch ms after which to try again (rate-limit, server). */
   at?: number | null;
-  /** Fresh streams already fetched without progress, passed back on the next start. */
+  /**
+   * Runs in a row that stopped without saving a media piece (stalls), passed back on the next
+   * start; the shared rules (download-resume.ts afterStop) fail the download when they run out.
+   */
   reResolves?: number;
+  /** When the first of those stalls stopped (epoch ms), for the rate-limit time budget. */
+  stalledSince?: number | null;
 }
 
 export interface DesktopUpdateState {

@@ -49,7 +49,7 @@ const chapters = Array.from({ length: 5 }, (_, i) => ({ id: `ch${i + 1}abc`, ord
 const text = (id) => ({ id, label: id, paragraphs: [`Text of ${id}`] });
 const hex = (value) => Buffer.from(value, "utf-8").toString("hex");
 const folder = (id) => path.join(storageRoot, "novel_downloads", `novelbuddy-${hex(id)}`);
-async function idle(id, timeout = 4000) {
+async function idle(id, timeout = 8000) {
   const started = Date.now();
   for (;;) {
     const t = (await N.listNovelDownloads()).find((x) => x.titleId === id);
@@ -58,6 +58,15 @@ async function idle(id, timeout = 4000) {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
+/** Polls until [condition] holds (timing differs under load and on Windows; never assert a moment). */
+async function waitFor(condition, what, timeout = 8000) {
+  const started = Date.now();
+  while (!(await condition())) {
+    if (Date.now() - started > timeout) throw new Error(`Timed out waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+const titleOf = async (id) => (await N.listNovelDownloads()).find((x) => x.titleId === id);
 
 // Runs first: the folder below is what an app closed mid-download leaves behind.
 test("after a restart, the chapters still waiting are fetched in order; saved ones aren't", async () => {
@@ -71,7 +80,8 @@ test("after a restart, the chapters still waiting are fetched in order; saved on
   const t = await idle(id);
   assert.deepEqual(fetched, ["ch2abc", "ch3abc"]);
   assert.equal(t.saved, 3);
-  assert.equal(fs.existsSync(path.join(folder(id), "pending.json")), false, "nothing left to resume");
+  // pending.json goes before the title shows as settled; poll anyway rather than assert a moment.
+  await waitFor(() => !fs.existsSync(path.join(folder(id), "pending.json")), "nothing left to resume");
   assert.deepEqual((await N.localChapter("novelbuddy", id, "ch3abc")).paragraphs, ["Text of ch3abc"]);
 });
 
@@ -100,16 +110,15 @@ test("a dropped network pauses the title and it carries on when the network is b
   harness.chapter = async (chapterId) => {
     if (!harness.online) throw new NovelSourceError("NovelBuddy couldn't be reached. Check your connection and retry.", 0);
     fetched.push(chapterId);
-    if (chapterId === "ch2abc") {
-      harness.online = false;
-      setTimeout(() => { harness.online = true; }, 150);
-    }
+    if (chapterId === "ch2abc") harness.online = false; // the network drops after chapter 2
     return text(chapterId);
   };
   await N.enqueueNovelChapters(detail(id), chapters, chapters);
+  // It stays offline until the title shows it is waiting: no race with the retries.
+  await waitFor(async () => /Waiting for the network/.test((await titleOf(id))?.error ?? ""), "the network wait");
   // While it waits, the queue is on disk for a restart.
-  await new Promise((resolve) => setTimeout(resolve, 60));
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(folder(id), "pending.json"), "utf8")), ["ch3abc", "ch4abc", "ch5abc"]);
+  harness.online = true;
   const t = await idle(id);
   assert.equal(t.saved, 5);
   assert.equal(t.failed, 0);
