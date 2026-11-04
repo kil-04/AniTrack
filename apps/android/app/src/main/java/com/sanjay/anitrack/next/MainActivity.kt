@@ -57,6 +57,8 @@ private val Accent: androidx.compose.ui.graphics.Color get() = com.sanjay.anitra
 
 object PipState {
     val active = mutableStateOf(false)
+    /** The player's current picture-in-picture settings (its controls), set while an episode is open. */
+    @Volatile var params: android.app.PictureInPictureParams? = null
 }
 
 /** A navigation tab: outlined [icon] normally, the filled [selectedIcon] when it's the current page. */
@@ -191,13 +193,14 @@ class MainActivity : ComponentActivity() {
         PipState.active.value = isInPictureInPictureMode
     }
 
-    // YouTube behaviour: leaving the app while watching drops into PiP.
+    // YouTube behaviour: leaving the app while watching drops into PiP. Android 12+ does that on its
+    // own (the player turns on auto-enter while it plays); older versions need this call.
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        if (com.sanjay.anitrack.next.data.PlaySession.playerActive) {
+        if (android.os.Build.VERSION.SDK_INT < 31 && com.sanjay.anitrack.next.data.PlaySession.playerActive) {
             try {
                 enterPictureInPictureMode(
-                    android.app.PictureInPictureParams.Builder()
+                    PipState.params ?: android.app.PictureInPictureParams.Builder()
                         .setAspectRatio(android.util.Rational(16, 9))
                         .build(),
                 )

@@ -68,6 +68,41 @@ import kotlinx.coroutines.launch
 private val Accent: Color get() = AniColors.Accent
 private const val SERVERS_UNAVAILABLE = "Could not load this episode's servers. Reconnect or retry manually."
 
+// Picture-in-picture controls come back to the player as this in-app broadcast.
+private const val PIP_BROADCAST = "com.sanjay.anitrack.next.PIP_CONTROL"
+private const val PIP_EXTRA = "control"
+private const val PIP_PREVIOUS = "previous"
+private const val PIP_PLAY = "play"
+private const val PIP_NEXT = "next"
+
+/**
+ * The player's picture-in-picture settings: 16:9, with Previous, Play/Pause and Next in the PiP
+ * window, and (Android 12+) entering PiP by itself on Home while [autoEnter] (an episode playing).
+ */
+private fun pipParams(context: android.content.Context, playing: Boolean, hasPrevious: Boolean, hasNext: Boolean, autoEnter: Boolean): PictureInPictureParams {
+    fun action(control: String, icon: Int, title: String, code: Int, enabled: Boolean): android.app.RemoteAction {
+        val intent = android.content.Intent(PIP_BROADCAST).setPackage(context.packageName).putExtra(PIP_EXTRA, control)
+        val pending = android.app.PendingIntent.getBroadcast(
+            context, code, intent,
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        return android.app.RemoteAction(android.graphics.drawable.Icon.createWithResource(context, icon), title, title, pending)
+            .apply { isEnabled = enabled }
+    }
+    val builder = PictureInPictureParams.Builder()
+        .setAspectRatio(Rational(16, 9))
+        .setActions(
+            listOf(
+                action(PIP_PREVIOUS, android.R.drawable.ic_media_previous, "Previous episode", 1, hasPrevious),
+                if (playing) action(PIP_PLAY, android.R.drawable.ic_media_pause, "Pause", 2, true)
+                else action(PIP_PLAY, android.R.drawable.ic_media_play, "Play", 2, true),
+                action(PIP_NEXT, android.R.drawable.ic_media_next, "Next episode", 3, hasNext),
+            ),
+        )
+    if (android.os.Build.VERSION.SDK_INT >= 31) builder.setAutoEnterEnabled(autoEnter).setSeamlessResizeEnabled(false)
+    return builder.build()
+}
+
 @OptIn(UnstableApi::class)
 @Composable
 fun PlayerScreen(
@@ -276,6 +311,41 @@ fun PlayerScreen(
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             // Don't re-show system bars — the whole app runs immersive now.
         }
+    }
+
+    // Picture-in-picture: Home enters it while an episode plays, and its window has Previous,
+    // Play/Pause and Next, which arrive here as a broadcast only this app can send.
+    val onPipControl by rememberUpdatedState<(String) -> Unit> { control ->
+        when (control) {
+            PIP_PREVIOUS -> if (index > 0) index -= 1
+            PIP_NEXT -> if (index + 1 < PlaySession.count) index += 1
+            PIP_PLAY -> doTogglePlay()
+        }
+    }
+    DisposableEffect(activity) {
+        val host = activity ?: return@DisposableEffect onDispose { }
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: android.content.Context, intent: android.content.Intent) {
+                intent.getStringExtra(PIP_EXTRA)?.let { onPipControl(it) }
+            }
+        }
+        androidx.core.content.ContextCompat.registerReceiver(
+            host, receiver, android.content.IntentFilter(PIP_BROADCAST), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        onDispose {
+            runCatching { host.unregisterReceiver(receiver) }
+            PipState.params = null
+            // Leaving the player stops Home from opening PiP.
+            if (android.os.Build.VERSION.SDK_INT >= 31) {
+                runCatching { host.setPictureInPictureParams(PictureInPictureParams.Builder().setAutoEnterEnabled(false).build()) }
+            }
+        }
+    }
+    LaunchedEffect(activity, isPlaying, index, error) {
+        val host = activity ?: return@LaunchedEffect
+        val params = pipParams(host, isPlaying, index > 0, index + 1 < PlaySession.count, autoEnter = isPlaying && error == null)
+        PipState.params = params
+        runCatching { host.setPictureInPictureParams(params) }
     }
 
     // Pin the selected (or highest) rendition — the DEFAULT is best quality,
@@ -837,9 +907,9 @@ fun PlayerScreen(
                 },
                 onPictureInPicture = {
                     try {
-                        activity?.enterPictureInPictureMode(
-                            PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build(),
-                        )
+                        activity?.let {
+                            it.enterPictureInPictureMode(pipParams(it, isPlaying, index > 0, index + 1 < PlaySession.count, isPlaying && error == null))
+                        }
                     } catch (_: Exception) { /* PiP unavailable */ }
                 },
                 onToggleFullscreen = {
