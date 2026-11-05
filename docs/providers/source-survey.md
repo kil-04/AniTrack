@@ -485,3 +485,164 @@ local playback with English subtitles were verified on the desktop and tablet;
 conservative transfer pacing was added after a simultaneous test hit a CDN
 limit. See [download validation](anichan.md#download-validation) for completed
 checks, tested qualities and the sampled mirrors that returned HTTP 502.
+
+# Weeb Central integration: 3 Nov 2026
+
+The user asked for more sources from EverythingMoe. Weeb Central was the
+remaining "usable" manga candidate from the 12 Oct survey that needs neither a
+page session nor title guessing, so it was added to both apps after XComic and
+Toonkotsu. Re-checked from this session's network with AniTrack's honest user
+agent and no browser:
+
+| Step | Request | Observed |
+| --- | --- | --- |
+| Search | `GET /search/data?text=…&sort=Best+Match&display_mode=Full+Display` | HTML cards; `/series/<ULID>/<slug>` links in relevance order |
+| Series | `GET /series/<ULID>` (slug optional) | `<h1>` English title, AniList link, `Type`, `Released`, `Adult Content`, newest chapters |
+| Chapters | `GET /series/<ULID>/full-chapter-list` | Every chapter in one fragment, newest first: One Piece 1,197, Berserk 403 (16 "Prologue N"), Solo Leveling 201 |
+| Pages | `GET /chapters/<ULID>/images?is_prev=False&current_page=1&reading_style=long_strip` | `<img>` tags on `hot.planeptune.us`, `scans-hot.planeptune.us`, `scans.lastation.us` and `official.lowee.us`, all served with no Referer |
+
+Decisions:
+
+- **Matching** is by the series page's AniList link (the shared `sourceMatches`
+  rule). Frieren, One Piece, Solo Leveling and Berserk all matched from their
+  AniList titles.
+- **"Adult Content: Yes"** also marks violent seinen such as Berserk. AniTrack
+  only lists AniList titles that aren't adult, so an AniList-linked series is
+  never rejected for the site's flag; an unlinked one still is.
+- **"Prologue N"** chapters are filed as 0.01–0.16, before chapter 1, as on
+  MangaDex. Other labels without a number (none seen in the samples) are skipped.
+- **Images** are allowed only from `planeptune`, `lastation`, `lowee` and
+  `leanbox` `.us` hosts under `/manga/` (`leanbox` follows the site's naming but
+  was not observed).
+- **Downloads** need no source-specific code in either app: desktop downloads
+  fetch `pageImages` through `fetchPageImage` (now allowing those hosts), and
+  Android's `MangaDownloads` fetches the plain HTTPS `MangaPage` URLs.
+
+Validation done: parser tests on both platforms over saved pages
+(`tests/weebcentral.test.mjs`, `WeebCentralParserTest`); a live run of the shared
+parser through search, match, chapter list, pages and a page-image download for
+the four titles above; desktop type-check.
+
+Follow-up the same day: the branch's CI run (workflow_dispatch, run 51) passed
+every step, including the Android unit tests and the debug APK build. In Electron
+32 (Xvfb), the compiled desktop source matched Frieren by AniList id, listed 147
+chapters, served page 1 through the reader's `anitrack-manga://img` protocol
+(PNG), downloaded chapter 1 through the desktop manga queue (39 pages, 16.2 MB)
+and, with every network request refused, read all 39 saved pages back in order
+and decoded them.
+
+**Verified on devices, 4 Nov 2026** (user's Windows PC and Galaxy A54, debug app):
+
+- **Desktop:** a QA copy of the built branch matched Frieren and listed 147
+  chapters, and chapter 1 read all 39 pages. With every request sent to a dead
+  proxy, the saved chapter (39 pages, 16 MB) read back 001-039 in order. Berserk
+  lists its 16 prologues first, labelled "Chapter 0.01" to "Chapter 0.16".
+- **Android:** the first run showed "Page N didn't load" for every page. The image
+  CDN answers OkHttp's default user agent with HTTP 403, which Coil sent; AniTrack's
+  agent gets 200. Fixed in a21ecec: Weeb Central pages carry `MangaHttp.USER_AGENT`
+  as a page header, which the reader, the tall-page slicer and downloads all send.
+  After the fix, chapter 1 read to page 39 of 39 and downloaded through Download
+  range (16 MB). In airplane mode the saved chapter opened and scrolled through to
+  "End of chapter 1" with every page drawn.
+
+**Prologue labels, fixed 4 Nov 2026:** the parsers filed Berserk's "Prologue 1" to
+"Prologue 16" as chapters 0.01 to 0.16 with no title, so rows read "Chapter 0.01" …
+"Chapter 0.16" and the tenth "Chapter 0.1". Both parsers now give each prologue the
+title "Prologue N"; the numbers and order are unchanged. A row now reads "0.01 ·
+Prologue 1" on desktop and "Ch. 0.01 · Prologue 1" on Android, like other titled
+chapters. Covered by the parser tests on both platforms (the saved full chapter
+list, plus a "Prologue 10" entry). **Still not done:** checking the rows on the
+phone.
+
+Other EverythingMoe candidates still open, unchanged from the earlier sections:
+MangaKatana (plain HTTP) and Kagane (page session) for manga; anv, Xanime and
+ANIMEGG for anime; NovelCool and NovelFire for novels.
+
+# Xanime integration: 3 Nov 2026
+
+The user chose Xanime as the next source after anv was set aside (its episode API
+refuses requests without the watch page's session cookie, and replaying that cookie
+was not pursued). Re-checked from this session with AniTrack's honest user agent,
+plain GETs only, no site code run:
+
+| Step | Request | Observed |
+| --- | --- | --- |
+| Search | `GET /search?word=<query>` | Qwik state lists each show with `al_id` (AniList), `ani_id_mal`, year, type, `ep_total`, sub/dub counts and `ep_up_id` (latest episode) |
+| Title | `GET /title/<show id>` | The same show object |
+| Episode | `GET /title/<show id>/<episode id>` | Episode list (the 50-episode page holding that episode) plus that episode's sources: `src_type` sub/dub, `src_name`, `souPath` (signed HLS master, about a day's lifetime), `track[]` captions, `jump` intro/outro |
+| Media | master, rendition (`.ico`), segment (`.gif`/`.jpeg`/…) | `application/vnd.apple.mpegurl` playlists and `video/mp2t` segments (sync byte 0x47), no `EXT-X-KEY`, **no Referer or cookie needed** |
+
+Live run of the shared parser (search → AniList match → episode list → streams →
+master → rendition → segment): Frieren (28/28 episodes), Cowboy Bebop (26/26, sub and
+dub with English captions and 49–144 s intro), Attack on Titan (25/25) and One Piece.
+
+Decisions and limits:
+
+- **Matching** is exact: a search result is accepted only when its `al_id` equals the
+  AniList id being opened (desktop also verifies through `getExternalIds`).
+- **Long shows list only their latest 50-episode page.** Episode ids are not
+  sequential, the sitemap lists only recent episodes, and other pages load through
+  the site's internal Qwik server calls, which AniTrack does not replay. One Piece
+  shows 1151–1180 of 1,180. Shows of 50 episodes or fewer are complete.
+- **No Sub, no streams:** as with shonen.to and AniChan, a Dub is never started
+  unless picked; an episode without a Sub stream offers nothing.
+- **Authorization:** `directory` scope for the master's signed media path; each
+  caption (on a sibling xanivsrc host) is authorized exactly. No headers are sent.
+- **Enablement:** on by default unless the signed configuration names `xanime` and
+  switches it off (like AniChan), because adding it to the signed file needs the
+  signing key. `xanime` was added to both apps' built-in configuration and order.
+- **Downloads** use both apps' existing HLS queues unchanged; image-like segment
+  names are saved as `.ts`.
+
+Validation done: parser tests on both platforms over the saved page states
+(`tests/xanime.test.mjs`, `XanimeTest`), desktop type-check and Node suite, and the
+live run above.
+
+Follow-up the same day:
+
+- **CI:** the branch's workflow_dispatch run (run 51) passed every step, including
+  the Android unit tests and the debug APK build, so the Android adapter compiles.
+- **Desktop playback** (`electron scripts/electron-playback-smoke.js --provider=xanime`,
+  Electron 32 under Xvfb): Bebop episode 1 Sub played at 1448×1080 with audio and
+  217 English caption cues, sustained 65 media seconds, then resumed after seeking
+  to 13:39 and back to 0:19. HTTP 200 for all 44 media requests.
+- **Desktop download:** the desktop download service saved all 353 segments
+  (305 MB, the 1080p rendition) plus `subs.vtt`; the local playlist has no remote
+  URLs and the image-named segments were saved as `.ts`. With every non-local
+  request refused, the saved episode played at 1448×1080 with its captions from
+  the start and after a seek to 20:05.
+
+**Verified on devices, 4 Nov 2026** (user's Windows PC and Galaxy A54, debug app):
+
+- **Desktop:** in a QA copy of the built branch, Bebop episode 1 played as follows:
+  - Sub at 1448×1080 with 217 English cues;
+  - Skip Intro jumped past 2:24, and seeks resumed;
+  - Dub loaded its own master playlist.
+
+  The Sub download (320 MB with `subs.vtt`) played offline through a dead proxy,
+  with captions, and after a seek to 20:05. Two details:
+  - The Dub's listed caption returns 404 on every xanivsrc host (missing on the site).
+  - A download follows the last Sub/Dub pick (`anitrack-provider-xanime-variant`).
+- **Android:** episode 1 played as follows:
+  - Highest (1080p), with English subtitles;
+  - Skip Intro worked, and seeking worked;
+  - the Dub played. ExoPlayer logged retries for the Dub's missing caption.
+
+  Episode 1 downloaded (304 MB) and played in airplane mode with its subtitles.
+  No crashes in the crash log during the run.
+
+**Missing captions, fixed 4 Nov 2026:** the Dub's 404 caption showed as an empty
+"English" track on desktop, and on Android ExoPlayer kept retrying it. Both players
+now cope with a dead side caption from any provider, not just Xanime:
+
+- **Desktop:** a caption `<track>` whose file fails to load is removed from the
+  video and from the captions menu (`components/player/sideCaptions.ts`, tested in
+  `tests/desktop-player.test.mjs`). The browser doesn't retry it.
+- **Android:** a side caption that gets an HTTP error (404, 403, 5xx) is not
+  retried. The player error that follows reloads the same stream without that
+  caption, at the same position. This happens before the player screen would count
+  the error as the server refusing the stream (`SideCaptions`,
+  `PlayerHolder.dropFailedCaption`, tested in `SideCaptionsTest`). The other
+  captions stay.
+
+**Still not done:** playing Bebop's Dub on the phone with this change.

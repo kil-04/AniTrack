@@ -403,6 +403,9 @@ fun PlayerScreen(
             }
             override fun onPlayerError(e: androidx.media3.common.PlaybackException) {
                 if (useWeb) return
+                // A dead side caption (missing on the host) isn't the stream refusing playback:
+                // the player reloads without it, so don't count it against the server.
+                if (com.sanjay.anitrack.next.data.PlayerHolder.dropFailedCaption(context, e)) return
                 var cause: Throwable? = e
                 var httpCode: Int? = null
                 while (cause != null) {

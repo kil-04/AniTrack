@@ -1,0 +1,281 @@
+<!DOCTYPE html><html><head><meta property="og:title" content="Sousou no Frieren | Weeb Central"></head><body>
+<h1 class="md:hidden text-2xl font-bold text-center">Frieren - Beyond Journey&#39;s End</h1>
+                <section class="md:hidden flex flex-col items-center justify-center">
+                    <div class="flex join bg-gray-200 border-4 border-gray-200">
+                        <div class="bg-gray-200 border-r border-gray-200 text-black flex items-center justify-center join-item px-5" x-text="new Intl.NumberFormat('en-US').format(subscriptions)"></div>
+                        <button class="btn bg-red-600 hover:bg-red-400 border-none text-white join-item w-32 cursor-pointer" id="left-sub-button" x-on:htmx:after-request="if(event.detail.successful) subscriptions++" hx-post="https://weebcentral.com/series/01J76XYDGDQERFSK333582BNBZ/subscribe">
+                            Subscribe
+                        </button>
+                    </div>
+                </section>
+                <section class="flex items-center justify-center">
+                    <picture>
+                        <source srcset="https://temp.compsci88.com/cover/normal/01J76XYDGDQERFSK333582BNBZ.webp" width="400" height="600" type="image/webp">
+                        <img src="https://temp.compsci88.com/cover/fallback/01J76XYDGDQERFSK333582BNBZ.jpg" alt="Frieren - Beyond Journey&#39;s End cover" width="400" height="600" decoding="async">
+                    </picture>
+                </section>
+                <button class="md:hidden border-none bg-primary flex items-center justify-center gap-2 py-2 " x-show="!show_detail" @click="show_detail = true">
+                    <svg></svg>
+                    <span>Show Details</span>
+                </button>
+                <section :class="show_detail ? '' : 'hidden md:block'">
+                    <ul class="flex flex-col gap-4">
+                        <li>
+                            <strong>Author(s): </strong>
+                            <span><a href="https://weebcentral.com/search?author=ABE+Tsukasa" class="link link-info link-hover">ABE Tsukasa</a>,</span>
+                            <span><a href="https://weebcentral.com/search?author=YAMADA+Kanehito" class="link link-info link-hover">YAMADA Kanehito</a></span>
+                        </li>
+                        <li>
+                            <strong>Tags(s): </strong>
+                            <span><a href="https://weebcentral.com/search?included_tag=Adventure" class="link link-info link-hover">Adventure</a>,</span>
+                            <span><a href="https://weebcentral.com/search?included_tag=Drama" class="link link-info link-hover">Drama</a>,</span>
+                            <span><a href="https://weebcentral.com/search?included_tag=Fantasy" class="link link-info link-hover">Fantasy</a>,</span>
+                            <span><a href="https://weebcentral.com/search?included_tag=Shounen" class="link link-info link-hover">Shounen</a>,</span>
+                            <span><a href="https://weebcentral.com/search?included_tag=Slice+of+Life" class="link link-info link-hover">Slice of Life</a></span>
+                        </li>
+                        <li>
+                            <strong>Type: </strong>
+                            <a href="https://weebcentral.com/search?included_type=Manga" class="link link-info link-hover">Manga</a>
+                        </li>
+                        <li>
+                            <strong>Status: </strong>
+                            <a href="https://weebcentral.com/search?included_status=Ongoing" class="link link-info link-hover">Ongoing</a>
+                        </li>
+                        <li>
+                            <strong>Released: </strong>
+                            <span>2020</span>
+                        </li>
+                        <li>
+                            <strong>Official Translation: </strong>
+                            <a href="https://weebcentral.com/search?official=True" class="link link-info link-hover">Yes</a>
+                        </li>
+                        <li>
+                            <strong>Anime Adaptation: </strong>
+                            <a href="https://weebcentral.com/search?anime=True" class="link link-info link-hover">Yes</a>
+                        </li>
+                        <li>
+                            <strong>Adult Content: </strong>
+                            <a href="https://weebcentral.com/search?adult=False" class="link link-info link-hover">No</a>
+                        </li>
+                        <li>
+                            <strong>RSS: </strong>
+                            <a href="https://weebcentral.com/series/01J76XYDGDQERFSK333582BNBZ/rss" class="link link-info link-hover">RSS Feed</a>
+                        </li>
+                        <li class="flex gap-4">
+                            <strong>Track:</strong>
+                            <span class="flex gap-4">
+                                <span class="tooltip tooltip-bottom" data-tip="Official Source">
+                                    <a href="https://www.viz.com/frieren-beyond-journeys-end" target="_blank" rel="noopener noreferrer" aria-label="Go to official website">
+                                        <svg></svg>
+                                    </a>
+                                </span>
+                                <span class="tooltip tooltip-bottom" data-tip="AniList">
+                                    <a href="https://anilist.co/manga/118586/Sousou-no-Frieren/" target="_blank" rel="noopener noreferrer" aria-label="Go to anilist">
+                                        <img src="/static/images/anilist.png" width="20" height="20" alt="Anilist icon">
+                                    </a>
+                                </span>
+                                <span class="tooltip tooltip-bottom" data-tip="MangaUpdates">
+                                    <a href="https://www.mangaupdates.com/series/ugf5dzu/sousou-no-frieren" target="_blank" rel="noopener noreferrer" aria-label="Go to mangaupdates">
+                                        <svg></svg>
+                                    </a>
+                                </span>
+                            </span>
+                        </li>
+                    </ul>
+                </section>
+            </section>
+            <!-- RIGHT -->
+            <section class="md:w-8/12 flex flex-col gap-4">
+                <h1 class="hidden md:block text-2xl font-bold">Frieren - Beyond Journey&#39;s End</h1>
+                <section class="hidden md:block">
+                    <div class="inline-block">
+                        <div class="join bg-gray-200 border-4 border-gray-200">
+                            <div class="bg-gray-200 border-r border-gray-200 text-black join-item flex items-center justify-center px-5" x-text="new Intl.NumberFormat('en-US').format(subscriptions)"></div>
+                            <button class="btn bg-red-600 hover:bg-red-400 border-none text-white join-item w-32 cursor-pointer" id="right-sub-button" x-on:htmx:after-request="if(event.detail.successful) subscriptions++" hx-post="https://weebcentral.com/series/01J76XYDGDQERFSK333582BNBZ/subscribe">
+                                Subscribe
+                            </button>
+                        </div>
+                    </div>
+                </section>
+                <section :class="show_detail ? '' : 'hidden md:block'">
+                    <ul class="flex flex-col gap-4">
+                        <li>
+                            <strong>Description</strong>
+                            <p class="whitespace-pre-wrap break-words">Frieren is a member of the hero's party that defeated the demon king. Both a magician and an elf, those are the things that separates her from the other members. Being able to live longer than others, her feelings are...</p>
+                        </li>
+                        <li>
+                            <strong>Associated Name(s)</strong>
+                            <ul class="list-disc list-inside">
+                                <li>Sousou no Frieren</li>
+                            </ul>
+                        </li>
+                    </ul>
+                </section>
+                <section class="w-full flex flex-col items-center justify-center mb-4">
+                    <!-- Profiton -->
+                    <script data-cfasync="false" async type="text/javascript" src="//kl.expwycheapie.com/sJokZM7BU5p2X0II/138576"></script>
+                </section>
+                <section x-data="{ mark_chapters: 'null', mark_chapter_option: false }">
+                    <div id="chapter-list" class="flex flex-col mt-2 divide-y divide-slate-500">
+                        <div class="flex items-center" x-data="{ new_chapter: checkNewChapter('2025-10-15T01:02:34.107778Z') }" x-show="mark_chapters == 'null' || (mark_chapters == 'read' && 'False'.toLowerCase() === 'false') || (mark_chapters == 'unread' && 'False'.toLowerCase() === 'true')">
+    <a href="/chapters/01K7JP7T3V8ZVZJSGF99FFH55K" class="hover:bg-base-300 flex-1 flex items-center p-2">
+        <span class="me-2">
+            <img src="/static/images/chapter-badge.svg" alt="" width="16" height="16" class="w-4 h-4" decoding="async">
+        </span>
+        <span class="grow flex items-center gap-2">
+            <span class="">Chapter 147</span>
+            <span class="flex gap-1 items-center link-info" x-show="last_read_chapter === '01K7JP7T3V8ZVZJSGF99FFH55K'">
+                <svg></svg>
+                <span class="hidden md:inline">Last Read</span>
+            </span>
+            <span x-show="new_chapter">
+                <img src="/static/images/new-chapter.svg" alt="" width="20" height="20" class="w-5 h-5" decoding="async">
+            </span>
+        </span>
+        <time class="text-datetime opacity-50" datetime="2025-10-15T01:02:34.107Z">2025-10-15T01:02:34.107778Z</time>
+    </a>
+    <input type="checkbox" value="01K7JP7T3V8ZVZJSGF99FFH55K" name="chapter_id" form="mark-as-read-form" class="checkbox ms-4" x-show="mark_chapters == 'read'">
+    <input type="checkbox" value="01K7JP7T3V8ZVZJSGF99FFH55K" name="chapter_id" form="mark-as-unread-form" class="checkbox ms-4" x-show="mark_chapters == 'unread'">
+</div>
+                        <div class="flex items-center" x-data="{ new_chapter: checkNewChapter('2025-09-30T23:33:43.999651Z') }" x-show="mark_chapters == 'null' || (mark_chapters == 'read' && 'False'.toLowerCase() === 'false') || (mark_chapters == 'unread' && 'False'.toLowerCase() === 'true')">
+    <a href="/chapters/01K6EFK2XZRN17SPNVFWJYCG1A" class="hover:bg-base-300 flex-1 flex items-center p-2">
+        <span class="me-2">
+            <img src="/static/images/chapter-badge.svg" alt="" width="16" height="16" class="w-4 h-4" decoding="async">
+        </span>
+        <span class="grow flex items-center gap-2">
+            <span class="">Chapter 146</span>
+            <span class="flex gap-1 items-center link-info" x-show="last_read_chapter === '01K6EFK2XZRN17SPNVFWJYCG1A'">
+                <svg></svg>
+                <span class="hidden md:inline">Last Read</span>
+            </span>
+            <span x-show="new_chapter">
+                <img src="/static/images/new-chapter.svg" alt="" width="20" height="20" class="w-5 h-5" decoding="async">
+            </span>
+        </span>
+        <time class="text-datetime opacity-50" datetime="2025-09-30T23:33:43.999Z">2025-09-30T23:33:43.999651Z</time>
+    </a>
+    <input type="checkbox" value="01K6EFK2XZRN17SPNVFWJYCG1A" name="chapter_id" form="mark-as-read-form" class="checkbox ms-4" x-show="mark_chapters == 'read'">
+    <input type="checkbox" value="01K6EFK2XZRN17SPNVFWJYCG1A" name="chapter_id" form="mark-as-unread-form" class="checkbox ms-4" x-show="mark_chapters == 'unread'">
+</div>
+                        <div class="flex items-center" x-data="{ new_chapter: checkNewChapter('2025-09-17T01:02:11.418501Z') }" x-show="mark_chapters == 'null' || (mark_chapters == 'read' && 'False'.toLowerCase() === 'false') || (mark_chapters == 'unread' && 'False'.toLowerCase() === 'true')">
+    <a href="/chapters/01K5AK2ZYT0S0NEDBCA777V7AH" class="hover:bg-base-300 flex-1 flex items-center p-2">
+        <span class="me-2">
+            <img src="/static/images/chapter-badge.svg" alt="" width="16" height="16" class="w-4 h-4" decoding="async">
+        </span>
+        <span class="grow flex items-center gap-2">
+            <span class="">Chapter 145</span>
+            <span class="flex gap-1 items-center link-info" x-show="last_read_chapter === '01K5AK2ZYT0S0NEDBCA777V7AH'">
+                <svg></svg>
+                <span class="hidden md:inline">Last Read</span>
+            </span>
+            <span x-show="new_chapter">
+                <img src="/static/images/new-chapter.svg" alt="" width="20" height="20" class="w-5 h-5" decoding="async">
+            </span>
+        </span>
+        <time class="text-datetime opacity-50" datetime="2025-09-17T01:02:11.418Z">2025-09-17T01:02:11.418501Z</time>
+    </a>
+    <input type="checkbox" value="01K5AK2ZYT0S0NEDBCA777V7AH" name="chapter_id" form="mark-as-read-form" class="checkbox ms-4" x-show="mark_chapters == 'read'">
+    <input type="checkbox" value="01K5AK2ZYT0S0NEDBCA777V7AH" name="chapter_id" form="mark-as-unread-form" class="checkbox ms-4" x-show="mark_chapters == 'unread'">
+</div>
+                        <div class="flex items-center" x-data="{ new_chapter: checkNewChapter('2025-09-02T22:58:44.403312Z') }" x-show="mark_chapters == 'null' || (mark_chapters == 'read' && 'False'.toLowerCase() === 'false') || (mark_chapters == 'unread' && 'False'.toLowerCase() === 'true')">
+    <a href="/chapters/01K46AEWHKQA3ZZX7N2MXGY61Y" class="hover:bg-base-300 flex-1 flex items-center p-2">
+        <span class="me-2">
+            <img src="/static/images/chapter-badge.svg" alt="" width="16" height="16" class="w-4 h-4" decoding="async">
+        </span>
+        <span class="grow flex items-center gap-2">
+            <span class="">Chapter 144</span>
+            <span class="flex gap-1 items-center link-info" x-show="last_read_chapter === '01K46AEWHKQA3ZZX7N2MXGY61Y'">
+                <svg></svg>
+                <span class="hidden md:inline">Last Read</span>
+            </span>
+            <span x-show="new_chapter">
+                <img src="/static/images/new-chapter.svg" alt="" width="20" height="20" class="w-5 h-5" decoding="async">
+            </span>
+        </span>
+        <time class="text-datetime opacity-50" datetime="2025-09-02T22:58:44.403Z">2025-09-02T22:58:44.403312Z</time>
+    </a>
+    <input type="checkbox" value="01K46AEWHKQA3ZZX7N2MXGY61Y" name="chapter_id" form="mark-as-read-form" class="checkbox ms-4" x-show="mark_chapters == 'read'">
+    <input type="checkbox" value="01K46AEWHKQA3ZZX7N2MXGY61Y" name="chapter_id" form="mark-as-unread-form" class="checkbox ms-4" x-show="mark_chapters == 'unread'">
+</div>
+                        <div class="flex items-center" x-data="{ new_chapter: checkNewChapter('2025-08-20T04:34:27.402757Z') }" x-show="mark_chapters == 'null' || (mark_chapters == 'read' && 'False'.toLowerCase() === 'false') || (mark_chapters == 'unread' && 'False'.toLowerCase() === 'true')">
+    <a href="/chapters/01K32W3HEATP9EGJ8HVZ5XDM5S" class="hover:bg-base-300 flex-1 flex items-center p-2">
+        <span class="me-2">
+            <img src="/static/images/chapter-badge.svg" alt="" width="16" height="16" class="w-4 h-4" decoding="async">
+        </span>
+        <span class="grow flex items-center gap-2">
+            <span class="">Chapter 143</span>
+            <span class="flex gap-1 items-center link-info" x-show="last_read_chapter === '01K32W3HEATP9EGJ8HVZ5XDM5S'">
+                <svg></svg>
+                <span class="hidden md:inline">Last Read</span>
+            </span>
+            <span x-show="new_chapter">
+                <img src="/static/images/new-chapter.svg" alt="" width="20" height="20" class="w-5 h-5" decoding="async">
+            </span>
+        </span>
+        <time class="text-datetime opacity-50" datetime="2025-08-20T04:34:27.402Z">2025-08-20T04:34:27.402757Z</time>
+    </a>
+    <input type="checkbox" value="01K32W3HEATP9EGJ8HVZ5XDM5S" name="chapter_id" form="mark-as-read-form" class="checkbox ms-4" x-show="mark_chapters == 'read'">
+    <input type="checkbox" value="01K32W3HEATP9EGJ8HVZ5XDM5S" name="chapter_id" form="mark-as-unread-form" class="checkbox ms-4" x-show="mark_chapters == 'unread'">
+</div>
+                        <div class="flex items-center" x-data="{ new_chapter: checkNewChapter('2025-08-06T01:18:53.298127Z') }" x-show="mark_chapters == 'null' || (mark_chapters == 'read' && 'False'.toLowerCase() === 'false') || (mark_chapters == 'unread' && 'False'.toLowerCase() === 'true')">
+    <a href="/chapters/01K1YFBCBH890DQJ8VD98BKJ0X" class="hover:bg-base-300 flex-1 flex items-center p-2">
+        <span class="me-2">
+            <img src="/static/images/chapter-badge.svg" alt="" width="16" height="16" class="w-4 h-4" decoding="async">
+        </span>
+        <span class="grow flex items-center gap-2">
+            <span class="">Chapter 142</span>
+            <span class="flex gap-1 items-center link-info" x-show="last_read_chapter === '01K1YFBCBH890DQJ8VD98BKJ0X'">
+                <svg></svg>
+                <span class="hidden md:inline">Last Read</span>
+            </span>
+            <span x-show="new_chapter">
+                <img src="/static/images/new-chapter.svg" alt="" width="20" height="20" class="w-5 h-5" decoding="async">
+            </span>
+        </span>
+        <time class="text-datetime opacity-50" datetime="2025-08-06T01:18:53.298Z">2025-08-06T01:18:53.298127Z</time>
+    </a>
+    <input type="checkbox" value="01K1YFBCBH890DQJ8VD98BKJ0X" name="chapter_id" form="mark-as-read-form" class="checkbox ms-4" x-show="mark_chapters == 'read'">
+    <input type="checkbox" value="01K1YFBCBH890DQJ8VD98BKJ0X" name="chapter_id" form="mark-as-unread-form" class="checkbox ms-4" x-show="mark_chapters == 'unread'">
+</div>
+                        <button class="hover:bg-base-300 p-2" hx-get="https://weebcentral.com/series/01J76XYDGDQERFSK333582BNBZ/full-chapter-list" hx-target="#chapter-list" x-on:htmx:after-request="mark_chapter_option = true">Show All Chapters</button>
+                        <div class="flex items-center" x-data="{ new_chapter: checkNewChapter('2024-09-07T17:04:15.717343Z') }" x-show="mark_chapters == 'null' || (mark_chapters == 'read' && 'False'.toLowerCase() === 'false') || (mark_chapters == 'unread' && 'False'.toLowerCase() === 'true')">
+    <a href="/chapters/01J76XZ3VG0FGZ3NWQFH3SCNX3" class="hover:bg-base-300 flex-1 flex items-center p-2">
+        <span class="me-2">
+            <img src="/static/images/chapter-badge-official.svg" alt="" width="16" height="16" class="w-4 h-4" decoding="async">
+        </span>
+        <span class="grow flex items-center gap-2">
+            <span class="">Chapter 3</span>
+            <span class="flex gap-1 items-center link-info" x-show="last_read_chapter === '01J76XZ3VG0FGZ3NWQFH3SCNX3'">
+                <svg></svg>
+                <span class="hidden md:inline">Last Read</span>
+            </span>
+            <span x-show="new_chapter">
+                <img src="/static/images/new-chapter.svg" alt="" width="20" height="20" class="w-5 h-5" decoding="async">
+            </span>
+        </span>
+        <time class="text-datetime opacity-50" datetime="2024-09-07T17:04:15.717Z">2024-09-07T17:04:15.717343Z</time>
+    </a>
+    <input type="checkbox" value="01J76XZ3VG0FGZ3NWQFH3SCNX3" name="chapter_id" form="mark-as-read-form" class="checkbox ms-4" x-show="mark_chapters == 'read'">
+    <input type="checkbox" value="01J76XZ3VG0FGZ3NWQFH3SCNX3" name="chapter_id" form="mark-as-unread-form" class="checkbox ms-4" x-show="mark_chapters == 'unread'">
+</div>
+                        <div class="flex items-center" x-data="{ new_chapter: checkNewChapter('2024-09-07T17:04:15.717343Z') }" x-show="mark_chapters == 'null' || (mark_chapters == 'read' && 'False'.toLowerCase() === 'false') || (mark_chapters == 'unread' && 'False'.toLowerCase() === 'true')">
+    <a href="/chapters/01J76XZ3VGWXASNA4CQKSY364D" class="hover:bg-base-300 flex-1 flex items-center p-2">
+        <span class="me-2">
+            <img src="/static/images/chapter-badge-official.svg" alt="" width="16" height="16" class="w-4 h-4" decoding="async">
+        </span>
+        <span class="grow flex items-center gap-2">
+            <span class="">Chapter 2</span>
+            <span class="flex gap-1 items-center link-info" x-show="last_read_chapter === '01J76XZ3VGWXASNA4CQKSY364D'">
+                <svg></svg>
+                <span class="hidden md:inline">Last Read</span>
+            </span>
+            <span x-show="new_chapter">
+                <img src="/static/images/new-chapter.svg" alt="" width="20" height="20" class="w-5 h-5" decoding="async">
+            </span>
+        </span>
+        <time class="text-datetime opacity-50" datetime="2024-09-07T17:04:15.717Z">2024-09-07T17:04:15.717343Z</time>
+    </a>
+    <input type="checkbox" value="01J76XZ3VGWXASNA4CQKSY364D" name="chapter_id" form="mark-as-read-form" class="checkbox ms-4" x-show="mark_chapters == 'read'">
+    <input type="checkbox" value="01J76XZ3VGWXASNA4CQKSY364D" name="chapter_id" form="mark-as-unread-form" class="checkbox ms-4" x-show="mark_chapters == 'unread'">
+</div>
+</body></html>

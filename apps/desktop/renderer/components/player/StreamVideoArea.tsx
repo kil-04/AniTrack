@@ -31,6 +31,8 @@ interface StreamVideoAreaProps {
   currentEpisode: any | null;
   loadingStream: boolean;
   fallbackNotice: string | null;
+  /** A short message over the video (sleep timer), or null. */
+  playerNotice?: string | null;
   buffering: boolean;
   streamError: string | null;
   playing: boolean;
@@ -70,6 +72,7 @@ export function StreamVideoArea({
   currentEpisode,
   loadingStream,
   fallbackNotice,
+  playerNotice = null,
   buffering,
   streamError,
   playing,
@@ -121,6 +124,11 @@ export function StreamVideoArea({
         />
       )}
       <GestureFeedback fb={gestureFeedback} />
+      {playerNotice && !minimized && (
+        <div className="pointer-events-none absolute left-1/2 top-6 z-40 -translate-x-1/2 rounded-full border border-white/10 bg-black/75 px-4 py-2 text-sm font-medium text-white shadow-lg backdrop-blur" role="status">
+          {playerNotice}
+        </div>
+      )}
       {capacitor && !minimized && currentEpisode && !loadingStream && (
         <button
           onClick={(event) => { event.stopPropagation(); onTogglePlay(); }}

@@ -3,7 +3,7 @@ import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
   BellRing, Bookmark, BookOpen, BookText, CalendarDays, Download, History, House, MonitorPlay, Music2,
-  PanelLeftClose, PanelLeftOpen, Search, Settings, Tv, UserRound, type LucideIcon,
+  PanelLeftClose, PanelLeftOpen, PartyPopper, Search, Settings, Tv, UserRound, type LucideIcon,
 } from "lucide-react";
 import { useAppStore } from "../store/useAppStore";
 import { hasMangaMode, lastReadingHome, modeForPath, modeHome } from "../lib/manga-api";
@@ -31,6 +31,7 @@ const ANIME: Group[] = [
       { to: "/library", label: "My List", icon: Bookmark },
       { to: "/continue-watching", label: "Continue Watching", icon: MonitorPlay },
       { to: "/downloads", label: "Downloads", icon: Download },
+      { to: "/year-review", label: "Year in Review", icon: PartyPopper },
     ],
   },
 ];

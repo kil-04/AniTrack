@@ -10,6 +10,7 @@ import {
   getListEntry,
   getProgress,
   getProgressForAnime,
+  getRecapActivity,
   migrateAnimeId,
   setListEntry,
   setProgress,
@@ -37,6 +38,8 @@ export function registerDbIpc(_getMainWindow: () => BrowserWindow | null) {
     getContinueWatchingPaged(page, pageSize)
   );
   
+  ipcMain.handle(IPC.RECAP_ACTIVITY, () => getRecapActivity());
+
   ipcMain.handle(IPC.CW_DISMISS, (_e, animeId: number) => {
     dismissFromContinueWatching(animeId);
     return { ok: true };

@@ -60,6 +60,7 @@ export default function TasteGenomePage() {
             <div className="mt-7 flex flex-wrap gap-3">
               <span className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs text-white/60">{mal.connected ? `Sequenced from ${mal.username ?? "your MAL"}` : "Sequenced from your local list"}</span>
               <Link to="/time-machine" className="rounded-full border border-fuchsia-300/20 bg-fuchsia-400/10 px-4 py-2 text-xs font-bold text-fuchsia-200 hover:bg-fuchsia-400/20">Enter the Time Machine →</Link>
+              <Link to="/year-review" className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-bold text-white/70 hover:bg-white/10">Your year in review →</Link>
             </div>
           </div>
           <div className="relative flex h-44 w-44 items-center justify-center rounded-full" style={{ background: `conic-gradient(#e879f9 ${genome.confidence}%, rgba(255,255,255,0.06) 0)` }}>

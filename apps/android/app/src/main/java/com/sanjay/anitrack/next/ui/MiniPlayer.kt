@@ -71,6 +71,8 @@ fun MiniPlayer(onExpand: () -> Unit, onClose: () -> Unit, docked: Boolean = fals
         var ticks = 0
         while (isActive) {
             playing = player.isPlaying
+            // A caption that didn't load is dropped and the episode plays on without it.
+            player.playerError?.let { PlayerHolder.dropFailedCaption(context, it) }
             failed = player.playerError != null
             progress = miniPlayerProgress(player.currentPosition, player.duration)
             // Keep Continue Watching fresh while playing in the mini (every ~10s).

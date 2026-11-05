@@ -1,19 +1,5 @@
 import { useState } from "react";
-import {
-  Play,
-  Pause,
-  SkipBack,
-  SkipForward,
-  Volume2,
-  Volume1,
-  VolumeX,
-  Settings,
-  Captions,
-  Maximize,
-  Minimize,
-  PictureInPicture2,
-  RectangleHorizontal,
-} from "lucide-react";
+import { Play, Pause, SkipBack, SkipForward, Volume2, Volume1, VolumeX, Settings, Captions, Maximize, Minimize, PictureInPicture2, RectangleHorizontal, Moon } from "lucide-react";
 import { SettingsMenuContent } from "./PlayerSettingsMenu";
 import { Seekbar, TimeDisplay } from "./Seekbar";
 
@@ -59,6 +45,9 @@ export interface YouTubeControlsProps {
   onToggleAutoPlay: () => void;
   onToggleAutoNext: () => void;
   onChangePlaybackRate: (rate: number) => void;
+  sleepMode?: number;
+  sleepLabel?: string;
+  onChangeSleep?: (mode: number) => void;
 
   cueFontSize?: string;
   setCueFontSize?: (size: string) => void;
@@ -80,6 +69,7 @@ export function YouTubeControls(props: YouTubeControlsProps) {
     onChangeQuality, onChangeHlsLevel, onToggleSubtitles, onToggleAutoPlay, onToggleAutoNext, onChangePlaybackRate,
     cueFontSize, setCueFontSize, cueFontFamily, setCueFontFamily,
     cueBgOpacity, setCueBgOpacity, cueColor, setCueColor,
+    sleepMode = 0, sleepLabel, onChangeSleep,
   } = props;
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -161,8 +151,13 @@ export function YouTubeControls(props: YouTubeControlsProps) {
 
           {/* Settings gear */}
           <div className="relative">
-            <button onClick={() => setMenuOpen((o) => !o)} className="ctl" title="Settings">
+            <button onClick={() => setMenuOpen((o) => !o)} className="ctl relative" title={sleepMode !== 0 && sleepLabel ? `Settings · Sleep timer: ${sleepLabel}` : "Settings"}>
               <Settings size={18} className={`transition-transform duration-300 ${menuOpen ? "rotate-45" : ""}`} />
+              {sleepMode !== 0 && (
+                <span className="absolute right-0.5 top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-accent text-white" aria-label="Sleep timer on">
+                  <Moon size={8} strokeWidth={3} />
+                </span>
+              )}
             </button>
             {menuOpen && (
               <div className="absolute bottom-12 right-0 z-50 animate-in fade-in slide-in-from-bottom-2 duration-150">
@@ -183,6 +178,9 @@ export function YouTubeControls(props: YouTubeControlsProps) {
                   onChangeHlsLevel={onChangeHlsLevel}
                   onToggleAutoPlay={onToggleAutoPlay}
                   onToggleAutoNext={onToggleAutoNext}
+                  sleepMode={sleepMode}
+                  sleepLabel={sleepLabel}
+                  onChangeSleep={onChangeSleep}
                   onToggleSubtitles={onToggleSubtitles}
                   cueFontSize={cueFontSize}
                   setCueFontSize={setCueFontSize}

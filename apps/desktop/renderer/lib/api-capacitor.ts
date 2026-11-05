@@ -622,6 +622,10 @@ export async function installCapacitorApiBridge() {
       async dismissContinueWatching(animeId: number) {
         return AniTrackDb.dismissContinueWatching({ animeId });
       },
+      // The retired Capacitor app has no Year in Review; the native Android app does.
+      async recapActivity() {
+        return { watches: [], reads: [] };
+      },
     },
 
     // ── progress ──────────────────────────────────────────────────────────────

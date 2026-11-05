@@ -44,7 +44,7 @@ The two apps are built separately (Electron on Windows, native Kotlin on Android
 - **Schedule** with countdowns to the next episode of the shows you follow, plus new-episode and new-chapter **notifications** on Android.
 
 ### Watch
-- **A built-in player.** On desktop it has YouTube-style controls and keyboard shortcuts. On Android it has swipe gestures, picture-in-picture and a mini player that keeps playing while you browse.
+- **A built-in player.** On desktop it has YouTube-style controls and keyboard shortcuts. On Android it has swipe gestures, picture-in-picture and a mini player that keeps playing while you browse. Both have a **sleep timer** that pauses after 15 minutes to an hour, or stops at the end of the episode.
 - **Skip the intro and outro** with one click, or automatically on Android, using community timestamps.
 - **Offline downloads** in both apps; on Android, a whole range of episodes at once.
 - Streams come from built-in **source connectors**, and you can switch to another source if one has trouble.
@@ -61,6 +61,7 @@ The two apps are built separately (Electron on Windows, native Kotlin on Android
 - **Continue the story**: see the manga or novel an anime adapts, and where you are in it.
 - **Theme songs** for every show (openings and endings), plus a shuffled **theme radio** of the shows you love.
 - **Time Machine**: browse anime by year, and what premiered on this day.
+- **Year in Review**: a recap of any year you used AniTrack, in both apps: hours watched, episodes finished, your top shows and genres, your busiest month and longest streak, the manga and novels you read most, and a title for the kind of year it was.
 
 ### And more
 - **Background music** while you browse: a built-in piano track, or your own music (audio files or a `.zip`), with play, pause, previous, next and repeat. It pauses itself for episodes and theme songs.

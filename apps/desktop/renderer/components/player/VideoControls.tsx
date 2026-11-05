@@ -37,6 +37,10 @@ interface VideoControlsProps {
   onVolumeChange: (vol: number) => void;
   onToggleAutoPlay: () => void;
   onToggleAutoNext: () => void;
+  /** Sleep timer (desktop settings menu): 0 off, -1 end of episode, otherwise minutes. */
+  sleepMode?: number;
+  sleepLabel?: string;
+  onChangeSleep?: (mode: number) => void;
   onPlayPrev: () => void;
   onPlayNext: () => void;
   onToggleFullscreen: () => void;
@@ -72,6 +76,7 @@ export function VideoControls({
   onToggleTheater, onTogglePiP, onChangePlaybackRate,
   onSeekToPct, onSeekBy, onSeekStart, onSeekEnd,
   onTogglePlay, onToggleMute, onVolumeChange, onToggleAutoPlay, onToggleAutoNext,
+  sleepMode, sleepLabel, onChangeSleep,
   onPlayPrev, onPlayNext, onToggleFullscreen, onToggleQualityMenu, onChangeQuality, onCloseQualityMenu,
 
   // Destructured with defaults
@@ -173,6 +178,9 @@ export function VideoControls({
         onToggleSubtitles={onToggleSubtitles}
         onToggleAutoPlay={onToggleAutoPlay}
         onToggleAutoNext={onToggleAutoNext}
+        sleepMode={sleepMode}
+        sleepLabel={sleepLabel}
+        onChangeSleep={onChangeSleep}
         onChangePlaybackRate={onChangePlaybackRate ?? (() => {})}
         cueFontSize={cueFontSize}
         setCueFontSize={setCueFontSize}

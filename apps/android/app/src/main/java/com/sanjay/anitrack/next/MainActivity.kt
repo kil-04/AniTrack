@@ -457,10 +457,24 @@ fun AppShell() {
                         com.sanjay.anitrack.next.ui.TimeMachineScreen(
                             openDetail,
                             onOpenGenome = { nav.navigate("taste-genome") },
+                            onOpenYearReview = { nav.navigate("year-review") },
                             onOpenMuseum = { nav.navigate("museum/${it.id}") },
                         )
                     }
-                    composable("taste-genome") { com.sanjay.anitrack.next.ui.TasteGenomeScreen(onOpen = { nav.navigate("anime/$it") }, onOpenTimeMachine = { go("time-machine") }) }
+                    composable("taste-genome") {
+                        com.sanjay.anitrack.next.ui.TasteGenomeScreen(
+                            onOpen = { nav.navigate("anime/$it") },
+                            onOpenTimeMachine = { go("time-machine") },
+                            onOpenYearReview = { nav.navigate("year-review") },
+                        )
+                    }
+                    composable("year-review") {
+                        com.sanjay.anitrack.next.ui.YearReviewScreen(
+                            onOpenAnime = { nav.navigate("anime/$it") },
+                            onOpenManga = { nav.navigate("manga/$it") },
+                            onOpenNovel = openNovel,
+                        )
+                    }
                     composable("museum/{id}") { entry ->
                         val id = entry.arguments?.getString("id")?.toIntOrNull() ?: 0
                         com.sanjay.anitrack.next.ui.MuseumScreen(

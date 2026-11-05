@@ -59,7 +59,8 @@ object MangaSources {
      * first (largest catalogue, one-time user-completed Cloudflare check), then
      * MangaBall (public JSON API), then XComic (public HTML, read from its largest
      * English edition), then Toonkotsu (tracker-matched, user-verified website
-     * session). MangaPill, MangaDex and Comix remain implemented but unregistered.
+     * session), then Weeb Central (public HTML, AniList-linked, official translations
+     * where they exist). MangaPill, MangaDex and Comix remain implemented but unregistered.
      */
     val all: List<MangaSource> = listOf(
         com.sanjay.anitrack.next.data.manga.mangadot.MangaDotSource,
@@ -67,6 +68,7 @@ object MangaSources {
         // Comix was removed at the user's request (19 Oct 2026: unreliable); its connector stays, unregistered.
         com.sanjay.anitrack.next.data.manga.xcomic.XComicSource,
         com.sanjay.anitrack.next.data.manga.toonkotsu.ToonkotsuSource,
+        com.sanjay.anitrack.next.data.manga.weebcentral.WeebCentralSource,
     )
 
     fun byId(id: String): MangaSource? = all.firstOrNull { it.id == id }

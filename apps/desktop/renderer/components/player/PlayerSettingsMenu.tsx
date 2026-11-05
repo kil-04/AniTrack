@@ -1,6 +1,7 @@
 import React, { useState } from "react";
-import { Check, ChevronRight, ChevronLeft, Gauge, RectangleHorizontal, Captions } from "lucide-react";
+import { Check, ChevronRight, ChevronLeft, Gauge, RectangleHorizontal, Captions, Moon } from "lucide-react";
 import SelectField from "../SelectField";
+import { SLEEP_CHOICES, type SleepMode } from "../../../../../packages/shared/sleep-timer";
 
 // Shared settings popup used by both the desktop bar (YouTubeControls) and the
 // mobile/tablet overlay (MobileControls). Renders the styled box + the
@@ -8,7 +9,7 @@ import SelectField from "../SelectField";
 
 export const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
 
-type MenuView = "main" | "speed" | "quality" | "subtitles";
+type MenuView = "main" | "speed" | "quality" | "subtitles" | "sleep";
 
 export interface SettingsMenuProps {
   links: any[];
@@ -20,6 +21,11 @@ export interface SettingsMenuProps {
   playbackRate: number;
   autoPlay: boolean;
   autoNext: boolean;
+  /** Sleep timer: 0 off, -1 the end of this episode, otherwise minutes. */
+  sleepMode?: SleepMode;
+  /** The sleep row's value: "Off", "End of episode", "12 min left". */
+  sleepLabel?: string;
+  onChangeSleep?: (mode: SleepMode) => void;
   subtitlesEnabled?: boolean;
   availableSubtitles?: any[];
   onChangePlaybackRate: (rate: number) => void;
@@ -42,7 +48,7 @@ export interface SettingsMenuProps {
 export function SettingsMenuContent(props: SettingsMenuProps) {
   const {
     links, selectedLink, streamVariants, hlsLevels = [], currentHlsLevel = -1, playbackRate,
-    autoPlay, autoNext, subtitlesEnabled = true, availableSubtitles = [],
+    autoPlay, autoNext, sleepMode = 0, sleepLabel = "Off", onChangeSleep, subtitlesEnabled = true, availableSubtitles = [],
     onChangePlaybackRate, onChangeQuality, onChangeHlsLevel, onToggleAutoPlay, onToggleAutoNext, onToggleSubtitles,
     cueFontSize = "16px", setCueFontSize, cueFontFamily = "'Outfit', 'Inter', sans-serif", setCueFontFamily,
     cueBgOpacity = 0.85, setCueBgOpacity, cueColor = "#f5f5f7", setCueColor, className = "",
@@ -90,6 +96,9 @@ export function SettingsMenuContent(props: SettingsMenuProps) {
           {availableSubtitles.length > 0 && (
             <MenuRow label="Subtitles" value={subtitlesEnabled ? "On" : "Off"} chevron onClick={() => setView("subtitles")} icon={<Captions size={16} />} />
           )}
+          {onChangeSleep && (
+            <MenuRow label="Sleep timer" value={sleepLabel} chevron onClick={() => setView("sleep")} icon={<Moon size={16} />} />
+          )}
           <div className="my-1 h-px bg-white/10" />
           <ToggleRow label="Autoplay" on={autoPlay} onClick={onToggleAutoPlay} />
           <ToggleRow label="Auto-next episode" on={autoNext} onClick={onToggleAutoNext} />
@@ -103,6 +112,22 @@ export function SettingsMenuContent(props: SettingsMenuProps) {
             <button key={sp} onClick={() => onChangePlaybackRate(sp)} className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-white/10">
               <span className="w-4">{playbackRate === sp && <Check size={15} />}</span>
               <span>{sp === 1 ? "Normal" : `${sp}×`}</span>
+            </button>
+          ))}
+        </>
+      )}
+
+      {view === "sleep" && (
+        <>
+          <MenuHeader title="Sleep timer" onBack={() => setView("main")} />
+          {SLEEP_CHOICES.map((choice) => (
+            <button
+              key={choice.mode}
+              onClick={() => { onChangeSleep?.(choice.mode); setView("main"); }}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-white/10"
+            >
+              <span className="w-4">{sleepMode === choice.mode && <Check size={15} />}</span>
+              <span>{choice.label}</span>
             </button>
           ))}
         </>
