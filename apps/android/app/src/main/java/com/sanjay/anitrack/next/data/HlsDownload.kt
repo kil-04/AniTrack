@@ -16,6 +16,14 @@ import java.util.concurrent.atomic.AtomicInteger
  * (best-effort) and writes the local playlist.
  */
 internal object HlsDownload {
+    /**
+     * Moves a finished temp file over [target], replacing one from an earlier run. File.renameTo
+     * already replaces on Android, but not on every JVM (the unit tests run on Windows).
+     */
+    private fun replaceWith(temp: File, target: File): Boolean = runCatching {
+        java.nio.file.Files.move(temp.toPath(), target.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+    }.isSuccess
+
     private const val SEGMENT_WORKERS = 6
     const val CAPTION_FILE = "subs.vtt"
     private const val MAX_CAPTION_BYTES = 2 * 1024 * 1024
@@ -125,7 +133,7 @@ internal object HlsDownload {
                     val temp = File(dir, "$CAPTION_FILE.part")
                     runCatching {
                         temp.writeBytes(body)
-                        if (!temp.renameTo(File(dir, CAPTION_FILE))) temp.delete()
+                        if (!replaceWith(temp, File(dir, CAPTION_FILE))) temp.delete()
                     }.onFailure { temp.delete() }
                 }
                 return
@@ -285,7 +293,7 @@ internal object HlsDownload {
             val playlistTemp = File(dir, "index.m3u8.part")
             val playlistFile = File(dir, "index.m3u8")
             playlistTemp.writeText(outLines.joinToString("\n"))
-            if (!playlistTemp.renameTo(playlistFile)) {
+            if (!replaceWith(playlistTemp, playlistFile)) {
                 playlistTemp.delete()
                 throw Exception("Could not finalize offline playlist")
             }
