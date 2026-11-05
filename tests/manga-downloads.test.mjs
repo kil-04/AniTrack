@@ -360,6 +360,25 @@ test("a reset, timeout or unreachable page from a source's own wrapper is retrie
   }
 });
 
+test("through Comix's request, a refused local-network address still fails and a failed DNS lookup still waits", async () => {
+  // Node hands the lookup's error to the request as the request's own error.
+  const unsafe = await comixError(new Error("Unsafe Comix image destination."));
+  const dns = await comixError(await comixError("dns"));
+  let n = 90;
+  for (const c of [{ why: "an unsafe destination", error: unsafe, status: "failed", calls: 1 }, { why: "a DNS failure", error: dns, status: "done", calls: 2 }]) {
+    const id = `lookup${n}`;
+    let calls = 0;
+    harness.pages = () => pageUrls("a", 1);
+    harness.fetch = async (url) => {
+      if (calls++ === 0) throw c.error;
+      return image(indexOf(url));
+    };
+    await M.downloadChapter(manga, title, chapter(id, n++));
+    assert.equal((await settled(`${manga.id}:${id}`)).status, c.status, c.why);
+    assert.equal(calls, c.calls, c.why);
+  }
+});
+
 test("a verified page's own refusals still aren't taken for the network", async () => {
   const malformed = await rejection(verifiedPage({ result: { nope: true } }).get("https://mangadot.example/img/p1.webp", "image/*"));
   assert.notEqual(malformed.name, "NoAnswerError");

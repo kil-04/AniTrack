@@ -15,10 +15,16 @@ const DEADLINE_MS = 25_000;
  * A failure in which the image host never answered (DNS, reset, refused, TLS, a
  * timeout). It keeps the transport's error as [cause] (or is a TimeoutError), so a
  * download can tell it from a refused or broken image and wait for the network.
+ * Without a [cause] the host stopped answering mid-response. A request error is
+ * the lookup's own when that failed: then only a failed DNS lookup is no answer,
+ * never an unsafe destination it refused.
  */
 function noAnswer(message: string, cause?: unknown): Error {
-  const code = (cause as { code?: unknown } | null)?.code;
-  return new Error(message, { cause: typeof code === "string" ? cause : { code: "ECONNRESET" } });
+  if (cause === undefined) return new Error(message, { cause: { code: "ECONNRESET" } });
+  const transport = (error: unknown) => typeof (error as { code?: unknown } | null)?.code === "string";
+  const inner = (cause as { cause?: unknown } | null)?.cause;
+  const origin = transport(cause) ? cause : transport(inner) ? inner : null;
+  return origin ? new Error(message, { cause: origin }) : new Error(message);
 }
 function timedOut(): Error {
   return Object.assign(new Error("Comix image took too long to load. Retry this page."), { name: "TimeoutError" });
