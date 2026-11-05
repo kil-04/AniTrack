@@ -44,6 +44,8 @@ interface Title {
   failStreak: number;
   /** Bumped by cancel: the chapter in progress (and its wait) stops. */
   generation: number;
+  /** The [generation] [current] started in: once cancel moved past it, queuing it again re-queues it. */
+  currentGeneration: number;
 }
 
 type Listener = (event: NovelDownloadTitle | { removed: string }) => void;
@@ -136,7 +138,7 @@ function load(): Promise<void> {
           .map((id) => byId.get(id)!);
         titles.set(novelTitleKey(meta.detail.sourceId, meta.detail.id), {
           detail: meta.detail, chapters, saved, queue: [...new Map(queue.map((c) => [c.id, c])).values()], failed: new Map(),
-          current: null, sizeBytes: size, error: null, updatedAt: Date.now(), failStreak: 0, generation: 0,
+          current: null, sizeBytes: size, error: null, updatedAt: Date.now(), failStreak: 0, generation: 0, currentGeneration: 0,
         });
       } catch {
         /* a folder without readable metadata is skipped */
@@ -186,14 +188,16 @@ export async function enqueueNovelChapters(detail: NovelDetail, chapters: NovelC
   const key = novelTitleKey(detail.sourceId, detail.id);
   let t = titles.get(key);
   if (!t) {
-    t = { detail, chapters: fullList, saved: new Set(), queue: [], failed: new Map(), current: null, sizeBytes: 0, error: null, updatedAt: Date.now(), failStreak: 0, generation: 0 };
+    t = { detail, chapters: fullList, saved: new Set(), queue: [], failed: new Map(), current: null, sizeBytes: 0, error: null, updatedAt: Date.now(), failStreak: 0, generation: 0, currentGeneration: 0 };
     titles.set(key, t);
   }
   t.detail = detail;
   if (fullList.length) t.chapters = fullList;
   await fs.promises.mkdir(folder(detail.sourceId, detail.id), { recursive: true });
   await writeAtomic(path.join(folder(detail.sourceId, detail.id), "meta.json"), JSON.stringify({ detail: t.detail, chapters: t.chapters }));
-  const waiting = new Set([...t.queue.map((c) => c.id), t.current?.id]);
+  // The chapter in progress is on its way, unless it was cancelled since it
+  // started: it stops then, so asking for it again queues it again.
+  const waiting = new Set([...t.queue.map((c) => c.id), t.currentGeneration === t.generation ? t.current?.id : undefined]);
   let added = 0;
   for (const chapter of [...chapters].sort((a, b) => a.order - b.order)) {
     if (!isNovelChapterId(detail.sourceId, chapter.id) || t.saved.has(chapter.id) || waiting.has(chapter.id)) continue;
@@ -253,10 +257,13 @@ async function pump(): Promise<void> {
   running = true;
   try {
     for (;;) {
+      // A chapter queued again while it was finishing may be saved by now.
+      for (const x of titles.values()) x.queue = x.queue.filter((c) => !x.saved.has(c.id));
       const t = [...titles.values()].filter((x) => x.queue.length).sort((a, b) => a.updatedAt - b.updatedAt)[0];
       if (!t) break;
       const chapter = t.queue.shift()!;
       t.current = chapter;
+      t.currentGeneration = t.generation;
       emit(t);
       const { sourceId, id } = t.detail;
       const generation = t.generation;
@@ -270,12 +277,14 @@ async function pump(): Promise<void> {
         if (live()) {
           await writeAtomic(chapterFile(sourceId, id, chapter.id), body);
           t.saved.add(chapter.id);
+          t.failed.delete(chapter.id);
           t.sizeBytes += Buffer.byteLength(body);
           t.failStreak = 0;
           t.error = null;
         }
       } catch (error) {
-        if (error instanceof Removed) continue;
+        // Cancelled meanwhile: it isn't a failure (and if it was asked for again, it is queued).
+        if (error instanceof Removed || !wanted()) continue;
         const message = error instanceof NovelSourceError ? error.message : "Couldn't save this chapter.";
         t.failed.set(chapter.id, message);
         t.error = message;
@@ -342,13 +351,20 @@ async function fetchChapter(t: Title, chapter: NovelChapter, wanted: () => boole
       if (verdict.action === "fail") throw new NovelSourceError(stalledMessage(verdict.reason, "chapter"));
       stalls = verdict.reResolves;
       stalledSince = verdict.stalledSince;
-      t.error = step.reason === "network"
+      const note = step.reason === "network"
         ? "Waiting for the network; downloading continues when it's back."
         : `${error.message.replace(/ Wait a minute, then retry\.$/, "")} Continuing automatically.`;
+      t.error = note;
       emit(t);
-      if (step.resumeAt) await waitWhile(Math.max(0, step.resumeAt - Date.now()) * retryScale, wanted);
-      while (!net.isOnline()) await waitWhile(NETWORK_POLL_MS * retryScale, wanted);
-      if (!wanted()) throw new Removed();
+      try {
+        if (step.resumeAt) await waitWhile(Math.max(0, step.resumeAt - Date.now()) * retryScale, wanted);
+        while (!net.isOnline()) await waitWhile(NETWORK_POLL_MS * retryScale, wanted);
+        if (!wanted()) throw new Removed();
+      } catch (stopped) {
+        // Cancelled or removed: nothing continues, so the note goes too.
+        if (t.error === note) t.error = null;
+        throw stopped;
+      }
       t.error = null;
       emit(t);
       attempt = -1;

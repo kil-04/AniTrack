@@ -180,11 +180,57 @@ test("removing or cancelling a title ends its chapter's wait at once, and the wo
       const cancelled = await titleOf(id);
       assert.equal(cancelled.queued, 0);
       assert.equal(cancelled.failed, 0, "a cancelled chapter isn't a failure");
+      assert.equal(cancelled.error, null, "nothing says it is continuing: nothing is");
       await waitFor(() => !fs.existsSync(path.join(folder(id), "pending.json")), "nothing left to resume");
     } else {
       assert.equal(await titleOf(id), undefined);
     }
   }
+});
+
+test("a chapter queued again right after Cancel is downloaded, whether it was waiting or on its way", async () => {
+  for (const stage of ["waiting", "in flight"]) {
+    const id = stage === "waiting" ? "Requeue01" : "Requeue02";
+    const fetched = [];
+    let answer;
+    const first = new Promise((resolve) => { answer = resolve; });
+    harness.chapter = async (chapterId) => {
+      fetched.push(chapterId);
+      if (fetched.length > 1) return text(chapterId);
+      if (stage === "waiting") throw new NovelSourceError("NovelBuddy is limiting requests. Wait a minute, then retry.", 429, false, "999999");
+      // In flight: it answers (a retryable error) only after the cancel and the new request.
+      await first;
+      throw new NovelSourceError("NovelBuddy returned an error (HTTP 503).", 503);
+    };
+    await N.enqueueNovelChapters(detail(id), chapters.slice(0, 1), chapters);
+    if (stage === "waiting") await waitFor(async () => /Continuing automatically/.test((await titleOf(id))?.error ?? ""), "the rate-limit wait");
+    else await waitFor(() => fetched.length === 1, "the request on its way");
+    await N.cancelNovelDownloads("novelbuddy", id);
+    assert.equal(await N.enqueueNovelChapters(detail(id), chapters.slice(0, 1), chapters), 1, `${stage}: asking again queues it again`);
+    answer();
+    const t = await idle(id);
+    assert.equal(t.saved, 1, `${stage}: it was downloaded`);
+    assert.equal(t.failed, 0);
+    assert.equal(t.error, null);
+    assert.deepEqual(fetched, ["ch1abc", "ch1abc"]);
+  }
+});
+
+test("a chapter queued again while it is downloading isn't fetched twice", async () => {
+  const id = "Requeue03";
+  const fetched = [];
+  let answer;
+  const first = new Promise((resolve) => { answer = resolve; });
+  harness.chapter = async (chapterId) => { fetched.push(chapterId); await first; return text(chapterId); };
+  await N.enqueueNovelChapters(detail(id), chapters.slice(0, 1), chapters);
+  await waitFor(() => fetched.length === 1, "the request on its way");
+  assert.equal(await N.enqueueNovelChapters(detail(id), chapters.slice(0, 1), chapters), 0, "already on its way");
+  await N.cancelNovelDownloads("novelbuddy", id);
+  assert.equal(await N.enqueueNovelChapters(detail(id), chapters.slice(0, 1), chapters), 1, "cancelled, so asked for again");
+  answer();
+  const t = await idle(id);
+  assert.equal(t.saved, 1);
+  assert.deepEqual(fetched, ["ch1abc"], "it finished on its way, so the queued copy was skipped");
 });
 
 after(() => {

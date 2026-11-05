@@ -67,6 +67,8 @@ object NovelDownloads {
         var failStreak: Int = 0,
         /** Bumped by cancel: the chapter in progress (and its wait) stops. */
         @Volatile var generation: Int = 0,
+        /** The [generation] [current] started in: once cancel moved past it, queuing it again re-queues it. */
+        var currentGeneration: Int = 0,
         /** The whole title was removed. */
         @Volatile var removed: Boolean = false,
     )
@@ -85,6 +87,8 @@ object NovelDownloads {
     @Volatile private var parkedUntil: Long? = null
     @Volatile private var parkedForNetwork = false
     private const val WAIT_SLICE_MS = 2_000L
+    /** A retry wait this long (a Retry-After) parks the worker like a pause. */
+    private const val PARK_RETRY_MS = 30_000L
 
     private fun key(source: NovelSourceId, id: String) = "${source.key}:$id"
     private fun hex(value: String) = value.toByteArray().joinToString("") { "%02x".format(it) }
@@ -226,7 +230,11 @@ object NovelDownloads {
                 temp.writeText(meta.toString())
                 if (!temp.renameTo(File(dir, "meta.json"))) { File(dir, "meta.json").writeText(meta.toString()); temp.delete() }
             }
-            val waiting = state.queue.map { it.id }.toMutableSet().apply { state.current?.let { add(it.id) } }
+            // The chapter in progress is on its way, unless it was cancelled since it
+            // started: it stops then, so asking for it again queues it again.
+            val waiting = state.queue.map { it.id }.toMutableSet().apply {
+                state.current?.takeIf { state.currentGeneration == state.generation }?.let { add(it.id) }
+            }
             var n = 0
             for (chapter in chapters.sortedBy { it.order }) {
                 if (!Novels.isChapterId(source, chapter.id) || chapter.id in state.saved || !waiting.add(chapter.id)) continue
@@ -283,9 +291,12 @@ object NovelDownloads {
     private suspend fun pump() {
         while (true) {
             val job = lock.withLock {
+                // A chapter queued again while it was finishing may be saved by now.
+                states.values.forEach { s -> s.queue.removeAll { it.id in s.saved } }
                 val state = states.values.filter { it.queue.isNotEmpty() }.minByOrNull { it.updatedAt } ?: return@withLock null
                 val chapter = state.queue.removeFirst()
                 state.current = chapter
+                state.currentGeneration = state.generation
                 state.updatedAt = System.currentTimeMillis()
                 state to chapter
             } ?: break
@@ -293,7 +304,7 @@ object NovelDownloads {
             val (state, chapter) = job
             val source = state.detail.card.source
             val id = state.detail.card.id
-            val generation = state.generation
+            val generation = state.currentGeneration
             try {
                 val text = fetchChapter(state, source, id, chapter, generation) ?: continue
                 val body = JSONObject().put("label", chapter.label).put("paragraphs", JSONArray(text.paragraphs)).toString()
@@ -308,12 +319,15 @@ object NovelDownloads {
                             state.sizeBytes += target.length()
                         }
                         state.saved += chapter.id
+                        state.failed.remove(chapter.id)
                         state.failStreak = 0
                         state.error = null
                     }
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
+                // Cancelled meanwhile: it isn't a failure (and if it was asked for again, it is queued).
+                if (state.generation != generation || state.removed) continue
                 val message = (e as? MangaSourceException)?.message ?: "Couldn't save this chapter."
                 lock.withLock {
                     state.failed[chapter.id] = message
@@ -365,7 +379,18 @@ object NovelDownloads {
             val failure = if (status == 0) DownloadResume.Failure.Network(NetworkWatch.online()) else DownloadResume.Failure.Http(status, error.retryAfter)
             when (val step = DownloadResume.nextStep(failure, attempt, 0, System.currentTimeMillis())) {
                 is DownloadResume.Step.Retry -> {
-                    if (!waitWhile(System.currentTimeMillis() + step.delayMs) { wanted() }) return null
+                    val at = System.currentTimeMillis() + step.delayMs
+                    // A long wait (a Retry-After) parks the worker, so the background job doesn't hold the phone awake for it.
+                    val park = step.delayMs >= PARK_RETRY_MS
+                    if (park) {
+                        parkedUntil = at
+                        appContext?.let { com.sanjay.anitrack.next.data.DownloadResumeWorker.reschedule(it) }
+                    }
+                    try {
+                        if (!waitWhile(at) { wanted() }) return null
+                    } finally {
+                        if (park) parkedUntil = null
+                    }
                     attempt++
                 }
                 is DownloadResume.Step.Pause -> {
@@ -373,22 +398,26 @@ object NovelDownloads {
                         is DownloadResume.Verdict.Fail -> throw MangaSourceException(DownloadResume.stalledMessage(verdict.reason, DownloadResume.Subject.CHAPTER))
                         is DownloadResume.Verdict.Wait -> { stalls = verdict.reResolves; stalledSince = verdict.stalledSince }
                     }
-                    lock.withLock {
-                        state.error = if (step.reason == DownloadResume.PauseReason.NETWORK) "Waiting for the network; downloading continues when it's back."
-                            else "${error.message?.removeSuffix(" Wait a minute, then retry.")} Continuing automatically."
-                    }
+                    val note = if (step.reason == DownloadResume.PauseReason.NETWORK) "Waiting for the network; downloading continues when it's back."
+                        else "${error.message?.removeSuffix(" Wait a minute, then retry.")} Continuing automatically."
+                    lock.withLock { state.error = note }
                     publish()
+                    // Cancelled or removed meanwhile: nothing continues, so the note goes too.
+                    suspend fun stopped(): NovelChapterText? {
+                        lock.withLock { if (state.error == note) state.error = null }
+                        return null
+                    }
                     try {
                         step.resumeAt?.let { at ->
                             parkedUntil = at
                             appContext?.let { com.sanjay.anitrack.next.data.DownloadResumeWorker.reschedule(it) }
-                            if (!waitWhile(at) { wanted() }) return null
+                            if (!waitWhile(at) { wanted() }) return stopped()
                         }
                         parkedUntil = null
                         if (!NetworkWatch.online()) {
                             parkedForNetwork = true
                             appContext?.let { com.sanjay.anitrack.next.data.DownloadResumeWorker.reschedule(it) }
-                            if (!NetworkWatch.awaitOnline { wanted() }) return null
+                            if (!NetworkWatch.awaitOnline { wanted() }) return stopped()
                         }
                     } finally {
                         parkedUntil = null
