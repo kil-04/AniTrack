@@ -33,12 +33,22 @@ fun DownloadsScreen(onPlay: () -> Unit, onOpenAnime: (Int) -> Unit = {}) {
     val expanded = remember { mutableStateMapOf<Int, Boolean>() }
 
     fun playLocal(d: Downloads.Item) {
-        val f = Downloads.localPlaylist(d.id) ?: return
+        if (Downloads.localPlaylist(d.id) == null) return
+        // The whole series' finished downloads, in episode order, so Previous/Next and auto-next
+        // move between them (it used to be a one-episode session with nowhere to go).
+        val saved = items
+            .filter { it.animeId == d.animeId && it.status == Downloads.Status.DONE }
+            .sortedBy { it.episode }
+            .mapNotNull { item -> Downloads.localPlaylist(item.id)?.let { item to it.absolutePath } }
+        val start = saved.indexOfFirst { it.first.id == d.id }.coerceAtLeast(0)
         com.sanjay.anitrack.next.data.PlaySession.apply {
             provider = "anikoto"; animeId = d.animeId; animeTitle = d.title; animeCover = d.cover
-            anime = null; localFile = f.absolutePath
-            slug = ""; anikotoEps = listOf(com.sanjay.anitrack.next.data.Anikoto.Episode(d.episode, "Episode ${d.episode.toInt()}", "", ""))
-            paheEps = emptyList(); index = 0
+            anime = null; localFiles = saved.map { it.second }
+            slug = ""
+            anikotoEps = saved.map { (item, _) ->
+                com.sanjay.anitrack.next.data.Anikoto.Episode(item.episode, "Episode ${item.episode.toInt()}", "", "")
+            }
+            paheEps = emptyList(); index = start
         }
         onPlay()
     }

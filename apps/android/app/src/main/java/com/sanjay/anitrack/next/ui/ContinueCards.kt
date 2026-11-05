@@ -39,7 +39,7 @@ internal fun fmtSecs(sec: Double): String {
  * false only if no source could be found at all.
  */
 internal suspend fun prepareResume(row: com.sanjay.anitrack.next.data.Db.CwRow): Boolean {
-    PlaySession.localFile = null // Online resume, never a downloaded file.
+    PlaySession.localFiles = emptyList() // Online resume, never a downloaded file.
     val runtime = RemoteConfig.current()
     val registry = Providers.registry
     // Keep the database/gist format unchanged. Only old Android builds wrote

@@ -111,7 +111,7 @@ object PlaySession {
         this.animeTitle = animeTitle
         this.animeCover = animeCover
         this.anime = anime
-        localFile = null
+        localFiles = emptyList()
         index = selectedIndex.coerceIn(series.episodes.indices)
         seriesByProvider.clear()
         seriesByProvider[series.providerId] = series
@@ -172,8 +172,11 @@ object PlaySession {
         return true
     }
 
-    // Offline single-episode playback (set when launched from Downloads).
-    var localFile: String? = null
+    // Offline playback (launched from Downloads): one saved playlist per episode of the session,
+    // the series' finished downloads in order, so Previous/Next and auto-next stay offline.
+    var localFiles: List<String> = emptyList()
+    /** The saved playlist of the episode at [index], when this is an offline session. */
+    val localFile: String? get() = localFiles.getOrNull(index)
 
     suspend fun resolve(
         i: Int,
@@ -181,7 +184,7 @@ object PlaySession {
         runtime: AndroidRuntimeConfig = RemoteConfig.current(),
         variantId: String? = null,
     ): Resolved {
-        localFile?.let { path ->
+        localFiles.getOrNull(i)?.let { path ->
             // Downloaded HLS — play the local index.m3u8 directly, with any
             // captions saved beside it.
             val playlist = java.io.File(path)
