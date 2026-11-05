@@ -4,6 +4,10 @@ import { registerHooks } from "node:module";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import vm from "node:vm";
+import { EventEmitter } from "node:events";
+import { createRequire } from "node:module";
+import ts from "typescript";
 
 // Desktop manga downloads with a fake source: what an interrupted chapter keeps,
 // how it waits and how it carries on (packages/shared/download-resume.ts).
@@ -263,6 +267,132 @@ test("removing a chapter that waits out a long rate limit ends the wait and free
   await M.removeMangaDownload(`${manga.id}:${id}`);
   assert.equal((await settled(`${manga.id}:${after}`)).status, "done");
   assert.ok(Date.now() - started < 5000, "the next chapter didn't wait six hours");
+});
+
+// The source wrappers' own errors for a request that got no answer, made by the real code.
+const requireHere = createRequire(import.meta.url);
+function desktopModule(file, overrides) {
+  const url = new URL(`../apps/desktop/main/services/${file}.ts`, import.meta.url);
+  const code = ts.transpileModule(fs.readFileSync(url, "utf8"), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+  }).outputText;
+  const module = { exports: {} };
+  vm.runInNewContext(code, {
+    module, exports: module.exports, require: (id) => overrides[id] ?? requireHere(id),
+    Buffer, URL, Response, AbortController, AbortSignal, setTimeout, clearTimeout, queueMicrotask, console: { warn() {} },
+  }, { filename: url.pathname, timeout: 2000 });
+  return module.exports;
+}
+/** Comix's image request failing in the transport ([fail]: the request's error, or "dns"). */
+async function comixError(fail) {
+  const https = { request() {
+    const req = new EventEmitter();
+    req.destroy = () => {};
+    req.end = () => queueMicrotask(() => req.emit("error", fail));
+    return req;
+  } };
+  const dns = fail === "dns"
+    ? { lookup(_host, _options, callback) { callback(Object.assign(new Error("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND" })); } }
+    : { lookup(_host, _options, callback) { callback(null, [{ address: "8.8.8.8", family: 4 }]); } };
+  const api = desktopModule("manga/comix-images", {
+    "./comix-image-codec": {}, "electron": { nativeImage: {}, BrowserWindow: class {}, session: {} }, "node:https": https, "node:dns": dns,
+  });
+  // Offline, the socket's own lookup is what fails.
+  if (fail === "dns") return new Promise((resolve) => api.comixImageLookup("cdn.comix.example", { family: 0, hints: 0, all: true }, resolve));
+  return api.fetchComixImage("https://cdn.comix.example/p1.webp").then(() => null, (error) => error);
+}
+/** A verified page (MangaDot, Toonkotsu) whose in-page fetch or page load gets no answer. */
+function verifiedPage({ fetchError = null, loadError = null, result = null } = {}) {
+  class Window extends EventEmitter {
+    constructor() {
+      super();
+      this.url = "";
+      const contents = new EventEmitter();
+      const session = Object.assign(new EventEmitter(), { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} });
+      Object.assign(contents, {
+        session, getURL: () => this.url, setAudioMuted() {}, setWindowOpenHandler() {}, executeJavaScript: async () => "MangaDot",
+        executeJavaScriptInIsolatedWorld: async () => { if (fetchError) throw fetchError; return result; },
+      });
+      this.webContents = contents;
+    }
+    async loadURL(url) {
+      if (loadError && url !== "https://mangadot.example/") throw loadError;
+      this.url = url;
+      this.webContents.emit("did-finish-load");
+    }
+    isDestroyed() { return false; } isVisible() { return false; } hide() {} show() {} focus() {} setTitle() {} destroy() {}
+  }
+  const api = desktopModule("providers/verified-page-session", { electron: { app: new EventEmitter(), BrowserWindow: Window } });
+  return new api.VerifiedPageSession({ origin: "https://mangadot.example", partition: "test", label: "MangaDot", world: 1210 });
+}
+const rejection = (promise) => promise.then(() => null, (error) => error);
+const chromiumError = (code, errno) => Object.assign(new Error(`${code} (${errno}) loading 'https://mangadot.example/title/1/2'`), { code, errno });
+
+test("a reset, timeout or unreachable page from a source's own wrapper is retried like a network drop", async () => {
+  const reset = await comixError(Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }));
+  assert.match(reset.message, /Comix image request failed/);
+  const dns = await comixError("dns");
+  assert.match(dns.message, /DNS lookup failed/);
+  const dot = await rejection(verifiedPage({ fetchError: new TypeError("Failed to fetch") }).get("https://mangadot.example/img/p1.webp", "image/*"));
+  assert.equal(dot.name, "NoAnswerError");
+  const unreachable = await rejection(verifiedPage({ loadError: chromiumError("ERR_INTERNET_DISCONNECTED", -106) }).readPage("https://mangadot.example/title/1/2", "reader"));
+  assert.equal(unreachable.name, "NoAnswerError");
+  const cases = [
+    { why: "Comix: a connection reset", error: reset },
+    { why: "Comix: a DNS failure", error: dns },
+    { why: "Comix: its own deadline", error: Object.assign(new Error("Comix image took too long to load. Retry this page."), { name: "TimeoutError" }) },
+    { why: "MangaDot: the in-page fetch got no answer", error: dot },
+    { why: "a verified reader page that couldn't be reached", error: unreachable },
+  ];
+  let n = 60;
+  for (const c of cases) {
+    const id = `wrapped${n}`;
+    let calls = 0;
+    harness.pages = () => pageUrls("a", 2);
+    harness.fetch = async (url) => {
+      if (indexOf(url) === 1 && calls++ === 0) throw c.error;
+      return image(indexOf(url));
+    };
+    await M.downloadChapter(manga, title, chapter(id, n++));
+    const done = await settled(`${manga.id}:${id}`);
+    assert.equal(done.status, "done", `${c.why}: ${done.error}`);
+    assert.equal(calls, 2, `${c.why}: tried again`);
+  }
+});
+
+test("a verified page's own refusals still aren't taken for the network", async () => {
+  const malformed = await rejection(verifiedPage({ result: { nope: true } }).get("https://mangadot.example/img/p1.webp", "image/*"));
+  assert.notEqual(malformed.name, "NoAnswerError");
+  const replaced = await rejection(verifiedPage({ loadError: chromiumError("ERR_ABORTED", -3) }).readPage("https://mangadot.example/title/1/2", "reader"));
+  assert.notEqual(replaced.name, "NoAnswerError");
+  const id = "wrapped70";
+  let calls = 0;
+  harness.pages = () => pageUrls("a", 1);
+  harness.fetch = async () => { calls++; throw malformed; };
+  await M.downloadChapter(manga, title, chapter(id, 70));
+  assert.equal((await settled(`${manga.id}:${id}`)).status, "failed");
+  assert.equal(calls, 1);
+});
+
+test("offline, a page the source couldn't load waits for the network instead of failing the chapter", async () => {
+  const { MangaSourceError } = await import(sources);
+  const id = "offline80";
+  const fetched = [];
+  harness.pages = () => pageUrls("a", 3);
+  harness.fetch = async (url) => {
+    const i = indexOf(url);
+    // Toonkotsu's reader page fails to load while the network is gone.
+    if (!harness.online) throw new MangaSourceError("Toonkotsu couldn't load this page. Retry or choose another source.");
+    fetched.push(i);
+    if (i === 0) harness.online = false;
+    return image(i);
+  };
+  await M.downloadChapter(manga, title, chapter(id, 80));
+  await waitFor(() => events.some((e) => e.item?.key === `${manga.id}:${id}` && e.item.status === "queued" && /network/.test(e.item.error ?? "")), "the network wait");
+  harness.online = true;
+  const done = await settled(`${manga.id}:${id}`);
+  assert.equal(done.status, "done", done.error);
+  assert.deepEqual(new Set(fetched), new Set([0, 1, 2]));
 });
 
 after(() => {

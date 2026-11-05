@@ -10,6 +10,19 @@ import {
 } from "./comix-image-codec";
 
 const DEADLINE_MS = 25_000;
+
+/**
+ * A failure in which the image host never answered (DNS, reset, refused, TLS, a
+ * timeout). It keeps the transport's error as [cause] (or is a TimeoutError), so a
+ * download can tell it from a refused or broken image and wait for the network.
+ */
+function noAnswer(message: string, cause?: unknown): Error {
+  const code = (cause as { code?: unknown } | null)?.code;
+  return new Error(message, { cause: typeof code === "string" ? cause : { code: "ECONNRESET" } });
+}
+function timedOut(): Error {
+  return Object.assign(new Error("Comix image took too long to load. Retry this page."), { name: "TimeoutError" });
+}
 export const COMIX_IMAGE_MAX_PENDING = 32;
 let imageTail: Promise<void> = Promise.resolve();
 let pendingImages = 0;
@@ -52,7 +65,7 @@ export function privateComixAddress(address: string): boolean {
 
 export const comixImageLookup: LookupFunction = (hostname, options, callback) => {
   lookup(hostname, { family: options.family, hints: options.hints, all: true }, (error, addresses) => {
-    if (error) return callback(new Error("Comix image DNS lookup failed."), "", 0);
+    if (error) return callback(noAnswer("Comix image DNS lookup failed.", error), "", 0);
     if (!addresses.length || addresses.some(entry => privateComixAddress(entry.address))) {
       return callback(new Error("Unsafe Comix image destination."), "", 0);
     }
@@ -65,10 +78,15 @@ function aborted(signal: AbortSignal): never {
   throw signal.reason instanceof Error ? signal.reason : new Error("Comix image load cancelled.");
 }
 
+/** Why [signal] stopped a load: its own deadline (or the caller's) stays a TimeoutError. */
+function cancelled(signal: AbortSignal): Error {
+  return (signal.reason as { name?: unknown } | null)?.name === "TimeoutError" ? signal.reason as Error : new Error("Comix image load cancelled.");
+}
+
 function withAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) return Promise.reject(new Error("Comix image load cancelled."));
+  if (signal.aborted) return Promise.reject(cancelled(signal));
   return new Promise((resolve, reject) => {
-    const cancel = () => reject(new Error("Comix image load cancelled."));
+    const cancel = () => reject(cancelled(signal));
     signal.addEventListener("abort", cancel, { once: true });
     promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", cancel));
   });
@@ -115,15 +133,15 @@ function download(url: string, signal: AbortSignal): Promise<ImageResponse> {
         } else chunks.push(chunk);
       });
       response.once("end", () => done(undefined, { status, bytes: Buffer.concat(chunks, size), headers: response.headers }));
-      response.once("error", () => done(new Error("Comix image response failed.")));
-      response.once("aborted", () => done(new Error("Comix image response was interrupted.")));
+      response.once("error", (error) => done(noAnswer("Comix image response failed.", error)));
+      response.once("aborted", () => done(noAnswer("Comix image response was interrupted.")));
     });
     const cancel = () => {
       req.destroy();
-      done(new Error("Comix image load cancelled."));
+      done(cancelled(signal));
     };
     signal.addEventListener("abort", cancel, { once: true });
-    req.once("error", () => done(new Error("Comix image request failed. Retry this page manually.")));
+    req.once("error", (error) => done(noAnswer("Comix image request failed. Retry this page manually.", error)));
     req.end();
     if (signal.aborted) cancel();
   });
@@ -258,7 +276,8 @@ export async function fetchComixImage(raw: string, signal?: AbortSignal): Promis
   if (pendingImages >= COMIX_IMAGE_MAX_PENDING) throw new Error("Too many Comix pages are pending. Retry this page manually.");
   pendingImages++;
   const controller = new AbortController();
-  const cancel = () => controller.abort(new Error("Comix image load cancelled."));
+  // The caller's own reason passes through (a TimeoutError from its deadline).
+  const cancel = () => controller.abort(cancelled(signal!));
   signal?.addEventListener("abort", cancel, { once: true });
   if (signal?.aborted) cancel();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -267,7 +286,7 @@ export async function fetchComixImage(raw: string, signal?: AbortSignal): Promis
       if (controller.signal.aborted) aborted(controller.signal);
       // Prefetch wait is not a failed network request. Start the bounded fetch/
       // decode deadline only after this operation acquires the image slot.
-      timer = setTimeout(cancel, DEADLINE_MS);
+      timer = setTimeout(() => controller.abort(timedOut()), DEADLINE_MS);
       return loadImage(url, controller.signal);
     });
     // Cancelled reservations remain in the bounded chain until the predecessor

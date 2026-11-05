@@ -397,12 +397,13 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 /**
  * A request that got no answer at all (offline, reset, refused, DNS, TLS, a
  * timeout), as opposed to a source, decoding or storage error, which is never
- * retried as though it were the network.
+ * retried as though it were the network. The sources' own wrappers say so too:
+ * a verified page's NoAnswerError, or Comix's error keeping its transport cause.
  */
 function noAnswer(error: unknown): boolean {
   const e = error as { name?: unknown; message?: unknown; code?: unknown; cause?: { code?: unknown } } | null;
   if (!e || typeof e !== "object") return false;
-  if (e.name === "TimeoutError") return true;
+  if (e.name === "TimeoutError" || e.name === "NoAnswerError") return true;
   const text = `${String(e.message ?? "")} ${String(e.code ?? "")} ${String(e.cause?.code ?? "")}`;
   return /net::ERR_|\bfetch failed\b|\bfailed to fetch\b|\b(?:ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|EPIPE|UND_ERR_[A-Z_]+)\b|socket hang up/i.test(text);
 }
@@ -513,18 +514,23 @@ async function savePage(
 ): Promise<{ page: SavedPage; bytes: number; tag: string }> {
   const target = publicHttps(page.url);
   if (!target) throw new DownloadError("Refused an unsafe page address.");
-  const pending = fetchPageImage(sourceId, target, AbortSignal.any([stop, AbortSignal.timeout(PAGE_TIMEOUT_MS)]));
+  const deadline = AbortSignal.timeout(PAGE_TIMEOUT_MS);
+  const pending = fetchPageImage(sourceId, target, AbortSignal.any([stop, deadline]));
   if (!pending) throw new DownloadError("Refused an unexpected page address.");
   let response: Response;
   try {
     response = await pending;
   } catch (error) {
     if (stop.aborted) throw new Stopped();
+    // No answer at all (offline, reset, timeout, the page's own deadline): the
+    // network, not the page. While offline any failure but the source's check
+    // waits for the network; online it is judged on what it is.
+    const verdict = error instanceof MangaSourceError && (error.verify || error.status != null);
+    if (!verdict && (deadline.aborted || noAnswer(error) || !net.isOnline())) {
+      throw new MangaSourceError("The download was interrupted. Check your connection and try again.", 0);
+    }
     // The source's own verdict (its check, its rate limit, a page it refused).
     if (error instanceof MangaSourceError) throw error;
-    // No answer at all (offline, reset, timeout): the network, not the page. While
-    // offline any failure waits for the network; online it is judged on what it is.
-    if (noAnswer(error) || !net.isOnline()) throw new MangaSourceError("The download was interrupted. Check your connection and try again.", 0);
     throw new DownloadError(`Page ${index + 1} couldn't be downloaded from the source.`);
   }
   const type = response.headers.get("content-type") ?? "";

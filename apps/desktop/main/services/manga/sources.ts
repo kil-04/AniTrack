@@ -52,7 +52,7 @@ import { comixSession, ComixSessionError } from "./comix-session";
 import { COMIX_CHAPTER_LIST_DEADLINE_MS, comixChapters, comixDetail, comixHasNext, comixPages, comixSearchIds, comixValidRequest, type ComixParams } from "./comix-protocol";
 import { fetchComixImage } from "./comix-images";
 import { ComixHtmlPageParser } from "./comix-html-pages";
-import { PageVerificationError, VerifiedPageSession } from "../providers/verified-page-session";
+import { NoAnswerError, PageVerificationError, VerifiedPageSession } from "../providers/verified-page-session";
 import { TOONKOTSU, isToonkotsuChapter, toonkotsuHid, toonkotsuSearchUrl, toonkotsuSeriesUrl, toonkotsuSearch, toonkotsuDetail, toonkotsuChapters, toonkotsuPageUrl } from "../../../../../packages/shared/toonkotsu";
 import { connectToonkotsu, toonkotsuGet, fetchToonkotsuImage, ToonkotsuSessionError } from "./toonkotsu-session";
 
@@ -723,12 +723,17 @@ export function fetchPageImage(sourceId: string, target: URL, signal?: AbortSign
 
 /**
  * A Toonkotsu page failure as the source's own verdict, so a download never takes
- * it for a network drop: its check (fail, asking for Connect), its rate limit
- * (wait), or a page it couldn't load (fail). A cancelled request stays as it is.
+ * a page it couldn't load for a network drop: its check (fail, asking for
+ * Connect), its rate limit (wait), no answer from the page at all (offline, a
+ * timeout: wait for the network), or a page it couldn't load (fail). A cancelled
+ * request stays as it is.
  */
 function toonkotsuPageError(error: unknown): unknown {
   if (error instanceof ToonkotsuSessionError) return new MangaSourceError(error.message, error.rate ? 429 : undefined, error.verify);
   if (error instanceof PageVerificationError) return new MangaSourceError(error.message, undefined, true);
+  if (error instanceof NoAnswerError || (error as { name?: unknown } | null)?.name === "TimeoutError") {
+    return new MangaSourceError(error instanceof NoAnswerError ? error.message : "Toonkotsu page took too long. Retry.", 0);
+  }
   if ((error as { name?: unknown } | null)?.name === "AbortError") return error;
   const message = error instanceof Error && /^Toonkotsu /.test(error.message) ? error.message : "Toonkotsu couldn't load this page. Retry or choose another source.";
   return new MangaSourceError(message);
