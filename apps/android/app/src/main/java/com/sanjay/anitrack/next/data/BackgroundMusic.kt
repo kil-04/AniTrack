@@ -20,16 +20,19 @@ import com.sanjay.anitrack.next.data.BackgroundMusicRules.Track
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
+import java.util.concurrent.TimeUnit
 import java.util.zip.ZipFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
 
 /**
  * Background music while browsing: the built-in piano track (assets/music) and the
  * user's imported tracks (filesDir/music), one at a time on a private ExoPlayer.
  * It steps aside for anything else that makes sound (the player screen, an episode
  * in the mini player, theme songs) and while the app is in the background.
- * Settings are per device. Main thread only, apart from [import]'s file work.
+ * Settings are per device. Main thread only, apart from [import]'s and [addTheme]'s file work.
  */
 internal object BackgroundMusic {
     /** What can pause the music: the player screen, an episode playing, theme songs and videos, the app in the background. */
@@ -407,6 +410,56 @@ internal object BackgroundMusic {
         } finally {
             part.delete()
         }
+    }
+
+    /** Redirects are followed by hand, so every hop is checked against the allowed hosts. */
+    private val http by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .build()
+    }
+
+    /** A track named [name] is already in the list (imported or built in). */
+    fun hasTrack(name: String): Boolean = tracks.value.any { it.id == name }
+
+    /**
+     * Downloads a song's audio from [url] into the music folder as [name] (from
+     * [BackgroundMusicRules.themeTrackFileName]), following at most [BackgroundMusicRules.MAX_REDIRECTS]
+     * redirects within the allowed hosts ([BackgroundMusicRules.isMusicDownloadUrl]). True when the track is there afterwards, already there included.
+     */
+    suspend fun addTheme(url: String, name: String): Boolean {
+        val ctx = appContext ?: return false
+        if (BackgroundMusicRules.safeTrackName(name) != name || !BackgroundMusicRules.isMusicFile(name)) return false
+        if (hasTrack(name)) return true
+        val added = withContext(Dispatchers.IO) {
+            val dir = musicDir(ctx)
+            var target = url
+            repeat(BackgroundMusicRules.MAX_REDIRECTS + 1) {
+                if (!BackgroundMusicRules.isMusicDownloadUrl(target)) return@withContext false
+                val response = try {
+                    http.newCall(Request.Builder().url(target).build()).execute()
+                } catch (e: Exception) {
+                    return@withContext false
+                }
+                target = response.use { res ->
+                    if (res.isRedirect) {
+                        res.header("Location")?.let { res.request.url.resolve(it)?.toString() } ?: return@withContext false
+                    } else {
+                        val body = res.body
+                        if (!res.isSuccessful || body == null || body.contentLength() > BackgroundMusicRules.MAX_BYTES) return@withContext false
+                        val copied = try { body.byteStream().use { copyIn(dir, name, it) } } catch (e: IOException) { false }
+                        return@withContext copied || File(dir, name).exists()
+                    }
+                }
+            }
+            false
+        }
+        tracks.value = listTracks()
+        apply()
+        return added
     }
 
     private fun displayName(ctx: Context, uri: Uri): String? = runCatching {

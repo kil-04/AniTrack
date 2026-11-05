@@ -65,7 +65,7 @@ internal fun ThemesSection(anime: Anime) {
     val watchable = songs.filter { it.videoUrl != null && !it.nsfw }
     fun watch(at: Int) {
         queue = VideoQueue(
-            watchable.map { VideoItem("${it.animeId}:${it.slug}", it.title, listOfNotNull(it.artistLine, anime.title, it.slug).joinToString(" · "), it.cover ?: anime.cover, it.videoUrl!!) },
+            watchable.map { VideoItem("${it.animeId}:${it.slug}", it.title, listOfNotNull(it.artistLine, anime.title, it.slug).joinToString(" · "), it.cover ?: anime.cover, it.videoUrl!!, it.toSongAudio()) },
             at.coerceIn(0, watchable.lastIndex),
             "${anime.title} · theme songs",
         )
@@ -166,6 +166,7 @@ private fun ThemeRow(song: ThemeSong, modifier: Modifier, onPlay: () -> Unit, on
                 }
             }
         }
+        AddToMusicButton(song.toSongAudio(), compact = true)
         if (song.videoUrl != null && !song.nsfw) {
             FilledTonalButton(onClick = onWatch, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
                 Icon(Icons.Rounded.Movie, null, Modifier.size(16.dp))
@@ -216,6 +217,7 @@ internal fun ThemeBar(modifier: Modifier = Modifier, onOpenAnime: (Int) -> Unit)
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+            AddToMusicButton(song.toSongAudio(), compact = true, tint = AniColors.Text, size = 36.dp)
             IconButton(onClick = { ThemePlayer.previous() }, modifier = Modifier.size(36.dp)) {
                 Icon(Icons.Rounded.SkipPrevious, "Previous", tint = AniColors.Text)
             }

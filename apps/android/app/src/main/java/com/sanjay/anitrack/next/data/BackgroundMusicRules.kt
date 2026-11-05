@@ -107,4 +107,41 @@ internal object BackgroundMusicRules {
             .trimStart('.')
             .take(180)
             .ifEmpty { "track.mp3" }
+
+    /** JavaScript's \s, so names collapse exactly as on desktop (Java's \s is ASCII only). */
+    private val SPACES = Regex("[\\t\\n\\u000B\\f\\r \\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]+")
+
+    /**
+     * The file name a theme song from Songs is saved under: "Title — Artist, Artist (Show OP1)"
+     * cut to 120 characters, with the URL's audio extension (else .ogg), made safe. Same as
+     * themeTrackFileName in bg-music.ts.
+     */
+    fun themeTrackFileName(title: String, artists: List<String>, anime: String, slug: String, url: String): String {
+        var base = title
+        if (artists.isNotEmpty()) base += " — " + artists.joinToString(", ")
+        if (anime.isNotEmpty()) base += " (" + anime + (if (slug.isNotEmpty()) " $slug" else "") + ")"
+        // A slash would read as a folder ("Fate/Zero" kept only "Zero …"): it becomes a dash.
+        base = base.replace('/', '-').replace('\\', '-').replace(SPACES, " ").trim { it == ' ' }.take(120).trim { it == ' ' }
+        val file = url.substringBefore('#').substringBefore('?').substringAfter("://", "")
+            .let { rest -> if ('/' in rest) rest.substring(rest.indexOf('/')) else "" }
+            .substringAfterLast('/')
+        val ext = if ('.' in file) "." + file.substringAfterLast('.').lowercase(Locale.ROOT) else ""
+        return safeTrackName(base + if (ext in EXTENSIONS) ext else ".ogg")
+    }
+
+    /**
+     * Whether a song's audio may be downloaded into the music folder (Add to music): https on
+     * AnimeThemes (animethemes.moe or any *.animethemes.moe) or AnisongDB's media hosts, which the
+     * Songs section's charts play from, and nowhere else. Each redirect hop must pass it too.
+     * Same as isMusicDownloadUrl in bg-music.ts.
+     */
+    fun isMusicDownloadUrl(url: String?): Boolean = url != null && runCatching {
+        val uri = java.net.URI(url)
+        val host = uri.host?.lowercase(Locale.ROOT) ?: return false
+        uri.scheme.equals("https", ignoreCase = true) && uri.rawUserInfo == null &&
+            (host == "animethemes.moe" || host.endsWith(".animethemes.moe") || host in AniSongs.HOSTS)
+    }.getOrDefault(false)
+
+    /** Redirects followed when downloading a song into the music folder. */
+    const val MAX_REDIRECTS = 3
 }

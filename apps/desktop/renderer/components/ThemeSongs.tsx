@@ -5,10 +5,16 @@ import type { ThemeSong } from "../../../../packages/shared/anime-themes";
 import { withSongClips } from "../../../../packages/shared/anisongs";
 import { currentTheme, RADIO_LABEL, useThemePlayer } from "../store/useThemePlayer";
 import { VideoPlayer, type VideoItem } from "./VideoPlayer";
+import { AddToMusicButton, type MusicSong } from "./BackgroundMusic";
 
 const OPENING = "#ff5c7a";
 const ENDING = "#7aa7ff";
 const tone = (song: ThemeSong) => (song.type === "OP" ? OPENING : ENDING);
+
+/** A theme song as Add to music takes it (Songs' own songs come through here named alike). */
+const musicSong = (song: ThemeSong): MusicSong => ({
+  title: song.title, artists: song.artists, anime: song.animeTitle, slug: song.slug, audioUrl: song.audioUrl,
+});
 
 function episodesLabel(episodes: string | null): string | null {
   if (!episodes?.trim()) return null;
@@ -114,6 +120,7 @@ export function ThemeSongs({ animeId, animeTitle, malId }: { animeId: number; an
                   <Film size={14} /> Watch
                 </button>
               )}
+              <AddToMusicButton song={musicSong(song)} />
             </div>
           );
         })}
@@ -162,6 +169,7 @@ export function ThemeBar() {
             </div>
           </div>
         </button>
+        <AddToMusicButton song={musicSong(song)} />
         <button onClick={previous} title="Previous" className="flex h-8 w-8 items-center justify-center rounded-full text-white/70 hover:bg-white/10 hover:text-white">
           <SkipBack size={15} />
         </button>

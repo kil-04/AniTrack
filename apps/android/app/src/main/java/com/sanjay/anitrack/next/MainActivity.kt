@@ -410,7 +410,7 @@ fun AppShell() {
                             if (previous?.destination?.route == "novel/{source}/{id}" &&
                                 previous.arguments?.getString("source") == source.key && previous.arguments?.getString("id") == id
                             ) nav.popBackStack() else openNovel(source, id)
-                        })
+                        }, onOpenMusicSettings = { go("settings") })
                     }
                     composable(
                         "novel-search?q={q}&genre={genre}",
@@ -435,7 +435,7 @@ fun AppShell() {
                         )
                     }
                     composable("reader") {
-                        com.sanjay.anitrack.next.ui.MangaReaderScreen(onBack = { nav.popBackStack() })
+                        com.sanjay.anitrack.next.ui.MangaReaderScreen(onBack = { nav.popBackStack() }, onOpenMusicSettings = { go("settings") })
                     }
                     composable("search?q={q}", arguments = listOf(navArgument("q") { defaultValue = "" })) { entry ->
                         // "View all results" from the top bar: a fresh search for that text.

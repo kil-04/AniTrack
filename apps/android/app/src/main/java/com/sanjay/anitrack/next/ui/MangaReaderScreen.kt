@@ -148,7 +148,7 @@ private fun Throwable.needsCheck(): Boolean =
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MangaReaderScreen(onBack: () -> Unit) {
+fun MangaReaderScreen(onBack: () -> Unit, onOpenMusicSettings: () -> Unit = {}) {
     val session = MangaReading.current.value
     if (session == null) {
         LaunchedEffect(Unit) { onBack() }
@@ -471,9 +471,9 @@ fun MangaReaderScreen(onBack: () -> Unit) {
                     )
                 }
                 if (narrow) {
-                    // The phone's single Music switch; long-press opens reader settings, which hold
-                    // the full music controls on phones.
-                    BackgroundMusicButton(onOpenSettings = { settingsOpen = true })
+                    // The phone's single Music switch; long-press opens the music panel (reader settings
+                    // also hold the full music controls on phones).
+                    BackgroundMusicButton(onOpenSettings = onOpenMusicSettings)
                     Spacer(Modifier.width(4.dp))
                     IconButton(onClick = { chaptersOpen = true }) {
                         Icon(Icons.AutoMirrored.Rounded.FormatListBulleted, "Chapters", tint = Color.White)
@@ -483,7 +483,7 @@ fun MangaReaderScreen(onBack: () -> Unit) {
                     }
                 } else {
                     // Background music keeps playing while reading; its controls ride along in the reader bar.
-                    BackgroundMusicBar(compact = true, onOpenSettings = {})
+                    BackgroundMusicBar(compact = true, onOpenSettings = onOpenMusicSettings)
                     Spacer(Modifier.width(8.dp))
                     PillButton("Chapters", { chaptersOpen = true }, icon = Icons.AutoMirrored.Rounded.FormatListBulleted, compact = true)
                     Spacer(Modifier.width(8.dp))
@@ -571,6 +571,7 @@ fun MangaReaderScreen(onBack: () -> Unit) {
                     prefs.edit().putBoolean("reader_spread_shift", it).apply()
                 },
                 musicControls = narrow,
+                onOpenMusicSettings = onOpenMusicSettings,
             )
         }
     }
@@ -911,6 +912,7 @@ private fun ReaderSettings(
     onSpreadShift: (Boolean) -> Unit,
     /** Phones: the top bar only has the Music switch, so pause and skip live here. */
     musicControls: Boolean = false,
+    onOpenMusicSettings: () -> Unit = {},
 ) {
     run {
         Column(
@@ -920,7 +922,7 @@ private fun ReaderSettings(
         ) {
             if (musicControls && com.sanjay.anitrack.next.data.BackgroundMusic.tracks.value.isNotEmpty()) {
                 Text("Background music", style = MaterialTheme.typography.labelLarge, color = AniColors.TextSecondary)
-                BackgroundMusicBar(compact = false, onOpenSettings = {})
+                BackgroundMusicBar(compact = false, onOpenSettings = onOpenMusicSettings)
                 Spacer(Modifier.height(6.dp))
             }
             Text("Reading mode", style = MaterialTheme.typography.labelLarge, color = AniColors.TextSecondary)

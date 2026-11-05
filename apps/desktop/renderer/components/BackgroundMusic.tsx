@@ -1,14 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import {
   AudioLines,
+  Check,
   FolderOpen,
+  ListPlus,
   Music2,
   Pause,
   Play,
   Plus,
   Repeat,
   Repeat1,
+  Settings2,
   Shuffle,
   SkipBack,
   SkipForward,
@@ -19,7 +23,7 @@ import {
   VolumeX,
   type LucideIcon,
 } from "lucide-react";
-import type { BgMusicMode, BgTrack } from "../../../../packages/shared/bg-music";
+import { isMusicDownloadUrl, themeTrackFileName, type BgMusicMode, type BgTrack } from "../../../../packages/shared/bg-music";
 import { useBgMusic, type BgHold } from "../store/useBgMusic";
 
 const MODES: Record<BgMusicMode, { label: string; icon: LucideIcon }> = {
@@ -268,25 +272,208 @@ export function BackgroundMusicSettings() {
   );
 }
 
-/** The top bar's music controls: on/off, then Previous, Play/Pause, Next, Repeat and the track while it is on. */
+/** Press-and-hold on the music controls opens the mini panel, as right-click does. */
+const HOLD_MS = 500;
+
+/**
+ * Right-click or a ~500 ms press calls [onHold]; the click that ends a hold is swallowed so a
+ * plain click keeps its own meaning. A press that wanders off is no hold.
+ */
+function useHold(onHold: () => void) {
+  const latest = useRef(onHold);
+  latest.current = onHold;
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const start = useRef<{ x: number; y: number } | null>(null);
+  const swallow = useRef(false);
+  const clear = () => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+    start.current = null;
+  };
+  useEffect(() => clear, []);
+  return {
+    /** Swallows the next click (a press that only closed the panel). */
+    swallowClick: () => { swallow.current = true; },
+    handlers: {
+      onPointerDown: (event: PointerEvent) => {
+        if (event.button !== 0) return;
+        clear();
+        swallow.current = false;
+        start.current = { x: event.clientX, y: event.clientY };
+        timer.current = setTimeout(() => {
+          timer.current = null;
+          swallow.current = true;
+          latest.current();
+        }, HOLD_MS);
+      },
+      onPointerMove: (event: PointerEvent) => {
+        const from = start.current;
+        if (from && Math.hypot(event.clientX - from.x, event.clientY - from.y) > 8) clear();
+      },
+      onPointerUp: clear,
+      onPointerLeave: clear,
+      onPointerCancel: clear,
+      onClickCapture: (event: MouseEvent) => {
+        // Only the controls' own click: the panel's clicks bubble here through its portal, and a
+        // hold released over the panel leaves no click on the controls to swallow.
+        if (!swallow.current || !event.currentTarget.contains(event.target as Node)) return;
+        swallow.current = false;
+        event.preventDefault();
+        event.stopPropagation();
+      },
+      onContextMenu: (event: MouseEvent) => {
+        event.preventDefault();
+        clear();
+        latest.current();
+      },
+    },
+  };
+}
+
+const PANEL_WIDTH = 320;
+
+/**
+ * The mini music panel: the track and its status, transport and order, the playlist and a
+ * way to Settings, in a small dropdown under [anchor] over the current page. Closes on a
+ * click outside or Escape.
+ */
+function MusicPanel({ anchor, onClose }: { anchor: HTMLElement; onClose: () => void }) {
+  const navigate = useNavigate();
+  const { on, tracks, playing, current, status, mode } = useMusic();
+  const { select, togglePlay, cycleMode } = useBgMusic.getState();
+  const panel = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLOListElement>(null);
+  const [place, setPlace] = useState<CSSProperties>({ visibility: "hidden" });
+
+  useLayoutEffect(() => {
+    const measure = () => {
+      const rect = anchor.getBoundingClientRect();
+      const left = Math.max(8, Math.min(rect.right - PANEL_WIDTH, window.innerWidth - PANEL_WIDTH - 8));
+      setPlace({ left, top: rect.bottom + 8, width: PANEL_WIDTH });
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    window.addEventListener("scroll", measure, true);
+    return () => {
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("scroll", measure, true);
+    };
+  }, [anchor]);
+
+  useEffect(() => {
+    // The playing track in view when the panel opens.
+    list.current?.querySelector<HTMLElement>("[data-current]")?.scrollIntoView({ block: "nearest" });
+    const onDown = (event: globalThis.PointerEvent) => {
+      const target = event.target as Node;
+      if (panel.current?.contains(target) || anchor.contains(target)) return;
+      onClose();
+    };
+    // Ahead of the readers' own Escape, which would leave the reader.
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.stopImmediatePropagation();
+      event.preventDefault();
+      onClose();
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("pointerdown", onDown, true);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, [anchor, onClose]);
+
+  const { label: modeLabel, icon: ModeIcon } = MODES[mode];
+  return createPortal(
+    // A portal still bubbles through the React tree: clicks here stop short of the page (the readers' tap zones).
+    <div
+      ref={panel}
+      role="dialog"
+      aria-label="Background music"
+      style={place}
+      onClick={(event) => event.stopPropagation()}
+      onPointerDown={(event) => event.stopPropagation()}
+      onContextMenu={(event) => event.stopPropagation()}
+      className="titlebar-no-drag panel fixed z-[95] bg-surface-1/95 p-3 text-white backdrop-blur-xl"
+    >
+      <div className="min-w-0 px-1">
+        <div className="truncate text-sm font-semibold">{current?.title ?? "Background music"}</div>
+        <div className="truncate text-xs text-ink-3">{status}</div>
+      </div>
+      <div className="mt-2.5 flex items-center justify-between gap-2">
+        <Transport size="sm" />
+        <button onClick={cycleMode} title={`${modeLabel}. Click to change.`} aria-label={`Playback order: ${modeLabel}`} className="chip">
+          <ModeIcon size={13} />
+          {modeLabel}
+        </button>
+      </div>
+      {/* About six rows, then it scrolls. */}
+      <ol ref={list} className="mt-2.5 max-h-[226px] overflow-y-auto rounded-xl border border-white/[0.06] bg-white/[0.02] p-1">
+        {tracks.map((track) => {
+          const isCurrent = track.id === current?.id;
+          return (
+            <li key={track.id} data-current={isCurrent ? "" : undefined}>
+              <button
+                onClick={() => (isCurrent ? !on && togglePlay() : select(track.id))}
+                title={isCurrent && on ? "Playing now" : "Play this track"}
+                aria-current={isCurrent ? "true" : undefined}
+                className={`flex h-9 w-full min-w-0 items-center gap-2.5 rounded-lg px-2 text-left transition ${
+                  isCurrent ? "bg-accent/[0.12]" : "hover:bg-white/[0.05]"
+                }`}
+              >
+                <span className={`grid w-6 shrink-0 place-items-center text-xs tabular-nums ${isCurrent ? "text-accent" : "text-ink-3"}`}>
+                  {isCurrent && on && playing ? <AudioLines size={14} /> : track.number ?? <Music2 size={12} />}
+                </span>
+                <span className={`truncate text-[13px] ${isCurrent ? "font-semibold text-white" : "text-ink-2"}`}>{track.title}</span>
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+      <button onClick={() => { onClose(); navigate("/settings#music"); }} className="btn btn-ghost btn-sm mt-2 w-full justify-start">
+        <Settings2 size={14} />
+        Music settings
+      </button>
+    </div>,
+    document.body,
+  );
+}
+
+/**
+ * The top bar's music controls: on/off, then Previous, Play/Pause, Next, Repeat and the track
+ * while it is on. Right-click or press and hold opens the mini music panel.
+ */
 export function BackgroundMusicButton() {
   const navigate = useNavigate();
   const { enabled, on, tracks, playing, loaded, current, status, mode } = useMusic();
   const { toggle, cycleMode } = useBgMusic.getState();
-  if (!window.api.music || !loaded) return null;
+  const anchor = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
   const openSettings = () => navigate("/settings#music");
+  // With no tracks there is no playlist to show: holding goes to Settings, like a click.
+  const hold = useHold(() => (useBgMusic.getState().tracks.length ? setOpen(true) : openSettings()));
+  if (!window.api.music || !loaded) return null;
 
   if (!tracks.length) {
     return (
-      <button onClick={openSettings} title="Background music: import tracks in Settings" className="btn btn-ghost btn-icon h-9 w-9 rounded-full">
-        <Music2 size={17} />
-      </button>
+      <div {...hold.handlers}>
+        <button onClick={openSettings} title="Background music: import tracks in Settings" className="btn btn-ghost btn-icon h-9 w-9 rounded-full">
+          <Music2 size={17} />
+        </button>
+      </div>
     );
   }
 
   const { label: modeLabel, icon: ModeIcon } = MODES[mode];
   return (
     <div
+      ref={anchor}
+      {...hold.handlers}
+      onPointerDown={(event) => {
+        // A press on the controls while the panel is open only closes it.
+        if (open && event.button === 0) { setOpen(false); hold.swallowClick(); return; }
+        hold.handlers.onPointerDown(event);
+      }}
       className={`flex h-10 items-center gap-0.5 rounded-full border px-1 transition-colors ${
         enabled ? "border-accent/30 bg-accent/[0.1]" : "border-white/[0.07] bg-white/[0.04]"
       }`}
@@ -294,7 +481,9 @@ export function BackgroundMusicButton() {
       <button
         onClick={toggle}
         aria-pressed={enabled}
-        title={enabled ? `Background music: ${status}. Click to turn it off.` : "Turn background music on"}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        title={enabled ? `Background music: ${status}. Click to turn it off; right-click or hold for the playlist.` : "Turn background music on (right-click or hold for the playlist)"}
         className="grid h-8 w-8 place-items-center rounded-full transition hover:bg-white/[0.08]"
       >
         {on && playing ? (
@@ -323,6 +512,99 @@ export function BackgroundMusicButton() {
           </button>
         </>
       )}
+      {open && anchor.current && <MusicPanel anchor={anchor.current} onClose={() => setOpen(false)} />}
     </div>
+  );
+}
+
+/** A song from Songs or a title page, as Add to music takes it. */
+export interface MusicSong {
+  title: string;
+  artists: string[];
+  anime: string;
+  /** "OP1", "ED2"; "" when it has none. */
+  slug: string;
+  audioUrl: string | null;
+}
+
+export type AddToMusicState = "idle" | "saving" | "failed" | "done";
+
+/**
+ * Add to music for one song: null when it can't be added (no AnimeThemes or AnisongDB audio,
+ * or no music folder in this build); "done" once a track of its file name is in the music.
+ */
+export function useAddToMusic(song: MusicSong) {
+  const name = isMusicDownloadUrl(song.audioUrl)
+    ? themeTrackFileName(song.title, song.artists, song.anime, song.slug, song.audioUrl)
+    : null;
+  const have = useBgMusic((s) => name != null && s.tracks.some((t) => t.id === name && !t.bundled));
+  const [state, setState] = useState<"idle" | "saving" | "failed">("idle");
+  useEffect(() => {
+    if (state !== "failed") return;
+    const timer = setTimeout(() => setState("idle"), 3500);
+    return () => clearTimeout(timer);
+  }, [state]);
+  if (!window.api.music || !name || !song.audioUrl) return null;
+  const url = song.audioUrl;
+  const shown: AddToMusicState = have ? "done" : state;
+  return {
+    state: shown,
+    label: shown === "done" ? "In your music" : shown === "saving" ? "Adding…" : shown === "failed" ? "Couldn't add this song" : "Add to music",
+    add: async () => {
+      if (shown === "done" || shown === "saving") return;
+      setState("saving");
+      try {
+        await useBgMusic.getState().addSong(url, name);
+        setState("idle");
+      } catch {
+        setState("failed");
+      }
+    },
+  };
+}
+
+/** The Add to music icon: a spinner while saving, a check once it is in the music. */
+export function AddToMusicIcon({ state, size }: { state: AddToMusicState; size: number }) {
+  if (state === "saving") {
+    return <span className="pixel-round inline-block animate-spin rounded-full border-2 border-current border-t-transparent" style={{ width: size, height: size }} />;
+  }
+  return state === "done" ? <Check size={size} /> : <ListPlus size={size} />;
+}
+
+/**
+ * A round Add to music button for song rows and players; a failure shows its short message
+ * above it for a moment (over the page, so a clipped player bar can't hide it), then the
+ * button returns.
+ */
+export function AddToMusicButton({ song, className = "" }: { song: MusicSong; className?: string }) {
+  const add = useAddToMusic(song);
+  const button = useRef<HTMLButtonElement>(null);
+  if (!add) return null;
+  const rect = add.state === "failed" ? button.current?.getBoundingClientRect() : undefined;
+  return (
+    <>
+      <button
+        ref={button}
+        onClick={(event) => { event.stopPropagation(); void add.add(); }}
+        disabled={add.state === "done" || add.state === "saving"}
+        title={add.state === "done" ? "In your music: it plays as background music" : add.label}
+        aria-label={add.label}
+        className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full transition disabled:cursor-default ${
+          add.state === "done" ? "text-accent" : add.state === "failed" ? "text-red-300" : "text-white/50 hover:bg-white/10 hover:text-white"
+        } ${className}`}
+      >
+        <AddToMusicIcon state={add.state} size={15} />
+      </button>
+      {rect && createPortal(
+        <span
+          role="status"
+          className="pointer-events-none fixed z-[96] whitespace-nowrap rounded-md bg-black/85 px-2 py-1 text-[11px] font-semibold text-red-200 shadow-lg"
+          style={{ top: Math.max(4, rect.top - 30), right: Math.max(4, window.innerWidth - rect.right) }}
+        >
+          {add.label}
+        </span>,
+        document.body,
+      )}
+    </>
   );
 }

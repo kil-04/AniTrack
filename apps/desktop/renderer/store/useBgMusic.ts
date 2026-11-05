@@ -56,6 +56,8 @@ interface BgMusicState extends Saved {
   refresh: () => Promise<void>;
   importTracks: () => Promise<{ added: number; skipped: number }>;
   remove: (trackId: string) => Promise<void>;
+  /** Downloads a song from Songs into the music as [name]; throws when it couldn't. */
+  addSong: (url: string, name: string) => Promise<"added" | "exists">;
 }
 
 const SETTINGS_KEY = "anitrack.bgm.v1";
@@ -276,6 +278,14 @@ export const useBgMusic = create<BgMusicState>((set, get) => ({
     });
     save(get());
     apply();
+  },
+  addSong: async (url, name) => {
+    const result = await window.api.music?.addSong(url, name);
+    if (!result) throw new Error("Couldn't add this song");
+    set({ tracks: result.tracks, loaded: true });
+    apply();
+    if (!result.ok) throw new Error(result.error ?? "Couldn't add this song");
+    return result.exists ? "exists" : "added";
   },
 }));
 

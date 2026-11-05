@@ -144,6 +144,7 @@ contextBridge.exposeInMainWorld("api", {
     import: () => ipcRenderer.invoke(IPC.MUSIC_IMPORT),
     remove: (id: string) => ipcRenderer.invoke(IPC.MUSIC_REMOVE, id),
     openFolder: () => ipcRenderer.invoke(IPC.MUSIC_OPEN_FOLDER),
+    addSong: (url: string, name: string) => ipcRenderer.invoke(IPC.MUSIC_ADD_SONG, url, name),
   },
   list: {
     getAll: () => ipcRenderer.invoke(IPC.LIST_GET_ALL),

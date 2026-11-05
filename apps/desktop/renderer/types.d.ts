@@ -65,6 +65,8 @@ interface ApiBridge {
     import(): Promise<{ added: number; skipped: number; tracks: import("../../../packages/shared/bg-music").BgTrack[] }>;
     remove(id: string): Promise<import("../../../packages/shared/bg-music").BgTrack[]>;
     openFolder(): Promise<{ ok: boolean }>;
+    /** Downloads a song's audio (AnimeThemes or AnisongDB) into the music folder as [name]. */
+    addSong(url: string, name: string): Promise<{ ok: boolean; exists?: boolean; error?: string; tracks: import("../../../packages/shared/bg-music").BgTrack[] }>;
   };
   list: {
     getAll(): Promise<{ entry: ListEntry; anime: AnimeMeta | null }[]>;

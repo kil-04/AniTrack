@@ -676,7 +676,10 @@ private fun PodiumCard(song: AniSong, rank: Int, order: String, onScreen: Boolea
         Box(Modifier.padding(10.dp).size(38.dp).clip(CircleShape).background(color), contentAlignment = Alignment.Center) {
             Text("$rank", color = Color.Black, fontWeight = FontWeight.Black, fontSize = 18.sp)
         }
-        if (playing) Box(Modifier.align(Alignment.TopEnd).padding(12.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.6f)).padding(8.dp)) { Equalizer() }
+        Row(Modifier.align(Alignment.TopEnd).padding(10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (playing) Box(Modifier.clip(CircleShape).background(Color.Black.copy(alpha = 0.6f)).padding(8.dp)) { Equalizer() }
+            AddToMusicButton(songAudio(song), compact = true, glass = true, tint = Color.White, size = 36.dp)
+        }
         Column(Modifier.align(Alignment.BottomStart).padding(12.dp)) {
             Text(song.title, color = Color.White, fontWeight = FontWeight.Black, fontSize = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(song.artist, color = Color.White.copy(alpha = 0.65f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -762,6 +765,7 @@ private fun SongRow(
         }
         if (!narrow) Box(Modifier.width(110.dp).padding(end = 6.dp), contentAlignment = Alignment.CenterEnd) { Score(song, order) }
         IconButton(onClick = { actions.listen(list, index, label) }, enabled = song.audio != null) { Icon(Icons.Rounded.Headphones, "Listen", tint = AniColors.TextSecondary) }
+        AddToMusicButton(songAudio(song), compact = true)
     }
 }
 
@@ -952,7 +956,12 @@ private fun songItem(song: AniSong) = VideoItem(
     byline = listOfNotNull(song.artist, song.anime, AniSongs.slug(song), song.year?.toString()).joinToString(" · "),
     cover = song.cover,
     url = AniSongs.videoUrl(song)!!,
+    audio = songAudio(song),
 )
+
+/** A song as Add to music takes it: named as the theme player's copy of it (no artist when AnisongDB has none, as on desktop). */
+private fun songAudio(song: AniSong): SongAudio? =
+    AniSongs.toThemeSong(song).toSongAudio()?.let { audio -> audio.copy(artists = audio.artists.filter { it.isNotEmpty() }) }
 
 /** A thin bar of a 0–100 score. */
 @Composable
@@ -1015,6 +1024,7 @@ private fun SongCardDialog(song: AniSong, actions: SongActions, onClose: () -> U
                             Text(song.title, color = Color.White, fontSize = if (narrow) 22.sp else 26.sp, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             Text(song.artist, color = Color.White.copy(alpha = 0.75f))
                             Text(listOfNotNull(song.anime, song.season).joinToString(" · "), color = Color.White.copy(alpha = 0.5f), fontSize = 13.sp)
+                            AddToMusicButton(songAudio(song), Modifier.padding(top = 10.dp))
                             if (!narrow) { Spacer(Modifier.height(12.dp)); chips() }
                         }
                         IconButton(onClick = onClose) { Icon(Icons.Rounded.Close, "Close", tint = Color.White) }

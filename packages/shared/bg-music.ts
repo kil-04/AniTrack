@@ -3,6 +3,7 @@
  * the app), with Repeat one / Play all / Shuffle. Shared rules; Android mirrors
  * them in BackgroundMusicRules.kt.
  */
+import { ANISONGS } from "./anisongs.ts";
 
 export type BgMusicMode = "one" | "all" | "shuffle";
 export const BG_MUSIC_MODES: BgMusicMode[] = ["one", "all", "shuffle"];
@@ -98,3 +99,44 @@ export function safeTrackName(name: string): string {
   const base = name.split(/[\\/]/).pop() ?? "";
   return base.replace(/[<>:"|?*\u0000-\u001f]/g, "_").replace(/^\.+/, "").slice(0, 180) || "track.mp3";
 }
+
+/**
+ * The file name a theme song gets when it is added to the music from Songs:
+ * "Title — Artist, Artist (Anime OP1).ogg", the base cut to 120 characters, with the
+ * URL's audio extension (else .ogg). Kotlin twin: BackgroundMusicRules.themeTrackFileName.
+ */
+export function themeTrackFileName(title: string, artists: string[], anime: string, slug: string, url: string): string {
+  let base = title;
+  if (artists.length) base += ` — ${artists.join(", ")}`;
+  if (anime) base += ` (${anime}${slug ? ` ${slug}` : ""})`;
+  // A slash would read as a folder ("Fate/Zero" kept only "Zero …"): it becomes a dash.
+  base = base.replace(/[\\/]/g, "-").replace(/\s+/g, " ").trim().slice(0, 120).trim();
+  let ext = ".ogg";
+  try {
+    const last = new URL(url).pathname.split("/").pop() ?? "";
+    const dot = last.lastIndexOf(".");
+    const found = dot >= 0 ? last.slice(dot).toLowerCase() : "";
+    if (BG_MUSIC_EXTENSIONS.includes(found)) ext = found;
+  } catch { /* not a URL: keep .ogg */ }
+  return safeTrackName(base + ext);
+}
+
+/**
+ * Whether a song's audio may be downloaded into the music folder: HTTPS on AnimeThemes
+ * (animethemes.moe or any *.animethemes.moe) or AnisongDB's media hosts, and nowhere else.
+ * Redirects are followed only while each hop passes this too.
+ */
+export function isMusicDownloadUrl(url: string | null | undefined): url is string {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password) return false;
+    const host = parsed.hostname.toLowerCase();
+    return host === "animethemes.moe" || host.endsWith(".animethemes.moe") || ANISONGS.HOSTS.includes(host);
+  } catch {
+    return false;
+  }
+}
+
+/** Redirects followed when downloading a song into the music folder. */
+export const BG_MUSIC_MAX_REDIRECTS = 3;

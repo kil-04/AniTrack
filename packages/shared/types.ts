@@ -256,6 +256,7 @@ export const IPC = {
   MUSIC_IMPORT: "music:import",
   MUSIC_REMOVE: "music:remove",
   MUSIC_OPEN_FOLDER: "music:open-folder",
+  MUSIC_ADD_SONG: "music:add-song",
   // Offline downloads (desktop)
   DOWNLOAD_START: "download:start",
   DOWNLOAD_LIST: "download:list",

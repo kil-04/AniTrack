@@ -134,6 +134,8 @@ internal data class VideoItem(
     val byline: String,
     val cover: String?,
     val url: String,
+    /** Its audio, for Add to music (null: none to save). */
+    val audio: SongAudio? = null,
 )
 
 internal data class VideoQueue(val items: List<VideoItem>, val index: Int, val label: String)
@@ -291,6 +293,7 @@ internal fun SongSidePlayer(video: SongVideo, onFull: () -> Unit, onClose: () ->
     ) {
         Row(Modifier.padding(start = 16.dp, end = 10.dp, top = 14.dp, bottom = 10.dp), verticalAlignment = Alignment.Top) {
             NowPlaying(video, big = false, modifier = Modifier.weight(1f))
+            AddToMusicButton(video.item.audio, compact = true, tint = Color.White, size = 48.dp)
             IconButton(onClick = onFull) { Icon(Icons.Rounded.Fullscreen, "Full screen", tint = Color.White) }
             IconButton(onClick = onClose) { Icon(Icons.Rounded.Close, "Close", tint = Color.White) }
         }
@@ -370,6 +373,7 @@ internal fun SongFullPlayer(video: SongVideo, onDock: (() -> Unit)?, onClose: ()
             SongVideoSurface(video, Modifier.fillMaxSize(), onSwipe = onStep)
             val buttons = @Composable {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    AddToMusicButton(video.item.audio, compact = true, glass = true, tint = Color.White)
                     GlassIconButton(Icons.Rounded.SkipPrevious, "Previous", { onStep(-1) }, size = 40.dp)
                     GlassIconButton(Icons.Rounded.SkipNext, "Next", { onStep(1) }, size = 40.dp)
                     if (phone && onDock == null) {

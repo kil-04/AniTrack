@@ -77,4 +77,56 @@ class BackgroundMusicRulesTest {
         assertEquals("a_b__c_.mp3", rules.safeTrackName("a<b>:c?.mp3"))
         assertEquals("It’s Going Down Now.mp3", rules.safeTrackName("It’s Going Down Now.mp3"))
     }
+
+    @Test fun themeSongsFromSongsAreNamedTitleArtistsShowAndPart() {
+        assertEquals(
+            "Cruel Angel's Thesis — Yoko Takahashi (Neon Genesis Evangelion OP1).ogg",
+            rules.themeTrackFileName("Cruel Angel's Thesis", listOf("Yoko Takahashi"), "Neon Genesis Evangelion", "OP1", "https://a.animethemes.moe/EvangelionOP1.ogg"),
+        )
+        // No artists, no part; the URL's extension lower-cased, its query ignored.
+        assertEquals("Gurenge (Demon Slayer).mp3", rules.themeTrackFileName("Gurenge", emptyList(), "Demon Slayer", "", "https://a.animethemes.moe/KimetsuED1.MP3?x=1"))
+        // A slash in a show or artist would read as a folder: it becomes a dash.
+        assertEquals(
+            "Oath Sign — LiSA (Fate-Zero OP1).ogg",
+            rules.themeTrackFileName("Oath Sign", listOf("LiSA"), "Fate/Zero", "OP1", "https://a.animethemes.moe/FateZeroOP1.ogg"),
+        )
+        // No show; an extension the player doesn't take becomes .ogg.
+        assertEquals(
+            "Unravel — TK, Ling tosite sigure.ogg",
+            rules.themeTrackFileName("Unravel", listOf("TK", "Ling tosite sigure"), "", "OP1", "https://a.animethemes.moe/TokyoGhoul-OP1.webm"),
+        )
+        // Whitespace collapses and the name is made safe.
+        assertEquals(
+            "Re_Re_ — ASIAN KUNG-FU GENERATION (Erased OP1).ogg",
+            rules.themeTrackFileName("  Re:Re:  ", listOf("ASIAN KUNG-FU\tGENERATION"), "Erased", "OP1", "https://a.animethemes.moe/BokuMachi-OP1.ogg"),
+        )
+        // The name is cut to 120 characters before the extension; no extension at all means .ogg.
+        assertEquals("A".repeat(120) + ".ogg", rules.themeTrackFileName("A".repeat(130), emptyList(), "", "", "https://a.animethemes.moe/audio"))
+        // tests/bg-music.test.mjs's own cases, so both apps name a song alike.
+        assertEquals(
+            "Gurenge — LiSA, Kayoko Kusano (Demon Slayer).mp3",
+            rules.themeTrackFileName("Gurenge", listOf("LiSA", "Kayoko Kusano"), "Demon Slayer", "", "https://a.animethemes.moe/x/KimetsuOP1.MP3?x=1"),
+        )
+        assertEquals("Blue Bird.ogg", rules.themeTrackFileName("  Blue   Bird ", emptyList(), "", "OP3", "https://a.animethemes.moe/NarutoShippudenOP3.webm"))
+        assertEquals("Unravel (Tokyo Ghoul OP1).ogg", rules.themeTrackFileName("Unravel", emptyList(), "Tokyo Ghoul", "OP1", "not a url"))
+        assertEquals(
+            "Re_ Re_ — ASIAN KUNG-FU GENERATION (Erased OP1).mp3",
+            rules.themeTrackFileName("Re: Re:", listOf("ASIAN KUNG-FU GENERATION"), "Erased", "OP1", "https://naedist.animemusicquiz.com/abcd12.mp3"),
+        )
+        assertEquals("a".repeat(120) + ".flac", rules.themeTrackFileName("a".repeat(130), emptyList(), "", "", "https://a.animethemes.moe/x.flac"))
+    }
+
+    @Test fun songsDownloadOnlyFromAnimeThemesAndAnisongDbMediaOverHttps() {
+        assertTrue(rules.isMusicDownloadUrl("https://a.animethemes.moe/EvangelionOP1.ogg"))
+        assertTrue(rules.isMusicDownloadUrl("https://v.animethemes.moe/EvangelionOP1.webm"))
+        assertTrue(rules.isMusicDownloadUrl("https://animethemes.moe/x.ogg"))
+        assertTrue(rules.isMusicDownloadUrl("https://naedist.animemusicquiz.com/abcd12.mp3"))
+        assertFalse(rules.isMusicDownloadUrl("http://a.animethemes.moe/x.ogg"))
+        assertFalse(rules.isMusicDownloadUrl("https://a.animethemes.moe.evil.com/x.ogg"))
+        assertFalse(rules.isMusicDownloadUrl("https://evilanimethemes.moe/x.ogg"))
+        assertFalse(rules.isMusicDownloadUrl("https://user@a.animethemes.moe/x.ogg"))
+        assertFalse(rules.isMusicDownloadUrl("file:///C:/x.ogg"))
+        assertFalse(rules.isMusicDownloadUrl("not a url"))
+        assertFalse(rules.isMusicDownloadUrl(null))
+    }
 }

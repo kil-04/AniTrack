@@ -28,6 +28,7 @@ import {
 } from "../../../../packages/shared/anisongs";
 import { useThemePlayer } from "../store/useThemePlayer";
 import { VideoPlayer, type VideoItem } from "../components/VideoPlayer";
+import { AddToMusicButton, AddToMusicIcon, useAddToMusic, type MusicSong } from "../components/BackgroundMusic";
 import { FlipText, FX_KEYFRAMES, Roulette, Slider, Tilt, Vinyl } from "../components/SongsFx";
 import { safeImageSrc } from "../lib/image-guard";
 import { PixelSceneCanvas } from "../components/PixelScene";
@@ -580,6 +581,7 @@ function SongRows({ songs, start = 0, shown, order, label, onWatch, hover, previ
             <button onClick={() => playAudio(songs, index, label)} disabled={!song.audio} title="Listen" className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-white/50 hover:bg-white/10 hover:text-white disabled:opacity-20">
               <Headphones size={15} />
             </button>
+            <AddToMusicButton song={musicSong(song)} />
           </li>
         );
       })}
@@ -719,6 +721,11 @@ function videoItem(song: AniSong): VideoItem {
   };
 }
 
+/** A song as Add to music takes it (the same name the music player's copy of it gets). */
+function musicSong(song: AniSong): MusicSong {
+  return { title: song.title, artists: song.artist ? [song.artist] : [], anime: song.anime, slug: songSlug(song), audioUrl: songAudioUrl(song) };
+}
+
 /** A thin bar of a 0–100 score. */
 function ScoreBar({ value }: { value: number }) {
   return (
@@ -750,9 +757,17 @@ function SongCard({ song, onClose, onWatch, onListen }: { song: AniSong; list: A
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
   const decade = song.year ? decadeOf(song.year) : null;
+  const add = useAddToMusic(musicSong(song));
   const tiles: { icon: JSX.Element; title: string; sub: string; onClick?: () => void; tint: string }[] = [
     { icon: <Play size={20} fill="currentColor" />, title: "Watch the video", sub: `${songSlug(song)} · ${song.quality ?? "clip"}`, onClick: song.video ? onWatch : undefined, tint: "#ef4444" },
     { icon: <Headphones size={20} />, title: "Listen", sub: "In the music player", onClick: song.audio ? onListen : undefined, tint: "#8b5cf6" },
+    ...(add ? [{
+      icon: <AddToMusicIcon state={add.state} size={20} />,
+      title: add.label,
+      sub: add.state === "done" ? "Plays as background music" : add.state === "failed" ? "Try again in a moment" : "Your background music, offline",
+      onClick: add.state === "idle" || add.state === "failed" ? () => void add.add() : undefined,
+      tint: "#22c55e",
+    }] : []),
     { icon: <ExternalLink size={20} />, title: `Open ${song.anime}`, sub: "Its title page", onClick: song.anilistId ? () => navigate(`/anime/${song.anilistId}`) : undefined, tint: "#3b82f6" },
     { icon: <Mic2 size={20} />, title: `More by ${song.artist}`, sub: "Every song they sang", onClick: () => nav.search(song.artist, "artist"), tint: "#ec4899" },
     { icon: <Layers size={20} />, title: `All of ${song.anime}`, sub: "Its openings and endings", onClick: () => nav.search(song.anime, "anime", song.malId), tint: "#14b8a6" },
@@ -787,7 +802,7 @@ function SongCard({ song, onClose, onWatch, onListen }: { song: AniSong; list: A
           </div>
           <div className="mt-6 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
             {tiles.map((tile, i) => (
-              <button key={tile.title} onClick={tile.onClick} disabled={!tile.onClick}
+              <button key={i} onClick={tile.onClick} disabled={!tile.onClick}
                 className="songs-rise group relative overflow-hidden rounded-2xl border border-white/10 bg-black/30 p-3.5 text-left transition duration-300 hover:-translate-y-1 hover:border-white/25 hover:bg-black/50 disabled:pointer-events-none disabled:opacity-35"
                 style={{ animationDelay: `${120 + i * 45}ms` }}>
                 <span className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl transition duration-300 group-hover:scale-110 group-hover:rotate-[-6deg]" style={{ background: `${tile.tint}26`, color: tile.tint }}>{tile.icon}</span>

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isMusicFile, nextMode, nextTrackIndex, previousTrackIndex, safeTrackName, skipTrackIndex, sortTracks, startTrackId, trackFromFile } from "../packages/shared/bg-music.ts";
+import { isMusicDownloadUrl, isMusicFile, nextMode, nextTrackIndex, previousTrackIndex, safeTrackName, skipTrackIndex, sortTracks, startTrackId, themeTrackFileName, trackFromFile } from "../packages/shared/bg-music.ts";
 
 test("track names come from the file name, without the track number", () => {
   assert.deepEqual(trackFromFile("57 I Will Protect You -Reload-.mp3"), { id: "57 I Will Protect You -Reload-.mp3", title: "I Will Protect You -Reload-", number: 57 });
@@ -66,4 +66,48 @@ test("imported file names are made safe", () => {
   assert.equal(safeTrackName("../../evil.mp3"), "evil.mp3");
   assert.equal(safeTrackName("a<b>:c?.mp3"), "a_b__c_.mp3");
   assert.equal(safeTrackName("It’s Going Down Now.mp3"), "It’s Going Down Now.mp3");
+});
+
+test("a song added from Songs is named title — artists (anime slug) with its audio extension", () => {
+  assert.equal(
+    themeTrackFileName("Cruel Angel's Thesis", ["Yoko Takahashi"], "Neon Genesis Evangelion", "OP1", "https://a.animethemes.moe/EvangelionOP1.ogg"),
+    "Cruel Angel's Thesis — Yoko Takahashi (Neon Genesis Evangelion OP1).ogg",
+  );
+  // Several artists, an upper-case extension, no slug.
+  assert.equal(
+    themeTrackFileName("Gurenge", ["LiSA", "Kayoko Kusano"], "Demon Slayer", "", "https://a.animethemes.moe/x/KimetsuOP1.MP3?x=1"),
+    "Gurenge — LiSA, Kayoko Kusano (Demon Slayer).mp3",
+  );
+  // A slash in a show or artist would read as a folder: it becomes a dash.
+  assert.equal(
+    themeTrackFileName("Oath Sign", ["LiSA"], "Fate/Zero", "OP1", "https://a.animethemes.moe/FateZeroOP1.ogg"),
+    "Oath Sign — LiSA (Fate-Zero OP1).ogg",
+  );
+  // No artists, no anime; an extension the player doesn't take becomes .ogg; whitespace collapses.
+  assert.equal(themeTrackFileName("  Blue   Bird ", [], "", "OP3", "https://a.animethemes.moe/NarutoShippudenOP3.webm"), "Blue Bird.ogg");
+  assert.equal(themeTrackFileName("Unravel", [], "Tokyo Ghoul", "OP1", "not a url"), "Unravel (Tokyo Ghoul OP1).ogg");
+  // Characters Windows refuses are replaced; the base stops at 120 characters before the extension.
+  assert.equal(themeTrackFileName("Re: Re:", ["ASIAN KUNG-FU GENERATION"], "Erased", "OP1", "https://naedist.animemusicquiz.com/abcd12.mp3"),
+    "Re_ Re_ — ASIAN KUNG-FU GENERATION (Erased OP1).mp3");
+  const long = themeTrackFileName("a".repeat(130), [], "", "", "https://a.animethemes.moe/x.flac");
+  assert.equal(long, `${"a".repeat(120)}.flac`);
+  // The Android twin's cases (BackgroundMusicRulesTest.kt), so both apps name a song alike.
+  assert.equal(themeTrackFileName("Gurenge", [], "Demon Slayer", "", "https://a.animethemes.moe/KimetsuED1.MP3?x=1"), "Gurenge (Demon Slayer).mp3");
+  assert.equal(themeTrackFileName("Unravel", ["TK", "Ling tosite sigure"], "", "OP1", "https://a.animethemes.moe/TokyoGhoul-OP1.webm"), "Unravel — TK, Ling tosite sigure.ogg");
+  assert.equal(themeTrackFileName("  Re:Re:  ", ["ASIAN KUNG-FU	GENERATION"], "Erased", "OP1", "https://a.animethemes.moe/BokuMachi-OP1.ogg"),
+    "Re_Re_ — ASIAN KUNG-FU GENERATION (Erased OP1).ogg");
+  assert.equal(themeTrackFileName("A".repeat(130), [], "", "", "https://a.animethemes.moe/audio"), `${"A".repeat(120)}.ogg`);
+});
+
+test("songs download only from AnimeThemes and AnisongDB's media hosts over HTTPS", () => {
+  assert.equal(isMusicDownloadUrl("https://a.animethemes.moe/EvangelionOP1.ogg"), true);
+  assert.equal(isMusicDownloadUrl("https://v.animethemes.moe/EvangelionOP1.webm"), true);
+  assert.equal(isMusicDownloadUrl("https://animethemes.moe/x.ogg"), true);
+  assert.equal(isMusicDownloadUrl("https://naedist.animemusicquiz.com/abcd12.mp3"), true);
+  assert.equal(isMusicDownloadUrl("http://a.animethemes.moe/x.ogg"), false);
+  assert.equal(isMusicDownloadUrl("https://a.animethemes.moe.evil.com/x.ogg"), false);
+  assert.equal(isMusicDownloadUrl("https://evilanimethemes.moe/x.ogg"), false);
+  assert.equal(isMusicDownloadUrl("https://user@a.animethemes.moe/x.ogg"), false);
+  assert.equal(isMusicDownloadUrl("file:///C:/x.ogg"), false);
+  assert.equal(isMusicDownloadUrl(null), false);
 });

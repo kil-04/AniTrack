@@ -17,17 +17,35 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.sanjay.anitrack.next.BuildConfig
 import com.sanjay.anitrack.next.data.GistSync
 import kotlinx.coroutines.launch
 
+/**
+ * One-shot: the next Settings visit lands on the Background music card instead of the top (the
+ * music controls' Music settings link sets it; Settings clears it once it has scrolled there).
+ */
+internal val openSettingsAtMusic = mutableStateOf(false)
+
 @Composable
 fun SettingsScreen(onMalProfileChanged: (connected: Boolean, username: String?) -> Unit = { _, _ -> }) {
+    val scroll = rememberScrollState()
+    var musicTop by remember { mutableStateOf<Int?>(null) }
+    val atMusic by openSettingsAtMusic
+    LaunchedEffect(atMusic, musicTop) {
+        val top = musicTop ?: return@LaunchedEffect
+        if (!atMusic) return@LaunchedEffect
+        // Cleared only once there: clearing it first would restart this effect and cancel the scroll.
+        scroll.scrollTo(top)
+        openSettingsAtMusic.value = false
+    }
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         Column(
-            Modifier.widthIn(max = 880.dp).fillMaxWidth().verticalScroll(rememberScrollState())
+            Modifier.widthIn(max = 880.dp).fillMaxWidth().verticalScroll(scroll)
                 .padding(horizontal = 24.dp, vertical = 20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
@@ -38,7 +56,7 @@ fun SettingsScreen(onMalProfileChanged: (connected: Boolean, username: String?) 
             SyncCard()
             NotificationsCard()
             SmartDownloadsCard()
-            BackgroundMusicCard()
+            Box(Modifier.onGloballyPositioned { musicTop = it.positionInParent().y.toInt() }) { BackgroundMusicCard() }
             BackupCard()
             AutomationCard()
             AboutCard()

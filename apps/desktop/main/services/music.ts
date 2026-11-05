@@ -1,10 +1,13 @@
 import { app } from "electron";
 import fs from "node:fs";
 import path from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { extractZipEntry, readZipEntries } from "./zip-entries";
 import {
   BG_MUSIC_MAX_BYTES,
+  BG_MUSIC_MAX_REDIRECTS,
+  isMusicDownloadUrl,
   isMusicFile,
   safeTrackName,
   sortTracks,
@@ -144,6 +147,68 @@ async function importZip(zip: string): Promise<{ added: number; skipped: number 
     }
   }
   return { added, skipped };
+}
+
+/**
+ * Downloads a song from Songs (AnimeThemes or AnisongDB audio) into the music folder as
+ * [name]: redirects only within the allowed hosts, nothing over the size limit, written
+ * through a partial file so a failed download leaves nothing behind. "exists" when a track
+ * of that name is already there.
+ */
+export function downloadTrack(url: unknown, name: unknown): Promise<"added" | "exists"> {
+  const run = importQueue.then(() => downloadNow(url, name));
+  importQueue = run.catch(() => undefined);
+  return run;
+}
+
+async function downloadNow(url: unknown, name: unknown): Promise<"added" | "exists"> {
+  if (typeof url !== "string" || !isMusicDownloadUrl(url)) throw new Error("That song can't be added.");
+  const target = trackFile(name);
+  if (!target) throw new Error("That song can't be added.");
+  if (fs.existsSync(target)) return "exists";
+  let current = url;
+  let response: Response | null = null;
+  for (let hop = 0; hop <= BG_MUSIC_MAX_REDIRECTS; hop++) {
+    const answer = await fetch(current, {
+      redirect: "manual",
+      headers: { "User-Agent": `AniTrack/${app.getVersion()} (Desktop; music)` },
+      signal: AbortSignal.timeout(10 * 60_000),
+    });
+    const location = answer.headers.get("location");
+    if (answer.status >= 300 && answer.status < 400 && location) {
+      await answer.body?.cancel().catch(() => undefined);
+      const next = new URL(location, current).toString();
+      if (!isMusicDownloadUrl(next)) throw new Error("The song redirected somewhere else.");
+      current = next;
+      continue;
+    }
+    response = answer;
+    break;
+  }
+  if (!response) throw new Error("The song redirected too many times.");
+  if (!response.ok || !response.body) throw new Error(`The song's host answered ${response.status}.`);
+  const length = Number(response.headers.get("content-length") ?? "");
+  if (Number.isFinite(length) && length > BG_MUSIC_MAX_BYTES) {
+    await response.body.cancel().catch(() => undefined);
+    throw new Error("The song is too large.");
+  }
+  const part = path.join(musicDir(), `${PART_PREFIX}song.part`);
+  let received = 0;
+  const limit = new Transform({
+    transform(chunk: Buffer, _encoding, done) {
+      received += chunk.length;
+      done(received > BG_MUSIC_MAX_BYTES ? new Error("The song is too large.") : null, chunk);
+    },
+  });
+  try {
+    await pipeline(Readable.fromWeb(response.body as import("node:stream/web").ReadableStream), limit, fs.createWriteStream(part));
+    if (!received) throw new Error("The song's host sent nothing.");
+    if (fs.existsSync(target)) return "exists";
+    await fs.promises.rename(part, target);
+    return "added";
+  } finally {
+    await fs.promises.rm(part, { force: true }).catch(() => undefined);
+  }
 }
 
 /** Deletes an imported track. Built-in tracks can't be removed. */

@@ -1,7 +1,7 @@
 import { dialog, ipcMain, shell, type BrowserWindow } from "electron";
 import { IPC } from "../../../../packages/shared/types";
 import { BG_MUSIC_EXTENSIONS } from "../../../../packages/shared/bg-music";
-import { importTracks, listTracks, musicDir, removeTrack } from "../services/music";
+import { downloadTrack, importTracks, listTracks, musicDir, removeTrack } from "../services/music";
 
 /** Background music: the user's own tracks in userData/music (see services/music.ts). */
 export function registerMusicIpc(getMainWindow: () => BrowserWindow | null) {
@@ -20,6 +20,15 @@ export function registerMusicIpc(getMainWindow: () => BrowserWindow | null) {
   ipcMain.handle(IPC.MUSIC_REMOVE, (_e, id: unknown) => {
     removeTrack(id);
     return listTracks();
+  });
+  // A song from Songs: the URL and name are checked again in downloadTrack (hosts, size, plain name).
+  ipcMain.handle(IPC.MUSIC_ADD_SONG, async (_e, url: unknown, name: unknown) => {
+    try {
+      const result = await downloadTrack(url, name);
+      return { ok: true, exists: result === "exists", tracks: listTracks() };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "Couldn't add this song", tracks: listTracks() };
+    }
   });
   ipcMain.handle(IPC.MUSIC_OPEN_FOLDER, async () => {
     const error = await shell.openPath(musicDir());
