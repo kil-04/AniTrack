@@ -80,14 +80,14 @@ object SmartDownloads {
     fun setOn(context: Context, on: Boolean) {
         prefs(context).edit().putBoolean(KEY_ON, on).apply()
         schedule(context)
+        val app = context.applicationContext
         if (on) {
             // The first pass waits a moment so the counts can be set before anything downloads.
-            val app = context.applicationContext
             scope.launch {
                 delay(FIRST_RUN_DELAY_MS)
                 kick(app, force = true)
             }
-        }
+        } else scope.launch { runCatching { clearFailed(app) } }
     }
 
     fun setEpisodesAhead(context: Context, count: Int) = prefs(context).edit().putInt(KEY_AHEAD, count).apply()
@@ -124,7 +124,10 @@ object SmartDownloads {
      */
     fun kick(context: Context, force: Boolean = false) {
         val app = context.applicationContext
-        if (!isOn(app)) return
+        if (!isOn(app)) {
+            scope.launch { runCatching { clearFailed(app) } }
+            return
+        }
         val gap = if (force) PLAYER_GAP_MS else FOREGROUND_GAP_MS
         if (System.currentTimeMillis() - prefs(app).getLong(KEY_LAST, 0L) < gap) return
         scope.launch { runCatching { run(app, background = false) } }
@@ -140,7 +143,10 @@ object SmartDownloads {
         AniList.init(app)
         Downloads.init(app)
         prefs(app).edit().putLong(KEY_LAST, System.currentTimeMillis()).apply()
-        if (!isOn(app)) return Summary(0, 0, 0, null)
+        if (!isOn(app)) {
+            dropFailed(app, all = true)
+            return Summary(0, 0, 0, null)
+        }
 
         val cleared = if (cleanup(app)) clearWatched(app) else 0
         dropFailed(app)
@@ -234,27 +240,28 @@ object SmartDownloads {
      * already saved. One stays only while it is still wanted: it goes, with its
      * saved pieces, once its episode or chapter is finished or its show or series
      * has left the recent window (and a pass drops one its plan no longer wants).
-     * A failure stays failed across restarts, so nothing retries it but a pass.
+     * A failure stays failed across restarts, so nothing retries it but a pass:
+     * with the feature off ([all]) no pass will, so every failed one goes.
      */
-    private suspend fun dropFailed(context: Context) {
+    private suspend fun dropFailed(context: Context, all: Boolean = false) {
         val now = System.currentTimeMillis()
         val anime = owned(context, KEY_OWNED)
-        val shows = recentShows(now).map { it.animeId }.toSet()
+        val shows = if (all) emptySet() else recentShows(now).map { it.animeId }.toSet()
         Downloads.items.toList().filter { it.id in anime && it.status == Downloads.Status.FAILED }.forEach {
-            if (it.animeId !in shows || (Db.positionsFor(it.animeId)[it.episode] ?: 0) >= WATCHED_PERCENT) {
+            if (all || it.animeId !in shows || (Db.positionsFor(it.animeId)[it.episode] ?: 0) >= WATCHED_PERCENT) {
                 Downloads.remove(it.id)
                 anime -= it.id
             }
         }
         saveOwned(context, KEY_OWNED, anime)
         val manga = owned(context, KEY_OWNED_MANGA)
-        val series = recentSeries(now).map { it.mangaId }.toSet()
+        val series = if (all) emptySet() else recentSeries(now).map { it.mangaId }.toSet()
         val failed = withContext(Dispatchers.Main) {
             MangaDownloads.items.toList().filter { it.key in manga && it.status == MangaDownloads.Status.FAILED }
         }
         val reads = mutableMapOf<Int, Map<Float, ReadState>>()
         val stale = failed.filter {
-            it.mangaId !in series || reads.getOrPut(it.mangaId) { Db.readingFor(it.mangaId) }[it.chapter.number]?.finished == true
+            all || it.mangaId !in series || reads.getOrPut(it.mangaId) { Db.readingFor(it.mangaId) }[it.chapter.number]?.finished == true
         }
         withContext(Dispatchers.Main) {
             stale.forEach {
@@ -263,6 +270,15 @@ object SmartDownloads {
             }
         }
         saveOwned(context, KEY_OWNED_MANGA, manga)
+    }
+
+    /** With the feature off: drops its failed downloads, which no pass will try again. */
+    private suspend fun clearFailed(context: Context) = running.withLock {
+        val app = context.applicationContext
+        if (isOn(app) || (owned(app, KEY_OWNED).isEmpty() && owned(app, KEY_OWNED_MANGA).isEmpty())) return@withLock
+        Db.init(app)
+        Downloads.init(app)
+        dropFailed(app, all = true)
     }
 
     private suspend fun queueEpisodes(context: Context, queued: MutableSet<String>): Int {

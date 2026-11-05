@@ -115,6 +115,13 @@ cases in `tests/fixtures/download-resume.json`
   error page, a bad image, a page or caption that fails to decode, an unsafe
   address, a bug, or a local storage error (disk full, no permission) is never
   retried as though it were the network: it fails at once, with its own message.
+  The sources' own wrappers keep that difference: Comix's image request keeps
+  the transport's error (a reset, DNS, its 25 s deadline is a `TimeoutError`),
+  and a verified page (MangaDot's images, Toonkotsu's reader) throws
+  `NoAnswerError` when its in-page fetch or page load got no answer. A page
+  past the download's own 60 s deadline counts as no answer too. While the
+  device is offline, any page failure but the source's check waits for the
+  network.
   - No answer is retried 4 times with backoff. Then, **only if the device is
     offline**, the download pauses until the network is back (`network`). If
     the device is online, the server isn't answering: the download pauses for
@@ -134,7 +141,10 @@ cases in `tests/fixtures/download-resume.json`
     the download pauses for 5 min.
   - 401, 403 and 410 re-resolve the stream (or, for manga, the page list), at
     most 2 times without progress. A 404 re-resolves once. Novels have nothing
-    to re-resolve, so these fail the chapter.
+    to re-resolve, so these fail the chapter. The budget is the stall streak
+    the run is on (`streakNow`): once a run saves a media piece it is no stall,
+    so its later refusals, 404s and expiring URLs re-resolve whatever stalls
+    came before it.
   - Any other 4xx, an HTTP 200 error page, or a source verification check
     fails as before.
   - Backoff is 1 s × 2^attempt, capped at 60 s.
@@ -151,7 +161,10 @@ cases in `tests/fixtures/download-resume.json`
   again before a URL's own expiry parameter (`expires`, `exp`, `e`,
   `X-Amz-Date` with `X-Amz-Expires`, Akamai `hdnts`/`hdnea`) is less than 60 s
   away, or once it was resolved more than 6 h ago. Xanime's signed master lasts
-  about a day, and Anikoto's tokens less.
+  about a day, and Anikoto's tokens less (`reResolveFirst`). A stream that was
+  already that close to expiry when it was resolved is resolved again only
+  within the streak's budget, then tried as it is, so a source whose streams
+  always say they expire soon still downloads.
 
 ## Final states: stalls and caps
 
@@ -162,7 +175,9 @@ kept, whether to wait and try again or to give up.
   media piece: a segment, an init segment, a page or a novel chapter. Keys don't
   count (they are fetched again every run), nor does a run that discarded what
   an earlier run saved (another rendition, a key that changed), so neither can
-  keep a download alive forever. Saving a piece ends the streak.
+  keep a download alive forever. Saving a piece ends the streak, at once (on
+  Android it is written to `meta.json` then, so a run killed mid-episode
+  doesn't come back on its old streak).
 - **Waiting for the network while offline never counts**, however long it lasts.
 - **A rate limit** keeps waiting until about an hour after the streak began, or
   12 stalls in a row, whichever comes first. Even a six-hour Retry-After is tried
@@ -193,14 +208,18 @@ kept, whether to wait and try again or to give up.
 - Manga chapters and novel chapters keep one worker each. A chapter waiting out
   a rate limit holds the chapters behind it (normally from the same source),
   but removing or cancelling it ends the wait within a couple of seconds, and
-  the stall caps bound it.
+  the stall caps bound it. On Android that includes a retry's wait, sliced the
+  same way. A cancelled title's "Continuing automatically" note goes with the
+  wait. A novel chapter cancelled while it waits or is on its way, then asked
+  for again, is queued again (and not fetched twice if it finished meanwhile).
 - On Android, an AnimePahe, AniChan or Miruro episode that can't be resolved
   without the app (the background job's fresh process, or the app in the
   background) waits as "Waiting for the app" and continues when the app is
   opened (`Downloads.resumeWaiting()` from `MainActivity`).
 - On Android, `DownloadResumeWorker` keeps the process (and its wakelock) only
-  while something is downloading. A download in a timed pause doesn't count: the
-  worker ends and asks for its next pass at the earliest wake. A network wait
+  while something is downloading. A download in a timed pause doesn't count, nor
+  does a manga or novel retry waiting 30 s or more (a Retry-After): the worker
+  ends and asks for its next pass at the earliest wake. A network wait
   relies on the job's network constraint, and a wait for the app on the next
   app start.
 
@@ -237,7 +256,9 @@ settled, so it is never stale.
 - Smart downloads' failed episodes and chapters are tried again by the next
   pass, keeping their pieces, while they are still wanted. One goes, with its
   pieces, once it is watched or read, its show or series leaves the three-week
-  window, or the plan no longer wants it.
+  window, or the plan no longer wants it. With Smart downloads turned off no
+  pass will try them, so its failed ones go (when it is turned off, and on the
+  app's next start); its finished ones stay.
 - Pieces aren't fsynced before their ledger line. A power cut can still leave a
   piece whose first bytes survived but whose tail didn't; only a zero-filled
   head is caught. Syncing every segment would slow Windows downloads noticeably.

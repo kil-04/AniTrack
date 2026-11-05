@@ -88,6 +88,8 @@ object MangaDownloads {
     }
     @Volatile private var parked: Parked? = null
     private const val WAIT_SLICE_MS = 2_000L
+    /** A retry wait this long (a Retry-After) parks the worker like a pause. */
+    private const val PARK_RETRY_MS = 30_000L
     private val client by lazy {
         OkHttpClient.Builder()
             .dns(MangaPublicDns)
@@ -395,7 +397,7 @@ object MangaDownloads {
      * a request with no answer counts as the network (and only offline as waiting for it): a
      * source's refusal, a bad page or a storage error fails the chapter as it is.
      */
-    private suspend fun <T> withRetry(reResolves: Int, work: suspend () -> T): T {
+    private suspend fun <T> withRetry(pending: Pending, reResolves: Int, work: suspend () -> T): T {
         var attempt = 0
         while (true) {
             val failure = try {
@@ -412,7 +414,7 @@ object MangaDownloads {
                 DownloadResume.Failure.Network(NetworkWatch.online())
             }
             when (val step = DownloadResume.nextStep(failure, attempt, reResolves, System.currentTimeMillis())) {
-                is DownloadResume.Step.Retry -> { delay(step.delayMs); attempt++ }
+                is DownloadResume.Step.Retry -> { retryWait(pending, step.delayMs); attempt++ }
                 DownloadResume.Step.Fail -> throw MangaSourceException(
                     if (failure is DownloadResume.Failure.Http && failure.status == 404) "A page is missing at the source." else "A page didn't download (HTTP ${(failure as? DownloadResume.Failure.Http)?.status}).",
                     (failure as? DownloadResume.Failure.Http)?.status,
@@ -420,6 +422,31 @@ object MangaDownloads {
                 else -> throw Interrupt(step)
             }
         }
+    }
+
+    /**
+     * Waits [ms] before a retry in short slices, so a chapter removed or cancelled meanwhile
+     * stops at once. A long one (a Retry-After) parks the worker, so the background job
+     * doesn't hold the phone awake for it, and should the process die it wakes when it ends.
+     */
+    private suspend fun retryWait(pending: Pending, ms: Long) {
+        val at = System.currentTimeMillis() + ms
+        val park = Parked.Until(at).takeIf { ms >= PARK_RETRY_MS }
+        if (park != null) {
+            parked = park
+            appContext?.let { com.sanjay.anitrack.next.data.DownloadResumeWorker.reschedule(it) }
+        }
+        try {
+            while (live(pending)) {
+                val left = at - System.currentTimeMillis()
+                if (left <= 0) break
+                delay(minOf(left, WAIT_SLICE_MS))
+            }
+        } finally {
+            // Another page's wait may have parked the worker since: that one stays.
+            if (park != null && parked === park) parked = null
+        }
+        if (!live(pending)) throw CancellationException("removed")
     }
 
     private val PAGE_FILE = Regex("^\\d{3,4}\\.(?:jpg|jpeg|png|webp|gif|avif|img)$")
@@ -441,7 +468,7 @@ object MangaDownloads {
     /** One pass at a chapter: keeps what's saved for the same page list, fetches the rest. */
     private suspend fun saveChapter(pending: Pending, start: Item, dir: File, reResolves: Int, attempt: Attempt): Item {
         var item = start
-        val pages = withRetry(reResolves) { pending.source.pages(pending.title, item.chapter) }
+        val pages = withRetry(pending, reResolves) { pending.source.pages(pending.title, item.chapter) }
         if (!live(pending)) throw CancellationException("removed")
         val pieces = pages.map { DownloadResume.Piece(DownloadResume.Kind.PAGE, it.url) }
         val rendition = DownloadResume.renditionId("chapter ${item.chapter.id}", pieces)
@@ -485,10 +512,10 @@ object MangaDownloads {
                         val at = next.getAndIncrement()
                         if (at >= fetch.size) break
                         val index = fetch[at]
-                        val resolved = withRetry(reResolves) { pending.source.resolvePage(pages[index]) }
+                        val resolved = withRetry(pending, reResolves) { pending.source.resolvePage(pages[index]) }
                         val name = "%03d.%s".format(index + 1, extensionOf(resolved.url))
                         val file = File(dir, name)
-                        withRetry(reResolves) { fetch(pending, resolved, file) }
+                        withRetry(pending, reResolves) { fetch(pending, resolved, file) }
                         val (w, h) = resolved.width?.let { it to (resolved.height ?: 0) } ?: bounds(file)
                         val head = readHead(file)?.head ?: ByteArray(0)
                         val tag = DownloadResume.pieceTag(pieces[index], head)
