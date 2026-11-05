@@ -157,6 +157,28 @@ export interface DownloadItem {
   // retried from the Downloads page (kwik URLs expire, but these ids are stable).
   animeSession?: string;
   episodeSession?: string;
+  /**
+   * Set while an unfinished download waits to continue. Its saved pieces are
+   * kept, and the queue resumes it once the reason has passed.
+   */
+  resume?: DownloadResumeHint;
+}
+
+export interface DownloadResumeHint {
+  /**
+   * network: offline (only ever while the device has no network) · rate-limit/server: wait until [at] ·
+   * expired: resolve the stream again · restart: the app was closed.
+   */
+  reason: "network" | "rate-limit" | "server" | "expired" | "restart";
+  /** Epoch ms after which to try again (rate-limit, server). */
+  at?: number | null;
+  /**
+   * Runs in a row that stopped without saving a media piece (stalls), passed back on the next
+   * start; the shared rules (download-resume.ts afterStop) fail the download when they run out.
+   */
+  reResolves?: number;
+  /** When the first of those stalls stopped (epoch ms), for the rate-limit time budget. */
+  stalledSince?: number | null;
 }
 
 export interface DesktopUpdateState {

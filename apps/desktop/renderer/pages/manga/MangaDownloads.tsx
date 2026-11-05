@@ -206,7 +206,7 @@ export default function MangaDownloads() {
                         <div className={`truncate text-xs ${item.status === "failed" ? "text-red-300/80" : "text-ink-3"}`}>
                           {item.status === "done" && [item.chapter.group, item.total ? `${item.total} pages` : null, humanSize(item.sizeBytes) || null].filter(Boolean).join(" · ")}
                           {item.status === "downloading" && `Downloading ${item.done}/${item.total}`}
-                          {item.status === "queued" && "Queued"}
+                          {item.status === "queued" && (item.error ?? "Queued")}
                           {item.status === "failed" && (item.error ?? "Download failed.")}
                         </div>
                         {item.status === "downloading" && (

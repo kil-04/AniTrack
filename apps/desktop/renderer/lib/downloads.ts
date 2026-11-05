@@ -7,6 +7,14 @@
  * episode's HLS URL just-in-time (kwik URLs expire fast) and feeds one download
  * at a time to native, so a 50-episode batch stays fresh and doesn't hammer the
  * CDN. State is mirrored to subscribers for the UI.
+ *
+ * Resuming: a download that stops with its files kept carries a `resume` hint
+ * and releases the queue at once. The queue starts it again, with a freshly
+ * resolved stream: at once when the stream expired or the app restarted, when
+ * the network is back, or once a server's wait is over. The downloader then
+ * keeps the pieces it already has (and fails it after too many stalls).
+ * A rate limit holds only the episodes of the provider that asked; removing
+ * the paused download, or asking for it again, lifts its hold.
  */
 import { registerPlugin } from "@capacitor/core";
 import { isCapacitor } from "./platform";
@@ -31,6 +39,9 @@ interface StartOpts {
   episodeSession?: string;
   subtitleUrl?: string | null;
   conservativeNetwork?: boolean;
+  resolvedAt?: number;
+  reResolves?: number;
+  stalledSince?: number | null;
 }
 
 interface DownloaderPlugin {
@@ -125,6 +136,9 @@ async function ensureInit() {
     const { items } = await backend.list();
     for (const it of items) state.set(it.id, it);
     emit();
+    // Unfinished downloads from before the app was closed carry on now.
+    // (In reverse, as each one goes to the front of the queue: they keep their order.)
+    for (const it of [...items].reverse()) if (it.resume) scheduleResume(it, true);
   } catch {
     /* ignore */
   }
@@ -132,12 +146,111 @@ async function ensureInit() {
     backend.onProgress((e) => {
       state.set(e.id, e);
       emit();
-      // Wake the queue worker when an active download settles.
-      if (e.status === "done" || e.status === "failed") tickQueue();
+      const settled = e.status === "done" || e.status === "failed" || !!e.resume;
+      // A download that settled (or paused) releases the queue at once, so a
+      // paused one can be started again right away (an expired stream is).
+      if (settled && e.id === activeId) activeId = null;
+      if (e.resume) scheduleResume(e, false);
+      if (settled) tickQueue();
     });
   } catch {
     /* ignore */
   }
+  if (typeof window !== "undefined") {
+    window.addEventListener("online", resumeNetworkWaiters);
+    // `online` isn't fired for every kind of reconnect (Wi-Fi to Wi-Fi, a VPN, waking up).
+    setInterval(() => { if (navigator.onLine !== false) resumeNetworkWaiters(); }, NETWORK_RECHECK_MS);
+  }
+}
+
+// ── Resuming ─────────────────────────────────────────────────────────────────
+
+const NETWORK_RECHECK_MS = 60_000;
+const resumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const waitingForNetwork = new Set<string>();
+
+/**
+ * Until when a rate limit holds [providerId]'s episodes (0: not held). A
+ * provider's CDN is shared by its episodes, so one that asked to wait holds
+ * the others; other providers carry on. It is read from the paused downloads
+ * themselves, so removing one (or asking for it again) lifts its hold. A
+ * download is never held by its own hint ([except]).
+ */
+function heldUntil(providerId: string, except: string): number {
+  const now = Date.now();
+  let until = 0;
+  for (const item of state.values()) {
+    const hint = item.resume;
+    if (item.id === except || item.providerId !== providerId || item.status !== "queued" || hint?.reason !== "rate-limit") continue;
+    const at = hint.at ?? 0;
+    if (at > now && at > until) until = at;
+  }
+  return until;
+}
+
+/** What a paused download is waiting for, for the Downloads page. */
+export function resumeLabel(item: DownloadItem): string | null {
+  const reason = item.resume?.reason;
+  if (!reason || item.status !== "queued") return null;
+  const pct = item.progress > 0 ? ` · ${item.progress}% saved` : "";
+  if (reason === "network") return `Waiting for the network${pct}`;
+  if (reason === "rate-limit" || reason === "server") {
+    const minutes = item.resume?.at ? Math.max(1, Math.ceil((item.resume.at - Date.now()) / 60_000)) : null;
+    const wait = minutes ? ` (about ${minutes} min)` : "";
+    return `${reason === "rate-limit" ? "The server asked to wait" : "The server is busy"}${wait}${pct}`;
+  }
+  return `Continuing${pct}`;
+}
+
+function scheduleResume(item: DownloadItem, afterRestart: boolean) {
+  const hint = item.resume;
+  if (!hint) return;
+  clearTimeout(resumeTimers.get(item.id));
+  resumeTimers.delete(item.id);
+  waitingForNetwork.delete(item.id);
+  const at = hint.at ?? 0;
+  if ((hint.reason === "rate-limit" || hint.reason === "server") && at > Date.now()) {
+    // Only this download waits; a rate limit also holds its provider (heldUntil).
+    resumeTimers.set(item.id, setTimeout(() => { resumeTimers.delete(item.id); resumeEntry(item.id); }, at - Date.now()));
+  } else if (hint.reason === "network" && !afterRestart) {
+    waitingForNetwork.add(item.id);
+    if (navigator.onLine !== false) {
+      resumeTimers.set(item.id, setTimeout(() => { resumeTimers.delete(item.id); resumeNetworkWaiters(); }, NETWORK_RECHECK_MS));
+    }
+  } else {
+    resumeEntry(item.id);
+  }
+}
+
+function resumeNetworkWaiters() {
+  for (const id of [...waitingForNetwork]) {
+    waitingForNetwork.delete(id);
+    clearTimeout(resumeTimers.get(id));
+    resumeTimers.delete(id);
+    resumeEntry(id);
+  }
+}
+
+/** Puts a paused download back at the front of the queue. */
+function resumeEntry(id: string) {
+  const item = state.get(id);
+  if (!item?.resume || item.status !== "queued" || activeId === id || queue.some((q) => q.id === id)) return;
+  if (!item.animeSession || !item.episodeSession) {
+    setLocal({ id, status: "failed", resume: undefined, error: "Download was interrupted. Retry to continue." });
+    return;
+  }
+  queue.unshift({
+    id, animeId: item.animeId, episode: item.episode, title: item.title, coverUrl: item.coverUrl ?? null,
+    providerId: item.providerId, animeSession: item.animeSession, episodeSession: item.episodeSession,
+    reResolves: item.resume.reResolves ?? 0, stalledSince: item.resume.stalledSince ?? null,
+  });
+  tickQueue();
+}
+
+function clearResume(id: string) {
+  clearTimeout(resumeTimers.get(id));
+  resumeTimers.delete(id);
+  waitingForNetwork.delete(id);
 }
 
 // ── Queue ────────────────────────────────────────────────────────────────────
@@ -151,10 +264,15 @@ interface QueueEntry {
   providerId: string;
   animeSession: string; // provider anime session
   episodeSession: string; // provider episode session/id
+  /** A resumed download's stalls in a row so far, and when the first one stopped. */
+  reResolves?: number;
+  stalledSince?: number | null;
 }
 
 const queue: QueueEntry[] = [];
 let activeId: string | null = null;
+/** Which start of [activeId] is current: a settle poll or a resolve from an older start does nothing. */
+let activeToken = 0;
 
 function setLocal(item: Partial<DownloadItem> & { id: string }) {
   const prev = state.get(item.id);
@@ -172,12 +290,37 @@ function setLocal(item: Partial<DownloadItem> & { id: string }) {
   emit();
 }
 
+let holdTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Ends the current start [token] (if it still is) and starts the next download. */
+function release(token: number) {
+  if (activeToken !== token || !activeId) return;
+  activeId = null;
+  tickQueue();
+}
+
 async function tickQueue() {
   if (!backend || activeId) return;
-  const next = queue.shift();
-  if (!next) return;
+  // The first episode whose provider isn't held by a rate limit.
+  let index = -1;
+  let wake = 0;
+  for (let i = 0; i < queue.length; i++) {
+    const until = heldUntil(queue[i].providerId, queue[i].id);
+    if (!until) { index = i; break; }
+    wake = wake ? Math.min(wake, until) : until;
+  }
+  if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+  if (index < 0) {
+    if (wake) holdTimer = setTimeout(() => { holdTimer = null; tickQueue(); }, Math.max(0, wake - Date.now()));
+    return;
+  }
+  const [next] = queue.splice(index, 1);
   activeId = next.id;
-  setLocal({ ...next, status: "queued", progress: 0 });
+  const token = ++activeToken;
+  clearResume(next.id);
+  const { reResolves, stalledSince, ...entry } = next;
+  const kept = state.get(next.id)?.progress ?? 0;
+  setLocal({ ...entry, status: "queued", progress: kept, resume: undefined, error: undefined });
 
   try {
     // Resolve the HLS URL just before downloading so the kwik token is fresh.
@@ -194,6 +337,9 @@ async function tickQueue() {
     const best = bestIndex >= 0 ? links[bestIndex] : null;
     if (!best) throw new Error("No stream link found");
     const resolved = await providerClient.resolve(next.providerId, best.id);
+    const resolvedAt = Date.now();
+    // Removed (or started again) while it was resolving: never start it now.
+    if (activeToken !== token) return;
     if (!resolved?.url) throw new Error("Could not resolve stream URL");
     if (resolved.hls === false) throw new Error("Choose an HLS server before downloading this episode.");
 
@@ -219,30 +365,36 @@ async function tickQueue() {
       episodeSession: next.episodeSession,
       subtitleUrl,
       conservativeNetwork: resolved.conservativeNetwork,
+      resolvedAt,
+      reResolves: reResolves ?? 0,
+      stalledSince: stalledSince ?? null,
     });
-    // The native `progress` listener drives status to done/failed, which calls
-    // tickQueue() again. Clear the active marker once it settles. Capped: a
-    // download stuck for 2h without settling releases the queue instead of
-    // polling forever.
+    // The `progress` listener releases the queue when the download settles (done,
+    // failed or paused with a `resume` hint). This poll is the safety net: it
+    // releases a download that is gone, and one stuck for 2 h without settling.
     let settleTries = 0;
     const settle = () => {
+      if (activeToken !== token || activeId !== next.id) return; // released already
       const cur = state.get(next.id);
-      if (cur && (cur.status === "done" || cur.status === "failed")) {
-        if (activeId === next.id) { activeId = null; tickQueue(); }
-        return;
-      }
+      if (!cur || cur.status === "done" || cur.status === "failed" || cur.resume) { release(token); return; }
       if (++settleTries > 7200) {
         setLocal({ id: next.id, status: "failed", error: "Download stalled" });
-        if (activeId === next.id) { activeId = null; tickQueue(); }
+        release(token);
         return;
       }
       setTimeout(settle, 1000);
     };
     settle();
   } catch (e: any) {
-    setLocal({ id: next.id, status: "failed", error: e?.message ?? String(e) });
-    activeId = null;
-    tickQueue();
+    if (activeToken !== token) return; // removed meanwhile
+    if (typeof navigator !== "undefined" && navigator.onLine === false && state.get(next.id)?.progress) {
+      // Offline while resolving a resumed download: wait for the network again.
+      setLocal({ id: next.id, status: "queued", resume: { reason: "network", reResolves: reResolves ?? 0, stalledSince: stalledSince ?? null } });
+      scheduleResume(state.get(next.id)!, false);
+    } else {
+      setLocal({ id: next.id, status: "failed", error: e?.message ?? String(e) });
+    }
+    release(token);
   }
 }
 
@@ -252,6 +404,8 @@ export function enqueueDownload(entry: QueueEntry): boolean {
   void ensureInit();
   const existing = state.get(entry.id);
   if (existing && (existing.status === "done" || existing.status === "downloading" || existing.status === "queued")) {
+    // Asking again for a paused download starts it now instead of waiting.
+    if (existing.status === "queued" && existing.resume) { clearResume(entry.id); resumeEntry(entry.id); }
     return false;
   }
   if (queue.some((q) => q.id === entry.id)) return false;
@@ -276,10 +430,13 @@ export async function removeDownload(id: string): Promise<void> {
   // Drop from queue if still pending.
   const qi = queue.findIndex((q) => q.id === id);
   if (qi >= 0) queue.splice(qi, 1);
+  // A paused download's wait ends here, and so does any rate-limit hold it set.
+  clearResume(id);
+  if (activeId === id) { activeId = null; activeToken++; }
   try { await backend.remove(id); } catch { /* ignore */ }
   state.delete(id);
-  if (activeId === id) { activeId = null; tickQueue(); }
   emit();
+  tickQueue();
 }
 
 export async function getPlayUrl(id: string): Promise<string | null> {

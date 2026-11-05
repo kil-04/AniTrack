@@ -65,13 +65,14 @@ import { comixSession, ComixSessionError } from "./comix-session";
 import { COMIX_CHAPTER_LIST_DEADLINE_MS, comixChapters, comixDetail, comixHasNext, comixPages, comixSearchIds, comixValidRequest, type ComixParams } from "./comix-protocol";
 import { fetchComixImage } from "./comix-images";
 import { ComixHtmlPageParser } from "./comix-html-pages";
-import { PageVerificationError, VerifiedPageSession } from "../providers/verified-page-session";
+import { NoAnswerError, PageVerificationError, VerifiedPageSession } from "../providers/verified-page-session";
 import { TOONKOTSU, isToonkotsuChapter, toonkotsuHid, toonkotsuSearchUrl, toonkotsuSeriesUrl, toonkotsuSearch, toonkotsuDetail, toonkotsuChapters, toonkotsuPageUrl } from "../../../../../packages/shared/toonkotsu";
 import { connectToonkotsu, toonkotsuGet, fetchToonkotsuImage, ToonkotsuSessionError } from "./toonkotsu-session";
 
 /** A reading-source failure whose message is safe to show; [verify] asks for the source's one-time check. */
 export class MangaSourceError extends Error {
-  constructor(message: string, readonly status?: number, readonly verify = false) {
+  /** [status] 0: no answer at all (offline, reset, timeout). [retryAfter]: the source's Retry-After. */
+  constructor(message: string, readonly status?: number, readonly verify = false, readonly retryAfter: string | null = null) {
     super(message);
   }
 }
@@ -132,7 +133,7 @@ export class SourceHttp {
       try {
         res = await this.fetcher()(target.toString(), init);
       } catch {
-        throw new MangaSourceError(`${this.label} couldn't be reached. Check your connection and retry.`);
+        throw new MangaSourceError(`${this.label} couldn't be reached. Check your connection and retry.`, 0);
       }
       const final = publicHttps(res.url || target.toString());
       if (!final || !this.hosts.has(final.hostname)) throw new MangaSourceError(`${this.label} redirected somewhere unexpected.`);
@@ -141,7 +142,7 @@ export class SourceHttp {
       }
       const text = await readCapped(res, maxBytes, this.label);
       if (res.status === 404) throw new MangaSourceError(`${this.label} doesn't have this anymore.`, 404);
-      if (res.status === 429) throw new MangaSourceError(`${this.label} is limiting requests. Wait a minute, then retry.`, 429);
+      if (res.status === 429) throw new MangaSourceError(`${this.label} is limiting requests. Wait a minute, then retry.`, 429, false, res.headers.get("retry-after"));
       if (res.status === 403 || res.status === 503) {
         if (this.verifiable && CHALLENGE.test(text.slice(0, 16_384))) {
           throw new MangaSourceError(`${this.label} needs a quick check. Use Connect ${this.label}, complete it, then retry.`, 403, true);
@@ -599,7 +600,9 @@ const xcomic: Source = {
  */
 async function toonRun<T>(work: () => Promise<T>): Promise<T> {
   try { return await work(); } catch (e) {
-    if (e instanceof ToonkotsuSessionError || e instanceof PageVerificationError) throw new MangaSourceError(e.message, undefined, e instanceof PageVerificationError || e.verify);
+    if (e instanceof ToonkotsuSessionError || e instanceof PageVerificationError) {
+      throw new MangaSourceError(e.message, e instanceof ToonkotsuSessionError && e.rate ? 429 : undefined, e instanceof PageVerificationError || e.verify);
+    }
     if (e instanceof MangaSourceError) throw e;
     throw new MangaSourceError("Toonkotsu couldn't load this title. Retry or choose another source.");
   }
@@ -764,7 +767,7 @@ export function connectMangaSource(sourceId: unknown, parent: BrowserWindow | nu
  * needs, or null for an address the source doesn't serve pages from.
  */
 export function fetchPageImage(sourceId: string, target: URL, signal?: AbortSignal): Promise<Response> | null {
-  if (sourceId === "toonkotsu") return fetchToonkotsuImage(target, signal);
+  if (sourceId === "toonkotsu") return fetchToonkotsuImage(target, signal)?.catch((error: unknown) => { throw toonkotsuPageError(error); }) ?? null;
   if (sourceId === "comix") return fetchComixImage(target.toString(), signal);
   if (sourceId === "mangaball" && ballImageHosts.has(target.hostname.toLowerCase())) {
     return net.fetch(target.toString(), { headers: { Referer: `${MANGABALL.SITE}/`, "User-Agent": honestAgent() }, signal });
@@ -780,6 +783,24 @@ export function fetchPageImage(sourceId: string, target: URL, signal?: AbortSign
     return dotFetch(target.toString(), "image/avif,image/webp,image/apng,image/*;q=0.8", true);
   }
   return null;
+}
+
+/**
+ * A Toonkotsu page failure as the source's own verdict, so a download never takes
+ * a page it couldn't load for a network drop: its check (fail, asking for
+ * Connect), its rate limit (wait), no answer from the page at all (offline, a
+ * timeout: wait for the network), or a page it couldn't load (fail). A cancelled
+ * request stays as it is.
+ */
+function toonkotsuPageError(error: unknown): unknown {
+  if (error instanceof ToonkotsuSessionError) return new MangaSourceError(error.message, error.rate ? 429 : undefined, error.verify);
+  if (error instanceof PageVerificationError) return new MangaSourceError(error.message, undefined, true);
+  if (error instanceof NoAnswerError || (error as { name?: unknown } | null)?.name === "TimeoutError") {
+    return new MangaSourceError(error instanceof NoAnswerError ? error.message : "Toonkotsu page took too long. Retry.", 0);
+  }
+  if ((error as { name?: unknown } | null)?.name === "AbortError") return error;
+  const message = error instanceof Error && /^Toonkotsu /.test(error.message) ? error.message : "Toonkotsu couldn't load this page. Retry or choose another source.";
+  return new MangaSourceError(message);
 }
 
 /** Serves a page image to the renderer with the headers (and session) its source needs. */

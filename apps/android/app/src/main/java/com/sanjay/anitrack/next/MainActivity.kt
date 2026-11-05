@@ -115,6 +115,8 @@ class MainActivity : ComponentActivity() {
         com.sanjay.anitrack.next.data.providers.connectors.MiruroAndroidProvider.attach(this)
         com.sanjay.anitrack.next.data.providers.connectors.AniChanAndroidProvider.attach(this)
         com.sanjay.anitrack.next.data.Pahe.attach(this)
+        // Episodes that waited for the app (their source needs it) carry on now.
+        com.sanjay.anitrack.next.data.Downloads.resumeWaiting()
         // ExoPlayer's HttpURLConnection stack consults this for cookies — the
         // pahe/kwik CDN rejects segment requests without the WebView's cookies.
         java.net.CookieHandler.setDefault(com.sanjay.anitrack.next.data.WebkitCookieHandler())
@@ -176,12 +178,14 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         com.sanjay.anitrack.next.data.providers.connectors.MiruroAndroidProvider.foreground(this, true)
         com.sanjay.anitrack.next.data.providers.connectors.AniChanAndroidProvider.foreground(this, true)
+        com.sanjay.anitrack.next.data.Downloads.resumeWaiting()
         com.sanjay.anitrack.next.update.AppUpdater.resumePendingInstall(this)
     }
 
     override fun onPause() {
         com.sanjay.anitrack.next.data.providers.connectors.MiruroAndroidProvider.foreground(this, false)
         com.sanjay.anitrack.next.data.providers.connectors.AniChanAndroidProvider.foreground(this, false)
+        com.sanjay.anitrack.next.data.Downloads.appHidden()
         super.onPause()
     }
 

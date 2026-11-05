@@ -22,20 +22,21 @@ function queue<T>(work: () => Promise<T>): Promise<T> {
   if (pending >= 32) return Promise.reject(new Error('Toonkotsu is busy. Retry in a moment.'));
   pending++;
   const run = tail.then(() => {
-    if (Date.now() < cooldownUntil) throw new ToonkotsuSessionError(false, 'Toonkotsu is limiting requests. Wait a minute, then retry.');
+    if (Date.now() < cooldownUntil) throw new ToonkotsuSessionError(false, 'Toonkotsu is limiting requests. Wait a minute, then retry.', true);
     return work();
   }).finally(() => { pending--; });
   tail = run.catch(() => {});
   return run;
 }
+/** [verify]: Toonkotsu wants its one-time check; [rate]: it is limiting requests. */
 export class ToonkotsuSessionError extends Error {
-  constructor(readonly verify: boolean, message: string) { super(message); }
+  constructor(readonly verify: boolean, message: string, readonly rate = false) { super(message); }
 }
 function result(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object') throw new Error('Toonkotsu sent an unreadable page.');
   const r = value as Record<string, unknown>;
   if (r.error === 'check') { verificationNeeded = true; throw new ToonkotsuSessionError(true, 'Toonkotsu needs a quick check. Use Connect Toonkotsu, complete it, close the window, then retry.'); }
-  if (r.error) throw new ToonkotsuSessionError(false, r.error === 'rate' ? 'Toonkotsu is limiting requests. Wait a minute, then retry.' : 'Toonkotsu could not load this page. Retry or choose another source.');
+  if (r.error) throw new ToonkotsuSessionError(false, r.error === 'rate' ? 'Toonkotsu is limiting requests. Wait a minute, then retry.' : 'Toonkotsu could not load this page. Retry or choose another source.', r.error === 'rate');
   return r;
 }
 export function toonkotsuGet(url: string): Promise<string> {
@@ -45,7 +46,7 @@ export function toonkotsuGet(url: string): Promise<string> {
       const retry = r.headers['retry-after'];
       const delay = /^\d+$/.test(retry ?? '') ? Number(retry) * 1000 : Date.parse(retry ?? '') - Date.now();
       cooldownUntil = Date.now() + Math.min(24 * 60 * 60_000, Math.max(60_000, Number.isFinite(delay) ? delay : 60_000));
-      throw new ToonkotsuSessionError(false, 'Toonkotsu is limiting requests. Wait a minute, then retry.');
+      throw new ToonkotsuSessionError(false, 'Toonkotsu is limiting requests. Wait a minute, then retry.', true);
     }
     if ([401,403,503].includes(r.status) || r.headers['cf-mitigated'] === 'challenge' || /<html|<!doctype/i.test(r.body?.slice(0,100) ?? '')) { verificationNeeded = true; throw new ToonkotsuSessionError(true, 'Toonkotsu needs a quick check. Use Connect Toonkotsu, complete it, then retry.'); }
     if (r.status !== 200 || r.body == null) throw new Error('Toonkotsu could not load its catalogue.');

@@ -2,7 +2,30 @@ import { app, net } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import type { DownloadItem } from "../../../../packages/shared/types";
+import type { DownloadItem, DownloadResumeHint } from "../../../../packages/shared/types";
+import {
+  HEAD_BYTES,
+  LEDGER_FILE,
+  MAX_RE_RESOLVES,
+  afterStop,
+  captionStep,
+  conservativeStep,
+  keyStillMatches,
+  ledgerHeader,
+  ledgerLine,
+  nextStep,
+  parseLedger,
+  pieceTag,
+  reResolveFirst,
+  renditionId,
+  resumePlan,
+  stalledMessage,
+  streakNow,
+  variantAttributes,
+  type Failure,
+  type Ledger,
+  type PlanPiece,
+} from "../../../../packages/shared/download-resume";
 import { getRuntimeConfig } from "./remote-config";
 import {
   getAuthorizedPaheRequestHeaders,
@@ -16,6 +39,15 @@ import { getResolvedStreamAuthorization } from "./providers/stream-authorization
  * paths, and serves it back via the `anitrack-dl://` protocol (registered in main.ts)
  * so the in-app hls.js player can play it offline. Progress is pushed to the
  * renderer via an injected `emit` callback.
+ *
+ * Interrupted downloads resume (packages/shared/download-resume.ts): every
+ * finished piece is appended to download.ledger, and the next run keeps the
+ * pieces that still verify for the same rendition and continues from the first
+ * missing one. A run that has to stop (offline, rate-limited, stream expired)
+ * keeps its files and reports why in `resume`; the renderer queue starts it
+ * again with a freshly resolved stream. Every stop has a final state: a run
+ * that stops without saving a segment is a stall, and the shared rules
+ * (afterStop) fail the download after a few in a row, except while offline.
  */
 
 type Emit = (item: DownloadItem) => void;
@@ -57,6 +89,21 @@ interface DownloadJob {
   removed: boolean;
   conservativeNetwork: boolean;
   lastRequestAt: number;
+  /** When the stream was resolved; a resumed run past a signed URL's life resolves it again. */
+  resolvedAt: number;
+  /** Runs in a row before this one that stopped without saving a media piece (stalls)… */
+  reResolves: number;
+  /** …and when the first of them stopped. */
+  stalledSince: number | null;
+  /**
+   * This run saved a media piece (keys are always fetched again, so they don't
+   * count), and not in a pass that discarded what an earlier run saved (another
+   * rendition, or a key that changed). It is no stall, so its own requests are
+   * judged off the streak ([streakNow]).
+   */
+  progressed: boolean;
+  /** Rate-limited: no worker starts a request before this (epoch ms). */
+  cooldownUntil: number;
 }
 const running = new Map<string, DownloadJob>();
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -65,19 +112,39 @@ const MAX_PLAYLIST_BYTES = 2 * 1024 * 1024;
 const MAX_ASSET_BYTES = 32 * 1024 * 1024;
 const MAX_DOWNLOAD_BYTES = 10 * 1024 * 1024 * 1024;
 const MAX_ASSETS = 20_000;
-// Since 429 is terminal, stay under CDN rate limits: an Anikoto CDN returned
-// 429 (Retry-After: 10) after ~100 requests in 4 s with six workers, while two
-// workers completed a 314-segment episode without one (1 Oct 2026).
+// Stay under CDN rate limits: an Anikoto CDN returned 429 (Retry-After: 10)
+// after ~100 requests in 4 s with six workers, while two workers completed a
+// 314-segment episode without one (1 Oct 2026). A 429 now waits out Retry-After
+// for both workers instead of failing the episode.
 const DOWNLOAD_WORKERS = 2;
+const PIECE_FILE = /^(?:seg\d+|key\d+|init\d+)\.[a-z0-9]+$/;
+
+let retryScale = 1;
+/** Tests shrink backoff and Retry-After waits; the app never calls this. */
+export function setDownloadRetryScale(scale: number): void { retryScale = scale; }
 
 class DownloadTransportError extends Error {}
 class DownloadStoppedError extends Error {}
+/** The request itself got no answer (offline, reset, refused, DNS, TLS, timeout): the network or the server, not the file. */
+class NoAnswer extends Error {}
+/** The run stops but keeps its files: [hint] says when and how to continue. */
+class DownloadInterrupt extends Error {
+  readonly hint: DownloadResumeHint;
+  constructor(hint: DownloadResumeHint) { super(`Download paused (${hint.reason}).`); this.hint = hint; }
+}
+/** A key fetched again differs from the one the kept segments were saved with. */
+class RenditionChanged extends Error {}
 
 export interface StartOpts {
   id: string; animeId: number; episode: number; title: string; coverUrl?: string | null;
   providerId: string; hlsUrl: string; referer?: string | null;
   animeSession?: string; episodeSession?: string; subtitleUrl?: string | null;
   conservativeNetwork?: boolean;
+  /** Epoch ms the stream was resolved (defaults to now). */
+  resolvedAt?: number;
+  /** Stalls in a row so far, and when the first one stopped (from the last run's resume hint). */
+  reResolves?: number;
+  stalledSince?: number | null;
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -89,7 +156,10 @@ export function startDownload(opts: StartOpts): void {
     emit(opts, "failed", 0, 0, 0, 0, "Downloads are temporarily disabled by signed automation rules.");
     return;
   }
-  const job: DownloadJob = { controller: new AbortController(), removed: false, conservativeNetwork: opts.conservativeNetwork === true, lastRequestAt: 0 };
+  const job: DownloadJob = {
+    controller: new AbortController(), removed: false, conservativeNetwork: opts.conservativeNetwork === true, lastRequestAt: 0,
+    resolvedAt: opts.resolvedAt ?? Date.now(), reResolves: opts.reResolves ?? 0, stalledSince: opts.stalledSince ?? null, progressed: false, cooldownUntil: 0,
+  };
   running.set(opts.id, job);
   void runDownload(opts, job);
 }
@@ -104,14 +174,14 @@ export function listDownloads(): { items: DownloadItem[] } {
         try {
           let item = JSON.parse(fs.readFileSync(meta, "utf-8")) as DownloadItem;
           // Downloads are process-bound. A persisted in-progress state with no
-          // matching worker means Electron exited before the job settled.
-          if ((item.status === "downloading" || item.status === "queued") && !running.has(item.id)) {
-            item = {
-              ...item,
-              status: "failed",
-              error: "Download was interrupted. Retry to continue.",
-              updatedAt: Date.now(),
-            };
+          // matching worker means Electron exited before the job settled. One
+          // with a ledger and the provider ids to resolve it again resumes.
+          const unsettled = item.status === "downloading" || (item.status === "queued" && !item.resume);
+          if (unsettled && !running.has(item.id)) {
+            const resumable = fs.existsSync(path.join(downloadsDir(), d.name, LEDGER_FILE)) && !!item.animeSession && !!item.episodeSession;
+            item = resumable
+              ? { ...item, status: "queued", error: undefined, resume: { reason: "restart", reResolves: 0 }, updatedAt: Date.now() }
+              : { ...item, status: "failed", error: "Download was interrupted. Retry to continue.", updatedAt: Date.now() };
             fs.writeFileSync(meta, JSON.stringify(item));
           }
           items.push(item);
@@ -154,6 +224,13 @@ export function assertStartOpts(value: unknown): asserts value is StartOpts {
   assertOptionalString(o.episodeSession, "episode session", 4096);
   assertOptionalHttpUrl(o.subtitleUrl, "subtitle URL");
   if (o.conservativeNetwork != null && typeof o.conservativeNetwork !== "boolean") throw new Error("Invalid download network setting");
+  if (o.resolvedAt != null && (typeof o.resolvedAt !== "number" || !Number.isSafeInteger(o.resolvedAt) || o.resolvedAt < 0)) throw new Error("Invalid resolve time");
+  if (o.reResolves != null && (typeof o.reResolves !== "number" || !Number.isInteger(o.reResolves) || o.reResolves < 0 || o.reResolves > 100)) {
+    throw new Error("Invalid resume count");
+  }
+  if (o.stalledSince != null && (typeof o.stalledSince !== "number" || !Number.isSafeInteger(o.stalledSince) || o.stalledSince < 0)) {
+    throw new Error("Invalid resume time");
+  }
 }
 
 function assertOptionalString(value: unknown, name: string, maxLength: number): void {
@@ -174,13 +251,17 @@ function assertHttpUrl(value: unknown, name: string): void {
 
 // ── Worker ──────────────────────────────────────────────────────────────────
 
-function emit(o: StartOpts, status: DownloadItem["status"], progress: number, done: number, total: number, sizeBytes: number, error?: string) {
+function emit(
+  o: StartOpts, status: DownloadItem["status"], progress: number, done: number, total: number, sizeBytes: number,
+  error?: string, resume?: DownloadResumeHint,
+) {
   if (running.get(o.id)?.removed) return;
   const item: DownloadItem = {
     id: o.id, animeId: o.animeId, episode: o.episode, title: o.title, coverUrl: o.coverUrl ?? null,
     providerId: o.providerId, status, progress, doneSegments: done, totalSegments: total, sizeBytes,
     updatedAt: Date.now(), animeSession: o.animeSession, episodeSession: o.episodeSession,
     ...(error ? { error } : {}),
+    ...(resume ? { resume } : {}),
   };
   try {
     const dir = itemDir(o.id);
@@ -192,28 +273,59 @@ function emit(o: StartOpts, status: DownloadItem["status"], progress: number, do
   emitProgress(item);
 }
 
+interface Asset { url: string; file: string; maxBytes: number; piece: PlanPiece }
+
+/** The first [HEAD_BYTES] of a saved file and its size, or null when it isn't there. */
+function readHead(file: string): { size: number; head: Uint8Array } | null {
+  let fd: number | null = null;
+  try {
+    const size = fs.statSync(file).size;
+    fd = fs.openSync(file, "r");
+    const head = Buffer.alloc(Math.min(HEAD_BYTES, size));
+    fs.readSync(fd, head, 0, head.length, 0);
+    return { size, head };
+  } catch {
+    return null;
+  } finally {
+    if (fd != null) try { fs.closeSync(fd); } catch { /* ignore */ }
+  }
+}
+
+/** Deletes every numbered piece (and unfinished .part file) so another rendition starts clean. */
+function clearPieces(dir: string): void {
+  for (const name of fs.readdirSync(dir)) {
+    if (PIECE_FILE.test(name) || name.endsWith(".part") || name === "download.plan") fs.rmSync(path.join(dir, name), { force: true });
+  }
+}
+
 async function runDownload(o: StartOpts, job: DownloadJob): Promise<void> {
   const dir = itemDir(o.id);
+  // Progress for the stall count is [job.progressed]; [startedOver]: this run
+  // discarded what an earlier one saved, so what it saves isn't progress.
+  let done = 0, total = 0, startedOver = false;
   try {
     assertJobActive(job);
     fs.mkdirSync(dir, { recursive: true });
     emit(o, "downloading", 0, 0, 0, 0);
     if (o.providerId === "animepahe" && !getResolvedStreamAuthorization(o.hlsUrl)
       && !getAuthorizedPaheRequestHeaders(o.hlsUrl)) {
-      throw new DownloadTransportError("AnimePahe stream authorization expired. Retry to resolve a fresh stream.");
+      if (job.reResolves >= MAX_RE_RESOLVES) throw new DownloadTransportError("AnimePahe stream authorization expired. Retry to resolve a fresh stream.");
+      throw new DownloadInterrupt({ reason: "expired" });
     }
 
     let received = await httpGetText(o.hlsUrl, o.providerId, job);
     let playlistUrl = received.url;
     let playlist = received.text;
+    const variant: string[] = [];
     // Some providers return a master playlist whose selected rendition is
     // itself another master. Resolve a bounded chain instead of accidentally
     // downloading the nested .m3u8 as though it were a video segment.
     for (let depth = 0; playlist.includes("#EXT-X-STREAM-INF"); depth++) {
       if (depth >= 4) throw new DownloadTransportError("HLS playlist nesting is too deep");
-      const variant = pickVariant(playlist, playlistUrl);
-      if (!variant) throw new DownloadTransportError("HLS master playlist had no playable variant");
-      received = await httpGetText(variant, o.providerId, job);
+      const picked = pickVariant(playlist, playlistUrl);
+      if (!picked) throw new DownloadTransportError("HLS master playlist had no playable variant");
+      variant.push(variantAttributes(picked.line));
+      received = await httpGetText(picked.url, o.providerId, job);
       playlistUrl = received.url;
       playlist = received.text;
     }
@@ -221,25 +333,30 @@ async function runDownload(o: StartOpts, job: DownloadJob): Promise<void> {
 
     const base = playlistUrl.slice(0, playlistUrl.lastIndexOf("/") + 1);
     const out: string[] = [];
-    const toDownload: { url: string; file: string; maxBytes: number }[] = [];
+    const assets: Asset[] = [];
     const localByUrl = new Map<string, string>();
     let seg = 0, key = 0, init = 0;
+    let encrypted = false;
+    let duration: string | null = null;
     const queueAsset = (url: string, prefix: "seg" | "key" | "init", fallbackExt: string): string => {
       const absolute = absolutize(url, base);
       const existing = localByUrl.get(absolute);
       if (existing) return existing;
-      if (toDownload.length >= MAX_ASSETS) throw new DownloadTransportError("This playlist contains too many media files.");
+      if (assets.length >= MAX_ASSETS) throw new DownloadTransportError("This playlist contains too many media files.");
       const sequence = prefix === "seg" ? seg++ : prefix === "key" ? key++ : init++;
       const width = prefix === "seg" ? 5 : 2;
       const ext = safeMediaExtension(absolute, fallbackExt);
       const name = `${prefix}${String(sequence).padStart(width, "0")}${ext}`;
       localByUrl.set(absolute, name);
-      toDownload.push({ url: absolute, file: path.join(dir, name), maxBytes: prefix === "key" ? 64 * 1024 : MAX_ASSET_BYTES });
+      const kind = prefix === "seg" ? "segment" : prefix;
+      const piece: PlanPiece = { kind, url: absolute, file: name, ...(kind === "segment" ? { duration, encrypted } : {}) };
+      assets.push({ url: absolute, file: path.join(dir, name), maxBytes: prefix === "key" ? 64 * 1024 : MAX_ASSET_BYTES, piece });
       return name;
     };
     for (const raw of playlist.split("\n")) {
       const line = raw.replace(/\r$/, "");
       if (line.startsWith("#EXT-X-KEY") || line.startsWith("#EXT-X-SESSION-KEY")) {
+        if (line.startsWith("#EXT-X-KEY")) encrypted = !/METHOD=NONE\b/.test(line);
         const m = line.match(/URI="([^"]+)"/);
         if (m) {
           const name = queueAsset(m[1], "key", ".key");
@@ -251,55 +368,84 @@ async function runDownload(o: StartOpts, job: DownloadJob): Promise<void> {
           const name = queueAsset(m[1], "init", ".mp4");
           out.push(line.replace(m[0], `URI="${name}"`));
         } else out.push(line);
+      } else if (line.startsWith("#EXTINF:")) {
+        duration = line.slice(8).split(",")[0].trim();
+        out.push(line);
       } else if (line.length && !line.startsWith("#")) {
         const name = queueAsset(line, "seg", ".ts");
         out.push(name);
+        duration = null;
       } else out.push(line);
     }
-    if (!toDownload.length) throw new DownloadTransportError("Playlist had no segments");
+    if (!assets.length) throw new DownloadTransportError("Playlist had no segments");
     assertJobActive(job);
-    const plan = createHash("sha256");
-    for (const asset of toDownload) plan.update(`${asset.url}\0${path.basename(asset.file)}\0`);
-    const fingerprint = plan.digest("hex");
-    const planFile = path.join(dir, "download.plan");
-    const previousPlan = fs.existsSync(planFile) ? fs.readFileSync(planFile, "utf8") : "";
-    const resumeAllowed = previousPlan === fingerprint;
-    // A changed plan overwrites numbered assets through .part files. Mark it
-    // incomplete first, so a later retry cannot reuse old files left behind
-    // when only some replacement segments finished before a failure.
-    if (!resumeAllowed) fs.writeFileSync(planFile, "incomplete");
+    total = assets.length;
+    const pieces = assets.map((asset) => asset.piece);
+    const rendition = renditionId(variant.join("|"), pieces);
+    const ledgerFile = path.join(dir, LEDGER_FILE);
     fs.writeFileSync(path.join(dir, "index.m3u8"), out.join("\n"));
 
-    const total = toDownload.length;
-    let done = 0;
-    // Drain every worker after failure so no old job can keep writing files.
-    let idx = 0;
     let downloadedBytes = 0;
-    async function worker() {
-      while (idx < toDownload.length) {
-        assertJobActive(job);
-        const d = toDownload[idx++];
-        downloadedBytes += await httpDownloadToFile(d.url, d.file, o.providerId, job, d.maxBytes, resumeAllowed);
-        assertJobActive(job);
-        if (downloadedBytes > MAX_DOWNLOAD_BYTES) throw new DownloadTransportError("This download exceeded the supported size limit.");
-        done++;
-        if (done % 4 === 0 || done === total) emit(o, "downloading", Math.floor((done * 100) / total), done, total, 0);
+    const save = async (index: number, ledger: Ledger | null): Promise<void> => {
+      const asset = assets[index];
+      const { size, tag } = await httpDownloadToFile(asset, o.providerId, job);
+      if (asset.piece.kind === "key" && !keyStillMatches(ledger, index, tag)) throw new RenditionChanged();
+      assertJobActive(job);
+      fs.appendFileSync(ledgerFile, ledgerLine(index, asset.piece.file!, size, tag));
+      downloadedBytes += size;
+      if (downloadedBytes > MAX_DOWNLOAD_BYTES) throw new DownloadTransportError("This download exceeded the supported size limit.");
+      if (asset.piece.kind !== "key" && !startedOver) job.progressed = true;
+    };
+
+    for (let pass = 0; ; pass++) {
+      const previous = pass === 0 && fs.existsSync(ledgerFile) ? parseLedger(fs.readFileSync(ledgerFile, "utf8")) : null;
+      const plan = resumePlan(pieces, rendition, previous, (file) => readHead(path.join(dir, file)));
+      // What it saved is discarded (another rendition, or a key that changed): not progress after all.
+      if (plan.restart && (pass > 0 || (previous?.pieces.size ?? 0) > 0)) { startedOver = true; job.progressed = false; }
+      if (plan.restart) {
+        clearPieces(dir);
+        fs.writeFileSync(ledgerFile, ledgerHeader(rendition, total));
+      } else {
+        for (const name of fs.readdirSync(dir)) if (name.endsWith(".part")) fs.rmSync(path.join(dir, name), { force: true });
       }
-    }
-    const workers = Array.from({ length: job.conservativeNetwork ? 1 : DOWNLOAD_WORKERS }, () => worker());
-    try {
-      await Promise.all(workers);
-    } catch (error) {
-      job.controller.abort();
-      await Promise.allSettled(workers);
-      throw error;
+      const ledger = plan.restart ? null : previous;
+      done = plan.keep.length;
+      emit(o, "downloading", Math.floor((done * 100) / total), done, total, 0);
+      try {
+        // Keys first: one that changed means the kept segments can't be used.
+        for (const index of plan.fetch) if (pieces[index].kind === "key") await save(index, ledger);
+      } catch (error) {
+        if (error instanceof RenditionChanged && pass === 0) continue;
+        throw error;
+      }
+      const queue = plan.fetch.filter((index) => pieces[index].kind !== "key");
+      // Drain every worker after failure so no old job can keep writing files.
+      let next = 0;
+      const worker = async () => {
+        while (next < queue.length) {
+          assertJobActive(job);
+          await save(queue[next++], ledger);
+          assertJobActive(job);
+          done++;
+          if (done % 4 === 0 || done === total) emit(o, "downloading", Math.floor((done * 100) / total), done, total, 0);
+        }
+      };
+      const workers = Array.from({ length: job.conservativeNetwork ? 1 : DOWNLOAD_WORKERS }, () => worker());
+      try {
+        await Promise.all(workers);
+      } catch (error) {
+        job.controller.abort();
+        await Promise.allSettled(workers);
+        throw error;
+      }
+      break;
     }
     assertJobActive(job);
-    fs.writeFileSync(planFile, fingerprint);
+    fs.rmSync(path.join(dir, "download.plan"), { force: true });
 
-    if (o.subtitleUrl) {
-      try { await httpDownloadToFile(o.subtitleUrl, path.join(dir, "subs.vtt"), o.providerId, job, MAX_PLAYLIST_BYTES, resumeAllowed); } catch { /* best-effort */ }
-    }
+    // Best-effort: a couple of short retries, then the episode finishes without
+    // them. Only a dropped network makes it wait (keeping every segment) to fetch them.
+    if (o.subtitleUrl) await saveCaptions(o.subtitleUrl, path.join(dir, "subs.vtt"), o.providerId, job);
 
     assertJobActive(job);
     let sizeBytes = 0;
@@ -307,7 +453,15 @@ async function runDownload(o: StartOpts, job: DownloadJob): Promise<void> {
     emit(o, "done", 100, total, total, sizeBytes);
   } catch (error: unknown) {
     if (job.removed) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } }
-    else emit(o, "failed", 0, 0, 0, 0, downloadFailureMessage(error));
+    else if (error instanceof DownloadInterrupt) {
+      // The files stay. The queue starts this download again when [hint] allows,
+      // unless it has stalled too often: then it fails (and Retry continues from its files).
+      const reason = error.hint.reason === "restart" ? "expired" : error.hint.reason;
+      const verdict = afterStop(reason, job.reResolves, job.stalledSince, job.progressed, Date.now());
+      const pct = total ? Math.floor((done * 100) / total) : 0;
+      if (verdict.action === "fail") emit(o, "failed", pct, done, total, 0, stalledMessage(verdict.reason, "episode"));
+      else emit(o, "queued", pct, done, total, 0, undefined, { ...error.hint, reResolves: verdict.reResolves, stalledSince: verdict.stalledSince });
+    } else emit(o, "failed", total ? Math.floor((done * 100) / total) : 0, done, total, 0, downloadFailureMessage(error));
   } finally {
     if (running.get(o.id) === job) running.delete(o.id);
   }
@@ -323,7 +477,7 @@ function reqHeaders(url: string, providerId: string): Record<string, string> {
   const headers: Record<string, string> = {};
   if (pahe.referer) {
     headers.Referer = pahe.referer.replace(/\/$/, "") + "/";
-    headers.Origin = new URL(pahe.referer).origin;
+    try { headers.Origin = new URL(pahe.referer).origin; } catch { /* no Origin for an unreadable referer */ }
   }
   if (pahe.cookie) headers.Cookie = pahe.cookie;
   return headers;
@@ -335,18 +489,13 @@ function assertJobActive(job: DownloadJob): void {
 
 function downloadFailureMessage(error: unknown): string {
   if (error instanceof DownloadTransportError) return error.message;
+  if (error instanceof RenditionChanged) return "The stream's encryption key keeps changing. Try another server.";
   if (error && typeof error === "object" && "code" in error) {
     if (error.code === "ENOSPC") return "There is not enough free disk space for this download.";
     if (error.code === "EACCES" || error.code === "EPERM") return "AniTrack could not write the download files.";
+    return "A storage error stopped the download. Retry to continue.";
   }
-  return "A network or storage error interrupted the download. Retry to resolve a fresh stream.";
-}
-
-export function downloadRetryDelay(retryAfter: string | null, attempt: number): number {
-  const seconds = Number(retryAfter);
-  return Number.isFinite(seconds) && seconds > 0
-    ? Math.min(5000, seconds * 1000)
-    : Math.min(5000, 400 * 2 ** Math.max(0, attempt));
+  return "The download stopped unexpectedly. Retry to continue.";
 }
 
 function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -411,49 +560,96 @@ async function responseBytes(response: Response, maxBytes: number, signal: Abort
   }
 }
 
-async function readWithRetry(url: string, providerId: string, job: DownloadJob, maxBytes: number): Promise<{ bytes: Buffer; url: string; contentType: string }> {
-  for (let attempt = 0; ; attempt++) {
-    assertJobActive(job);
-    const controller = new AbortController();
-    let timedOut = false;
-    const abort = () => controller.abort();
-    job.controller.signal.addEventListener("abort", abort, { once: true });
-    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, job.conservativeNetwork ? CONSERVATIVE_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS);
-    try {
-      let requestUrl = downloadMediaUrl(url);
-      let response: Response;
-      for (let redirects = 0; ; redirects++) {
-        if (job.conservativeNetwork) {
-          const wait = job.lastRequestAt + 500 - Date.now();
-          if (wait > 0) await retryWait(wait, job.controller.signal);
-          job.lastRequestAt = Date.now();
-        }
-        response = await abortable(net.fetch(requestUrl, {
-          headers: reqHeaders(requestUrl, providerId), signal: controller.signal,
-          redirect: "manual", credentials: "omit",
-        }), controller.signal);
-        if (![301, 302, 303, 307, 308].includes(response.status)) break;
-        void response.body?.cancel().catch(() => {});
-        const location = response.headers.get("location");
-        if (!location || redirects >= 3) throw new DownloadTransportError("The download returned too many redirects.");
-        requestUrl = downloadMediaUrl(new URL(location, requestUrl).toString());
+/** Marks a rejection of the request itself: no answer (offline, reset, refused, DNS, TLS, a timeout). */
+async function transport<T>(work: Promise<T>): Promise<T> {
+  try {
+    return await work;
+  } catch (error) {
+    if (error instanceof DownloadTransportError) throw error;
+    throw new NoAnswer(error instanceof Error ? error.message : String(error));
+  }
+}
+
+interface Answer { bytes: Buffer; url: string; contentType: string }
+
+/**
+ * One request, following its redirects: the answer, or why there was none
+ * (an HTTP status, or no answer with whether the device is online). Anything
+ * else (an unsafe address, a size limit, a bug) is thrown, so a deterministic
+ * failure is never mistaken for the network and retried forever.
+ */
+async function fetchOnce(url: string, providerId: string, job: DownloadJob, maxBytes: number): Promise<Answer | Failure> {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  job.controller.signal.addEventListener("abort", abort, { once: true });
+  const timer = setTimeout(() => controller.abort(), job.conservativeNetwork ? CONSERVATIVE_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS);
+  try {
+    let requestUrl = downloadMediaUrl(url);
+    let response: Response;
+    for (let redirects = 0; ; redirects++) {
+      if (job.conservativeNetwork) {
+        const wait = job.lastRequestAt + 500 - Date.now();
+        if (wait > 0) await retryWait(wait, job.controller.signal);
+        job.lastRequestAt = Date.now();
       }
-      if (response.ok) return {
-        bytes: await responseBytes(response, maxBytes, controller.signal), url: requestUrl,
+      const init: RequestInit = { headers: reqHeaders(requestUrl, providerId), signal: controller.signal, redirect: "manual", credentials: "omit" };
+      response = await transport(abortable(net.fetch(requestUrl, init), controller.signal));
+      if (![301, 302, 303, 307, 308].includes(response.status)) break;
+      void response.body?.cancel().catch(() => {});
+      const location = response.headers.get("location");
+      if (!location || redirects >= 3) throw new DownloadTransportError("The download returned too many redirects.");
+      let next: string;
+      try { next = new URL(location, requestUrl).toString(); } catch { throw new DownloadTransportError("The download returned an invalid media address."); }
+      requestUrl = downloadMediaUrl(next);
+    }
+    if (response.ok) {
+      return {
+        bytes: await transport(responseBytes(response, maxBytes, controller.signal)), url: requestUrl,
         contentType: response.headers.get("content-type") ?? "",
       };
-      void response.body?.cancel().catch(() => {});
-      const retryable = response.status === 408 || (response.status >= 500 && response.status <= 599);
-      if (!retryable || attempt >= 3) throw new DownloadTransportError(`Download server returned HTTP ${response.status}. Retry manually or choose another provider.`);
-      await retryWait(downloadRetryDelay(response.headers.get("retry-after"), attempt), job.controller.signal);
-    } catch (error) {
-      if (timedOut && !job.controller.signal.aborted) throw new DownloadTransportError("A download request timed out. Retry to resolve a fresh stream.");
-      throw error;
-    } finally {
-      clearTimeout(timer);
-      job.controller.signal.removeEventListener("abort", abort);
-      controller.abort();
     }
+    void response.body?.cancel().catch(() => {});
+    return { status: response.status, retryAfter: response.headers.get("retry-after") };
+  } catch (error) {
+    if (!(error instanceof NoAnswer) || job.removed || job.controller.signal.aborted) throw error;
+    // Offline, it waits for the network; online, the server isn't answering (a stall).
+    return { network: true, online: net.isOnline() };
+  } finally {
+    clearTimeout(timer);
+    job.controller.signal.removeEventListener("abort", abort);
+    controller.abort();
+  }
+}
+
+async function readWithRetry(url: string, providerId: string, job: DownloadJob, maxBytes: number): Promise<Answer> {
+  for (let attempt = 0; ; attempt++) {
+    assertJobActive(job);
+    const cooling = job.cooldownUntil - Date.now();
+    if (cooling > 0) await retryWait(cooling, job.controller.signal);
+    // A signed URL about to expire is resolved again rather than refused mid-episode.
+    // (Only while fresh streams help: one that is always about to expire is tried as it is.)
+    if (reResolveFirst(url, job.resolvedAt, job.reResolves, Date.now())) {
+      throw new DownloadInterrupt({ reason: "expired" });
+    }
+    const result = await fetchOnce(url, providerId, job, maxBytes);
+    if ("bytes" in result) return result;
+    const failure: Failure = result;
+    const now = Date.now();
+    // Read again: another worker may have saved a segment meanwhile.
+    const streak = streakNow(job.reResolves, job.progressed);
+    let step = nextStep(failure, attempt, streak, now);
+    // A rate-sensitive stream is never retried at once: it pauses, longer with each stall.
+    if (job.conservativeNetwork) step = conservativeStep(step, failure, streak, now);
+    if (step.action === "retry") {
+      const wait = step.delayMs * retryScale;
+      if ("status" in failure && (failure.status === 429 || failure.status === 503)) job.cooldownUntil = Math.max(job.cooldownUntil, now + wait);
+      await retryWait(wait, job.controller.signal);
+      continue;
+    }
+    if (step.action === "re-resolve") throw new DownloadInterrupt({ reason: "expired" });
+    if (step.action === "pause") throw new DownloadInterrupt({ reason: step.reason, at: step.resumeAt });
+    const status = "status" in failure ? failure.status : 0;
+    throw new DownloadTransportError(`Download server returned HTTP ${status}. Retry manually or choose another provider.`);
   }
 }
 
@@ -462,23 +658,49 @@ async function httpGetText(url: string, providerId: string, job: DownloadJob): P
   return { text: result.bytes.toString("utf8"), url: result.url };
 }
 
-async function httpDownloadToFile(
-  url: string,
-  file: string,
-  providerId: string,
-  job: DownloadJob,
-  maxBytes: number,
-  resumeAllowed: boolean,
-): Promise<number> {
+/** Saves one piece through a .part file and returns what the ledger records about it. */
+async function httpDownloadToFile(asset: Asset, providerId: string, job: DownloadJob): Promise<{ size: number; tag: string }> {
   assertJobActive(job);
-  if (resumeAllowed && fs.existsSync(file) && fs.statSync(file).size > 0) return fs.statSync(file).size;
-  const { bytes: buf, contentType } = await readWithRetry(url, providerId, job, maxBytes);
+  const { bytes: buf, contentType } = await readWithRetry(asset.url, providerId, job, asset.maxBytes);
   assertJobActive(job);
   assertDownloadedAsset(buf, contentType);
-  const tmp = file + ".part";
+  const tmp = asset.file + ".part";
   fs.writeFileSync(tmp, buf);
-  fs.renameSync(tmp, file);
-  return buf.length;
+  fs.renameSync(tmp, asset.file);
+  return { size: buf.length, tag: pieceTag(asset.piece, buf) };
+}
+
+/**
+ * Captions, best-effort (shared captionStep): a couple of short retries, never
+ * a pause for the server or a fresh stream; then the episode finishes without
+ * them. Offline, the run stops for the network instead (its segments are kept),
+ * so a dropped connection doesn't cost a soft-subbed episode its captions.
+ */
+async function saveCaptions(url: string, file: string, providerId: string, job: DownloadJob): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    assertJobActive(job);
+    let result: Answer | Failure;
+    try {
+      result = await fetchOnce(url, providerId, job, MAX_PLAYLIST_BYTES);
+    } catch (error) {
+      if (error instanceof DownloadStoppedError || job.removed || job.controller.signal.aborted) throw error;
+      return; // an unsafe address, an oversized body: no captions
+    }
+    if ("bytes" in result) {
+      try { assertDownloadedAsset(result.bytes, result.contentType); } catch { return; } // an error page: no captions
+      assertJobActive(job);
+      const tmp = file + ".part";
+      try {
+        fs.writeFileSync(tmp, result.bytes);
+        fs.renameSync(tmp, file);
+      } catch { fs.rmSync(tmp, { force: true }); }
+      return;
+    }
+    const step = captionStep(result, attempt, job.conservativeNetwork, Date.now());
+    if (step.action === "retry") { await retryWait(step.delayMs * retryScale, job.controller.signal); continue; }
+    if (step.action === "pause") throw new DownloadInterrupt({ reason: "network", at: null });
+    return;
+  }
 }
 
 const FMP4_BOX_TYPES = new Set(["ftyp", "styp", "moof", "moov", "sidx", "emsg", "prft"]);
@@ -528,16 +750,16 @@ function safeMediaExtension(url: string, fallback: string): string {
   return fallback;
 }
 
-function pickVariant(playlist: string, base: string): string | null {
+function pickVariant(playlist: string, base: string): { url: string; line: string } | null {
   const lines = playlist.split("\n").map((l) => l.replace(/\r$/, ""));
   const baseDir = base.slice(0, base.lastIndexOf("/") + 1);
-  let bestUrl: string | null = null, bestBw = -1;
+  let best: { url: string; line: string } | null = null, bestBw = -1;
   for (let i = 0; i < lines.length; i++) {
     if (lines[i].startsWith("#EXT-X-STREAM-INF")) {
       const bw = Number(lines[i].match(/BANDWIDTH=(\d+)/)?.[1] ?? 0);
       const uri = lines[i + 1]?.trim();
-      if (uri && !uri.startsWith("#") && bw > bestBw) { bestBw = bw; bestUrl = absolutize(uri, baseDir); }
+      if (uri && !uri.startsWith("#") && bw > bestBw) { bestBw = bw; best = { url: absolutize(uri, baseDir), line: lines[i] }; }
     }
   }
-  return bestUrl;
+  return best;
 }

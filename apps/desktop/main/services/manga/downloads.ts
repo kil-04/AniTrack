@@ -1,4 +1,4 @@
-import { app } from "electron";
+import { app, net } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -22,6 +22,23 @@ import {
   type SourceTitle,
 } from "../../../../../packages/shared/manga";
 import { fetchPageImage, MangaSourceError, sourceById } from "./sources";
+import {
+  HEAD_BYTES,
+  LEDGER_FILE,
+  afterStop,
+  ledgerHeader,
+  ledgerLine,
+  nextStep,
+  parseLedger,
+  pieceTag,
+  renditionId,
+  resumePlan,
+  stalledMessage,
+  type Failure,
+  type Ledger,
+  type PlanPiece,
+  type Step,
+} from "../../../../../packages/shared/download-resume";
 
 /**
  * Offline manga chapters, like the Android app's MangaDownloads: each chapter's
@@ -29,6 +46,15 @@ import { fetchPageImage, MangaSourceError, sourceById } from "./sources";
  * meta.json, one chapter at a time in the order they were asked for. The reader
  * opens a finished chapter from disk (anitrack-manga://local/…), so downloaded
  * chapters read without a connection.
+ *
+ * Interrupted chapters resume (packages/shared/download-resume.ts): each saved
+ * page is appended to download.ledger, and a later run keeps the pages that
+ * still verify (same size and image format) for the same page list, fetching
+ * only the rest in their places. A chapter waits out rate limits and network
+ * drops, fetches its page list again when page addresses expire, and carries
+ * on after the app is restarted. Every wait has an end: an attempt that saves
+ * no page is a stall, and a few in a row fail the chapter (the shared
+ * afterStop), except while the device is offline.
  */
 
 const MAX_PAGE_BYTES = 40 * 1024 * 1024;
@@ -47,8 +73,20 @@ export function setMangaDownloadEmitter(fn: (event: MangaDownloadEvent) => void)
 
 class DownloadError extends Error {}
 class Stopped extends Error {}
+/** The chapter has to stop: wait ([step] pause) or fetch its page list again (re-resolve). */
+class Interrupt extends Error {
+  readonly step: Step;
+  constructor(step: Step) { super("Download paused."); this.step = step; }
+}
+
+const NETWORK_POLL_MS = 15_000;
+let retryScale = 1;
+/** Tests shrink backoff and Retry-After waits; the app never calls this. */
+export function setMangaRetryScale(scale: number): void { retryScale = scale; }
 
 interface Pending { key: string; generation: number; title: SourceTitle }
+/** What one attempt at a chapter did, for the stall count. */
+interface Attempt { saved: number; startedOver: boolean }
 
 const items = new Map<string, MangaDownload>();
 // The live request per chapter: a queued or running download whose generation no
@@ -130,9 +168,10 @@ async function folderSize(dir: string): Promise<number> {
   return total;
 }
 
-/** Downloads from earlier runs; an unfinished one comes back as failed. */
+/** Downloads from earlier runs; an unfinished one is queued again and resumes. */
 async function restore(): Promise<void> {
   const root = mangaDownloadsDir();
+  const resume: { manga: DownloadManga; title: SourceTitle; chapter: MangaChapter }[] = [];
   for (const series of await fs.promises.readdir(root, { withFileTypes: true }).catch(() => [])) {
     if (!series.isDirectory() || !/^\d{1,10}$/.test(series.name)) continue;
     for (const folder of await fs.promises.readdir(path.join(root, series.name), { withFileTypes: true }).catch(() => [])) {
@@ -145,6 +184,11 @@ async function restore(): Promise<void> {
         continue;
       }
       const item = itemOf(meta.manga, meta.title, meta.chapter);
+      if (!meta.complete) {
+        // Unfinished: it carries on where it stopped (keeping the pages its ledger lists).
+        resume.push({ manga: meta.manga, title: meta.title, chapter: meta.chapter });
+        continue;
+      }
       items.set(item.key, {
         ...item,
         status: meta.complete ? "done" : "failed",
@@ -154,6 +198,7 @@ async function restore(): Promise<void> {
       });
     }
   }
+  for (const r of resume) enqueue(r.manga, r.title, r.chapter);
 }
 
 export async function listMangaDownloads(): Promise<MangaDownload[]> {
@@ -289,42 +334,37 @@ async function run(pending: Pending): Promise<void> {
   try {
     dir = folderOf(item.mangaId, item.chapter.id);
     const chapter = item.chapter;
+    // The folder is kept: pages an earlier run saved are reused below.
     await onLane(async () => {
-      await fs.promises.rm(dir, RM);
       await fs.promises.mkdir(dir, { recursive: true });
       await writeMeta(dir, { manga, title: pending.title, chapter, pages: [], complete: false, sizeBytes: 0 });
     });
-    const pages = await sourceById(item.sourceId).pageImages(pending.title, chapter.id);
-    if (!live()) throw new Stopped();
-    item = update(pending, { ...item, status: "downloading", done: 0, total: pages.length, error: null });
-    const saved: SavedPage[] = new Array(pages.length);
-    let size = 0;
-    let next = 0;
-    // One failed page stops the others before the chapter is marked failed.
-    const failed = new AbortController();
-    const signal = AbortSignal.any([controller.signal, failed.signal]);
-    const worker = async () => {
-      while (next < pages.length) {
+    // Attempts in a row that saved no page (stalls), and when the first one stopped.
+    let reResolves = 0;
+    let stalledSince: number | null = null;
+    for (;;) {
+      const attempt: Attempt = { saved: 0, startedOver: false };
+      try {
+        item = await saveChapter(pending, item, dir, controller.signal, reResolves, live, attempt);
+        break;
+      } catch (error) {
+        if (!(error instanceof Interrupt) || !live()) throw error;
+        const step = error.step;
+        if (step.action !== "re-resolve" && step.action !== "pause") throw error;
+        const reason = step.action === "pause" ? step.reason : "expired";
+        const verdict = afterStop(reason, reResolves, stalledSince, attempt.saved > 0 && !attempt.startedOver, Date.now());
+        if (verdict.action === "fail") throw new DownloadError(stalledMessage(verdict.reason, "chapter"));
+        reResolves = verdict.reResolves;
+        stalledSince = verdict.stalledSince;
+        if (step.action === "re-resolve") continue;
+        const latest = items.get(pending.key) ?? item;
+        item = update(pending, { ...latest, status: "queued", error: waitingLabel(step, latest) });
+        await waitOut(step, controller.signal);
         if (!live()) throw new Stopped();
-        const index = next++;
-        const result = await savePage(item.sourceId, pages[index], dir, index, signal);
-        saved[index] = result.page;
-        size += result.bytes;
-        item = update(pending, { ...item, done: item.done + 1 });
       }
-    };
-    const workers = Array.from({ length: Math.min(PAGE_WORKERS, pages.length) }, worker);
-    try {
-      await Promise.all(workers);
-    } catch (error) {
-      failed.abort();
-      await Promise.allSettled(workers);
-      throw error;
     }
-    if (!live()) throw new Stopped();
-    const finished = { ...chapter, pageCount: pages.length };
-    await writeMeta(dir, { manga, title: pending.title, chapter: finished, pages: saved, complete: true, sizeBytes: size });
-    update(pending, { ...item, chapter: finished, status: "done", done: pages.length, total: pages.length, sizeBytes: size });
+    const finished = { ...item.chapter, pageCount: item.total };
+    update(pending, { ...item, chapter: finished, status: "done", error: null });
   } catch (error) {
     if (live() && !(error instanceof Stopped)) update(pending, { ...item, status: "failed", error: failureMessage(error) });
   } finally {
@@ -333,35 +373,190 @@ async function run(pending: Pending): Promise<void> {
   }
 }
 
+function waitingLabel(step: Extract<Step, { action: "pause" }>, item: MangaDownload): string {
+  const saved = item.done > 0 ? ` (${item.done} of ${item.total} pages saved)` : "";
+  if (step.reason === "network") return `Waiting for the network${saved}.`;
+  return `${step.reason === "rate-limit" ? "The source asked to wait" : "The source is busy"}; continuing automatically${saved}.`;
+}
+
+/** Sleeps until a paused chapter may continue: the wait is over and the network is up. */
+async function waitOut(step: Extract<Step, { action: "pause" }>, signal: AbortSignal): Promise<void> {
+  if (step.resumeAt) await sleep(Math.max(0, step.resumeAt - Date.now()) * retryScale, signal);
+  while (!net.isOnline()) await sleep(NETWORK_POLL_MS * retryScale, signal);
+}
+
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) { reject(new Stopped()); return; }
+    const onAbort = () => { clearTimeout(timer); reject(new Stopped()); };
+    const timer = setTimeout(() => { signal.removeEventListener("abort", onAbort); resolve(); }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/**
+ * A request that got no answer at all (offline, reset, refused, DNS, TLS, a
+ * timeout), as opposed to a source, decoding or storage error, which is never
+ * retried as though it were the network. The sources' own wrappers say so too:
+ * a verified page's NoAnswerError, or Comix's error keeping its transport cause.
+ */
+function noAnswer(error: unknown): boolean {
+  const e = error as { name?: unknown; message?: unknown; code?: unknown; cause?: { code?: unknown } } | null;
+  if (!e || typeof e !== "object") return false;
+  if (e.name === "TimeoutError" || e.name === "NoAnswerError") return true;
+  const text = `${String(e.message ?? "")} ${String(e.code ?? "")} ${String(e.cause?.code ?? "")}`;
+  return /net::ERR_|\bfetch failed\b|\bfailed to fetch\b|\b(?:ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|EPIPE|UND_ERR_[A-Z_]+)\b|socket hang up/i.test(text);
+}
+
+/** The shared rules' view of a failure, or null when retrying can't help (it fails the chapter). */
+function failureOf(error: unknown): Failure | null {
+  if (error instanceof MangaSourceError) {
+    if (error.verify || error.status == null) return null;
+    return error.status === 0 ? { network: true, online: net.isOnline() } : { status: error.status, retryAfter: error.retryAfter };
+  }
+  return noAnswer(error) ? { network: true, online: net.isOnline() } : null;
+}
+
+/** [work] with the shared retry rules; throws [Interrupt] when the chapter has to stop. */
+async function withRetry<T>(work: () => Promise<T>, reResolves: number, signal: AbortSignal): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await work();
+    } catch (error) {
+      if (signal.aborted) throw new Stopped();
+      const failure = failureOf(error);
+      if (!failure) throw error;
+      const step = nextStep(failure, attempt, reResolves, Date.now());
+      if (step.action === "retry") { await sleep(step.delayMs * retryScale, signal); continue; }
+      if (step.action === "fail") throw error;
+      throw new Interrupt(step);
+    }
+  }
+}
+
+/** One pass at a chapter: keeps what's saved for the same page list, fetches the rest. */
+async function saveChapter(
+  pending: Pending, start: MangaDownload, dir: string, stop: AbortSignal, reResolves: number, live: () => boolean, attempt: Attempt,
+): Promise<MangaDownload> {
+  let item = start;
+  const chapter = item.chapter;
+  const manga: DownloadManga = { id: item.mangaId, title: item.mangaTitle, cover: item.cover, country: item.country };
+  const pages = await withRetry(() => sourceById(item.sourceId).pageImages(pending.title, chapter.id), reResolves, stop);
+  if (!live()) throw new Stopped();
+  const pieces: PlanPiece[] = pages.map((page) => ({ kind: "page", url: page.url }));
+  const rendition = renditionId(`chapter ${chapter.id}`, pieces);
+  const ledgerFile = path.join(dir, LEDGER_FILE);
+  const previous = parseLedger(await fs.promises.readFile(ledgerFile, "utf8").catch(() => ""));
+  const heads = new Map<string, { size: number; head: Uint8Array }>();
+  for (const entry of previous?.pieces.values() ?? []) {
+    const bytes = await fs.promises.readFile(path.join(dir, entry.file)).catch(() => null);
+    if (bytes) heads.set(entry.file, { size: bytes.length, head: bytes.subarray(0, HEAD_BYTES) });
+  }
+  const plan = resumePlan(pieces, rendition, previous, (file) => heads.get(file) ?? null);
+  const ledger: Ledger | null = plan.restart ? null : previous;
+  // Pages saved for another page list are discarded: this attempt isn't progress.
+  if (plan.restart && (previous?.pieces.size ?? 0) > 0) attempt.startedOver = true;
+  if (plan.restart) {
+    // Another page list (or none recorded): start the chapter clean.
+    for (const name of await fs.promises.readdir(dir)) {
+      if (PAGE_FILE.test(name) || name.endsWith(".part")) await fs.promises.rm(path.join(dir, name), { force: true });
+    }
+    await fs.promises.writeFile(ledgerFile, ledgerHeader(rendition, pages.length));
+  }
+  const saved: SavedPage[] = new Array(pages.length);
+  let size = 0;
+  for (const index of plan.keep) {
+    const entry = ledger!.pieces.get(index)!;
+    const bytes = await fs.promises.readFile(path.join(dir, entry.file));
+    const page = pages[index];
+    const dims = page.width && page.height ? { width: page.width, height: page.height } : imageSize(bytes);
+    saved[index] = { file: entry.file, w: dims?.width ?? null, h: dims?.height ?? null };
+    size += bytes.length;
+  }
+  item = update(pending, { ...item, status: "downloading", done: plan.keep.length, total: pages.length, error: null });
+  let next = 0;
+  // One failed page stops the others before the chapter is marked failed.
+  const failed = new AbortController();
+  const signal = AbortSignal.any([stop, failed.signal]);
+  const worker = async () => {
+    while (next < plan.fetch.length) {
+      if (!live()) throw new Stopped();
+      const index = plan.fetch[next++];
+      const result = await withRetry(() => savePage(item.sourceId, pages[index], dir, index, signal), reResolves, signal);
+      if (!live()) throw new Stopped();
+      await fs.promises.appendFile(ledgerFile, ledgerLine(index, result.page.file, result.bytes, result.tag));
+      saved[index] = result.page;
+      size += result.bytes;
+      attempt.saved++;
+      item = update(pending, { ...item, done: item.done + 1 });
+    }
+  };
+  const workers = Array.from({ length: Math.min(PAGE_WORKERS, plan.fetch.length) }, worker);
+  try {
+    await Promise.all(workers);
+  } catch (error) {
+    failed.abort();
+    await Promise.allSettled(workers);
+    throw error;
+  }
+  if (!live()) throw new Stopped();
+  const finished = { ...chapter, pageCount: pages.length };
+  await writeMeta(dir, { manga, title: pending.title, chapter: finished, pages: saved, complete: true, sizeBytes: size });
+  return { ...item, chapter: finished, done: pages.length, total: pages.length, sizeBytes: size };
+}
+
 async function savePage(
   sourceId: string,
   page: MangaPageImage,
   dir: string,
   index: number,
   stop: AbortSignal,
-): Promise<{ page: SavedPage; bytes: number }> {
+): Promise<{ page: SavedPage; bytes: number; tag: string }> {
   const target = publicHttps(page.url);
   if (!target) throw new DownloadError("Refused an unsafe page address.");
-  const pending = fetchPageImage(sourceId, target, AbortSignal.any([stop, AbortSignal.timeout(PAGE_TIMEOUT_MS)]));
+  const deadline = AbortSignal.timeout(PAGE_TIMEOUT_MS);
+  const pending = fetchPageImage(sourceId, target, AbortSignal.any([stop, deadline]));
   if (!pending) throw new DownloadError("Refused an unexpected page address.");
-  const response = await pending;
+  let response: Response;
+  try {
+    response = await pending;
+  } catch (error) {
+    if (stop.aborted) throw new Stopped();
+    // No answer at all (offline, reset, timeout, the page's own deadline): the
+    // network, not the page. While offline any failure but the source's check
+    // waits for the network; online it is judged on what it is.
+    const verdict = error instanceof MangaSourceError && (error.verify || error.status != null);
+    if (!verdict && (deadline.aborted || noAnswer(error) || !net.isOnline())) {
+      throw new MangaSourceError("The download was interrupted. Check your connection and try again.", 0);
+    }
+    // The source's own verdict (its check, its rate limit, a page it refused).
+    if (error instanceof MangaSourceError) throw error;
+    throw new DownloadError(`Page ${index + 1} couldn't be downloaded from the source.`);
+  }
   const type = response.headers.get("content-type") ?? "";
   if (!response.ok || !type.toLowerCase().startsWith("image/")) {
     void response.body?.cancel().catch(() => {});
     if (sourceId === "mangadot" && (response.status === 403 || response.status === 503 || (response.ok && type.includes("html")))) {
       throw new DownloadError(VERIFY_MESSAGE);
     }
-    if (response.status === 429) throw new DownloadError("The source is limiting requests. Wait a minute, then retry.");
-    if (response.status === 404) throw new DownloadError(`Page ${index + 1} is missing at the source.`);
-    throw new DownloadError(response.ok ? `Page ${index + 1} didn't come back as an image.` : `Page ${index + 1} didn't download (HTTP ${response.status}).`);
+    if (response.status === 429) throw new MangaSourceError("The source is limiting requests. Wait a minute, then retry.", 429, false, response.headers.get("retry-after"));
+    if (response.status === 404) throw new MangaSourceError(`Page ${index + 1} is missing at the source.`, 404);
+    if (!response.ok) throw new MangaSourceError(`Page ${index + 1} didn't download (HTTP ${response.status}).`, response.status, false, response.headers.get("retry-after"));
+    throw new DownloadError(`Page ${index + 1} didn't come back as an image.`);
   }
-  const bytes = await readBytes(response);
+  let bytes: Buffer;
+  try {
+    bytes = await readBytes(response);
+  } catch (error) {
+    if (error instanceof DownloadError || stop.aborted) throw error;
+    throw new MangaSourceError("The download was interrupted. Check your connection and try again.", 0);
+  }
   const file = `${String(index + 1).padStart(3, "0")}.${pageExtension(type, target.pathname)}`;
   const partial = path.join(dir, `${file}.part`);
   await fs.promises.writeFile(partial, bytes);
   await fs.promises.rename(partial, path.join(dir, file));
   const size = page.width && page.height ? { width: page.width, height: page.height } : imageSize(bytes);
-  return { page: { file, w: size?.width ?? null, h: size?.height ?? null }, bytes: bytes.length };
+  return { page: { file, w: size?.width ?? null, h: size?.height ?? null }, bytes: bytes.length, tag: pieceTag({ kind: "page", url: page.url }, bytes) };
 }
 
 async function readBytes(response: Response): Promise<Buffer> {

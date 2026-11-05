@@ -41,6 +41,27 @@ export class PageVerificationError extends Error {
   }
 }
 
+/**
+ * The website never answered (offline, reset, refused, DNS, a timeout), as
+ * opposed to an answer that was refused or unreadable: a download waits for the
+ * network and tries again instead of failing.
+ */
+export class NoAnswerError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NoAnswerError";
+  }
+}
+
+/** A Chromium network error from a load (code ERR_*, errno < 0), not a navigation another one replaced. */
+function networkLoadError(error: unknown): boolean {
+  const e = error as { code?: unknown; errno?: unknown } | null;
+  return typeof e?.code === "string" && /^ERR_/.test(e.code) && e.code !== "ERR_ABORTED" && typeof e.errno === "number" && e.errno < 0;
+}
+
+/** An in-page fetch that got no answer: Chromium's "Failed to fetch", a network error mid-body, or its timeout. */
+const NO_ANSWER = /^timeout$|failed to fetch|network ?error|AbortError|signal is aborted/i;
+
 export class VerifiedPageSession {
   private win: BrowserWindow | null = null;
   private ready: Promise<BrowserWindow> | null = null;
@@ -67,13 +88,17 @@ export class VerifiedPageSession {
     const target = new URL(url);
     if (target.origin !== this.options.origin || target.username || target.password) throw new Error("Unexpected website page.");
     const win = await this.open();
-    if (win.webContents.getURL() !== target.href) await win.loadURL(target.href);
+    if (win.webContents.getURL() !== target.href) {
+      await win.loadURL(target.href).catch((error: unknown) => {
+        throw networkLoadError(error) ? new NoAnswerError(`${this.options.label} page could not be reached. Check your connection, then retry.`) : error;
+      });
+    }
     this.touch();
     let timer: NodeJS.Timeout | undefined;
     try {
       return await Promise.race([
         win.webContents.executeJavaScriptInIsolatedWorld(this.options.world, [{ code }]),
-        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${this.options.label} page took too long. Retry.`)), 30_000); }),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new NoAnswerError(`${this.options.label} page took too long. Retry.`)), 30_000); }),
       ]);
     } finally { clearTimeout(timer); this.touch(); }
   }
@@ -182,7 +207,9 @@ export class VerifiedPageSession {
     } catch (error) {
       const reason = error instanceof Error ? `${error.name}: ${error.message}` : "unknown";
       console.warn(`[${this.options.label}] Session request failed:`, reason.replace(/https?:\/\/\S+/g, "[url]").slice(0, 160));
-      throw new Error(`${this.options.label} request did not complete. Retry or choose another provider.`);
+      const message = `${this.options.label} request did not complete. Retry or choose another provider.`;
+      const e = error as { name?: unknown; message?: unknown } | null;
+      throw e && NO_ANSWER.test(`${String(e.name)}: ${String(e.message)}`.replace(/^Error: /, "")) ? new NoAnswerError(message) : new Error(message);
     } finally {
       clearTimeout(timer);
       this.touch();
@@ -260,7 +287,7 @@ export class VerifiedPageSession {
 
     this.ready = new Promise<BrowserWindow>((resolve, reject) => {
       let settled = false;
-      let deadline = setTimeout(() => finish(new Error(`${label} did not finish loading. Retry or choose another provider.`)), 30_000);
+      let deadline = setTimeout(() => finish(new NoAnswerError(`${label} did not finish loading. Retry or choose another provider.`)), 30_000);
       const finish = (error?: Error) => {
         if (settled) return;
         settled = true;
@@ -304,8 +331,9 @@ export class VerifiedPageSession {
         }
       });
       // A cached homepage could render while the network copy is behind a check.
-      win.loadURL(origin + this.options.homePath, { extraHeaders: "Cache-Control: no-cache\n" }).catch(() => {
-        finish(new Error(`${label} could not be loaded. Retry or choose another provider.`));
+      win.loadURL(origin + this.options.homePath, { extraHeaders: "Cache-Control: no-cache\n" }).catch((error: unknown) => {
+        const message = `${label} could not be loaded. Retry or choose another provider.`;
+        finish(networkLoadError(error) ? new NoAnswerError(message) : new Error(message));
       });
     });
     return this.ready;
