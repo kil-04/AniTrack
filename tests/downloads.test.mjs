@@ -556,6 +556,24 @@ test("no answer while online is a stall, not a network wait, and the third in a 
   assert.ok(fs.existsSync(path.join(folder(opts.id), "download.ledger")), "Retry continues from what was saved");
 });
 
+test("after two stalls, a run that is saving segments still resolves a refused or missing stream again instead of failing", async () => {
+  for (const status of [403, 410, 404]) {
+    resetFixture(async (url) => {
+      if (url.includes("master.m3u8")) return new Response(mediaPlaylist("https://cdn.example/a.ts", "https://cdn.example/b.ts"));
+      if (url.endsWith("a.ts")) return new Response(ts(1));
+      // Refused only once this run has saved a segment of its own.
+      await waitUntil(() => fs.existsSync(path.join(folder(opts.id), "seg00000.ts")));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return new Response("", { status });
+    });
+    const opts = options({ reResolves: 2, stalledSince: Date.now() - 60_000 });
+    const item = await terminal(opts);
+    assert.equal(item.status, "queued", `HTTP ${status}: ${item.error}`);
+    assert.equal(item.resume.reason, "expired", `HTTP ${status}: a fresh stream is resolved`);
+    assert.equal(item.resume.reResolves, 0, `HTTP ${status}: a run that saved a segment isn't a stall`);
+  }
+});
+
 test("offline, a stop waits for the network and never counts as a stall", async () => {
   resetFixture(async (url) => {
     if (url.includes("master.m3u8")) return new Response(mediaPlaylist("https://cdn.example/a.ts"));

@@ -185,6 +185,14 @@ class DownloadResumeTest {
         }
     }
 
+    @Test fun aRunThatSavesAMediaPieceIsOffTheStreakForTheRestOfIt() {
+        cases.getJSONArray("streakNow").objects().forEach {
+            val streak = DownloadResume.streakNow(it.getInt("reResolves"), it.getBoolean("progressed"))
+            assertEquals(it.getString("why"), it.getInt("streak"), streak)
+            assertEquals(it.getString("why"), step(it.getJSONObject("step")), DownloadResume.nextStep(failure(it.getJSONObject("failure")), it.getInt("attempt"), streak, it.getLong("now")))
+        }
+    }
+
     @Test fun captionsAreBestEffort() {
         cases.getJSONArray("captionSteps").objects().forEach {
             assertEquals(
@@ -201,6 +209,9 @@ class DownloadResumeTest {
         }
         cases.getJSONArray("reResolveBeforeFetch").objects().forEach {
             assertEquals(it.getString("why"), it.getBoolean("reResolve"), DownloadResume.reResolveBeforeFetch(it.getString("url"), it.getLong("resolvedAt"), it.getLong("now")))
+        }
+        cases.getJSONArray("reResolveFirst").objects().forEach {
+            assertEquals(it.getString("why"), it.getBoolean("reResolve"), DownloadResume.reResolveFirst(it.getString("url"), it.getLong("resolvedAt"), it.getInt("reResolves"), it.getLong("now")))
         }
     }
 }

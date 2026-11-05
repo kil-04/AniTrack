@@ -352,9 +352,21 @@ export function retryAfterMs(header: string | null | undefined, now: number): nu
 }
 
 /**
+ * The stall streak a run is on now, for [nextStep], [conservativeStep] and the
+ * check before a fetch ([reResolveBeforeFetch]): the [reResolves] it started
+ * with until it saves a media piece ([progressed]), then 0. That run is no
+ * stall, so a later refusal, 404 or expiring URL in it resolves the stream
+ * again instead of failing on the budget earlier stalls used up.
+ */
+export function streakNow(reResolves: number, progressed: boolean): number {
+  return progressed ? 0 : reResolves;
+}
+
+/**
  * What to do after a request failed: [attempt] failures of this request so far
- * (0 for the first), [reResolves] runs in a row before this one that stopped
- * without saving a media piece (each starts with a freshly resolved stream).
+ * (0 for the first), [reResolves] runs in a row that stopped without saving a
+ * media piece, this one included while it hasn't saved one ([streakNow]); each
+ * starts with a freshly resolved stream.
  */
 export function nextStep(failure: Failure, attempt: number, reResolves: number, now: number): Step {
   if ("network" in failure) {
@@ -502,4 +514,20 @@ export function reResolveBeforeFetch(url: string, resolvedAt: number, now: numbe
   const expires = urlExpiresAt(url);
   if (expires != null && now >= expires - EXPIRY_MARGIN_MS) return true;
   return now - resolvedAt > MAX_RESOLVED_AGE_MS;
+}
+
+/**
+ * [reResolveBeforeFetch] for a run whose stall streak began at [reResolves]. A
+ * stream that still had a minute left when it was resolved ([resolvedAt]) is
+ * always resolved again once it runs out: a fresh one helps, and a run that
+ * keeps getting fresh streams without saving anything stalls ([afterStop]).
+ * One that was already about to expire when it was resolved is resolved again
+ * only within the streak's budget, then tried as it is, so a source whose
+ * streams always say they expire soon still downloads (and a run that saved a
+ * piece of it isn't sent for a fresh one before every request).
+ */
+export function reResolveFirst(url: string, resolvedAt: number, reResolves: number, now: number): boolean {
+  if (!reResolveBeforeFetch(url, resolvedAt, now)) return false;
+  const expires = urlExpiresAt(url);
+  return expires == null || expires - EXPIRY_MARGIN_MS > resolvedAt || reResolves < MAX_RE_RESOLVES;
 }

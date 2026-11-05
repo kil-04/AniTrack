@@ -1390,6 +1390,48 @@
       "reResolve": true
     }
   ],
+  "reResolveFirst": [
+    {
+      "why": "had an hour when resolved, 30 s left now, after two stalls: a fresh stream helps, so resolve it again",
+      "url": "https://cdn.example/a.m3u8?expires=1793797200",
+      "resolvedAt": 1793793000000,
+      "reResolves": 2,
+      "now": 1793797170000,
+      "reResolve": true
+    },
+    {
+      "why": "had 30 s when resolved: resolve it again while the streak allows",
+      "url": "https://cdn.example/a.m3u8?expires=1793797200",
+      "resolvedAt": 1793797170000,
+      "reResolves": 0,
+      "now": 1793797180000,
+      "reResolve": true
+    },
+    {
+      "why": "had 30 s when resolved, two stalls already: try it as it is",
+      "url": "https://cdn.example/a.m3u8?expires=1793797200",
+      "resolvedAt": 1793797170000,
+      "reResolves": 2,
+      "now": 1793797180000,
+      "reResolve": false
+    },
+    {
+      "why": "no expiry, resolved 7 h ago: resolve it again whatever the streak",
+      "url": "https://cdn.example/a.m3u8",
+      "resolvedAt": 1793768400000,
+      "reResolves": 5,
+      "now": 1793793600000,
+      "reResolve": true
+    },
+    {
+      "why": "an hour left: fetch it",
+      "url": "https://cdn.example/a.m3u8?expires=1793797200",
+      "resolvedAt": 1793793000000,
+      "reResolves": 0,
+      "now": 1793793600000,
+      "reResolve": false
+    }
+  ],
   "afterStop": [
     {
       "why": "a run that saved a media piece ends the streak",
@@ -1565,6 +1607,92 @@
       "verdict": {
         "action": "fail",
         "reason": "server"
+      }
+    }
+  ],
+  "streakNow": [
+    {
+      "why": "a run that has saved nothing is still on the streak it started with: two stalls, then a 403 fails",
+      "reResolves": 2,
+      "progressed": false,
+      "failure": {
+        "status": 403
+      },
+      "attempt": 0,
+      "now": 1000,
+      "streak": 2,
+      "step": {
+        "action": "fail"
+      }
+    },
+    {
+      "why": "once a run saves a media piece its streak is over: a 403 after two stalls resolves the stream again",
+      "reResolves": 2,
+      "progressed": true,
+      "failure": {
+        "status": 403
+      },
+      "attempt": 0,
+      "now": 1000,
+      "streak": 0,
+      "step": {
+        "action": "re-resolve"
+      }
+    },
+    {
+      "why": "…and so does a 404 after one stall",
+      "reResolves": 1,
+      "progressed": true,
+      "failure": {
+        "status": 404
+      },
+      "attempt": 0,
+      "now": 1000,
+      "streak": 0,
+      "step": {
+        "action": "re-resolve"
+      }
+    },
+    {
+      "why": "a 404 after one stall, nothing saved yet: fail",
+      "reResolves": 1,
+      "progressed": false,
+      "failure": {
+        "status": 404
+      },
+      "attempt": 0,
+      "now": 1000,
+      "streak": 1,
+      "step": {
+        "action": "fail"
+      }
+    },
+    {
+      "why": "a 410 after many rate-limit stalls, with progress: resolve again",
+      "reResolves": 9,
+      "progressed": true,
+      "failure": {
+        "status": 410
+      },
+      "attempt": 0,
+      "now": 1000,
+      "streak": 0,
+      "step": {
+        "action": "re-resolve"
+      }
+    },
+    {
+      "why": "a fresh streak stays fresh",
+      "reResolves": 0,
+      "progressed": false,
+      "failure": {
+        "status": 401
+      },
+      "attempt": 0,
+      "now": 1000,
+      "streak": 0,
+      "step": {
+        "action": "re-resolve"
       }
     }
   ],

@@ -81,6 +81,14 @@ test("resume: every stop has a final state (stalls, rate limits, offline waits)"
   for (const c of cases.stalledMessages) assert.equal(R.stalledMessage(c.reason, c.item), c.message, `${c.reason} ${c.item}`);
 });
 
+test("resume: a run that saves a media piece is off the streak for the rest of it", () => {
+  for (const c of cases.streakNow) {
+    const streak = R.streakNow(c.reResolves, c.progressed);
+    assert.equal(streak, c.streak, c.why);
+    assert.deepEqual(R.nextStep(c.failure, c.attempt, streak, c.now), c.step, c.why);
+  }
+});
+
 test("resume: captions are best-effort", () => {
   for (const c of cases.captionSteps) assert.deepEqual(R.captionStep(c.failure, c.attempt, c.conservative, c.now), c.step, c.why);
 });
@@ -88,4 +96,5 @@ test("resume: captions are best-effort", () => {
 test("resume: when to resolve the stream again", () => {
   for (const c of cases.expiry) assert.equal(R.urlExpiresAt(c.url), c.at, c.url);
   for (const c of cases.reResolveBeforeFetch) assert.equal(R.reResolveBeforeFetch(c.url, c.resolvedAt, c.now), c.reResolve, c.why);
+  for (const c of cases.reResolveFirst) assert.equal(R.reResolveFirst(c.url, c.resolvedAt, c.reResolves, c.now), c.reResolve, c.why);
 });

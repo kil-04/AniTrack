@@ -138,6 +138,26 @@ class HlsDownloadTest {
         assertTrue(File(dir, "seg00000.ts").isFile)
     }
 
+    @Test fun afterTwoStallsARunSavingSegmentsStillResolvesARefusedOrMissingStreamAgain() {
+        for (status in listOf(403, 410, 404)) {
+            val dir = temp.newFolder()
+            val cdn = Cdn { url ->
+                when {
+                    url.contains("master") -> ok(playlist(listOf("a.ts", "b.ts")).toByteArray())
+                    url.endsWith("a.ts") -> ok(ts(1))
+                    else -> {
+                        // Refused only once this run has saved a segment of its own.
+                        while (!File(dir, "seg00000.ts").isFile) Thread.sleep(5)
+                        Thread.sleep(20)
+                        Triple(status, null, null)
+                    }
+                }
+            }
+            val outcome = run(dir, cdn, reResolves = 2)
+            assertTrue("HTTP $status: $outcome", outcome is Outcome.ReResolve && outcome.progressed)
+        }
+    }
+
     @Test fun aCorruptedSegmentIsFetchedAgainAndAnotherQualityStartsOver() {
         val dir = temp.newFolder()
         var quality = "1080"

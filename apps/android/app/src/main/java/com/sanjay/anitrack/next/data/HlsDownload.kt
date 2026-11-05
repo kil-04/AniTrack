@@ -5,6 +5,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -48,11 +49,20 @@ internal object HlsDownload {
     private class KeyChanged : Exception()
 
     /** Per-run request state shared by the segment workers. */
-    private class RunState(val reResolves: Int, val resolvedAt: Long, val conservative: Boolean) {
+    private class RunState(val reResolves: Int, val resolvedAt: Long, val conservative: Boolean, val onProgressed: () -> Unit) {
         @Volatile var cooldownUntil = 0L
         @Volatile var savedMedia = false
         @Volatile var startedOver = false
+        private val told = AtomicBoolean(false)
         val progressed get() = savedMedia && !startedOver
+        /** The stall streak now: once this run saved a media piece it is off it ([DownloadResume.streakNow]). */
+        val streak get() = DownloadResume.streakNow(reResolves, progressed)
+
+        /** A media piece was saved: the first one (in a pass that kept what was saved) ends the streak, once. */
+        fun saved() {
+            savedMedia = true
+            if (progressed && told.compareAndSet(false, true)) onProgressed()
+        }
     }
 
     /** One request with the shared retry rules; throws [Interrupt] when the run has to stop. */
@@ -61,7 +71,9 @@ internal object HlsDownload {
         while (true) {
             val cooling = state.cooldownUntil - fetcher.now()
             if (cooling > 0) fetcher.wait(cooling)
-            if (state.reResolves < DownloadResume.MAX_RE_RESOLVES && DownloadResume.reResolveBeforeFetch(url, state.resolvedAt, fetcher.now())) {
+            // A signed URL about to expire is resolved again rather than refused mid-episode (only
+            // while fresh streams help: one that is always about to expire is tried as it is).
+            if (DownloadResume.reResolveFirst(url, state.resolvedAt, state.reResolves, fetcher.now())) {
                 throw Interrupt(DownloadResume.Step.ReResolve)
             }
             if (state.conservative) fetcher.wait(500)
@@ -69,9 +81,10 @@ internal object HlsDownload {
             if (result.status in 200..299 && value != null) return value
             val failure = failureOf(result, fetcher)
             val now = fetcher.now()
-            var step = DownloadResume.nextStep(failure, failures, state.reResolves, now)
+            val streak = state.streak
+            var step = DownloadResume.nextStep(failure, failures, streak, now)
             // A rate-sensitive stream is never retried at once: it pauses, longer with each stall.
-            if (state.conservative) step = DownloadResume.conservativeStep(step, failure, state.reResolves, now)
+            if (state.conservative) step = DownloadResume.conservativeStep(step, failure, streak, now)
             when (step) {
                 is DownloadResume.Step.Retry -> {
                     val http = failure as? DownloadResume.Failure.Http
@@ -129,13 +142,14 @@ internal object HlsDownload {
      * Downloads the HLS stream at [url] into [dir], keeping what an earlier run
      * saved for the same rendition, then its captions ([captionUrl], best-effort).
      * Returns Done, or why it stopped (its files stay); throws for a failure
-     * resuming can't help. [reResolves]: runs in a row before this one that stalled.
+     * resuming can't help. [reResolves]: runs in a row before this one that stalled;
+     * [onProgressed] runs once, when this run saves its first media piece (it is no stall).
      */
     suspend fun run(
         dir: File, url: String, conservative: Boolean, reResolves: Int, resolvedAt: Long,
-        fetcher: Fetcher, onProgress: (Int) -> Unit, captionUrl: String? = null,
+        fetcher: Fetcher, onProgress: (Int) -> Unit, captionUrl: String? = null, onProgressed: () -> Unit = {},
     ): Outcome {
-        val state = RunState(reResolves, resolvedAt, conservative)
+        val state = RunState(reResolves, resolvedAt, conservative, onProgressed)
         try {
             var playlistUrl = url
             suspend fun readPlaylist(url: String): String =
@@ -220,7 +234,7 @@ internal object HlsDownload {
                 if (d.piece.kind == DownloadResume.Kind.KEY && !DownloadResume.keyStillMatches(ledger, index, tag)) throw KeyChanged()
                 synchronized(ledgerLock) { ledgerFile.appendText(DownloadResume.ledgerLine(index, d.file.name, d.file.length(), tag)) }
                 // Keys are fetched again every run: only media counts as progress.
-                if (d.piece.kind != DownloadResume.Kind.KEY) state.savedMedia = true
+                if (d.piece.kind != DownloadResume.Kind.KEY) state.saved()
             }
 
             var pass = 0

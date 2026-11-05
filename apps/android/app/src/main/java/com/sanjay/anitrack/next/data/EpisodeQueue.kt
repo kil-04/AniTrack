@@ -33,8 +33,11 @@ internal class EpisodeQueue(private val host: Host) {
         fun waitsForApp(providerId: String?): Boolean
         fun show(id: String, status: Downloads.Status, progress: Int, error: String? = null)
         fun progress(id: String): Int
-        /** One pass at the stream (and its captions), reporting progress through [show]. */
-        suspend fun download(id: String, source: Downloads.Source, reResolves: Int, resolvedAt: Long): HlsDownload.Outcome
+        /**
+         * One pass at the stream (and its captions), reporting progress through [show]. [onProgressed]
+         * runs once, when the pass saves its first media piece.
+         */
+        suspend fun download(id: String, source: Downloads.Source, reResolves: Int, resolvedAt: Long, onProgressed: () -> Unit): HlsDownload.Outcome
         fun readOrigin(id: String): EpisodeOrigin?
         fun readStall(id: String): Stall
         fun writeMeta(item: Downloads.Item, origin: EpisodeOrigin?, stall: Stall)
@@ -186,7 +189,7 @@ internal class EpisodeQueue(private val host: Host) {
                 }
             }
             run.origin?.providerId?.let { provider -> if (heldUntil(provider, id) != null) return Turn.Held(provider) }
-            val outcome = host.download(id, source, run.stall.reResolves, host.now())
+            val outcome = host.download(id, source, run.stall.reResolves, host.now()) { streakEnded(run) }
             val now = host.now()
             when (outcome) {
                 is HlsDownload.Outcome.Done -> return Turn.Done
@@ -203,6 +206,17 @@ internal class EpisodeQueue(private val host: Host) {
                 }
             }
         }
+    }
+
+    /**
+     * A run saved a media piece: it is no stall, so its streak ends on disk now. Should the
+     * process be killed before the run stops, the resumed episode doesn't carry the old streak.
+     * [Run.stall] stays as it began until the run stops: [settle] then judges the run with it
+     * (one that went on to discard what it saved, for another rendition or key, still stalled).
+     */
+    private fun streakEnded(run: Run) {
+        if (run.stall == Stall()) return
+        host.writeStall(run.item.id, Stall())
     }
 
     /** Applies the shared stall rules to a stopped run: carries the streak on (persisted), or fails the episode. */

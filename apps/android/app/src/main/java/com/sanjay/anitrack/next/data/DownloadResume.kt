@@ -322,8 +322,16 @@ object DownloadResume {
     }
 
     /**
+     * The stall streak a run is on now (see download-resume.ts): the [reResolves] it started with
+     * until it saves a media piece ([progressed]), then 0, so a later refusal, 404 or expiring URL
+     * in it resolves the stream again instead of failing on the budget earlier stalls used up.
+     */
+    fun streakNow(reResolves: Int, progressed: Boolean): Int = if (progressed) 0 else reResolves
+
+    /**
      * What to do after a request failed: [attempt] failures of this request so far, [reResolves]
-     * runs in a row before this one that stopped without saving a media piece.
+     * runs in a row that stopped without saving a media piece, this one included while it hasn't
+     * saved one ([streakNow]).
      */
     fun nextStep(failure: Failure, attempt: Int, reResolves: Int, now: Long): Step {
         if (failure is Failure.Network) {
@@ -462,5 +470,16 @@ object DownloadResume {
         val expires = urlExpiresAt(url)
         if (expires != null && now >= expires - EXPIRY_MARGIN_MS) return true
         return now - resolvedAt > MAX_RESOLVED_AGE_MS
+    }
+
+    /**
+     * [reResolveBeforeFetch] for a run whose stall streak began at [reResolves] (see download-resume.ts):
+     * a stream that had a minute left when resolved is always resolved again once it runs out; one
+     * already about to expire then only within the streak's budget, then tried as it is.
+     */
+    fun reResolveFirst(url: String, resolvedAt: Long, reResolves: Int, now: Long): Boolean {
+        if (!reResolveBeforeFetch(url, resolvedAt, now)) return false
+        val expires = urlExpiresAt(url)
+        return expires == null || expires - EXPIRY_MARGIN_MS > resolvedAt || reResolves < MAX_RE_RESOLVES
     }
 }

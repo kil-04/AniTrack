@@ -16,10 +16,11 @@ import {
   nextStep,
   parseLedger,
   pieceTag,
-  reResolveBeforeFetch,
+  reResolveFirst,
   renditionId,
   resumePlan,
   stalledMessage,
+  streakNow,
   variantAttributes,
   type Failure,
   type Ledger,
@@ -94,6 +95,13 @@ interface DownloadJob {
   reResolves: number;
   /** …and when the first of them stopped. */
   stalledSince: number | null;
+  /**
+   * This run saved a media piece (keys are always fetched again, so they don't
+   * count), and not in a pass that discarded what an earlier run saved (another
+   * rendition, or a key that changed). It is no stall, so its own requests are
+   * judged off the streak ([streakNow]).
+   */
+  progressed: boolean;
   /** Rate-limited: no worker starts a request before this (epoch ms). */
   cooldownUntil: number;
 }
@@ -150,7 +158,7 @@ export function startDownload(opts: StartOpts): void {
   }
   const job: DownloadJob = {
     controller: new AbortController(), removed: false, conservativeNetwork: opts.conservativeNetwork === true, lastRequestAt: 0,
-    resolvedAt: opts.resolvedAt ?? Date.now(), reResolves: opts.reResolves ?? 0, stalledSince: opts.stalledSince ?? null, cooldownUntil: 0,
+    resolvedAt: opts.resolvedAt ?? Date.now(), reResolves: opts.reResolves ?? 0, stalledSince: opts.stalledSince ?? null, progressed: false, cooldownUntil: 0,
   };
   running.set(opts.id, job);
   void runDownload(opts, job);
@@ -292,10 +300,9 @@ function clearPieces(dir: string): void {
 
 async function runDownload(o: StartOpts, job: DownloadJob): Promise<void> {
   const dir = itemDir(o.id);
-  // Progress for the stall count: a media piece saved (keys are always fetched
-  // again, so they don't count), and not in a run that discarded what an
-  // earlier one saved (another rendition, or a key that changed).
-  let done = 0, total = 0, savedMedia = false, startedOver = false;
+  // Progress for the stall count is [job.progressed]; [startedOver]: this run
+  // discarded what an earlier one saved, so what it saves isn't progress.
+  let done = 0, total = 0, startedOver = false;
   try {
     assertJobActive(job);
     fs.mkdirSync(dir, { recursive: true });
@@ -387,13 +394,14 @@ async function runDownload(o: StartOpts, job: DownloadJob): Promise<void> {
       fs.appendFileSync(ledgerFile, ledgerLine(index, asset.piece.file!, size, tag));
       downloadedBytes += size;
       if (downloadedBytes > MAX_DOWNLOAD_BYTES) throw new DownloadTransportError("This download exceeded the supported size limit.");
-      if (asset.piece.kind !== "key") savedMedia = true;
+      if (asset.piece.kind !== "key" && !startedOver) job.progressed = true;
     };
 
     for (let pass = 0; ; pass++) {
       const previous = pass === 0 && fs.existsSync(ledgerFile) ? parseLedger(fs.readFileSync(ledgerFile, "utf8")) : null;
       const plan = resumePlan(pieces, rendition, previous, (file) => readHead(path.join(dir, file)));
-      if (plan.restart && (pass > 0 || (previous?.pieces.size ?? 0) > 0)) startedOver = true;
+      // What it saved is discarded (another rendition, or a key that changed): not progress after all.
+      if (plan.restart && (pass > 0 || (previous?.pieces.size ?? 0) > 0)) { startedOver = true; job.progressed = false; }
       if (plan.restart) {
         clearPieces(dir);
         fs.writeFileSync(ledgerFile, ledgerHeader(rendition, total));
@@ -449,7 +457,7 @@ async function runDownload(o: StartOpts, job: DownloadJob): Promise<void> {
       // The files stay. The queue starts this download again when [hint] allows,
       // unless it has stalled too often: then it fails (and Retry continues from its files).
       const reason = error.hint.reason === "restart" ? "expired" : error.hint.reason;
-      const verdict = afterStop(reason, job.reResolves, job.stalledSince, savedMedia && !startedOver, Date.now());
+      const verdict = afterStop(reason, job.reResolves, job.stalledSince, job.progressed, Date.now());
       const pct = total ? Math.floor((done * 100) / total) : 0;
       if (verdict.action === "fail") emit(o, "failed", pct, done, total, 0, stalledMessage(verdict.reason, "episode"));
       else emit(o, "queued", pct, done, total, 0, undefined, { ...error.hint, reResolves: verdict.reResolves, stalledSince: verdict.stalledSince });
@@ -620,16 +628,18 @@ async function readWithRetry(url: string, providerId: string, job: DownloadJob, 
     if (cooling > 0) await retryWait(cooling, job.controller.signal);
     // A signed URL about to expire is resolved again rather than refused mid-episode.
     // (Only while fresh streams help: one that is always about to expire is tried as it is.)
-    if (job.reResolves < MAX_RE_RESOLVES && reResolveBeforeFetch(url, job.resolvedAt, Date.now())) {
+    if (reResolveFirst(url, job.resolvedAt, job.reResolves, Date.now())) {
       throw new DownloadInterrupt({ reason: "expired" });
     }
     const result = await fetchOnce(url, providerId, job, maxBytes);
     if ("bytes" in result) return result;
     const failure: Failure = result;
     const now = Date.now();
-    let step = nextStep(failure, attempt, job.reResolves, now);
+    // Read again: another worker may have saved a segment meanwhile.
+    const streak = streakNow(job.reResolves, job.progressed);
+    let step = nextStep(failure, attempt, streak, now);
     // A rate-sensitive stream is never retried at once: it pauses, longer with each stall.
-    if (job.conservativeNetwork) step = conservativeStep(step, failure, job.reResolves, now);
+    if (job.conservativeNetwork) step = conservativeStep(step, failure, streak, now);
     if (step.action === "retry") {
       const wait = step.delayMs * retryScale;
       if ("status" in failure && (failure.status === 429 || failure.status === 503)) job.cooldownUntil = Math.max(job.cooldownUntil, now + wait);

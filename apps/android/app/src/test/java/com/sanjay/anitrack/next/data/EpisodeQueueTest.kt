@@ -5,6 +5,7 @@ import com.sanjay.anitrack.next.data.providers.EpisodeOrigin
 import com.sanjay.anitrack.next.data.providers.OriginCapture
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -31,6 +32,8 @@ class EpisodeQueueTest {
         @Volatile var visible = true
         /** What each download of an episode returns: (id, how many times before) → outcome. */
         var script: (String, Int) -> Outcome = { _, _ -> Outcome.Done }
+        /** What a download does before it returns: (id, how many times before, its first segment saved). */
+        var during: suspend (String, Int, () -> Unit) -> Unit = { _, _, _ -> }
         val states = ConcurrentHashMap<String, Triple<Downloads.Status, Int, String?>>()
         val stalls = ConcurrentHashMap<String, EpisodeQueue.Stall>()
         val failures = ConcurrentHashMap<String, String>()
@@ -44,9 +47,10 @@ class EpisodeQueueTest {
         override fun waitsForApp(providerId: String?) = !visible && providerId == "anichan"
         override fun show(id: String, status: Downloads.Status, progress: Int, error: String?) { states[id] = Triple(status, progress, error) }
         override fun progress(id: String) = states[id]?.second ?: 0
-        override suspend fun download(id: String, source: Downloads.Source, reResolves: Int, resolvedAt: Long): Outcome {
+        override suspend fun download(id: String, source: Downloads.Source, reResolves: Int, resolvedAt: Long, onProgressed: () -> Unit): Outcome {
             val before = downloads.count { it.first == id }
             downloads += id to clock
+            during(id, before, onProgressed)
             yield()
             return script(id, before)
         }
@@ -208,6 +212,21 @@ class EpisodeQueueTest {
         assertTrue("it waited until the persisted time", app.ofs("a")[0].second >= start + 600_000)
         assertEquals("one stall carried over, so the second run here is the third in a row", 2, app.ofs("a").size)
         assertEquals(Downloads.Status.FAILED, app.status("a"))
+    }
+
+    @Test fun aRunThatSavesASegmentEndsTheStreakOnDiskSoAKilledRunDoesntCarryItOn() = runBlocking {
+        val app = Fake()
+        app.stalls["a"] = EpisodeQueue.Stall(reResolves = 2, stalledSince = start - 60_000)
+        // The first run saves a segment, then the process is killed mid-episode.
+        app.during = { _, n, saved -> if (n == 0) { saved(); awaitCancellation() } }
+        app.script = { _, n -> if (n == 1) Outcome.Pause(pause, app.clock + 60_000, false) else Outcome.Done }
+        val first = start(EpisodeQueue(app), "a", resumed = true)
+        until("the saved segment ended the streak on disk") { app.stalls["a"] == EpisodeQueue.Stall() }
+        first.cancel(); first.join()
+        // Restarted: it carries on with a fresh streak, so one stall doesn't fail it.
+        start(EpisodeQueue(app), "a", resumed = true).join()
+        assertEquals(3, app.ofs("a").size)
+        assertEquals(Downloads.Status.DONE, app.status("a"))
     }
 
     @Test fun askedForAgainAnEpisodeStartsAFreshStreak() = runBlocking {

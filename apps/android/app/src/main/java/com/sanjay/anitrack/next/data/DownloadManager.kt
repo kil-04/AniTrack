@@ -346,8 +346,8 @@ object Downloads {
             } else setStatus(id, status, progress, error)
         }
         override fun progress(id: String) = currentProgress(id)
-        override suspend fun download(id: String, source: Source, reResolves: Int, resolvedAt: Long) =
-            Downloads.download(id, source, reResolves, resolvedAt) { p -> setStatus(id, Status.DOWNLOADING, p) }
+        override suspend fun download(id: String, source: Source, reResolves: Int, resolvedAt: Long, onProgressed: () -> Unit) =
+            Downloads.download(id, source, reResolves, resolvedAt, onProgressed) { p -> setStatus(id, Status.DOWNLOADING, p) }
         override fun readOrigin(id: String) = Downloads.readOrigin(id)
         override fun readStall(id: String) = Downloads.readStall(id)
         override fun writeMeta(item: Item, origin: EpisodeOrigin?, stall: EpisodeQueue.Stall) =
@@ -450,13 +450,13 @@ object Downloads {
      * offline without them, so they're saved beside the video, best-effort.
      */
     private suspend fun download(
-        id: String, source: Source, reResolves: Int, resolvedAt: Long, onProgress: (Int) -> Unit,
+        id: String, source: Source, reResolves: Int, resolvedAt: Long, onProgressed: () -> Unit, onProgress: (Int) -> Unit,
     ): HlsDownload.Outcome = withContext(Dispatchers.IO) {
         val fetcher = HlsDownload.Fetcher(
             bytes = { url -> DownloadTransport.attemptBytes(url, source.referer, source.userAgent) },
             toFile = { url, file -> DownloadTransport.attemptToFile(url, file, source.referer, source.userAgent) },
             online = NetworkWatch::online,
         )
-        HlsDownload.run(folder(id).apply { mkdirs() }, source.url, source.conservativeNetwork, reResolves, resolvedAt, fetcher, onProgress, source.subtitleUrl)
+        HlsDownload.run(folder(id).apply { mkdirs() }, source.url, source.conservativeNetwork, reResolves, resolvedAt, fetcher, onProgress, source.subtitleUrl, onProgressed)
     }
 }
