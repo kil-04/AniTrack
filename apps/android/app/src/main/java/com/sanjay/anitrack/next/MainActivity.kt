@@ -288,6 +288,13 @@ fun AppShell() {
     val currentTab = current?.substringBefore('?')
     // City Pop opens from Songs, so the Songs tab stays lit there.
     val tabSelected: (Dest) -> Boolean = { d -> currentTab == d.route || (d.route == "songs" && currentTab == "city-pop") }
+    // Floating mini player (the desktop's bottom-right persistent player). A phone docks it under
+    // the page instead, above the bottom tabs, so it never covers the end of a page.
+    val miniOn by com.sanjay.anitrack.next.data.PlayerHolder.miniActive
+    val showMini = miniOn && current != "player"
+    val miniDocked = com.sanjay.anitrack.next.ui.miniPlayerDocked(widthDp)
+    val expandMini: () -> Unit = { nav.navigate("player") { launchSingleTop = true } }
+    val closeMini: () -> Unit = { com.sanjay.anitrack.next.data.PlayerHolder.release() }
 
     Surface(color = Bg, modifier = Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
@@ -524,11 +531,10 @@ fun AppShell() {
                         }
                     }
                 }
-                // Floating mini player (the desktop's bottom-right persistent player).
-                val miniOn by com.sanjay.anitrack.next.data.PlayerHolder.miniActive
-                // Theme songs' now-playing bar, bottom-left (above the mini player on phones).
+                // Theme songs' now-playing bar, bottom-left, above the mini player: a portrait tablet
+                // lifts it over the floating one; a phone's docked one is already below the page.
                 if (!hideChrome && com.sanjay.anitrack.next.data.ThemePlayer.current != null) {
-                    val stacked = miniOn && !wideLayout
+                    val stacked = miniOn && !wideLayout && !miniDocked
                     com.sanjay.anitrack.next.ui.ThemeBar(
                         Modifier.align(Alignment.BottomStart)
                             .padding(start = 16.dp, end = 16.dp, bottom = if (stacked) 205.dp else 16.dp)
@@ -536,12 +542,9 @@ fun AppShell() {
                         onOpenAnime = { id -> nav.navigate("anime/$id") { launchSingleTop = true } },
                     )
                 }
-                if (miniOn && current != "player") {
+                if (showMini && !miniDocked) {
                     Box(Modifier.align(Alignment.BottomEnd).padding(16.dp)) {
-                        com.sanjay.anitrack.next.ui.MiniPlayer(
-                            onExpand = { nav.navigate("player") { launchSingleTop = true } },
-                            onClose = { com.sanjay.anitrack.next.data.PlayerHolder.release() },
-                        )
+                        com.sanjay.anitrack.next.ui.MiniPlayer(onExpand = expandMini, onClose = closeMini)
                     }
                 }
                 // Background music floats just under the top bar, beneath the profile button (the
@@ -558,6 +561,11 @@ fun AppShell() {
                         modifier = Modifier.align(Alignment.TopEnd).padding(10.dp),
                     )
                 }
+            }
+            // Phones: the docked mini player sits between the page and the bottom tabs (at the foot of
+            // the readers, which have none), so pages end above it and nothing on them is hidden.
+            if (showMini && miniDocked) {
+                com.sanjay.anitrack.next.ui.MiniPlayer(onExpand = expandMini, onClose = closeMini, docked = true)
             }
             // Phones: bottom nav bar (Settings lives behind the profile button).
             if (!wideLayout && !hideChrome) {
