@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, ChevronLeft, ChevronRight, HardDriveDownload, Link2, Maximize, RefreshCw, Settings2, X } from "lucide-react";
+import { ArrowLeft, ChevronLeft, ChevronRight, HardDriveDownload, Link2, Maximize, RefreshCw, Settings2, X, ZoomIn, ZoomOut } from "lucide-react";
 import { BackgroundMusicButton } from "../../components/BackgroundMusic";
 import { chapterLabel, spreadsOf, type MangaChapter, type MangaPageImage, type SourceResult } from "../../../../../packages/shared/manga";
 import {
@@ -45,6 +45,14 @@ const CHROME_IDLE_MS = 3000;
 const BACKGROUNDS: Record<ReaderBackground, string> = { black: "#000000", gray: "#1c1c1f", white: "#f2f2f2" };
 const WIDTHS: Record<ReaderWidth, string> = { narrow: "720px", medium: "960px", full: "100%" };
 
+/** Zoom: 100% is the page as the layout fits it; closer steps by keys and buttons, any value by wheel or slider. */
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 5;
+const ZOOM_STEP = 1.25;
+const clampZoom = (value: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(value * 100) / 100));
+/** A press that moves further than this is a drag (it pans), not a click. */
+const DRAG_SLOP = 4;
+
 function Choice<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: [T, string][]; onChange: (v: T) => void }) {
   return (
     <div>
@@ -83,6 +91,16 @@ export default function MangaReader() {
   const settingsOpen = useRef(false);
   const lastWheel = useRef(0);
   settingsOpen.current = settings;
+  // Zoom, and (in page modes) how far the zoomed page is moved from the middle.
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const root = useRef<HTMLDivElement>(null);
+  const stage = useRef<HTMLDivElement>(null);
+  const view = useRef({ zoom: 1, pan: { x: 0, y: 0 }, paged: false });
+  /** Vertical: the point of the strip to keep under the pointer once the new zoom is laid out. */
+  const anchor = useRef<{ fx: number; fy: number; x: number; y: number } | null>(null);
+  /** The click that ends a drag isn't a click. */
+  const dragged = useRef(false);
 
   const chapter = session ? session.chapters[session.index] : null;
   const hasPrev = !!session && session.index > 0;
@@ -141,6 +159,104 @@ export default function MangaReader() {
     [double, count, prefs.shift, isWide],
   );
   const spreadIndex = Math.max(0, spreads.findIndex((s) => s.includes(page)));
+
+  // ── Zoom ──
+  view.current = { zoom, pan, paged };
+  /** Keeps a zoomed page from being dragged off the screen: it moves by at most its overhang. */
+  const clampPan = useCallback((p: { x: number; y: number }, z: number) => {
+    const el = stage.current;
+    if (!el || z <= 1) return { x: 0, y: 0 };
+    const maxX = (el.clientWidth * (z - 1)) / 2;
+    const maxY = (el.clientHeight * (z - 1)) / 2;
+    return { x: Math.min(maxX, Math.max(-maxX, p.x)), y: Math.min(maxY, Math.max(-maxY, p.y)) };
+  }, []);
+  /** Zooms to [value], keeping the point at [at] (window coordinates; the middle when absent) where it is. */
+  const zoomTo = useCallback((value: number, at?: { x: number; y: number }) => {
+    const now = view.current;
+    const next = clampZoom(value);
+    if (next === now.zoom) return;
+    if (now.paged) {
+      const el = stage.current;
+      if (el) {
+        const box = el.getBoundingClientRect();
+        // The page is scaled about the middle: a point at d from it sits over (d - pan) / zoom of the page.
+        const d = at ? { x: at.x - (box.left + box.width / 2), y: at.y - (box.top + box.height / 2) } : { x: 0, y: 0 };
+        const k = next / now.zoom;
+        setPan(clampPan({ x: d.x - (d.x - now.pan.x) * k, y: d.y - (d.y - now.pan.y) * k }, next));
+      }
+    } else {
+      const el = scroller.current;
+      if (el && el.scrollWidth && el.scrollHeight) {
+        const box = el.getBoundingClientRect();
+        const x = at ? at.x - box.left : el.clientWidth / 2;
+        const y = at ? at.y - box.top : el.clientHeight / 2;
+        anchor.current = { fx: (el.scrollLeft + x) / el.scrollWidth, fy: (el.scrollTop + y) / el.scrollHeight, x, y };
+      }
+    }
+    setZoom(next);
+  }, [clampPan]);
+  const zoomBy = useCallback((factor: number, at?: { x: number; y: number }) => zoomTo(view.current.zoom * factor, at), [zoomTo]);
+  const resetZoom = useCallback(() => { setZoom(1); setPan({ x: 0, y: 0 }); }, []);
+  // Vertical: once the wider (or narrower) strip is laid out, scroll the kept point back under the pointer.
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    const a = anchor.current;
+    anchor.current = null;
+    if (!el || !a) return;
+    el.scrollLeft = a.fx * el.scrollWidth - a.x;
+    el.scrollTop = a.fy * el.scrollHeight - a.y;
+  }, [zoom]);
+  // A page turn, another chapter or another layout starts from the whole page again.
+  useEffect(() => { if (paged) resetZoom(); }, [paged, spreadIndex, chapter?.id, resetZoom]);
+  useEffect(() => { resetZoom(); }, [paged, resetZoom]);
+  // Ctrl + wheel (and a touchpad pinch, which arrives as one) zooms at the pointer. Registered
+  // by hand: React's wheel listener is passive and couldn't stop the page from scrolling too.
+  useEffect(() => {
+    const el = root.current;
+    if (!el) return;
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey) return;
+      event.preventDefault();
+      zoomBy(Math.exp(-event.deltaY * 0.0015), { x: event.clientX, y: event.clientY });
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [zoomBy]);
+  /** Dragging with the mouse moves a zoomed page, or scrolls the vertical strip. */
+  const startDrag = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    const el = paged ? stage.current : scroller.current;
+    if (!el || (paged && zoom <= 1)) return;
+    const box = el.getBoundingClientRect();
+    // A press on the strip's own scrollbar is the scrollbar's.
+    if (!paged && (event.clientX - box.left >= el.clientWidth || event.clientY - box.top >= el.clientHeight)) return;
+    const from = { x: event.clientX, y: event.clientY, pan, left: el.scrollLeft, top: el.scrollTop, cursor: el.style.cursor };
+    let moved = false;
+    const onMove = (e: MouseEvent) => {
+      const dx = e.clientX - from.x;
+      const dy = e.clientY - from.y;
+      if (!moved && Math.hypot(dx, dy) < DRAG_SLOP) return;
+      if (!moved) { moved = true; el.style.cursor = "grabbing"; }
+      if (paged) setPan(clampPan({ x: from.pan.x + dx, y: from.pan.y + dy }, view.current.zoom));
+      else { el.scrollLeft = from.left - dx; el.scrollTop = from.top - dy; }
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      el.style.cursor = from.cursor;
+      dragged.current = moved;
+      // The click that follows a drag reads the flag; a drag that ended outside the window leaves none.
+      if (moved) window.setTimeout(() => { dragged.current = false; }, 0);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+  /** Whether this click ended a drag (and so isn't one). */
+  const wasDrag = () => {
+    const was = dragged.current;
+    dragged.current = false;
+    return was;
+  };
 
   // Save where you are (debounced), and once more when leaving.
   const latest = useRef({ page, count });
@@ -245,6 +361,9 @@ export default function MangaReader() {
         if (document.fullscreenElement) void document.exitFullscreen(); else void document.documentElement.requestFullscreen().catch(() => {});
       } else if ((event.key === "n" || event.key === "N") && hasNext && session) { save(); go(session.index + 1); }
       else if ((event.key === "p" || event.key === "P") && hasPrev && session) { save(); go(session.index - 1); }
+      else if (event.key === "+" || event.key === "=") { event.preventDefault(); zoomBy(ZOOM_STEP); }
+      else if (event.key === "-" || event.key === "_") { event.preventDefault(); zoomBy(1 / ZOOM_STEP); }
+      else if (event.key === "0") { event.preventDefault(); resetZoom(); }
       else if (paged && (event.key === "ArrowRight" || event.key === "ArrowLeft")) {
         event.preventDefault();
         turn((event.key === "ArrowRight") !== rtl);
@@ -253,7 +372,7 @@ export default function MangaReader() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [paged, rtl, turn, leave, settings, hasNext, hasPrev, session, go, save]);
+  }, [paged, rtl, turn, leave, settings, hasNext, hasPrev, session, go, save, zoomBy, resetZoom]);
 
   const update = (patch: Partial<ReaderPrefs>) => {
     const next = { ...prefs, ...patch };
@@ -281,6 +400,7 @@ export default function MangaReader() {
 
   return (
     <div
+      ref={root}
       className="fixed inset-0 z-[60] flex flex-col"
       style={{ backgroundColor: background, color: ink, cursor: chrome ? undefined : "none" }}
       onMouseMove={poke}
@@ -305,6 +425,13 @@ export default function MangaReader() {
         {/* Background music keeps playing while reading; its controls ride along here. */}
         <div className="rounded-full bg-black/50 backdrop-blur-md"><BackgroundMusicButton /></div>
         {count > 0 && <span className="rounded-full border border-white/10 bg-black/50 text-white backdrop-blur-md px-3 py-1.5 text-xs font-semibold tabular-nums">{Math.min(page + 1, count)} / {count}</span>}
+        {count > 0 && (
+          <div className="flex h-10 items-center rounded-xl border border-white/10 bg-black/50 text-white backdrop-blur-md">
+            <button onClick={() => zoomBy(1 / ZOOM_STEP)} disabled={zoom <= ZOOM_MIN} className="grid h-10 w-9 place-items-center rounded-l-xl transition hover:bg-black/75 disabled:opacity-30" title="Zoom out (-)" aria-label="Zoom out"><ZoomOut size={15} /></button>
+            <button onClick={resetZoom} className="h-10 min-w-[3.25rem] px-1 text-xs font-semibold tabular-nums transition hover:bg-black/75" title="Back to 100% (0)">{Math.round(zoom * 100)}%</button>
+            <button onClick={() => zoomBy(ZOOM_STEP)} disabled={zoom >= ZOOM_MAX} className="grid h-10 w-9 place-items-center rounded-r-xl transition hover:bg-black/75 disabled:opacity-30" title="Zoom in (+)" aria-label="Zoom in"><ZoomIn size={15} /></button>
+          </div>
+        )}
         <button onClick={() => hasPrev && (save(), go(session.index - 1))} disabled={!hasPrev} className="flex h-10 items-center gap-1 rounded-xl border border-white/10 bg-black/50 text-white backdrop-blur-md transition hover:bg-black/75 px-3.5 text-xs font-semibold disabled:opacity-30" title="Previous chapter (P)">
           <ChevronLeft size={15} /> Prev
         </button>
@@ -342,7 +469,23 @@ export default function MangaReader() {
           )}
           <Choice<ReaderBackground> label="Background" value={prefs.background} onChange={(bg) => update({ background: bg })}
             options={[["black", "Black"], ["gray", "Dark gray"], ["white", "White"]]} />
-          <p className="border-t border-white/[0.07] pt-3 text-[11px] leading-relaxed text-ink-3">Keys: ← → or the mouse wheel turn pages · N / P chapters · F full screen · Esc back. Move the mouse to show the controls.</p>
+          <div>
+            <div className="mb-2 flex items-center text-[10px] font-bold uppercase tracking-[0.18em] text-ink-3">
+              <span className="flex-1">Zoom</span>
+              <span className="tabular-nums text-ink-2">{Math.round(zoom * 100)}%</span>
+            </div>
+            <input
+              type="range"
+              min={ZOOM_MIN * 100}
+              max={ZOOM_MAX * 100}
+              step={5}
+              value={Math.round(zoom * 100)}
+              onChange={(event) => zoomTo(Number(event.target.value) / 100)}
+              className="h-1 w-full cursor-pointer accent-accent"
+              aria-label="Zoom"
+            />
+          </div>
+          <p className="border-t border-white/[0.07] pt-3 text-[11px] leading-relaxed text-ink-3">Keys: ← → or the mouse wheel turn pages · N / P chapters · F full screen · Esc back. Zoom: Ctrl + wheel, + and −, or double-click; drag to move around; 0 goes back to 100%. Move the mouse to show the controls.</p>
         </div>
       )}
 
@@ -370,8 +513,16 @@ export default function MangaReader() {
       )}
 
       {load.state === "ready" && !paged && (
-        <div ref={scroller} className="thin-scrollbar flex-1 overflow-y-auto" onClick={toggleChrome}>
-          <div className="mx-auto" style={{ maxWidth: WIDTHS[prefs.width] }}>
+        <div
+          ref={scroller}
+          className="thin-scrollbar flex-1 select-none overflow-auto"
+          style={{ cursor: chrome ? "grab" : undefined }}
+          onMouseDown={startDrag}
+          onClick={() => { if (!wasDrag()) toggleChrome(); }}
+          onDoubleClick={(event) => zoomTo(zoom > 1 ? 1 : 2, { x: event.clientX, y: event.clientY })}
+        >
+          {/* Zoomed, the strip is wider than the window and scrolls (or drags) sideways too. */}
+          <div className="mx-auto" style={{ width: `calc(min(100%, ${WIDTHS[prefs.width]}) * ${zoom})` }}>
             {pages.map((p, i) => (
               <div key={p.url} ref={(el) => { pageRefs.current[i] = el; }} data-page={i} style={{ minHeight: p.width && p.height ? undefined : "60vh" }}>
                 <img
@@ -393,20 +544,38 @@ export default function MangaReader() {
 
       {load.state === "ready" && paged && (
         <div
+          ref={stage}
           className="relative flex flex-1 select-none items-center justify-center overflow-hidden"
+          style={{ cursor: zoom > 1 && chrome ? "grab" : undefined }}
+          onMouseDown={startDrag}
           onClick={(event) => {
+            if (wasDrag()) return;
             const x = event.clientX / window.innerWidth;
-            if (x < 0.3) turn(rtl);
+            // Zoomed in, the sides don't turn pages: a click there is usually a missed drag.
+            if (zoom > 1) toggleChrome();
+            else if (x < 0.3) turn(rtl);
             else if (x > 0.7) turn(!rtl);
             else toggleChrome();
           }}
+          onDoubleClick={(event) => {
+            const x = event.clientX / window.innerWidth;
+            if (zoom > 1) resetZoom();
+            // At 100% only the middle zooms: the sides turn pages on each click.
+            else if (x >= 0.3 && x <= 0.7) zoomTo(2, { x: event.clientX, y: event.clientY });
+          }}
           onWheel={(event) => {
+            if (event.ctrlKey) return;
+            if (zoom > 1) {
+              // Zoomed in, the wheel moves the page instead of turning it.
+              setPan((p) => clampPan(event.shiftKey ? { x: p.x - event.deltaY, y: p.y } : { x: p.x - event.deltaX, y: p.y - event.deltaY }, zoom));
+              return;
+            }
             if (Math.abs(event.deltaY) < 25 || performance.now() - lastWheel.current < 250) return;
             lastWheel.current = performance.now();
             turn(event.deltaY > 0);
           }}
         >
-          <div className="flex h-full max-h-full items-center justify-center">
+          <div className="flex h-full max-h-full items-center justify-center" style={zoom > 1 ? { transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` } : undefined}>
             {ordered.map((i) => (
               <img
                 key={pages[i].url}

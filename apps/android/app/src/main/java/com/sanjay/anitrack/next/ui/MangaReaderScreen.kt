@@ -13,6 +13,7 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -49,9 +50,11 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
@@ -63,6 +66,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.compose.AsyncImagePainter
@@ -393,10 +397,12 @@ fun MangaReaderScreen(onBack: () -> Unit, onOpenMusicSettings: () -> Unit = {}) 
             }
             else -> {
                 val maxWidth = ReaderWidths[widthIndex]
+                ZoomableStrip(listState, resetKey = chapter.id, onTap = { chrome = !chrome }) { zoomed, endSpace ->
                 LazyColumn(
                     state = listState,
-                    modifier = Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { chrome = !chrome } },
+                    modifier = Modifier.fillMaxSize().then(zoomed),
                     horizontalAlignment = Alignment.CenterHorizontally,
+                    contentPadding = PaddingValues(bottom = endSpace),
                 ) {
                     items(count = segments.size, key = { "${chapter.id}:${segments[it].page}:${segments[it].rows?.first ?: -1}" }) { item ->
                         val segment = segments[item]
@@ -422,6 +428,7 @@ fun MangaReaderScreen(onBack: () -> Unit, onOpenMusicSettings: () -> Unit = {}) 
                     item(key = "${chapter.id}:end") {
                         ChapterEnd(chapter.number, session.hasNext, background.content) { MangaReading.step(1) }
                     }
+                }
                 }
             }
         }
@@ -601,6 +608,73 @@ private fun BoxScope.ReaderPanel(open: Boolean, title: String, onDismiss: () -> 
             }
             content()
         }
+    }
+}
+
+/**
+ * The vertical strip, zoomable: two fingers pinch about the point between them (and move
+ * the strip), a double tap switches between 1× and 2×, and while zoomed in a finger moves
+ * the strip sideways as well as scrolling it. [content] gets the modifier that draws the
+ * list zoomed, and the space to leave after its last row (see below).
+ */
+@Composable
+private fun ZoomableStrip(listState: LazyListState, resetKey: Any, onTap: () -> Unit, content: @Composable (Modifier, Dp) -> Unit) {
+    var scale by remember(resetKey) { mutableFloatStateOf(1f) }
+    /** How far the zoomed strip is moved sideways from the middle. */
+    var shift by remember(resetKey) { mutableFloatStateOf(0f) }
+    var size by remember { mutableStateOf(IntSize.Zero) }
+    fun clampShift(x: Float, zoom: Float): Float {
+        val max = size.width * (zoom - 1f) / 2f
+        return x.coerceIn(-max, max)
+    }
+    /** Zooms to [next], keeping the part of the strip under [at] (a point of this box) where it is. */
+    fun zoomTo(next: Float, at: Offset) {
+        val zoom = next.coerceIn(1f, 5f)
+        if (zoom == scale) return
+        val fromMiddle = at.x - size.width / 2f
+        shift = clampShift(fromMiddle - (fromMiddle - shift) * zoom / scale, zoom)
+        // The list is drawn scaled from its top edge, so the row under the finger is y / scale down the list.
+        listState.dispatchRawDelta(at.y / scale - at.y / zoom)
+        scale = zoom
+    }
+    Box(
+        Modifier.fillMaxSize().clipToBounds()
+            .onSizeChanged { size = it }
+            .pointerInput(resetKey) {
+                detectTapGestures(onDoubleTap = { zoomTo(if (scale > 1f) 1f else 2f, it) }, onTap = { onTap() })
+            }
+            .pointerInput(resetKey) {
+                // Seen before the list sees them: two fingers are a pinch here, never a scroll there.
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    do {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        val fingers = event.changes.count { it.pressed }
+                        if (fingers > 1) {
+                            val pan = event.calculatePan()
+                            zoomTo(scale * event.calculateZoom(), event.calculateCentroid(useCurrent = false))
+                            shift = clampShift(shift + pan.x, scale)
+                            listState.dispatchRawDelta(-pan.y / scale)
+                            event.changes.forEach { if (it.positionChanged()) it.consume() }
+                        } else if (fingers == 1 && scale > 1f) {
+                            // One finger: the list scrolls itself; the sideways part of the drag moves the strip.
+                            shift = clampShift(shift + event.calculatePan().x, scale)
+                        }
+                    } while (event.changes.any { it.pressed })
+                }
+            },
+    ) {
+        content(
+            Modifier.graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+                translationX = shift
+                transformOrigin = TransformOrigin(0.5f, 0f)
+            },
+            // Zoomed, only the top 1/scale of the list's own height is on screen: the space after
+            // the last row lets the end of the chapter scroll up into it.
+            with(LocalDensity.current) { (size.height * (1f - 1f / scale)).toDp() },
+        )
     }
 }
 
@@ -989,7 +1063,7 @@ private fun ReaderSettings(
             }
             Spacer(Modifier.height(4.dp))
             Text(
-                "In page modes, tap the left or right side to turn pages, the middle to show or hide controls, and pinch or double-tap to zoom.",
+                "In page modes, tap the left or right side to turn pages and the middle to show or hide controls. Pinch or double-tap to zoom in any layout; zoomed in, drag to move around.",
                 style = MaterialTheme.typography.labelMedium,
                 color = AniColors.TextTertiary,
             )
