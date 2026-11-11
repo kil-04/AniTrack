@@ -10,6 +10,8 @@ import {
   NOVEL_GENRES,
   NOVEL_SORTS,
   NOVEL_SOURCES,
+  novelSourceLabel,
+  otherNovelSource,
   type NovelCard as Card,
   type NovelSearchFilters,
 } from "../../../../../packages/shared/novel";
@@ -153,11 +155,11 @@ export default function NovelSearch() {
       )}
       {failed && !results.length ? (
         <EmptyState icon={TriangleAlert} tone="danger" title={`${source.label} didn't answer`}>
-          {failed} NovelBuddy and NovelArchive both failed to answer. Check your connection, then try again.
+          {failed} {source.label} and {novelSourceLabel(otherNovelSource(sourceId))} both failed to answer. Check your connection, then try again.
         </EmptyState>
       ) : !loading && !shown.length ? (
         <EmptyState icon={SearchX} title="Nothing matches">
-          No novels match on {NOVEL_SOURCES.find((s) => s.id === (answered?.sourceId ?? sourceId))!.label}. Try fewer filters, another spelling, or the other source.
+          No novels match on {NOVEL_SOURCES.find((s) => s.id === (answered?.sourceId ?? sourceId))!.label}. Try fewer filters, another spelling, or another source.
         </EmptyState>
       ) : (
         <div className="grid grid-cols-2 gap-x-4 gap-y-7 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7">

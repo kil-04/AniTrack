@@ -91,9 +91,10 @@ object NovelDownloads {
     private const val PARK_RETRY_MS = 30_000L
 
     private fun key(source: NovelSourceId, id: String) = "${source.key}:$id"
-    private fun hex(value: String) = value.toByteArray().joinToString("") { "%02x".format(it) }
-    private fun unhex(value: String) = String(value.chunked(2).map { it.toInt(16).toByte() }.toByteArray())
-    private fun folder(source: NovelSourceId, id: String) = File(root ?: error("not initialised"), "${source.key}-${hex(id)}")
+    private fun hex(value: String) = NovelNames.hex(value)
+    private fun unhex(value: String) = NovelNames.unhex(value)
+    // A long Novel Phoenix id is shortened (NovelNames); every other id is its plain hex, as before.
+    private fun folder(source: NovelSourceId, id: String) = File(root ?: error("not initialised"), "${source.key}-${NovelNames.stem(id)}")
     private fun chapterFile(source: NovelSourceId, id: String, chapterId: String) = File(folder(source, id), "c-${hex(chapterId)}.json")
     private fun pendingFile(source: NovelSourceId, id: String) = File(folder(source, id), "pending.json")
 

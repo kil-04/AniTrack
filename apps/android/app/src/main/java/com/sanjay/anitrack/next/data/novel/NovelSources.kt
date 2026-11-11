@@ -3,13 +3,19 @@ package com.sanjay.anitrack.next.data.novel
 import android.content.Context
 import com.sanjay.anitrack.next.data.manga.MangaHttp
 import com.sanjay.anitrack.next.data.manga.MangaSourceException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Fetching for novels mode: fixed hosts, spaced requests and bounded bodies
@@ -33,7 +39,38 @@ object NovelSources {
     )
     private fun http(source: NovelSourceId, lane: Lane = Lane.Front) = lanes.getValue(source).getValue(lane)
 
+    /**
+     * Novel Phoenix refuses bursts (HTTP 429), so everything sent to it draws on one
+     * budget: three requests at once, then one every two seconds, which ran clean in
+     * testing. What's on screen (priority 0) goes before the chapter-list fill (1),
+     * and that before downloads and update checks (2).
+     */
+    private val phoenixPace = NovelPace(3, 2000)
+
+    /** One queue of requests to Novel Phoenix, each drawn from the shared budget. */
+    private class Phoenix(private val priority: Int) {
+        private val http = MangaHttp("Novel Phoenix", NovelPhoenixParser.HOSTS, { MangaHttp.USER_AGENT }, 150)
+        suspend fun get(url: String, maxBytes: Int): String {
+            phoenixPace.take(priority)
+            return http.get(url, HTML_TYPE, maxBytes)
+        }
+    }
+
+    private val phoenixFront = Phoenix(0)
+    /**
+     * Novel Phoenix lists chapters 100 to a page, so a long novel's first list is dozens
+     * of requests. They go one at a time on a queue of their own, behind whatever is on
+     * screen, so the chapter being read never waits for them.
+     */
+    private val phoenixFillLane = Phoenix(1)
+    private val phoenixBack = Phoenix(2)
+    private fun phoenix(lane: Lane) = if (lane == Lane.Front) phoenixFront else phoenixBack
+    /** A fill that is refused for going too fast waits this long (or the site's Retry-After) and carries on, a few times. */
+    private const val PHOENIX_FILL_WAIT_MS = 30_000L
+    private const val PHOENIX_FILL_RETRIES = 4
+
     private const val JSON_TYPE = "application/json"
+    private const val HTML_TYPE = "text/html,application/xhtml+xml"
     private const val LIST_BYTES = 4 * 1024 * 1024
     private const val CHAPTERS_BYTES = 16 * 1024 * 1024
     private const val TEXT_BYTES = 4 * 1024 * 1024
@@ -51,6 +88,7 @@ object NovelSources {
         @Synchronized fun get(key: String): T? = map[key]?.takeIf { System.currentTimeMillis() - it.first < ttlMs }?.second
         /** [life] shortens this entry's life (a stand-in answer). */
         @Synchronized fun set(key: String, value: T, life: Long = ttlMs) { map[key] = System.currentTimeMillis() - (ttlMs - life) to value }
+        @Synchronized fun delete(key: String) { map.remove(key) }
     }
 
     private val homeCache = Ttl<NovelHome>(30 * 60_000L, 1)
@@ -63,6 +101,10 @@ object NovelSources {
         val json = runCatching { JSONObject(text) }.getOrElse { throw MangaSourceException("$label sent a response AniTrack couldn't read.") }
         return try { read(json) } catch (e: NovelParseException) { throw MangaSourceException(e.message ?: "$label sent a response AniTrack couldn't read.") }
     }
+
+    /** Reads a source's HTML page, turning any shape problem into a message safe to show. */
+    private fun <T> page(label: String, html: String, read: (String) -> T): T =
+        try { read(html) } catch (e: NovelParseException) { throw MangaSourceException(e.message ?: "$label sent a page AniTrack couldn't read.") }
 
     /**
      * Home: NovelBuddy's feed; while NovelBuddy is down, NovelArchive's lists; while both
@@ -113,12 +155,19 @@ object NovelSources {
     }
 
     suspend fun search(source: NovelSourceId, filters: NovelFilters): NovelPage {
-        val url = if (source == NovelSourceId.NovelBuddy) NovelBuddyParser.searchUrl(filters) else NovelArchiveParser.searchUrl(filters)
+        val url = when (source) {
+            NovelSourceId.NovelBuddy -> NovelBuddyParser.searchUrl(filters)
+            NovelSourceId.NovelArchive -> NovelArchiveParser.searchUrl(filters)
+            NovelSourceId.NovelPhoenix -> NovelPhoenixParser.searchUrl(filters)
+        }
         searchCache.get(url)?.let { return it }
-        val page = parse(source.label, http(source).get(url, JSON_TYPE, LIST_BYTES),
-            if (source == NovelSourceId.NovelBuddy) NovelBuddyParser::search else NovelArchiveParser::search)
-        searchCache.set(url, page)
-        return page
+        val found = when (source) {
+            NovelSourceId.NovelBuddy -> parse(source.label, http(source).get(url, JSON_TYPE, LIST_BYTES), NovelBuddyParser::search)
+            NovelSourceId.NovelArchive -> parse(source.label, http(source).get(url, JSON_TYPE, LIST_BYTES), NovelArchiveParser::search)
+            NovelSourceId.NovelPhoenix -> page(source.label, phoenixFront.get(url, LIST_BYTES)) { NovelPhoenixParser.search(it, filters.page) }
+        }
+        searchCache.set(url, found)
+        return found
     }
 
     /** NovelArchive sends the contents list with the title, so one request fills both caches. */
@@ -136,28 +185,154 @@ object NovelSources {
         require(Novels.isTitleId(source, id))
         val key = "${source.key}:$id"
         detailCache.get(key)?.let { return it }
-        val detail = if (source == NovelSourceId.NovelBuddy) {
-            parse("NovelBuddy", http(source, lane).get(NovelBuddyParser.titleUrl(id), JSON_TYPE, LIST_BYTES), NovelBuddyParser::detail)
-        } else archiveTitle(id, lane)
+        val detail = when (source) {
+            NovelSourceId.NovelBuddy -> parse("NovelBuddy", http(source, lane).get(NovelBuddyParser.titleUrl(id), JSON_TYPE, LIST_BYTES), NovelBuddyParser::detail)
+            NovelSourceId.NovelArchive -> archiveTitle(id, lane)
+            NovelSourceId.NovelPhoenix -> page("Novel Phoenix", phoenix(lane).get(NovelPhoenixParser.titleUrl(id), LIST_BYTES)) {
+                NovelPhoenixParser.detail(it, id, System.currentTimeMillis())
+            }
+        }
         detailCache.set(key, detail)
         writeDetail(detail)
         runCatching { NovelStore.registerTitle(detail) }
         return detail
     }
 
+    /**
+     * A title's chapters in reading order. A long Novel Phoenix list read for the first
+     * time comes back at once, with "Chapter N" standing in for the names on pages not
+     * read yet ([chaptersPartial] says so); [chaptersComplete] waits for them.
+     */
     suspend fun chapters(source: NovelSourceId, id: String, lane: Lane = Lane.Front): List<NovelChapter> {
         require(Novels.isTitleId(source, id))
         val key = "${source.key}:$id"
         chapterCache.get(key)?.let { return it }
-        return if (source == NovelSourceId.NovelBuddy) {
-            val list = parse("NovelBuddy", http(source, lane).get(NovelBuddyParser.chaptersUrl(id), JSON_TYPE, CHAPTERS_BYTES), NovelBuddyParser::chapters)
+        return when (source) {
+            NovelSourceId.NovelBuddy -> {
+                val list = parse("NovelBuddy", http(source, lane).get(NovelBuddyParser.chaptersUrl(id), JSON_TYPE, CHAPTERS_BYTES), NovelBuddyParser::chapters)
+                chapterCache.set(key, list)
+                writeChapters(source, id, list)
+                list
+            }
+            NovelSourceId.NovelArchive -> {
+                detailCache.set(key, archiveTitle(id, lane))
+                chapterCache.get(key).orEmpty()
+            }
+            NovelSourceId.NovelPhoenix -> phoenixChapters(id, lane)
+        }
+    }
+
+    /** Whether the list [chapters] gives right now still has stand-in names. */
+    fun chaptersPartial(source: NovelSourceId, id: String) = phoenixFills.containsKey("${source.key}:$id")
+
+    /** The list with every chapter's real name: waits for a long list's remaining pages. */
+    suspend fun chaptersComplete(source: NovelSourceId, id: String): List<NovelChapter> {
+        val list = chapters(source, id)
+        return phoenixFills["${source.key}:$id"]?.done?.await() ?: list
+    }
+
+    // ── Novel Phoenix's paged chapter lists (mirrors phoenixChapters in the desktop's sources.ts) ──
+
+    private class PhoenixFill(val provisional: () -> List<NovelChapter>, val done: Deferred<List<NovelChapter>>)
+
+    /** A saved Novel Phoenix list older than this is read again in full (a chapter's title can be corrected). */
+    private const val PHOENIX_FULL_REFRESH_MS = 7L * 24 * 60 * 60 * 1000
+    /** Up to this many pages are simply waited for; more than that and the list is shown first, filled in behind. */
+    private const val PHOENIX_QUICK_PAGES = 3
+    /** Long lists being filled in: what there is so far, and the whole list once every page is read. */
+    private val phoenixFills = ConcurrentHashMap<String, PhoenixFill>()
+    /** Pages read for a list that isn't whole yet, so a fill that was cut short carries on instead of starting over. */
+    private val phoenixPages = Ttl<ConcurrentHashMap<Int, List<NovelPhoenixParser.Row>>>(30 * 60_000L, 8)
+    private val phoenixLock = Mutex()
+    private val fillScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /**
+     * Novel Phoenix's chapter list, page by page. Chapters are requested by position and
+     * earlier pages don't change, so with a list saved from last time only its last page
+     * and the pages after it are read again (new chapters); a list that shrank, or
+     * doesn't line up, is read from the start. A list with many pages still to read is
+     * returned at once with stand-in names and finished in the background.
+     */
+    private suspend fun phoenixChapters(id: String, lane: Lane): List<NovelChapter> = phoenixLock.withLock {
+        val source = NovelSourceId.NovelPhoenix
+        val key = "${source.key}:$id"
+        // Another caller may have finished (or started filling) the list while this one waited.
+        chapterCache.get(key)?.let { return@withLock it }
+        phoenixFills[key]?.let { return@withLock it.provisional() }
+        val per = NovelPhoenixParser.CHAPTERS_PER_PAGE
+        suspend fun read(n: Int, on: Phoenix) =
+            page("Novel Phoenix", on.get(NovelPhoenixParser.chaptersUrl(id, n), LIST_BYTES)) { NovelPhoenixParser.chapterPage(it, System.currentTimeMillis()) }
+
+        val old = withContext(Dispatchers.IO) {
+            runCatching {
+                file("chapters", source, id)?.takeIf { it.exists() && System.currentTimeMillis() - it.lastModified() < PHOENIX_FULL_REFRESH_MS }
+                    ?.let { chaptersFrom(JSONArray(it.readText())) }
+            }.getOrNull().orEmpty()
+        }
+        // Whole pages before the last saved one are kept, when they are the positions 1, 2, 3…
+        var keep = maxOf(0, (old.size + per - 1) / per - 1) * per
+        if (!old.take(keep).withIndex().all { (i, c) -> c.id == (i + 1).toString() }) keep = 0
+        var from = keep / per + 1
+        var first = read(from, phoenix(lane))
+        if (keep > 0 && first.chapters.firstOrNull()?.id != (keep + 1).toString()) {
+            keep = 0
+            from = 1
+            first = read(1, phoenix(lane))
+        }
+        val kept = old.take(keep).map { NovelPhoenixParser.Row(it.id, it.label, it.updatedAt) }
+        val last = first.pages
+        val pages = phoenixPages.get(key) ?: ConcurrentHashMap()
+        phoenixPages.set(key, pages)
+        pages[from] = first.chapters
+        // The last page is always read now (it is the one that grows); the others once.
+        val missing = ((from + 1)..last).filter { it == last || !pages.containsKey(it) }
+        val start = from
+        suspend fun fetchRest(on: Phoenix, patient: Boolean = false) {
+            for (n in missing) {
+                var attempt = 0
+                while (true) {
+                    try {
+                        pages[n] = read(n, on).chapters
+                        break
+                    } catch (e: MangaSourceException) {
+                        // The background fill waits out a "too many requests" instead of giving the list up.
+                        if (!patient || e.status != 429 || attempt >= PHOENIX_FILL_RETRIES) throw e
+                        attempt++
+                        val asked = (e.retryAfter?.trim()?.toLongOrNull() ?: 0L) * 1000
+                        kotlinx.coroutines.delay(if (asked in 1..300_000) asked else PHOENIX_FILL_WAIT_MS)
+                    }
+                }
+            }
+        }
+        // A page that failed fails the list: a list with a hole would misnumber every later chapter.
+        fun whole(): List<NovelChapter> {
+            phoenixPages.delete(key)
+            return NovelPhoenixParser.chapters(listOf(kept) + (start..last).map { pages[it].orEmpty() })
+        }
+        val total = first.total
+        if (lane == Lane.Back || total == null || missing.size <= PHOENIX_QUICK_PAGES) {
+            fetchRest(phoenix(lane))
+            val list = whole()
             chapterCache.set(key, list)
             writeChapters(source, id, list)
-            list
-        } else {
-            detailCache.set(key, archiveTitle(id, lane))
-            chapterCache.get(key).orEmpty()
+            return@withLock list
         }
+        val provisional = { NovelPhoenixParser.provisional(total, listOf(kept) + pages.values) }
+        // Started only once it is registered, so its end always finds (and removes) its own entry.
+        val done = fillScope.async(start = CoroutineStart.LAZY) {
+            try {
+                fetchRest(phoenixFillLane, patient = true)
+                val list = whole()
+                chapterCache.set(key, list)
+                writeChapters(source, id, list)
+                list
+            } finally {
+                phoenixFills.remove(key)
+            }
+        }
+        phoenixFills[key] = PhoenixFill(provisional, done)
+        done.start()
+        provisional()
     }
 
     /** A chapter's text: a downloaded copy first, then a recent fetch, then the source. */
@@ -166,10 +341,13 @@ object NovelSources {
         if (lane == Lane.Front) NovelDownloads.localChapter(source, titleId, chapterId)?.let { return it }
         val key = "${source.key}:$titleId:$chapterId"
         textCache.get(key)?.let { return it }
-        val text = if (source == NovelSourceId.NovelBuddy) {
-            parse("NovelBuddy", http(source, lane).get(NovelBuddyParser.chapterUrl(titleId, chapterId), JSON_TYPE, TEXT_BYTES), NovelBuddyParser::chapterText)
-        } else {
-            parse("NovelArchive", http(source, lane).get(NovelArchiveParser.chapterUrl(titleId, chapterId), JSON_TYPE, TEXT_BYTES)) { NovelArchiveParser.chapterText(it, chapterId) }
+        val text = when (source) {
+            NovelSourceId.NovelBuddy ->
+                parse("NovelBuddy", http(source, lane).get(NovelBuddyParser.chapterUrl(titleId, chapterId), JSON_TYPE, TEXT_BYTES), NovelBuddyParser::chapterText)
+            NovelSourceId.NovelArchive ->
+                parse("NovelArchive", http(source, lane).get(NovelArchiveParser.chapterUrl(titleId, chapterId), JSON_TYPE, TEXT_BYTES)) { NovelArchiveParser.chapterText(it, chapterId) }
+            NovelSourceId.NovelPhoenix ->
+                page("Novel Phoenix", phoenix(lane).get(NovelPhoenixParser.chapterUrl(titleId, chapterId), TEXT_BYTES)) { NovelPhoenixParser.chapterText(it, chapterId) }
         }
         if (text.paragraphs.isEmpty()) throw MangaSourceException("This chapter came back empty on the source. Try another source.")
         // Downloads don't fill the reading cache (they'd push out the chapters around the reader).
@@ -244,12 +422,10 @@ object NovelSources {
 
     // ── Saved title pages ─────────────────────────────────────────────────────
 
-    private fun hex(id: String) = id.toByteArray().joinToString("") { "%02x".format(it) }
-
     private fun file(kind: String, source: NovelSourceId, id: String): File? {
         val dir = cacheDir ?: return null
-        // Case-sensitive ids: hex-encode for a safe, collision-free file name.
-        return File(dir, "$kind-${source.key}-${hex(id)}.json")
+        // Case-sensitive ids: hex-encode for a safe, collision-free file name (a long id is shortened, see NovelNames).
+        return File(dir, "$kind-${source.key}-${NovelNames.stem(id)}.json")
     }
 
     private suspend fun write(target: File?, json: String) = withContext(Dispatchers.IO) {

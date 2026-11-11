@@ -96,6 +96,8 @@ export class SourceHttp {
     private readonly fetcher: () => (url: string, init: RequestInit) => Promise<Response>,
     private readonly userAgent: string | null,
     private readonly verifiable = false,
+    /** What the source serves: JSON, or pages for the sources read from their HTML. */
+    private readonly accept = "application/json",
   ) {}
 
   get(url: string, maxBytes: number): Promise<string> {
@@ -121,7 +123,7 @@ export class SourceHttp {
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), 25_000);
     try {
-      const headers: Record<string, string> = { Accept: "application/json" };
+      const headers: Record<string, string> = { Accept: this.accept };
       if (this.userAgent) headers["User-Agent"] = this.userAgent;
       const init: RequestInit = { headers, signal: ac.signal };
       if (json !== undefined) {

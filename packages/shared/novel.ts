@@ -1,6 +1,7 @@
 /**
- * Novels mode: shared types and the reading-source parsers (NovelBuddy and
- * NovelArchive JSON APIs). Mirrors the Android app's data/novel package.
+ * Novels mode: shared types and the reading-source parsers (NovelBuddy's and
+ * NovelArchive's JSON APIs, Novel Phoenix's pages). Mirrors the Android app's
+ * data/novel package.
  *
  * Novels are source-first: many web novels have no AniList entry, so a title is
  * identified by its source and that source's id, never by a metadata catalogue.
@@ -19,6 +20,8 @@ export const NOVEL_IPC = {
   /** The title page saved from the last fetch, shown while a fresh one loads. */
   TITLE_SAVED: "novel:title-saved",
   CHAPTERS: "novel:chapters",
+  /** The same list once every chapter name is in (a long Novel Phoenix list arrives in pages). */
+  CHAPTERS_COMPLETE: "novel:chapters-complete",
   CHAPTER: "novel:chapter",
   READING_GET: "novel:reading-get",
   READING_SAVE: "novel:reading-save",
@@ -54,7 +57,7 @@ export const NOVEL_IPC = {
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export type NovelSourceId = "novelbuddy" | "novelarchive";
+export type NovelSourceId = "novelbuddy" | "novelarchive" | "novelphoenix";
 
 export interface NovelSourceInfo {
   id: NovelSourceId;
@@ -66,10 +69,11 @@ export interface NovelSourceInfo {
 export const NOVEL_SOURCES: NovelSourceInfo[] = [
   { id: "novelbuddy", label: "NovelBuddy", blurb: "Large translated web-novel library, complete chapter lists" },
   { id: "novelarchive", label: "NovelArchive", blurb: "110k+ titles; chapter labels can skip or repeat numbers" },
+  { id: "novelphoenix", label: "Novel Phoenix", blurb: "NovelFire's library: quick with new chapters; long chapter lists load in pages" },
 ];
 
 export const isNovelSource = (value: unknown): value is NovelSourceId =>
-  value === "novelbuddy" || value === "novelarchive";
+  value === "novelbuddy" || value === "novelarchive" || value === "novelphoenix";
 
 export const novelSourceLabel = (id: string) => NOVEL_SOURCES.find((s) => s.id === id)?.label ?? id;
 
@@ -133,7 +137,7 @@ export interface NovelHome {
   notice?: string | null;
 }
 
-/** The other reading source: where a request goes when its own source is down. */
+/** Where a request goes when its own source is down: NovelBuddy, or NovelArchive for NovelBuddy itself. */
 export const otherNovelSource = (id: NovelSourceId): NovelSourceId => (id === "novelbuddy" ? "novelarchive" : "novelbuddy");
 
 /** What Home says when it isn't showing NovelBuddy's live feed. */
@@ -201,7 +205,8 @@ export interface NovelSearchPage {
   hasNextPage: boolean;
 }
 
-export type NovelResult<T> = { ok: true; value: T } | { ok: false; error: string };
+/** [partial]: a chapter list whose later names are still being read (see NOVEL_IPC.CHAPTERS_COMPLETE). */
+export type NovelResult<T> = { ok: true; value: T; partial?: boolean } | { ok: false; error: string };
 
 /** Where a title stands in the reader: one row per chapter opened. */
 export interface NovelReadingRow {
@@ -425,20 +430,26 @@ export interface NovelDownloadTitle {
 export const NOVEL_MAX_CHAPTERS = 20_000;
 export const NOVEL_MAX_PARAGRAPHS = 5_000;
 
-/** NovelBuddy ids are short case-sensitive base62 strings; NovelArchive's are Mongo object ids. */
+/**
+ * NovelBuddy ids are short case-sensitive base62 strings; NovelArchive's are Mongo
+ * object ids; Novel Phoenix's are the lower-case slugs of its addresses. NovelArchive
+ * and Novel Phoenix chapters are requested by their 1-based position.
+ */
 const NB_ID = /^[A-Za-z0-9]{4,24}$/;
 const NA_ID = /^[a-f0-9]{24}$/;
 const NA_CHAPTER = /^[1-9][0-9]{0,5}$/;
+const NP_ID = /^[a-z0-9][a-z0-9-]{0,119}$/;
 
 export function isNovelTitleId(sourceId: string, id: string): boolean {
   if (sourceId === "novelbuddy") return NB_ID.test(id);
   if (sourceId === "novelarchive") return NA_ID.test(id);
+  if (sourceId === "novelphoenix") return NP_ID.test(id);
   return false;
 }
 
 export function isNovelChapterId(sourceId: string, id: string): boolean {
   if (sourceId === "novelbuddy") return NB_ID.test(id);
-  if (sourceId === "novelarchive") return NA_CHAPTER.test(id);
+  if (sourceId === "novelarchive" || sourceId === "novelphoenix") return NA_CHAPTER.test(id);
   return false;
 }
 
@@ -787,6 +798,204 @@ export function novelArchiveChapterText(json: unknown, position: string): NovelC
   // The text is plain, but strip any markup that slips in rather than show it.
   const paragraphs = /<\/?(p|br|div)\b/i.test(content) ? htmlToParagraphs(content) : textToParagraphs(decodeEntities(content));
   return { id: position, label, paragraphs: dropRepeatedHeading(paragraphs, label) };
+}
+
+// ── Novel Phoenix (novelphoenix.com, NovelFire's library) ─────────────────────
+
+/*
+ * Novel Phoenix has no JSON API: search, browse, title, chapter-list and chapter
+ * pages are server-rendered HTML, read here with small patterns (no markup is
+ * ever rendered). A title's id is the slug of its address; a chapter is requested
+ * by its 1-based position (`/chapter-<n>`), and its label is only shown. Chapter
+ * lists come 100 to a page.
+ */
+export const NOVELPHOENIX = {
+  ORIGIN: "https://novelphoenix.com",
+  HOSTS: ["novelphoenix.com"],
+  CHAPTERS_PER_PAGE: 100,
+};
+
+// The site sorts by popular, new or latest release only (anything else falls back to new).
+const NP_SORT: Record<NovelSort, string> = { popular: "popular", favourites: "popular", rating: "popular", latest: "latest-release", newest: "new" };
+
+/** A search by name, or (without a query) a browse by genre, status and sort. */
+export function novelPhoenixSearchUrl(filters: Omit<NovelSearchFilters, "sourceId">): string {
+  const page = Math.max(1, Math.min(500, Math.floor(filters.page ?? 1)));
+  const query = filters.query?.trim();
+  if (query) return `${NOVELPHOENIX.ORIGIN}/search?${new URLSearchParams({ keyword: query.slice(0, 120), page: String(page) })}`;
+  const genre = filters.genre ? filters.genre.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") : "";
+  return `${NOVELPHOENIX.ORIGIN}/genre-${genre || "all"}/sort-${NP_SORT[filters.sort ?? "popular"]}/status-${filters.status ?? "all"}/all-novel?page=${page}`;
+}
+
+export const novelPhoenixTitleUrl = (id: string) => `${NOVELPHOENIX.ORIGIN}/novel/${encodeURIComponent(id)}`;
+export const novelPhoenixChaptersUrl = (id: string, page: number) =>
+  `${NOVELPHOENIX.ORIGIN}/novel/${encodeURIComponent(id)}/chapters?page=${Math.max(1, Math.floor(page))}`;
+export const novelPhoenixChapterUrl = (titleId: string, position: string) =>
+  `${NOVELPHOENIX.ORIGIN}/novel/${encodeURIComponent(titleId)}/chapter-${encodeURIComponent(position)}`;
+
+/** A fragment's text: tags dropped, entities decoded, spaces collapsed. */
+const fragmentText = (html: string | null | undefined, max = 300): string | null =>
+  html == null ? null : str(cleanLine(decodeEntities(html.replace(/<[^>]*>/g, " "))), max);
+
+const wholeNumber = (value: string | null | undefined): number | null => {
+  const n = value == null ? NaN : Number(value.replace(/,/g, ""));
+  return Number.isInteger(n) && n >= 0 ? n : null;
+};
+
+const TIME_UNITS: Record<string, number> = {
+  second: 1000, minute: 60_000, hour: 3_600_000, day: 86_400_000, week: 7 * 86_400_000, month: 30 * 86_400_000, year: 365 * 86_400_000,
+};
+
+/** "13 hours ago" (or a date) as a time, counted back from [now]; null when it isn't one. */
+export function relativeTime(text: string | null | undefined, now: number): number | null {
+  if (!text) return null;
+  const m = text.toLowerCase().match(/\b(\d{1,4}|an?)\s+(second|minute|hour|day|week|month|year)s?\s+ago\b/);
+  if (m) return now - (m[1][0] === "a" ? 1 : Number(m[1])) * TIME_UNITS[m[2]];
+  return /\d{4}/.test(text) ? time(text.trim()) : null;
+}
+
+function npCard(chunk: string): NovelCard | null {
+  const id = chunk.match(/href="(?:https:\/\/novelphoenix\.com)?\/novel\/([a-z0-9][a-z0-9-]*)"/)?.[1];
+  const title = fragmentText(chunk.match(/<h[1-6] class="(?:novel-)?title[^"]*">([\s\S]*?)<\/h[1-6]>/)?.[1])
+    ?? fragmentText(chunk.match(/<a title="([^"]*)"/)?.[1]);
+  if (!id || !title || !NP_ID.test(id)) return null;
+  const rating = Number(chunk.match(/icon-star"><\/i>\s*([0-5](?:\.\d+)?)/)?.[1]);
+  return {
+    sourceId: "novelphoenix",
+    id,
+    title,
+    // Covers are lazy-loaded: the real address is in data-src, with a blank image in src.
+    cover: imageUrl(chunk.match(/<img[^>]*\sdata-src="([^"]+)"/)?.[1] ?? chunk.match(/<img[^>]*\ssrc="(?!data:)([^"]+)"/)?.[1], NOVELPHOENIX.ORIGIN),
+    // "Ch. 3242 · Ongoing" (search results); browse cards don't say.
+    status: publishStatus(chunk.match(/(?:·|&middot;)\s*(Ongoing|Completed)\b/i)?.[1]),
+    chapters: wholeNumber(chunk.match(/\bCh\.\s*([\d,]+)/)?.[1] ?? chunk.match(/([\d,]+)\s*Chapters\b/i)?.[1]),
+    rating: rating > 0 ? Math.min(5, rating) : null,
+    genres: [],
+    mtl: false,
+    synopsis: null,
+  };
+}
+
+/** A search or browse page: its first list holds the results (later ones are suggestions). */
+export function novelPhoenixSearch(html: string, page = 1): NovelSearchPage {
+  const start = html.indexOf('<ul class="novel-list');
+  if (start < 0) throw new Error("Novel Phoenix sent a page AniTrack couldn't read.");
+  const end = html.indexOf("</ul>", start);
+  const items = html.slice(start, end < 0 ? html.length : end).split('<li class="novel-item"').slice(1).map(npCard).filter((c): c is NovelCard => !!c);
+  return { items, hasNextPage: new RegExp(`[?&](?:amp;)?page=${Math.floor(page) + 1}"`).test(html) };
+}
+
+export function novelPhoenixDetail(html: string, id: string, now: number): NovelDetail {
+  const title = fragmentText(html.match(/<h1 class="novel-title[^"]*">([\s\S]*?)<\/h1>/)?.[1]);
+  if (!title || !NP_ID.test(id)) throw new Error("Novel Phoenix doesn't have this title.");
+  const authors = html.match(/<div class="author">([\s\S]*?)<\/div>/)?.[1] ?? "";
+  const genres = html.match(/<div class="categories">([\s\S]*?)<\/ul>/)?.[1] ?? "";
+  const summary = html.match(/<div class="summary">[\s\S]*?<div class="content[^"]*">([\s\S]*?)(?:<div class="expand">|<\/div>\s*<\/div>)/)?.[1];
+  const rating = Number(html.match(/class="my-rating" data-rating="([0-5](?:\.\d+)?)"/)?.[1]);
+  const chapters = wholeNumber(html.match(/icon-book-open"><\/i>\s*([\d,]+)/)?.[1]);
+  const latest = html.match(/chapter-latest-container[\s\S]*?<p class="latest[^"]*">([\s\S]*?)<\/p>\s*<p class="update">([\s\S]*?)<\/p>/);
+  return {
+    sourceId: "novelphoenix",
+    id,
+    title,
+    cover: imageUrl(html.match(/<figure class="cover">\s*<img[^>]*\s(?:data-)?src="(?!data:)([^"]+)"/)?.[1], NOVELPHOENIX.ORIGIN),
+    status: publishStatus(html.match(/<strong class="(ongoing|completed)">/i)?.[1]),
+    chapters,
+    rating: rating > 0 ? Math.min(5, rating) : null,
+    genres: unique([...genres.matchAll(/class="property-item">([^<]*)<\/a>/g)].map((m) => fragmentText(m[1], 40)), 12),
+    mtl: false,
+    synopsis: summary ? plainText(summary, 6000) : null,
+    author: unique([...authors.matchAll(/itemprop="author">([^<]*)</g)].map((m) => fragmentText(m[1], 120)), 4).join(", ") || null,
+    altNames: [],
+    url: novelPhoenixTitleUrl(id),
+    latest: chapters ? { count: chapters, label: fragmentText(latest?.[1], 200), at: relativeTime(fragmentText(latest?.[2], 80), now) } : null,
+  };
+}
+
+/** A chapter's label: the site's number with its title, or the title alone when it already says "Chapter N". */
+function npChapterLabel(position: string, numberText: string | null, title: string | null): string {
+  const number = numberText?.replace(/^ch(?:apter)?\.?\s*/i, "").trim() || position;
+  if (!title) return `Chapter ${number}`;
+  return (/^(?:chapter|chap|ch)\b\.?\s*\d/i.test(title) ? title : `Chapter ${number}: ${title}`).slice(0, 200);
+}
+
+export interface NovelPhoenixChapterPage {
+  /** This page's chapters in reading order; the id is the position the site requests. */
+  chapters: { id: string; label: string; updatedAt: number | null }[];
+  /** How many pages the list has. */
+  pages: number;
+  /** How many chapters the title has in all, when the page says. */
+  total: number | null;
+}
+
+/** One page (100 chapters) of a title's chapter list. */
+export function novelPhoenixChapterPage(html: string, now: number): NovelPhoenixChapterPage {
+  const start = html.indexOf('<ul class="chapter-list');
+  if (start < 0) throw new Error("Novel Phoenix doesn't have this title's chapters.");
+  const end = html.indexOf("</ul>", start);
+  const chapters: NovelPhoenixChapterPage["chapters"] = [];
+  for (const m of html.slice(start, end < 0 ? html.length : end).matchAll(/<a href="[^"]*\/chapter-([1-9][0-9]{0,5})"[^>]*>([\s\S]*?)<\/a>/g)) {
+    const label = npChapterLabel(
+      m[1],
+      fragmentText(m[2].match(/class="chapter-no">([^<]*)</)?.[1], 40),
+      fragmentText(m[2].match(/class="chapter-title">([\s\S]*?)<\/strong>/)?.[1], 200),
+    );
+    chapters.push({ id: m[1], label, updatedAt: relativeTime(fragmentText(m[2].match(/class="chapter-update"[^>]*>([^<]*)</)?.[1], 80), now) });
+  }
+  let pages = 1;
+  for (const m of html.matchAll(/\/chapters\?page=(\d{1,4})\b/g)) pages = Math.max(pages, Number(m[1]));
+  const total = wholeNumber(html.match(/id="gotochapno"[^>]*\smax="(\d{1,6})"/)?.[1] ?? html.match(/A total of ([\d,]+) chapters/)?.[1]);
+  return { chapters, pages: Math.min(pages, Math.ceil(NOVEL_MAX_CHAPTERS / NOVELPHOENIX.CHAPTERS_PER_PAGE)), total };
+}
+
+/**
+ * The whole list while some of its pages are still unread: a chapter on an unread
+ * page stands in as "Chapter N". Chapters are requested by position, so every one
+ * can be opened already; only its name is missing.
+ */
+export function novelPhoenixProvisional(total: number, pages: Iterable<NovelPhoenixChapterPage["chapters"]>): NovelChapter[] {
+  const known = new Map<string, NovelPhoenixChapterPage["chapters"][number]>();
+  for (const rows of pages) for (const row of rows) known.set(row.id, row);
+  const count = Math.min(Math.max(0, Math.floor(total)), NOVEL_MAX_CHAPTERS);
+  return Array.from({ length: count }, (_, i) => {
+    const row = known.get(String(i + 1));
+    return { id: String(i + 1), order: i, label: row?.label ?? `Chapter ${i + 1}`, updatedAt: row?.updatedAt ?? null };
+  });
+}
+
+/** A title's chapter-list pages (in page order) as one list in reading order. */
+export function novelPhoenixChapters(pages: NovelPhoenixChapterPage["chapters"][]): NovelChapter[] {
+  const seen = new Set<string>();
+  const out: NovelChapter[] = [];
+  for (const row of pages.flat()) {
+    if (seen.has(row.id) || out.length >= NOVEL_MAX_CHAPTERS) continue;
+    seen.add(row.id);
+    out.push({ id: row.id, order: out.length, label: row.label, updatedAt: row.updatedAt });
+  }
+  return out;
+}
+
+/** Where the `<div>` opened just before [from] closes (nested ones skipped); the end of the text when it never does. */
+function closingDiv(html: string, from: number): number {
+  const tags = /<(\/?)div\b/gi;
+  tags.lastIndex = from;
+  let depth = 1;
+  for (let m = tags.exec(html); m; m = tags.exec(html)) {
+    depth += m[1] ? -1 : 1;
+    if (depth === 0) return m.index;
+  }
+  return html.length;
+}
+
+export function novelPhoenixChapterText(html: string, position: string): NovelChapterText {
+  // The "chapter not found" page has a #content block too (its layout's), without a chapter id.
+  const open = html.match(/<div id="content"[^>]*\sdata-chapter-id="\d+"[^>]*>/);
+  if (!open || open.index == null) {
+    throw new Error(/<title>[^<]*Not Found/i.test(html) ? "Novel Phoenix doesn't have this chapter." : "Novel Phoenix sent this chapter without its text.");
+  }
+  const from = open.index + open[0].length;
+  const label = fragmentText(html.match(/<span class="chapter-title">([\s\S]*?)<\/span>/)?.[1], 200) ?? `Chapter ${position}`;
+  return { id: position, label, paragraphs: dropRepeatedHeading(htmlToParagraphs(html.slice(from, closingDiv(html, from))), label) };
 }
 
 // ── Matching across sources ───────────────────────────────────────────────────

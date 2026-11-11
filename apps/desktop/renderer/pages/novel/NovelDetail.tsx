@@ -31,7 +31,8 @@ import { novelReadingChanged, novelRemoved, onNovelSync, syncNovelReading } from
 
 const PAGE = 100;
 
-type Chapters = { state: "loading" } | { state: "failed"; text: string } | { state: "ready"; list: NovelChapter[]; stale?: boolean };
+/** [naming]: a long list whose later chapters still show as "Chapter N" while their names load. */
+type Chapters = { state: "loading" } | { state: "failed"; text: string } | { state: "ready"; list: NovelChapter[]; stale?: boolean; naming?: boolean };
 type Finding = { source: NovelSourceId; state: "searching" } | { source: NovelSourceId; state: "pick"; items: Card[] } | { source: NovelSourceId; state: "none" | "error"; text: string };
 
 export default function NovelDetail() {
@@ -82,8 +83,18 @@ export default function NovelDetail() {
         void novelApi().reading(sourceId, titleId).then((p) => { if (alive) setProgress(p); });
       })
       .catch((error: Error) => { if (alive) setDetailError(error.message); });
-    unwrap(novelApi().chapters(sourceId, titleId))
-      .then((list) => { if (alive) setChapters({ state: "ready", list }); })
+    novelApi().chapters(sourceId, titleId)
+      .then((result) => {
+        if (!result.ok) throw new Error(result.error);
+        if (!alive) return;
+        setChapters({ state: "ready", list: result.value, naming: result.partial === true });
+        if (!result.partial) return;
+        // A long list comes at once with stand-in names; the real ones follow.
+        void novelApi().chaptersComplete(sourceId, titleId).then((whole) => {
+          if (!alive) return;
+          setChapters((c) => (whole.ok ? { state: "ready", list: whole.value } : c.state === "ready" ? { ...c, naming: false } : c));
+        });
+      })
       .catch((error: Error) => { if (alive) setChapters((c) => (c.state === "ready" ? { ...c, stale: true } : { state: "failed", text: error.message })); });
     const loadProgress = () => { void novelApi().reading(sourceId, titleId).then((p) => { if (alive) setProgress(p); }); };
     loadProgress();
@@ -380,7 +391,7 @@ export default function NovelDetail() {
         {chapters.state === "failed" && (
           <div className="panel flex items-center gap-4 p-4 text-sm text-ink-2">
             <span className="icon-tile bg-amber-400/10 text-amber-300 ring-amber-300/20"><TriangleAlert size={17} /></span>
-            <span className="flex-1">{chapters.text} {NOVEL_SOURCES.length > 1 ? "You can try the other source above." : ""}</span>
+            <span className="flex-1">{chapters.text} {NOVEL_SOURCES.length > 1 ? "You can try another source above." : ""}</span>
             <button onClick={() => setAttempt((n) => n + 1)} className="btn btn-secondary btn-sm"><RefreshCw size={13} /> Retry</button>
           </div>
         )}
@@ -389,6 +400,9 @@ export default function NovelDetail() {
             <div className="mb-3 flex flex-wrap items-center gap-x-3 text-xs text-ink-3">
               <span>{list.length.toLocaleString()} chapters on {novelSourceLabel(sourceId)}</span>
               {downloads.saved.size > 0 && <span className="text-emerald-300/80">{downloads.saved.size.toLocaleString()} saved offline</span>}
+              {chapters.naming && (
+                <span className="flex items-center gap-1.5"><Loader2 size={11} className="animate-spin" /> Later chapter names are still loading; every chapter can be read already.</span>
+              )}
               {chapters.stale && (
                 <span className="flex items-center gap-2 text-amber-300/80">
                   Showing the list saved last time.

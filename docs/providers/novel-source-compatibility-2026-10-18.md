@@ -234,6 +234,8 @@ the other app's exact output.
   debug app (it has no gist token, so it never uploads).
 
 - Not yet: MAL/AniList sync for novels, update notifications, LNORI.
+- 11 Nov 2026: a third source, Novel Phoenix, was added; see `novel-phoenix.md`
+  (HTML pages, paged chapter lists, a shared request budget, the sync file's `"more"` section).
 
 Verified 18 Oct: desktop in an isolated Electron QA copy (Overgeared auto-linked
 across sources; NovelBuddy Chapter 1734 at 50% resumed on NovelArchive's

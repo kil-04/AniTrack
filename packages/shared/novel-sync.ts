@@ -19,19 +19,53 @@
  * not newer than it, so the other device's copy cannot resurrect them. A copy's
  * link (`novelKey`, the group's smallest copy key, the same on every device) merges
  * by `linkAt`, the time it was last linked or unlinked; `seen` merges by maximum.
+ *
+ * Sources added after the first release (Novel Phoenix on) keep their rows under
+ * "more", a section with the same four parts:
+ *     "more": { "titles", "reading", "list", "deleted": { "reading", "list" } }
+ * An app version from before a source existed refuses a whole file holding a row it
+ * can't validate, so new sources' rows never go in the first sections; that version
+ * ignores "more" and keeps syncing the sources it knows. Inside "more", rows of a
+ * source this version doesn't know are kept as they are and written back, so the
+ * next new source needs no new section. The file has no "more" while it would be empty.
  */
 
 export const NOVEL_SYNC_FILE = "anitrack-novel-sync.json";
 export const NOVEL_SYNC_TOMBSTONE_TTL_MS = 90 * 24 * 3600 * 1000;
 export const NOVEL_SYNC_MAX_ROWS = 20_000;
 
-const SOURCES = ["novelbuddy", "novelarchive"] as const;
+const SOURCES = ["novelbuddy", "novelarchive", "novelphoenix"] as const;
 type Source = (typeof SOURCES)[number];
+/** The sources of the first sync format; every other source's rows live under "more". */
+const FIRST_SOURCES: readonly string[] = ["novelbuddy", "novelarchive"];
 const STATUSES = ["reading", "completed", "on_hold", "dropped", "plan_to_read"];
-const TITLE_ID = /^[A-Za-z0-9]{4,24}$/;
+const SHORT_ID = /^[A-Za-z0-9]{4,24}$/;
+/** Title ids per source: short codes, or Novel Phoenix's address slugs. */
+const TITLE_IDS: Record<Source, RegExp> = { novelbuddy: SHORT_ID, novelarchive: SHORT_ID, novelphoenix: /^[a-z0-9][a-z0-9-]{0,119}$/ };
 const CHAPTER_ID = /^[A-Za-z0-9]{1,24}$/;
-const COPY_KEY = /^(novelbuddy|novelarchive):([A-Za-z0-9]{4,24})$/;
-const ROW_KEY = /^(novelbuddy|novelarchive):([A-Za-z0-9]{4,24}):([A-Za-z0-9]{1,24})$/;
+/** How a source id looks, known to this version or not (the part of a key before its first colon). */
+const SOURCE_SHAPE = /^[a-z][a-z0-9]{2,31}$/;
+
+const isTitleId = (sourceId: Source, titleId: unknown): titleId is string => typeof titleId === "string" && TITLE_IDS[sourceId].test(titleId);
+
+/** Whether [key] is a valid "<source>:<titleId>" of a source this version knows. */
+export function isNovelCopyKey(key: unknown): key is string {
+  if (typeof key !== "string") return false;
+  const parts = key.split(":");
+  return parts.length === 2 && isSource(parts[0]) && isTitleId(parts[0], parts[1]);
+}
+
+/** Whether [key] is a valid "<source>:<titleId>:<chapterId>" of a source this version knows. */
+export function isNovelRowKey(key: unknown): key is string {
+  if (typeof key !== "string") return false;
+  const parts = key.split(":");
+  return parts.length === 3 && isSource(parts[0]) && isTitleId(parts[0], parts[1]) && CHAPTER_ID.test(parts[2]);
+}
+
+const sourceOf = (key: string) => key.slice(0, Math.max(0, key.indexOf(":")));
+const inFirstFormat = (key: string) => FIRST_SOURCES.includes(sourceOf(key));
+/** A key of a source this version doesn't know (a newer app's): its row is kept untouched. */
+const isForeignKey = (key: string) => SOURCE_SHAPE.test(sourceOf(key)) && !isSource(sourceOf(key));
 
 export interface NovelSyncReading {
   sourceId: Source;
@@ -67,11 +101,21 @@ export interface NovelSyncTitle {
 
 type Shown = { title: string; cover: string | null };
 
+/** Rows of sources a newer app added, exactly as the file held them. */
+export interface NovelSyncKept {
+  titles: Record<string, unknown>;
+  reading: Record<string, unknown>;
+  list: Record<string, unknown>;
+  deleted: { reading: Record<string, unknown>; list: Record<string, unknown> };
+}
+
 export interface NovelSyncDoc {
   titles: Record<string, Omit<NovelSyncTitle, "sourceId" | "titleId">>;
   reading: Record<string, NovelSyncReading>;
   list: Record<string, NovelSyncList>;
   deleted: { reading: Record<string, number>; list: Record<string, number> };
+  /** Present when the file held rows of sources this version doesn't know; written back unchanged. */
+  kept?: NovelSyncKept;
 }
 
 /** This device's tables, as one reconcile reads them. */
@@ -115,7 +159,7 @@ export function novelSyncReading(value: unknown): NovelSyncReading | null {
   const row = record(value);
   if (!row) return null;
   const { sourceId, titleId, chapterId, chapterOrder, chapterLabel, paragraph, paragraphCount, updatedAt } = row;
-  if (!isSource(sourceId) || typeof titleId !== "string" || !TITLE_ID.test(titleId)) return null;
+  if (!isSource(sourceId) || !isTitleId(sourceId, titleId)) return null;
   if (typeof chapterId !== "string" || !CHAPTER_ID.test(chapterId)) return null;
   if (!int(chapterOrder, 0, 20_000) || typeof chapterLabel !== "string" || !chapterLabel || chapterLabel.length > 200) return null;
   if (!int(paragraphCount, 0, 5_000) || !int(paragraph, 0, paragraphCount as number) || !time(updatedAt)) return null;
@@ -130,7 +174,7 @@ export function novelSyncList(value: unknown): NovelSyncList | null {
   const row = record(value);
   if (!row) return null;
   const { sourceId, titleId, status, updatedAt } = row;
-  if (!isSource(sourceId) || typeof titleId !== "string" || !TITLE_ID.test(titleId)) return null;
+  if (!isSource(sourceId) || !isTitleId(sourceId, titleId)) return null;
   if (typeof status !== "string" || !STATUSES.includes(status) || !time(updatedAt)) return null;
   return { sourceId, titleId, status, updatedAt: updatedAt as number };
 }
@@ -144,67 +188,105 @@ export function parseNovelSyncDoc(content: string | null | undefined): NovelSync
   if (content == null || !content.trim()) return emptyNovelSyncDoc();
   const json = record(JSON.parse(content));
   if (!json) throw new Error("The novel sync file is not an object.");
-  const section = (name: string) => (json[name] == null ? {} : record(json[name]));
-  const titles = section("titles");
-  const reading = section("reading");
-  const list = section("list");
-  const deleted = section("deleted");
-  if (!titles || !reading || !list || !deleted) throw new Error("The novel sync file has an invalid section.");
-  const deletedReading = deleted.reading == null ? {} : record(deleted.reading);
-  const deletedList = deleted.list == null ? {} : record(deleted.list);
-  if (!deletedReading || !deletedList) throw new Error("The novel sync file has an invalid removal section.");
-  if (Object.keys(reading).length > NOVEL_SYNC_MAX_ROWS || Object.keys(titles).length > NOVEL_SYNC_MAX_ROWS) {
-    throw new Error("The novel sync file has too many rows.");
-  }
-
+  const more = json.more == null ? {} : record(json.more);
+  if (!more) throw new Error("The novel sync file has an invalid section.");
   const doc = emptyNovelSyncDoc();
-  for (const [key, value] of Object.entries(reading)) {
-    const row = novelSyncReading(value);
-    if (!row || key !== novelRowKey(row.sourceId, row.titleId, row.chapterId)) throw new Error("The novel sync file has an invalid reading row.");
-    doc.reading[key] = row;
-  }
-  for (const [key, value] of Object.entries(list)) {
-    const row = novelSyncList(value);
-    if (!row || key !== novelCopyKey(row.sourceId, row.titleId)) throw new Error("The novel sync file has an invalid list row.");
-    doc.list[key] = row;
-  }
-  for (const [key, value] of Object.entries(titles)) {
-    const t = record(value);
-    if (!COPY_KEY.test(key) || !t || typeof t.title !== "string" || t.title.length > 300
-      || (t.cover != null && (typeof t.cover !== "string" || t.cover.length > 2048))
-      || typeof t.novelKey !== "string" || !COPY_KEY.test(t.novelKey)
-      || (t.linkAt != null && !time(t.linkAt)) || (t.seen != null && !int(t.seen, 0, 20_000))) {
-      throw new Error("The novel sync file has invalid title details.");
+  const kept: NovelSyncKept = { titles: {}, reading: {}, list: {}, deleted: { reading: {}, list: {} } };
+  let foreign = 0;
+  // The first sections hold the first sources only; "more" holds every later source.
+  for (const [part, first] of [[json, true], [more, false]] as const) {
+    const section = (name: string) => (part[name] == null ? {} : record(part[name]));
+    const titles = section("titles");
+    const reading = section("reading");
+    const list = section("list");
+    const deleted = section("deleted");
+    if (!titles || !reading || !list || !deleted) throw new Error("The novel sync file has an invalid section.");
+    const deletedReading = deleted.reading == null ? {} : record(deleted.reading);
+    const deletedList = deleted.list == null ? {} : record(deleted.list);
+    if (!deletedReading || !deletedList) throw new Error("The novel sync file has an invalid removal section.");
+    if (Object.keys(reading).length > NOVEL_SYNC_MAX_ROWS || Object.keys(titles).length > NOVEL_SYNC_MAX_ROWS) {
+      throw new Error("The novel sync file has too many rows.");
     }
-    doc.titles[key] = {
-      title: t.title, cover: typeof t.cover === "string" ? t.cover : null, novelKey: t.novelKey,
-      linkAt: (t.linkAt as number | null | undefined) ?? null, seen: (t.seen as number | null | undefined) ?? null,
+    /** A row this version leaves alone: under "more", from a source it doesn't know. */
+    const keep = (into: Record<string, unknown>, key: string, value: unknown) => {
+      if (first || !isForeignKey(key)) return false;
+      into[key] = value;
+      foreign++;
+      return true;
     };
+    /** Each source's rows sit in their own part of the file, or an older app would choke on them. */
+    const placed = (key: string) => inFirstFormat(key) === first;
+
+    for (const [key, value] of Object.entries(reading)) {
+      if (keep(kept.reading, key, value)) continue;
+      const row = novelSyncReading(value);
+      if (!row || !placed(key) || key !== novelRowKey(row.sourceId, row.titleId, row.chapterId)) throw new Error("The novel sync file has an invalid reading row.");
+      doc.reading[key] = row;
+    }
+    for (const [key, value] of Object.entries(list)) {
+      if (keep(kept.list, key, value)) continue;
+      const row = novelSyncList(value);
+      if (!row || !placed(key) || key !== novelCopyKey(row.sourceId, row.titleId)) throw new Error("The novel sync file has an invalid list row.");
+      doc.list[key] = row;
+    }
+    for (const [key, value] of Object.entries(titles)) {
+      if (keep(kept.titles, key, value)) continue;
+      const t = record(value);
+      // A first-format copy linked under a later source's key sits in "more" as well.
+      if (!isNovelCopyKey(key) || !t || typeof t.title !== "string" || t.title.length > 300
+        || (t.cover != null && (typeof t.cover !== "string" || t.cover.length > 2048))
+        || !isNovelCopyKey(t.novelKey) || (inFirstFormat(key) && inFirstFormat(t.novelKey)) !== first
+        || (t.linkAt != null && !time(t.linkAt)) || (t.seen != null && !int(t.seen, 0, 20_000))) {
+        throw new Error("The novel sync file has invalid title details.");
+      }
+      doc.titles[key] = {
+        title: t.title, cover: typeof t.cover === "string" ? t.cover : null, novelKey: t.novelKey,
+        linkAt: (t.linkAt as number | null | undefined) ?? null, seen: (t.seen as number | null | undefined) ?? null,
+      };
+    }
+    for (const [key, ts] of Object.entries(deletedReading)) {
+      if (keep(kept.deleted.reading, key, ts)) continue;
+      if (!(isNovelCopyKey(key) || isNovelRowKey(key)) || !placed(key) || !time(ts)) throw new Error("The novel sync file has an invalid removal.");
+      doc.deleted.reading[key] = ts as number;
+    }
+    for (const [key, ts] of Object.entries(deletedList)) {
+      if (keep(kept.deleted.list, key, ts)) continue;
+      if (!isNovelCopyKey(key) || !placed(key) || !time(ts)) throw new Error("The novel sync file has an invalid removal.");
+      doc.deleted.list[key] = ts as number;
+    }
   }
-  for (const [key, ts] of Object.entries(deletedReading)) {
-    if (!(COPY_KEY.test(key) || ROW_KEY.test(key)) || !time(ts)) throw new Error("The novel sync file has an invalid removal.");
-    doc.deleted.reading[key] = ts as number;
-  }
-  for (const [key, ts] of Object.entries(deletedList)) {
-    if (!COPY_KEY.test(key) || !time(ts)) throw new Error("The novel sync file has an invalid removal.");
-    doc.deleted.list[key] = ts as number;
-  }
+  if (foreign) doc.kept = kept;
   return doc;
 }
 
 /** The document with keys in a fixed order, so equal content always serializes the same. */
 function ordered(doc: NovelSyncDoc) {
   const sort = <T>(o: Record<string, T>) => Object.fromEntries(Object.keys(o).sort().map((k) => [k, o[k]]));
-  return {
-    v: 1,
-    titles: sort(Object.fromEntries(Object.entries(doc.titles).map(([k, t]) => [k, { title: t.title, cover: t.cover, novelKey: t.novelKey, linkAt: t.linkAt, seen: t.seen }]))),
-    reading: sort(Object.fromEntries(Object.entries(doc.reading).map(([k, r]) => [k, {
-      sourceId: r.sourceId, titleId: r.titleId, chapterId: r.chapterId, chapterOrder: r.chapterOrder,
-      chapterLabel: r.chapterLabel, paragraph: r.paragraph, paragraphCount: r.paragraphCount, updatedAt: r.updatedAt,
-    }]))),
-    list: sort(Object.fromEntries(Object.entries(doc.list).map(([k, r]) => [k, { sourceId: r.sourceId, titleId: r.titleId, status: r.status, updatedAt: r.updatedAt }]))),
-    deleted: { reading: sort(doc.deleted.reading), list: sort(doc.deleted.list) },
+  const title = (t: NovelSyncDoc["titles"][string]) => ({ title: t.title, cover: t.cover, novelKey: t.novelKey, linkAt: t.linkAt, seen: t.seen });
+  const reading = (r: NovelSyncReading) => ({
+    sourceId: r.sourceId, titleId: r.titleId, chapterId: r.chapterId, chapterOrder: r.chapterOrder,
+    chapterLabel: r.chapterLabel, paragraph: r.paragraph, paragraphCount: r.paragraphCount, updatedAt: r.updatedAt,
+  });
+  const list = (r: NovelSyncList) => ({ sourceId: r.sourceId, titleId: r.titleId, status: r.status, updatedAt: r.updatedAt });
+  const same = (ts: number) => ts;
+  const byKey = (key: string) => inFirstFormat(key);
+  /** One part of the file: the first sources' rows, or (under "more") every other source's and the kept ones. */
+  const part = (first: boolean) => {
+    const mine = <T>(rows: Record<string, T>, write: (row: T) => unknown, here: (key: string, row: T) => boolean, kept?: Record<string, unknown>) =>
+      sort<unknown>({ ...(first ? {} : kept), ...Object.fromEntries(Object.entries(rows).filter(([k, r]) => here(k, r) === first).map(([k, r]) => [k, write(r)])) });
+    return {
+      titles: mine(doc.titles, title, (k, t) => inFirstFormat(k) && inFirstFormat(t.novelKey), doc.kept?.titles),
+      reading: mine(doc.reading, reading, byKey, doc.kept?.reading),
+      list: mine(doc.list, list, byKey, doc.kept?.list),
+      deleted: {
+        reading: mine(doc.deleted.reading, same, byKey, doc.kept?.deleted.reading),
+        list: mine(doc.deleted.list, same, byKey, doc.kept?.deleted.list),
+      },
+    };
   };
+  const more = part(false);
+  const empty = ![more.titles, more.reading, more.list, more.deleted.reading, more.deleted.list].some((o) => Object.keys(o).length);
+  return { v: 1, ...part(true), ...(empty ? {} : { more }) };
 }
 
 export function serializeNovelSyncDoc(doc: NovelSyncDoc): string {
@@ -244,7 +326,7 @@ export function planNovelSync(input: NovelSyncLocal, remote: NovelSyncDoc, pendi
   const local: NovelSyncLocal = {
     reading: input.reading.filter((r) => novelSyncReading(r) != null),
     list: input.list.filter((r) => novelSyncList(r) != null),
-    titles: input.titles.filter((t) => isSource(t.sourceId) && TITLE_ID.test(t.titleId) && COPY_KEY.test(t.novelKey)
+    titles: input.titles.filter((t) => isSource(t.sourceId) && isTitleId(t.sourceId, t.titleId) && isNovelCopyKey(t.novelKey)
       && (t.linkAt == null || time(t.linkAt)) && (t.seen == null || int(t.seen, 0, 20_000))),
   };
   const deletedReading = mergeRemovals(remote.deleted.reading, pending.reading);
@@ -334,6 +416,8 @@ export function planNovelSync(input: NovelSyncLocal, remote: NovelSyncDoc, pendi
   for (const [key, ts] of Object.entries(deletedList)) if (ts < cutoff && pending.list[key] !== ts) delete deletedList[key];
 
   const doc: NovelSyncDoc = { titles: merged, reading, list, deleted: { reading: deletedReading, list: deletedList } };
+  // Rows of sources only a newer app knows go back exactly as they came.
+  if (remote.kept) doc.kept = remote.kept;
   return {
     reading: { upsert: readingUpsert, remove: readingRemove },
     list: { upsert: listUpsert, remove: listRemove },

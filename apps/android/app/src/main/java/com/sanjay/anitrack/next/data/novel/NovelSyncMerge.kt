@@ -1,6 +1,7 @@
 package com.sanjay.anitrack.next.data.novel
 
 import org.json.JSONObject
+import org.json.JSONTokener
 
 /**
  * Cross-device novel sync rules (progress, the list, linked sources): the Kotlin
@@ -15,6 +16,13 @@ import org.json.JSONObject
  *
  * Rows merge last-write-wins by `updatedAt`; a removal hides the copy's rows (or
  * the one row) not newer than it. A copy's link merges by `linkAt`; `seen` by maximum.
+ *
+ * Sources added after the first release (Novel Phoenix on) keep their rows under
+ * "more", a section with the same four parts. An app version from before a source
+ * existed refuses a whole file holding a row it can't validate, so new sources' rows
+ * never go in the first sections; that version ignores "more" and keeps syncing the
+ * sources it knows. Inside "more", rows of a source this version doesn't know are
+ * kept as they are and written back. The file has no "more" while it would be empty.
  */
 internal object NovelSyncMerge {
     const val FILE = "anitrack-novel-sync.json"
@@ -53,11 +61,24 @@ internal object NovelSyncMerge {
     data class Local(val reading: List<LocalReading>, val list: List<LocalList>, val titles: List<Title>)
     data class Removals(val reading: Map<String, Long> = emptyMap(), val list: Map<String, Long> = emptyMap())
     data class DocTitle(val title: String, val cover: String?, val novelKey: String, val linkAt: Long?, val seen: Int?)
+    /** Rows of sources a newer app added, exactly as the file held them: key to the value's JSON text. */
+    data class Kept(
+        val titles: Map<String, String> = emptyMap(),
+        val reading: Map<String, String> = emptyMap(),
+        val list: Map<String, String> = emptyMap(),
+        val deletedReading: Map<String, String> = emptyMap(),
+        val deletedList: Map<String, String> = emptyMap(),
+    ) {
+        val isEmpty: Boolean get() = titles.isEmpty() && reading.isEmpty() && list.isEmpty() && deletedReading.isEmpty() && deletedList.isEmpty()
+    }
+
     data class Doc(
         val titles: Map<String, DocTitle> = emptyMap(),
         val reading: Map<String, Reading> = emptyMap(),
         val list: Map<String, ListRow> = emptyMap(),
         val deleted: Removals = Removals(),
+        /** Present when the file held rows of sources this version doesn't know; written back unchanged. */
+        val kept: Kept? = null,
     )
 
     data class Plan(
@@ -76,12 +97,41 @@ internal object NovelSyncMerge {
             readingUpsert.isNotEmpty() || readingRemove.isNotEmpty() || listUpsert.isNotEmpty() || listRemove.isNotEmpty() || titles.isNotEmpty()
     }
 
-    private val SOURCES = setOf("novelbuddy", "novelarchive")
+    /** The sources of the first sync format; every other source's rows live under "more". */
+    private val FIRST_SOURCES = setOf("novelbuddy", "novelarchive")
     private val STATUSES = setOf("reading", "completed", "on_hold", "dropped", "plan_to_read")
-    private val TITLE_ID = Regex("[A-Za-z0-9]{4,24}")
+    private val SHORT_ID = Regex("[A-Za-z0-9]{4,24}")
+    /** Title ids per source: short codes, or Novel Phoenix's address slugs. */
+    private val TITLE_IDS = mapOf("novelbuddy" to SHORT_ID, "novelarchive" to SHORT_ID, "novelphoenix" to Regex("[a-z0-9][a-z0-9-]{0,119}"))
     private val CHAPTER_ID = Regex("[A-Za-z0-9]{1,24}")
-    private val COPY_KEY = Regex("(novelbuddy|novelarchive):[A-Za-z0-9]{4,24}")
-    private val ROW_KEY = Regex("(novelbuddy|novelarchive):[A-Za-z0-9]{4,24}:[A-Za-z0-9]{1,24}")
+    /** How a source id looks, known to this version or not (the part of a key before its first colon). */
+    private val SOURCE_SHAPE = Regex("[a-z][a-z0-9]{2,31}")
+
+    private fun isTitleId(source: String, titleId: String) = TITLE_IDS[source]?.matches(titleId) == true
+
+    /** Whether [key] is a valid "<source>:<titleId>" of a source this version knows. */
+    fun isCopyKey(key: String): Boolean {
+        val parts = key.split(":")
+        return parts.size == 2 && isTitleId(parts[0], parts[1])
+    }
+
+    /** Whether [key] is a valid "<source>:<titleId>:<chapterId>" of a source this version knows. */
+    fun isRowKey(key: String): Boolean {
+        val parts = key.split(":")
+        return parts.size == 3 && isTitleId(parts[0], parts[1]) && CHAPTER_ID.matches(parts[2])
+    }
+
+    private fun sourceOf(key: String) = key.substring(0, maxOf(0, key.indexOf(':')))
+    private fun inFirstFormat(key: String) = sourceOf(key) in FIRST_SOURCES
+    /** A key of a source this version doesn't know (a newer app's): its row is kept untouched. */
+    private fun isForeignKey(key: String) = SOURCE_SHAPE.matches(sourceOf(key)) && sourceOf(key) !in TITLE_IDS
+
+    /** A JSON value's text, to write back exactly what was read. */
+    private fun rawJson(value: Any?): String = when (value) {
+        null, JSONObject.NULL -> "null"
+        is String -> JSONObject.quote(value)
+        else -> value.toString()
+    }
 
     fun copyKey(source: String, titleId: String) = "$source:$titleId"
     fun rowKey(source: String, titleId: String, chapterId: String) = "$source:$titleId:$chapterId"
@@ -93,14 +143,14 @@ internal object NovelSyncMerge {
     }
 
     fun validReading(r: Reading): Boolean =
-        r.source in SOURCES && TITLE_ID.matches(r.titleId) && CHAPTER_ID.matches(r.chapterId) &&
+        isTitleId(r.source, r.titleId) && CHAPTER_ID.matches(r.chapterId) &&
             r.chapterOrder in 0..20_000 && r.chapterLabel.isNotEmpty() && r.chapterLabel.length <= 200 &&
             r.paragraphCount in 0..5_000 && r.paragraph in 0..r.paragraphCount && r.updatedAt > 0
 
-    fun validList(r: ListRow): Boolean = r.source in SOURCES && TITLE_ID.matches(r.titleId) && r.status in STATUSES && r.updatedAt > 0
+    fun validList(r: ListRow): Boolean = isTitleId(r.source, r.titleId) && r.status in STATUSES && r.updatedAt > 0
 
     private fun validTitle(t: Title): Boolean =
-        t.source in SOURCES && TITLE_ID.matches(t.titleId) && COPY_KEY.matches(t.novelKey) &&
+        isTitleId(t.source, t.titleId) && isCopyKey(t.novelKey) &&
             (t.linkAt == null || t.linkAt > 0) && (t.seen == null || t.seen in 0..20_000)
 
     /** A validated reading row, or null. */
@@ -134,73 +184,109 @@ internal object NovelSyncMerge {
         val json = JSONObject(content)
         fun section(parent: JSONObject, name: String): JSONObject? =
             if (!parent.has(name) || parent.isNull(name)) JSONObject() else parent.opt(name) as? JSONObject
-        val titles = section(json, "titles") ?: error("The novel sync file has an invalid section.")
-        val reading = section(json, "reading") ?: error("The novel sync file has an invalid section.")
-        val list = section(json, "list") ?: error("The novel sync file has an invalid section.")
-        val deleted = section(json, "deleted") ?: error("The novel sync file has an invalid section.")
-        val deletedReading = section(deleted, "reading") ?: error("The novel sync file has an invalid removal section.")
-        val deletedList = section(deleted, "list") ?: error("The novel sync file has an invalid removal section.")
-        require(reading.length() <= MAX_ROWS && titles.length() <= MAX_ROWS) { "The novel sync file has too many rows." }
+        val more = section(json, "more") ?: error("The novel sync file has an invalid section.")
 
         val rows = LinkedHashMap<String, Reading>()
-        for (key in reading.keys()) {
-            val row = reading(reading.optJSONObject(key))
-            require(row != null && key == rowKey(row.source, row.titleId, row.chapterId)) { "The novel sync file has an invalid reading row." }
-            rows[key] = row!!
-        }
         val entries = LinkedHashMap<String, ListRow>()
-        for (key in list.keys()) {
-            val row = list(list.optJSONObject(key))
-            require(row != null && key == copyKey(row.source, row.titleId)) { "The novel sync file has an invalid list row." }
-            entries[key] = row!!
-        }
         val copies = LinkedHashMap<String, DocTitle>()
-        for (key in titles.keys()) {
-            val t = titles.optJSONObject(key)
-            val title = t?.opt("title") as? String
-            val cover = if (t == null || !t.has("cover") || t.isNull("cover")) null else t.opt("cover")
-            val novelKey = t?.opt("novelKey") as? String
-            val linkAt = if (t == null || !t.has("linkAt") || t.isNull("linkAt")) null else integral(t.opt("linkAt")) ?: -1L
-            val seen = if (t == null || !t.has("seen") || t.isNull("seen")) null else integral(t.opt("seen")) ?: -1L
-            require(
-                COPY_KEY.matches(key) && title != null && title.length <= 300 && (cover == null || (cover is String && cover.length <= 2048)) &&
-                    novelKey != null && COPY_KEY.matches(novelKey) && (linkAt == null || linkAt > 0) && (seen == null || seen in 0..20_000),
-            ) { "The novel sync file has invalid title details." }
-            copies[key] = DocTitle(title!!, cover as String?, novelKey!!, linkAt, seen?.toInt())
-        }
-        fun removals(o: JSONObject, pattern: (String) -> Boolean): Map<String, Long> {
-            val out = LinkedHashMap<String, Long>()
-            for (key in o.keys()) {
-                val ts = integral(o.opt(key))
-                require(pattern(key) && ts != null && ts > 0) { "The novel sync file has an invalid removal." }
-                out[key] = ts!!
+        val removedReading = LinkedHashMap<String, Long>()
+        val removedList = LinkedHashMap<String, Long>()
+        val keptTitles = LinkedHashMap<String, String>()
+        val keptReading = LinkedHashMap<String, String>()
+        val keptList = LinkedHashMap<String, String>()
+        val keptRemovedReading = LinkedHashMap<String, String>()
+        val keptRemovedList = LinkedHashMap<String, String>()
+        // The first sections hold the first sources only; "more" holds every later source.
+        for ((part, first) in listOf(json to true, more to false)) {
+            val titles = section(part, "titles") ?: error("The novel sync file has an invalid section.")
+            val reading = section(part, "reading") ?: error("The novel sync file has an invalid section.")
+            val list = section(part, "list") ?: error("The novel sync file has an invalid section.")
+            val deleted = section(part, "deleted") ?: error("The novel sync file has an invalid section.")
+            val deletedReading = section(deleted, "reading") ?: error("The novel sync file has an invalid removal section.")
+            val deletedList = section(deleted, "list") ?: error("The novel sync file has an invalid removal section.")
+            require(reading.length() <= MAX_ROWS && titles.length() <= MAX_ROWS) { "The novel sync file has too many rows." }
+            /** A row this version leaves alone: under "more", from a source it doesn't know. */
+            fun keep(into: MutableMap<String, String>, from: JSONObject, key: String): Boolean {
+                if (first || !isForeignKey(key)) return false
+                into[key] = rawJson(from.opt(key))
+                return true
             }
-            return out
+            /** Each source's rows sit in their own part of the file, or an older app would choke on them. */
+            fun placed(key: String) = inFirstFormat(key) == first
+
+            for (key in reading.keys()) {
+                if (keep(keptReading, reading, key)) continue
+                val row = reading(reading.optJSONObject(key))
+                require(row != null && placed(key) && key == rowKey(row.source, row.titleId, row.chapterId)) { "The novel sync file has an invalid reading row." }
+                rows[key] = row!!
+            }
+            for (key in list.keys()) {
+                if (keep(keptList, list, key)) continue
+                val row = list(list.optJSONObject(key))
+                require(row != null && placed(key) && key == copyKey(row.source, row.titleId)) { "The novel sync file has an invalid list row." }
+                entries[key] = row!!
+            }
+            for (key in titles.keys()) {
+                if (keep(keptTitles, titles, key)) continue
+                val t = titles.optJSONObject(key)
+                val title = t?.opt("title") as? String
+                val cover = if (t == null || !t.has("cover") || t.isNull("cover")) null else t.opt("cover")
+                val novelKey = t?.opt("novelKey") as? String
+                val linkAt = if (t == null || !t.has("linkAt") || t.isNull("linkAt")) null else integral(t.opt("linkAt")) ?: -1L
+                val seen = if (t == null || !t.has("seen") || t.isNull("seen")) null else integral(t.opt("seen")) ?: -1L
+                // A first-format copy linked under a later source's key sits in "more" as well.
+                require(
+                    isCopyKey(key) && title != null && title.length <= 300 && (cover == null || (cover is String && cover.length <= 2048)) &&
+                        novelKey != null && isCopyKey(novelKey) && (inFirstFormat(key) && inFirstFormat(novelKey)) == first &&
+                        (linkAt == null || linkAt > 0) && (seen == null || seen in 0..20_000),
+                ) { "The novel sync file has invalid title details." }
+                copies[key] = DocTitle(title!!, cover as String?, novelKey!!, linkAt, seen?.toInt())
+            }
+            fun removals(o: JSONObject, into: MutableMap<String, Long>, kept: MutableMap<String, String>, pattern: (String) -> Boolean) {
+                for (key in o.keys()) {
+                    if (keep(kept, o, key)) continue
+                    val ts = integral(o.opt(key))
+                    require(pattern(key) && placed(key) && ts != null && ts > 0) { "The novel sync file has an invalid removal." }
+                    into[key] = ts!!
+                }
+            }
+            removals(deletedReading, removedReading, keptRemovedReading) { isCopyKey(it) || isRowKey(it) }
+            removals(deletedList, removedList, keptRemovedList) { isCopyKey(it) }
         }
-        return Doc(
-            copies, rows, entries,
-            Removals(removals(deletedReading) { COPY_KEY.matches(it) || ROW_KEY.matches(it) }, removals(deletedList) { COPY_KEY.matches(it) }),
-        )
+        val kept = Kept(keptTitles, keptReading, keptList, keptRemovedReading, keptRemovedList)
+        return Doc(copies, rows, entries, Removals(removedReading, removedList), kept.takeIf { !it.isEmpty })
     }
 
     fun serialize(doc: Doc): String {
-        val titles = JSONObject()
-        for ((key, t) in doc.titles) {
-            titles.put(key, JSONObject().put("title", t.title).put("cover", t.cover ?: JSONObject.NULL).put("novelKey", t.novelKey)
-                .put("linkAt", t.linkAt ?: JSONObject.NULL).put("seen", t.seen ?: JSONObject.NULL))
+        fun title(t: DocTitle) = JSONObject().put("title", t.title).put("cover", t.cover ?: JSONObject.NULL).put("novelKey", t.novelKey)
+            .put("linkAt", t.linkAt ?: JSONObject.NULL).put("seen", t.seen ?: JSONObject.NULL)
+        fun reading(r: Reading) = JSONObject().put("sourceId", r.source).put("titleId", r.titleId).put("chapterId", r.chapterId)
+            .put("chapterOrder", r.chapterOrder).put("chapterLabel", r.chapterLabel).put("paragraph", r.paragraph)
+            .put("paragraphCount", r.paragraphCount).put("updatedAt", r.updatedAt)
+        fun list(r: ListRow) = JSONObject().put("sourceId", r.source).put("titleId", r.titleId).put("status", r.status).put("updatedAt", r.updatedAt)
+        /** One part of the file: the first sources' rows, or (under "more") every other source's and the kept ones. */
+        fun part(first: Boolean): JSONObject {
+            fun <T> mine(rows: Map<String, T>, kept: Map<String, String>?, here: (String, T) -> Boolean, write: (T) -> Any): JSONObject {
+                val out = JSONObject()
+                if (!first) kept?.forEach { (key, text) -> out.put(key, JSONTokener(text).nextValue()) }
+                for ((key, row) in rows) if (here(key, row) == first) out.put(key, write(row))
+                return out
+            }
+            return JSONObject()
+                .put("titles", mine(doc.titles, doc.kept?.titles, { k, t -> inFirstFormat(k) && inFirstFormat(t.novelKey) }, ::title))
+                .put("reading", mine(doc.reading, doc.kept?.reading, { k, _ -> inFirstFormat(k) }, ::reading))
+                .put("list", mine(doc.list, doc.kept?.list, { k, _ -> inFirstFormat(k) }, ::list))
+                .put("deleted", JSONObject()
+                    .put("reading", mine(doc.deleted.reading, doc.kept?.deletedReading, { k, _ -> inFirstFormat(k) }) { it })
+                    .put("list", mine(doc.deleted.list, doc.kept?.deletedList, { k, _ -> inFirstFormat(k) }) { it }))
         }
-        val reading = JSONObject()
-        for ((key, r) in doc.reading) {
-            reading.put(key, JSONObject().put("sourceId", r.source).put("titleId", r.titleId).put("chapterId", r.chapterId)
-                .put("chapterOrder", r.chapterOrder).put("chapterLabel", r.chapterLabel).put("paragraph", r.paragraph)
-                .put("paragraphCount", r.paragraphCount).put("updatedAt", r.updatedAt))
-        }
-        val list = JSONObject()
-        for ((key, r) in doc.list) list.put(key, JSONObject().put("sourceId", r.source).put("titleId", r.titleId).put("status", r.status).put("updatedAt", r.updatedAt))
-        val deletedReading = JSONObject(); for ((key, ts) in doc.deleted.reading) deletedReading.put(key, ts)
-        val deletedList = JSONObject(); for ((key, ts) in doc.deleted.list) deletedList.put(key, ts)
-        return JSONObject().put("v", 1).put("titles", titles).put("reading", reading).put("list", list)
-            .put("deleted", JSONObject().put("reading", deletedReading).put("list", deletedList)).toString()
+        val out = part(true).put("v", 1)
+        val more = part(false)
+        val deleted = more.getJSONObject("deleted")
+        val empty = more.getJSONObject("titles").length() == 0 && more.getJSONObject("reading").length() == 0 && more.getJSONObject("list").length() == 0 &&
+            deleted.getJSONObject("reading").length() == 0 && deleted.getJSONObject("list").length() == 0
+        if (!empty) out.put("more", more)
+        return out.toString()
     }
 
     /** Whether a removal hides this reading row: its copy or the row was removed at or after it was read. */
@@ -322,7 +408,8 @@ internal object NovelSyncMerge {
         deletedReading.entries.removeAll { (key, ts) -> ts < cutoff && pending.reading[key] != ts }
         deletedList.entries.removeAll { (key, ts) -> ts < cutoff && pending.list[key] != ts }
 
-        val doc = Doc(merged, reading, list, Removals(deletedReading, deletedList))
+        // Rows of sources only a newer app knows go back exactly as they came.
+        val doc = Doc(merged, reading, list, Removals(deletedReading, deletedList), remote.kept)
         return Plan(readingUpsert, readingRemove, listUpsert, listRemove, titleUpdates, doc, changed = doc != remote)
     }
 

@@ -12,6 +12,7 @@ import {
   type NovelDownloadTitle,
   type NovelSourceId,
 } from "../../../../../packages/shared/novel";
+import { fileStem, hex, unhex } from "./names";
 import { NovelSourceError, novelChapter } from "./sources";
 import { afterStop, nextStep, stalledMessage, type Failure } from "../../../../../packages/shared/download-resume";
 
@@ -19,8 +20,9 @@ import { afterStop, nextStep, stalledMessage, type Failure } from "../../../../.
  * Offline novel chapters: userData/novel_downloads/<source>-<hex title id>/ holds
  * meta.json (the title's details and full chapter list when it was queued) and one
  * c-<hex chapter id>.json per saved chapter. Ids are hex-encoded because NovelBuddy
- * ids are case-sensitive and Windows file names aren't. One worker fetches one
- * chapter at a time on the sources' slower background lane.
+ * ids are case-sensitive and Windows file names aren't (a long Novel Phoenix id is
+ * shortened, see names.ts). One worker fetches one chapter at a time on the sources'
+ * slower background lane.
  *
  * pending.json lists the chapters still to fetch, so downloads carry on after
  * the app is restarted. A chapter that hits a rate limit or a network drop waits
@@ -56,9 +58,7 @@ let loading: Promise<void> | null = null;
 let running = false;
 
 const root = () => path.join(app.getPath("userData"), "novel_downloads");
-const hex = (value: string) => Buffer.from(value, "utf-8").toString("hex");
-const unhex = (value: string) => Buffer.from(value, "hex").toString("utf-8");
-const folder = (sourceId: string, titleId: string) => path.join(root(), `${sourceId}-${hex(titleId)}`);
+const folder = (sourceId: string, titleId: string) => path.join(root(), `${sourceId}-${fileStem(titleId)}`);
 const chapterFile = (sourceId: string, titleId: string, chapterId: string) => path.join(folder(sourceId, titleId), `c-${hex(chapterId)}.json`);
 const pendingFile = (sourceId: string, titleId: string) => path.join(folder(sourceId, titleId), "pending.json");
 const NETWORK_POLL_MS = 15_000;

@@ -233,6 +233,29 @@ test("a chapter queued again while it is downloading isn't fetched twice", async
   assert.deepEqual(fetched, ["ch1abc"], "it finished on its way, so the queued copy was skipped");
 });
 
+test("a Novel Phoenix title with a long address id is saved under a short folder name", async () => {
+  // 120 characters, the longest id accepted: its hex alone would overrun Windows' path limit.
+  const id = `${"a-very-long-novel-title-".repeat(5)}`.slice(0, 120);
+  const positions = [1, 2].map((n) => ({ id: String(n), order: n - 1, label: `Chapter ${n}`, updatedAt: null }));
+  harness.chapter = async (chapterId) => text(chapterId);
+  const longDetail = { ...detail(id), sourceId: "novelphoenix", url: `https://novelphoenix.example/novel/${id}` };
+  assert.equal(await N.enqueueNovelChapters(longDetail, positions, positions), 2);
+  const t = await idle(id);
+  assert.equal(t.saved, 2);
+  const dirs = fs.readdirSync(path.join(storageRoot, "novel_downloads")).filter((name) => name.startsWith("novelphoenix-"));
+  assert.equal(dirs.length, 1);
+  assert.match(dirs[0], /^novelphoenix-[0-9a-f]{64}-[0-9a-f]{32}$/);
+  assert.deepEqual((await N.localChapter("novelphoenix", id, "2")).paragraphs, ["Text of 2"]);
+  assert.deepEqual((await N.savedChapterIds("novelphoenix", id)).sort(), ["1", "2"]);
+  // A short id keeps the plain hex name, like every title saved before.
+  const short = { ...detail("shadow-slave"), sourceId: "novelphoenix" };
+  await N.enqueueNovelChapters(short, positions.slice(0, 1), positions);
+  await idle("shadow-slave");
+  assert.ok(fs.existsSync(path.join(storageRoot, "novel_downloads", `novelphoenix-${hex("shadow-slave")}`, `c-${hex("1")}.json`)));
+  await N.removeNovelDownloads("novelphoenix", id);
+  assert.equal(fs.existsSync(path.join(storageRoot, "novel_downloads", dirs[0])), false);
+});
+
 after(() => {
   const resolved = path.resolve(storageRoot);
   if (path.dirname(resolved) !== path.resolve(os.tmpdir()) || !path.basename(resolved).startsWith("anitrack-novel-dl-test-")) throw new Error("Invalid fixture cleanup path");

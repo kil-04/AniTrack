@@ -6,8 +6,9 @@ import java.net.URI
 import java.net.URLEncoder
 
 /*
- * Novels mode: models and the reading-source parsers (NovelBuddy and NovelArchive
- * JSON APIs). Mirrors the desktop app's packages/shared/novel.ts.
+ * Novels mode: models and the reading-source parsers (NovelBuddy's and
+ * NovelArchive's JSON APIs, Novel Phoenix's pages). Mirrors the desktop app's
+ * packages/shared/novel.ts.
  *
  * Novels are source-first: many web novels have no AniList entry, so a title is
  * identified by its source and that source's id. Chapter ids are the source's own
@@ -17,7 +18,8 @@ import java.net.URLEncoder
 
 enum class NovelSourceId(val key: String, val label: String, val blurb: String) {
     NovelBuddy("novelbuddy", "NovelBuddy", "Large translated web-novel library, complete chapter lists"),
-    NovelArchive("novelarchive", "NovelArchive", "110k+ titles; chapter labels can skip or repeat numbers");
+    NovelArchive("novelarchive", "NovelArchive", "110k+ titles; chapter labels can skip or repeat numbers"),
+    NovelPhoenix("novelphoenix", "Novel Phoenix", "NovelFire's library: quick with new chapters; long chapter lists load in pages");
 
     companion object {
         fun of(key: String?): NovelSourceId? = entries.firstOrNull { it.key == key }
@@ -71,13 +73,16 @@ data class NovelHome(
     val notice: String? = null,
 )
 
-/** NovelArchive only sorts by recent, popular, rating or chapters (anything else falls back to recent). */
-enum class NovelSort(val label: String, val buddy: String, val archive: String) {
-    Popular("Popular", "views", "popular"),
-    Favourites("Fan favourites", "bookmarks", "popular"),
-    Rating("Top rated", "rating", "rating"),
-    Latest("Recently updated", "latest", "recent"),
-    Newest("Newly added", "newest", "recent"),
+/**
+ * NovelArchive only sorts by recent, popular, rating or chapters (anything else falls back
+ * to recent); Novel Phoenix by popular, new or latest release (anything else falls back to new).
+ */
+enum class NovelSort(val label: String, val buddy: String, val archive: String, val phoenix: String) {
+    Popular("Popular", "views", "popular", "popular"),
+    Favourites("Fan favourites", "bookmarks", "popular", "popular"),
+    Rating("Top rated", "rating", "rating", "popular"),
+    Latest("Recently updated", "latest", "recent", "latest-release"),
+    Newest("Newly added", "newest", "recent", "new"),
 }
 
 data class NovelFilters(
@@ -128,7 +133,7 @@ object Novels {
     const val MAX_CHAPTERS = 20_000
     const val MAX_PARAGRAPHS = 5_000
 
-    /** The other reading source: where a request goes when its own source is down. */
+    /** Where a request goes when its own source is down: NovelBuddy, or NovelArchive for NovelBuddy itself. */
     fun otherSource(source: NovelSourceId) = if (source == NovelSourceId.NovelBuddy) NovelSourceId.NovelArchive else NovelSourceId.NovelBuddy
 
     /** What Home says when it isn't showing NovelBuddy's live feed. */
@@ -142,15 +147,18 @@ object Novels {
     private val NB_ID = Regex("^[A-Za-z0-9]{4,24}$")
     private val NA_ID = Regex("^[a-f0-9]{24}$")
     private val NA_CHAPTER = Regex("^[1-9][0-9]{0,5}$")
+    /** Novel Phoenix ids are the lower-case slugs of its addresses; its chapters are requested by position. */
+    private val NP_ID = Regex("^[a-z0-9][a-z0-9-]{0,119}$")
 
     fun isTitleId(source: NovelSourceId, id: String) = when (source) {
         NovelSourceId.NovelBuddy -> NB_ID.matches(id)
         NovelSourceId.NovelArchive -> NA_ID.matches(id)
+        NovelSourceId.NovelPhoenix -> NP_ID.matches(id)
     }
 
     fun isChapterId(source: NovelSourceId, id: String) = when (source) {
         NovelSourceId.NovelBuddy -> NB_ID.matches(id)
-        NovelSourceId.NovelArchive -> NA_CHAPTER.matches(id)
+        NovelSourceId.NovelArchive, NovelSourceId.NovelPhoenix -> NA_CHAPTER.matches(id)
     }
 
     /**
@@ -336,10 +344,17 @@ object NovelText {
         return textToParagraphs(decode(text))
     }
 
+    /** Collapses runs of spaces and drops control characters, keeping the text itself. */
+    fun cleanLine(line: String): String = line.replace(CONTROL, "").replace(SPACES, " ").trim()
+
+    /** A fragment's text: tags dropped, entities decoded, spaces collapsed; null when nothing is left. */
+    fun fragment(html: String?, max: Int = 300): String? =
+        html?.let { cleanLine(decode(it.replace(TAG, " "))) }?.takeIf { it.isNotEmpty() }?.take(max)
+
     fun textToParagraphs(text: String): List<String> {
         val out = ArrayList<String>()
         for (raw in text.split('\n')) {
-            val line = raw.replace(CONTROL, "").replace(SPACES, " ").trim()
+            val line = cleanLine(raw)
             if (line.isNotEmpty()) out += line
             if (out.size >= Novels.MAX_PARAGRAPHS) break
         }
@@ -634,5 +649,225 @@ object NovelArchiveParser {
         val content = c.opt("content") as? String ?: throw NovelParseException("NovelArchive sent this chapter without its text.")
         val label = c.text("name", 200) ?: "Chapter $position"
         return NovelChapterText(position, label, NovelText.dropRepeatedHeading(NovelText.auto(content), label))
+    }
+}
+
+// ── Novel Phoenix (novelphoenix.com, NovelFire's library) ─────────────────────
+
+/*
+ * Novel Phoenix has no JSON API: search, browse, title, chapter-list and chapter
+ * pages are server-rendered HTML, read here with small patterns (no markup is
+ * ever rendered). A title's id is the slug of its address; a chapter is requested
+ * by its 1-based position (`/chapter-<n>`), and its label is only shown. Chapter
+ * lists come 100 to a page. Mirrors the Novel Phoenix section of novel.ts.
+ */
+object NovelPhoenixParser {
+    const val ORIGIN = "https://novelphoenix.com"
+    val HOSTS = setOf("novelphoenix.com")
+    const val CHAPTERS_PER_PAGE = 100
+    private val ID = Regex("^[a-z0-9][a-z0-9-]{0,119}$")
+    private val IC = RegexOption.IGNORE_CASE
+
+    /** A search by name, or (without a query) a browse by genre, status and sort. */
+    fun searchUrl(f: NovelFilters): String {
+        val page = f.page.coerceIn(1, 500)
+        val q = f.query.trim()
+        if (q.isNotEmpty()) return "$ORIGIN/search?keyword=${enc(q.take(120))}&page=$page"
+        val genre = f.genre?.lowercase()?.replace(Regex("[^a-z0-9]+"), "-")?.trim('-').orEmpty()
+        return "$ORIGIN/genre-${genre.ifEmpty { "all" }}/sort-${f.sort.phoenix}/status-${f.status ?: "all"}/all-novel?page=$page"
+    }
+
+    fun titleUrl(id: String) = "$ORIGIN/novel/${enc(id)}"
+    fun chaptersUrl(id: String, page: Int) = "$ORIGIN/novel/${enc(id)}/chapters?page=${maxOf(1, page)}"
+    fun chapterUrl(titleId: String, position: String) = "$ORIGIN/novel/${enc(titleId)}/chapter-${enc(position)}"
+
+    private fun wholeNumber(value: String?): Int? = value?.replace(",", "")?.toIntOrNull()?.takeIf { it >= 0 }
+
+    private val AGO = Regex("\\b(\\d{1,4}|an?)\\s+(second|minute|hour|day|week|month|year)s?\\s+ago\\b")
+    private val YEAR = Regex("\\d{4}")
+    private val UNITS = mapOf(
+        "second" to 1000L, "minute" to 60_000L, "hour" to 3_600_000L, "day" to 86_400_000L,
+        "week" to 7 * 86_400_000L, "month" to 30 * 86_400_000L, "year" to 365 * 86_400_000L,
+    )
+
+    /** "13 hours ago" (or a date like "Nov 9, 2026") as a time, counted back from [now]; null when it isn't one. */
+    fun relativeTime(text: String?, now: Long): Long? {
+        if (text.isNullOrEmpty()) return null
+        AGO.find(text.lowercase())?.let { m ->
+            val n = if (m.groupValues[1].startsWith("a")) 1L else m.groupValues[1].toLong()
+            return now - n * UNITS.getValue(m.groupValues[2])
+        }
+        if (!YEAR.containsMatchIn(text)) return null
+        return runCatching { java.text.SimpleDateFormat("MMM d, yyyy", java.util.Locale.US).apply { isLenient = false }.parse(text.trim())?.time }.getOrNull()
+            ?: runCatching { java.time.Instant.parse(text.trim()).toEpochMilli() }.getOrNull()
+    }
+
+    private val CARD_HREF = Regex("href=\"(?:https://novelphoenix\\.com)?/novel/([a-z0-9][a-z0-9-]*)\"")
+    private val CARD_TITLE = Regex("<h[1-6] class=\"(?:novel-)?title[^\"]*\">([\\s\\S]*?)</h[1-6]>")
+    private val CARD_TITLE_ATTR = Regex("<a title=\"([^\"]*)\"")
+    private val CARD_RATING = Regex("icon-star\"></i>\\s*([0-5](?:\\.\\d+)?)")
+    private val LAZY_IMG = Regex("<img[^>]*\\sdata-src=\"([^\"]+)\"")
+    private val IMG = Regex("<img[^>]*\\ssrc=\"(?!data:)([^\"]+)\"")
+    private val CARD_STATUS = Regex("(?:·|&middot;)\\s*(Ongoing|Completed)\\b", IC)
+    private val CARD_CH = Regex("\\bCh\\.\\s*([\\d,]+)")
+    private val CARD_CHAPTERS = Regex("([\\d,]+)\\s*Chapters\\b", IC)
+
+    private fun first(re: Regex, text: String): String? = re.find(text)?.groupValues?.get(1)
+
+    private fun card(chunk: String): NovelCard? {
+        val id = first(CARD_HREF, chunk)?.takeIf(ID::matches) ?: return null
+        val title = NovelText.fragment(first(CARD_TITLE, chunk)) ?: NovelText.fragment(first(CARD_TITLE_ATTR, chunk)) ?: return null
+        val rating = first(CARD_RATING, chunk)?.toDoubleOrNull()?.takeIf { it > 0 }?.coerceAtMost(5.0)
+        return NovelCard(
+            source = NovelSourceId.NovelPhoenix,
+            id = id,
+            title = title,
+            // Covers are lazy-loaded: the real address is in data-src, with a blank image in src.
+            cover = image(first(LAZY_IMG, chunk) ?: first(IMG, chunk), ORIGIN),
+            // "Ch. 3242 · Ongoing" (search results); browse cards don't say.
+            status = status(first(CARD_STATUS, chunk)),
+            chapters = wholeNumber(first(CARD_CH, chunk) ?: first(CARD_CHAPTERS, chunk)),
+            rating = rating,
+            genres = emptyList(),
+            mtl = false,
+        )
+    }
+
+    /** A search or browse page: its first list holds the results (later ones are suggestions). */
+    fun search(html: String, page: Int = 1): NovelPage {
+        val start = html.indexOf("<ul class=\"novel-list")
+        if (start < 0) throw NovelParseException("Novel Phoenix sent a page AniTrack couldn't read.")
+        val end = html.indexOf("</ul>", start)
+        val items = html.substring(start, if (end < 0) html.length else end).split("<li class=\"novel-item\"").drop(1).mapNotNull(::card)
+        return NovelPage(items, Regex("[?&](?:amp;)?page=${page + 1}\"").containsMatchIn(html))
+    }
+
+    private val H1 = Regex("<h1 class=\"novel-title[^\"]*\">([\\s\\S]*?)</h1>")
+    private val AUTHORS = Regex("<div class=\"author\">([\\s\\S]*?)</div>")
+    private val AUTHOR = Regex("itemprop=\"author\">([^<]*)<")
+    private val GENRES = Regex("<div class=\"categories\">([\\s\\S]*?)</ul>")
+    private val GENRE = Regex("class=\"property-item\">([^<]*)</a>")
+    private val SUMMARY = Regex("<div class=\"summary\">[\\s\\S]*?<div class=\"content[^\"]*\">([\\s\\S]*?)(?:<div class=\"expand\">|</div>\\s*</div>)")
+    private val RATING = Regex("class=\"my-rating\" data-rating=\"([0-5](?:\\.\\d+)?)\"")
+    private val COUNT = Regex("icon-book-open\"></i>\\s*([\\d,]+)")
+    private val LATEST = Regex("chapter-latest-container[\\s\\S]*?<p class=\"latest[^\"]*\">([\\s\\S]*?)</p>\\s*<p class=\"update\">([\\s\\S]*?)</p>")
+    private val COVER = Regex("<figure class=\"cover\">\\s*<img[^>]*\\s(?:data-)?src=\"(?!data:)([^\"]+)\"")
+    private val STATUS = Regex("<strong class=\"(ongoing|completed)\">", IC)
+
+    fun detail(html: String, id: String, now: Long): NovelDetail {
+        val title = NovelText.fragment(first(H1, html))
+        if (title == null || !ID.matches(id)) throw NovelParseException("Novel Phoenix doesn't have this title.")
+        val authors = first(AUTHORS, html).orEmpty()
+        val genres = first(GENRES, html).orEmpty()
+        val chapters = wholeNumber(first(COUNT, html))
+        val latest = LATEST.find(html)
+        return NovelDetail(
+            card = NovelCard(
+                source = NovelSourceId.NovelPhoenix,
+                id = id,
+                title = title,
+                cover = image(first(COVER, html), ORIGIN),
+                status = status(first(STATUS, html)),
+                chapters = chapters,
+                rating = first(RATING, html)?.toDoubleOrNull()?.takeIf { it > 0 }?.coerceAtMost(5.0),
+                genres = unique(GENRE.findAll(genres).map { NovelText.fragment(it.groupValues[1], 40) }.toList(), 12),
+                mtl = false,
+            ),
+            author = unique(AUTHOR.findAll(authors).map { NovelText.fragment(it.groupValues[1], 120) }.toList(), 4).joinToString(", ").ifBlank { null },
+            altNames = emptyList(),
+            synopsis = plainText(first(SUMMARY, html), 6000),
+            url = titleUrl(id),
+            latest = chapters?.takeIf { it > 0 }?.let {
+                NovelLatest(it, NovelText.fragment(latest?.groupValues?.get(1), 200), relativeTime(NovelText.fragment(latest?.groupValues?.get(2), 80), now))
+            },
+        )
+    }
+
+    private val LABEL_PREFIX = Regex("^ch(?:apter)?\\.?\\s*", IC)
+    private val NAMES_CHAPTER = Regex("^(?:chapter|chap|ch)\\b\\.?\\s*\\d", IC)
+
+    /** A chapter's label: the site's number with its title, or the title alone when it already says "Chapter N". */
+    private fun chapterLabel(position: String, numberText: String?, title: String?): String {
+        val number = numberText?.replace(LABEL_PREFIX, "")?.trim().orEmpty().ifEmpty { position }
+        if (title == null) return "Chapter $number"
+        return (if (NAMES_CHAPTER.containsMatchIn(title)) title else "Chapter $number: $title").take(200)
+    }
+
+    /** One chapter of a list page; [id] is the position the site requests. */
+    data class Row(val id: String, val label: String, val updatedAt: Long?)
+
+    /** One page (100 chapters) of a title's list: its chapters in reading order, how many pages there are, and the title's chapter count when the page says. */
+    data class ChapterPage(val chapters: List<Row>, val pages: Int, val total: Int?)
+
+    private val CHAPTER_LINK = Regex("<a href=\"[^\"]*/chapter-([1-9][0-9]{0,5})\"[^>]*>([\\s\\S]*?)</a>")
+    private val CH_NO = Regex("class=\"chapter-no\">([^<]*)<")
+    private val CH_TITLE = Regex("class=\"chapter-title\">([\\s\\S]*?)</strong>")
+    private val CH_TIME = Regex("class=\"chapter-update\"[^>]*>([^<]*)<")
+    private val PAGE_LINK = Regex("/chapters\\?page=(\\d{1,4})\\b")
+    private val TOTAL_INPUT = Regex("id=\"gotochapno\"[^>]*\\smax=\"(\\d{1,6})\"")
+    private val TOTAL_TEXT = Regex("A total of ([\\d,]+) chapters")
+
+    fun chapterPage(html: String, now: Long): ChapterPage {
+        val start = html.indexOf("<ul class=\"chapter-list")
+        if (start < 0) throw NovelParseException("Novel Phoenix doesn't have this title's chapters.")
+        val end = html.indexOf("</ul>", start)
+        val chapters = CHAPTER_LINK.findAll(html.substring(start, if (end < 0) html.length else end)).map { m ->
+            val body = m.groupValues[2]
+            val label = chapterLabel(m.groupValues[1], NovelText.fragment(first(CH_NO, body), 40), NovelText.fragment(first(CH_TITLE, body), 200))
+            Row(m.groupValues[1], label, relativeTime(NovelText.fragment(first(CH_TIME, body), 80), now))
+        }.toList()
+        val pages = PAGE_LINK.findAll(html).maxOfOrNull { it.groupValues[1].toInt() } ?: 1
+        val total = wholeNumber(first(TOTAL_INPUT, html) ?: first(TOTAL_TEXT, html))
+        return ChapterPage(chapters, minOf(maxOf(1, pages), (Novels.MAX_CHAPTERS + CHAPTERS_PER_PAGE - 1) / CHAPTERS_PER_PAGE), total)
+    }
+
+    /** A title's chapter-list pages (in page order) as one list in reading order. */
+    fun chapters(pages: List<List<Row>>): List<NovelChapter> {
+        val seen = HashSet<String>()
+        val out = ArrayList<NovelChapter>()
+        for (row in pages.flatten()) {
+            if (out.size >= Novels.MAX_CHAPTERS || !seen.add(row.id)) continue
+            out += NovelChapter(row.id, out.size, row.label, row.updatedAt)
+        }
+        return out
+    }
+
+    /**
+     * The whole list while some of its pages are still unread: a chapter on an unread
+     * page stands in as "Chapter N". Chapters are requested by position, so every one
+     * can be opened already; only its name is missing.
+     */
+    fun provisional(total: Int, pages: Collection<List<Row>>): List<NovelChapter> {
+        val known = HashMap<String, Row>()
+        for (rows in pages) for (row in rows) known[row.id] = row
+        return (0 until total.coerceIn(0, Novels.MAX_CHAPTERS)).map { i ->
+            val row = known[(i + 1).toString()]
+            NovelChapter((i + 1).toString(), i, row?.label ?: "Chapter ${i + 1}", row?.updatedAt)
+        }
+    }
+
+    private val CONTENT_OPEN = Regex("<div id=\"content\"[^>]*\\sdata-chapter-id=\"\\d+\"[^>]*>")
+    private val NOT_FOUND = Regex("<title>[^<]*Not Found", IC)
+    private val DIV = Regex("<(/?)div\\b", IC)
+    private val CHAPTER_TITLE = Regex("<span class=\"chapter-title\">([\\s\\S]*?)</span>")
+
+    /** Where the `<div>` opened just before [from] closes (nested ones skipped); the end of the text when it never does. */
+    private fun closingDiv(html: String, from: Int): Int {
+        var depth = 1
+        for (m in DIV.findAll(html, from)) {
+            depth += if (m.groupValues[1].isEmpty()) 1 else -1
+            if (depth == 0) return m.range.first
+        }
+        return html.length
+    }
+
+    fun chapterText(html: String, position: String): NovelChapterText {
+        // The "chapter not found" page has a #content block too (its layout's), without a chapter id.
+        val open = CONTENT_OPEN.find(html) ?: throw NovelParseException(
+            if (NOT_FOUND.containsMatchIn(html)) "Novel Phoenix doesn't have this chapter." else "Novel Phoenix sent this chapter without its text.",
+        )
+        val from = open.range.last + 1
+        val label = NovelText.fragment(first(CHAPTER_TITLE, html), 200) ?: "Chapter $position"
+        return NovelChapterText(position, label, NovelText.dropRepeatedHeading(NovelText.htmlToParagraphs(html.substring(from, closingDiv(html, from))), label))
     }
 }

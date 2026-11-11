@@ -22,6 +22,8 @@ import {
   type NovelUpdate,
 } from "../../../../packages/shared/novel";
 import {
+  isNovelCopyKey,
+  isNovelRowKey,
   novelSyncList,
   novelSyncReading,
   type NovelSyncRemovals,
@@ -37,7 +39,17 @@ import {
   removeNovelDownloads,
   savedChapterIds,
 } from "../services/novel/downloads";
-import { NovelSourceError, novelChapter, novelChapters, novelHome, novelSearch, novelTitle, savedNovelTitle } from "../services/novel/sources";
+import {
+  NovelSourceError,
+  novelChapter,
+  novelChapters,
+  novelChaptersComplete,
+  novelChaptersPartial,
+  novelHome,
+  novelSearch,
+  novelTitle,
+  savedNovelTitle,
+} from "../services/novel/sources";
 import * as store from "../services/novel/store";
 
 function source(value: unknown): NovelSourceId {
@@ -165,7 +177,6 @@ function novelUpdates(force = false): Promise<NovelUpdate[]> {
 
 // ── Sync payloads from the renderer: validated like the gist file itself ──
 
-const COPY_KEY = /^(novelbuddy|novelarchive):[A-Za-z0-9]{4,24}$/;
 const shownText = (o: Record<string, unknown>) => ({ title: optionalText(o.title, 300) ?? "", cover: optionalText(o.cover, 2048) });
 const list = (value: unknown) => (Array.isArray(value) ? value : []).slice(0, 20_000).map((v) => (v ?? {}) as Record<string, unknown>);
 
@@ -193,7 +204,7 @@ function syncChange(value: unknown) {
       const src = source(t.sourceId);
       const linkAt = t.linkAt == null ? null : count(t.linkAt, Number.MAX_SAFE_INTEGER);
       const seen = t.seen == null ? null : count(t.seen, 20_000);
-      if (typeof t.novelKey !== "string" || !COPY_KEY.test(t.novelKey)) throw new Error("Invalid novel key");
+      if (!isNovelCopyKey(t.novelKey)) throw new Error("Invalid novel key");
       return { sourceId: src, titleId: titleId(src, t.titleId), ...shownText(t), novelKey: t.novelKey, linkAt, seen };
     }),
   };
@@ -204,7 +215,7 @@ function removals(value: unknown): NovelSyncRemovals {
   const part = (v: unknown) => {
     const out: Record<string, number> = {};
     for (const [key, at] of Object.entries((v ?? {}) as Record<string, unknown>).slice(0, 40_000)) {
-      if (/^(novelbuddy|novelarchive):[A-Za-z0-9]{4,24}(:[A-Za-z0-9]{1,24})?$/.test(key)) out[key] = count(at, Number.MAX_SAFE_INTEGER);
+      if (isNovelCopyKey(key) || isNovelRowKey(key)) out[key] = count(at, Number.MAX_SAFE_INTEGER);
     }
     return out;
   };
@@ -264,7 +275,12 @@ export function registerNovelIpc(getMainWindow: () => BrowserWindow | null) {
         updatesCache = null;
       }
       return list;
-    });
+    }).then((result) => (result.ok && novelChaptersPartial(src, tid) ? { ...result, partial: true } : result));
+  });
+  ipcMain.handle(NOVEL_IPC.CHAPTERS_COMPLETE, (_e, sourceId: unknown, id: unknown) => {
+    const src = source(sourceId);
+    const tid = titleId(src, id);
+    return guarded(() => novelChaptersComplete(src, tid));
   });
   ipcMain.handle(NOVEL_IPC.CHAPTER, (_e, sourceId: unknown, id: unknown, chapter: unknown) => {
     const src = source(sourceId);

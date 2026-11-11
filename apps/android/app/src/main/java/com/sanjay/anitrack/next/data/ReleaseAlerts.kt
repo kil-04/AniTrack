@@ -61,7 +61,7 @@ object ReleaseAlerts {
     /** On the very first check, episodes from the last day still count as new. */
     private const val FIRST_LOOKBACK_S = 24 * 60 * 60L
     private val ROUTE = Regex("^(anime|manga)/\\d{1,9}$")
-    private val NOVEL_ROUTE = Regex("^novel/([a-z]+)/([A-Za-z0-9]{1,40})$")
+    private val NOVEL_ROUTE = Regex("^novel/([a-z]+)/([A-Za-z0-9-]{1,120})$")
 
     /** A detail page a notification asked to open; AppShell navigates and clears it. */
     val pendingRoute = mutableStateOf<String?>(null)

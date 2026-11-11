@@ -401,8 +401,8 @@ fun NovelSearchScreen(initialQuery: String = "", initialGenre: String? = null, o
         when {
             searching && results.isEmpty() ->
                 LinearProgressIndicator(Modifier.fillMaxWidth().clip(aniShape(50)), color = AniColors.Accent, trackColor = AniColors.SurfaceHigh)
-            error != null -> EmptyState(Icons.Rounded.CloudOff, "${source.label} didn't answer", "$error NovelBuddy and NovelArchive both failed to answer. Check your connection, then try again.", actionLabel = "Retry", onAction = apply)
-            !searching && shown.isEmpty() -> EmptyState(Icons.Rounded.SearchOff, "No results", "Nothing matches on ${answered.label}. Try fewer filters, another spelling, or the other source.")
+            error != null -> EmptyState(Icons.Rounded.CloudOff, "${source.label} didn't answer", "$error ${source.label} and ${Novels.otherSource(source).label} both failed to answer. Check your connection, then try again.", actionLabel = "Retry", onAction = apply)
+            !searching && shown.isEmpty() -> EmptyState(Icons.Rounded.SearchOff, "No results", "Nothing matches on ${answered.label}. Try fewer filters, another spelling, or another source.")
         }
         notice?.takeIf { error == null }?.let { SourceNotice(it, Modifier.padding(bottom = 14.dp)) }
     }
@@ -500,6 +500,8 @@ fun NovelDetailScreen(source: NovelSourceId, titleId: String, onRead: () -> Unit
     var chapters by remember { mutableStateOf<List<NovelChapter>?>(null) }
     var chaptersError by remember { mutableStateOf<String?>(null) }
     var stale by remember { mutableStateOf(false) }
+    // A long list whose later chapters still show as "Chapter N" while their names load.
+    var naming by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf<Map<String, NovelProgress>>(emptyMap()) }
     var status by remember { mutableStateOf<String?>(null) }
     var group by remember { mutableStateOf<List<NovelStore.Member>>(emptyList()) }
@@ -537,6 +539,7 @@ fun NovelDetailScreen(source: NovelSourceId, titleId: String, onRead: () -> Unit
             .onSuccess { list ->
                 chapters = list
                 stale = false
+                naming = NovelSources.chaptersPartial(source, titleId)
                 runCatching { NovelSources.markSeen(source, titleId, list.size) }
             }
             .onFailure { if (chapters == null) chaptersError = it.novelMessage() else stale = true }
@@ -546,6 +549,12 @@ fun NovelDetailScreen(source: NovelSourceId, titleId: String, onRead: () -> Unit
             group = runCatching { NovelStore.group(source, titleId) }.getOrDefault(group)
             status = runCatching { NovelStore.statusOf(source, titleId) }.getOrNull()
         }
+    }
+    // A long list comes at once with stand-in names; the real ones follow.
+    LaunchedEffect(source, titleId, naming) {
+        if (!naming) return@LaunchedEffect
+        runCatching { NovelSources.chaptersComplete(source, titleId) }.onSuccess { chapters = it }
+        naming = false
     }
     // Read marks follow the reader.
     val session by NovelReading.current
@@ -758,9 +767,11 @@ fun NovelDetailScreen(source: NovelSourceId, titleId: String, onRead: () -> Unit
                 }
                 Spacer(Modifier.height(8.dp))
                 val note = when {
-                    chaptersError != null -> "$chaptersError You can try the other source above."
+                    chaptersError != null -> "$chaptersError You can try another source above."
                     stale -> "Showing the list saved last time."
-                    list.isNotEmpty() -> "%,d chapters on %s".format(list.size, source.label) + if (savedIds.isNotEmpty()) " · %,d saved offline".format(savedIds.size) else ""
+                    list.isNotEmpty() -> "%,d chapters on %s".format(list.size, source.label) +
+                        (if (savedIds.isNotEmpty()) " · %,d saved offline".format(savedIds.size) else "") +
+                        (if (naming) " · Later chapter names are still loading; every chapter can be read already." else "")
                     else -> null
                 }
                 note?.let { Text(it, style = MaterialTheme.typography.labelMedium, color = if (stale || chaptersError != null) Color(0xFFFCD34D) else AniColors.TextTertiary) }

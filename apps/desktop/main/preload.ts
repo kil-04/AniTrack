@@ -99,6 +99,7 @@ contextBridge.exposeInMainWorld("api", {
     title: (sourceId: string, id: string) => ipcRenderer.invoke(NOVEL_IPC.TITLE, sourceId, id),
     savedTitle: (sourceId: string, id: string) => ipcRenderer.invoke(NOVEL_IPC.TITLE_SAVED, sourceId, id),
     chapters: (sourceId: string, id: string) => ipcRenderer.invoke(NOVEL_IPC.CHAPTERS, sourceId, id),
+    chaptersComplete: (sourceId: string, id: string) => ipcRenderer.invoke(NOVEL_IPC.CHAPTERS_COMPLETE, sourceId, id),
     chapter: (sourceId: string, id: string, chapterId: string) => ipcRenderer.invoke(NOVEL_IPC.CHAPTER, sourceId, id, chapterId),
     reading: (sourceId: string, id: string) => ipcRenderer.invoke(NOVEL_IPC.READING_GET, sourceId, id),
     saveReading: (row: unknown) => ipcRenderer.invoke(NOVEL_IPC.READING_SAVE, row),

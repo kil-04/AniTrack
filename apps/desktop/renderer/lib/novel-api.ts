@@ -19,7 +19,7 @@ import type {
   NovelStatus,
 } from "../../../../packages/shared/novel";
 import type { NovelSyncLocal, NovelSyncPlan, NovelSyncRemovals } from "../../../../packages/shared/novel-sync";
-import { novelFallbackNotice, otherNovelSource } from "../../../../packages/shared/novel";
+import { isNovelSource, novelFallbackNotice, otherNovelSource } from "../../../../packages/shared/novel";
 
 /** The Electron bridge for novels mode (see main/ipc/novel.ts). */
 export interface NovelApi {
@@ -29,7 +29,10 @@ export interface NovelApi {
   title(sourceId: NovelSourceId, id: string): Promise<NovelResult<NovelDetail>>;
   /** The title page saved by the last visit (shown at once, and offline). */
   savedTitle(sourceId: NovelSourceId, id: string): Promise<{ detail: NovelDetail; chapters: NovelChapter[] } | null>;
+  /** `partial` on the result: later chapters still carry stand-in names ("Chapter N"); see [chaptersComplete]. */
   chapters(sourceId: NovelSourceId, id: string): Promise<NovelResult<NovelChapter[]>>;
+  /** The list once every chapter's real name is in (a long Novel Phoenix list arrives in pages). */
+  chaptersComplete(sourceId: NovelSourceId, id: string): Promise<NovelResult<NovelChapter[]>>;
   chapter(sourceId: NovelSourceId, id: string, chapterId: string): Promise<NovelResult<NovelChapterText>>;
   /** The novel's progress on every linked source, by chapter key. */
   reading(sourceId: NovelSourceId, id: string): Promise<NovelProgressMap>;
@@ -153,7 +156,12 @@ export function saveNovelReaderPrefs(prefs: NovelReaderPrefs) {
 
 /** The source last picked on the search page. */
 export function preferredNovelSource(): NovelSourceId {
-  try { return localStorage.getItem("anitrack.novel.source") === "novelarchive" ? "novelarchive" : "novelbuddy"; } catch { return "novelbuddy"; }
+  try {
+    const saved = localStorage.getItem("anitrack.novel.source");
+    return isNovelSource(saved) ? saved : "novelbuddy";
+  } catch {
+    return "novelbuddy";
+  }
 }
 
 export function setPreferredNovelSource(id: NovelSourceId) {

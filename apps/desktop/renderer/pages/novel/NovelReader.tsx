@@ -39,7 +39,8 @@ type Text = { state: "loading" } | { state: "failed"; error: string } | { state:
 export default function NovelReader() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
-  const sourceId = isNovelSource(params.get("s")) ? (params.get("s") as "novelbuddy" | "novelarchive") : null;
+  const sourceParam = params.get("s");
+  const sourceId = isNovelSource(sourceParam) ? sourceParam : null;
   const titleId = params.get("t") ?? "";
   const chapterId = params.get("c") ?? "";
   const startParagraph = Math.max(0, Number(params.get("p")) || 0);
