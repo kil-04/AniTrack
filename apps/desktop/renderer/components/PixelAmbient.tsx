@@ -64,10 +64,14 @@ function WalkingCat() {
   if (!sheet) return null;
   return (
     <div className="pixel-cat-path">
-      <div
-        className="pixel-cat"
-        style={{ width: sheet.width, height: sheet.height, backgroundImage: `url(${sheet.url})`, backgroundSize: `${sheet.width * 2}px ${sheet.height}px` }}
-      />
+      {/* A window one frame wide over a strip of both frames; the strip steps sideways by
+          transform (sliding a background image instead repainted on the main thread). */}
+      <div className="pixel-cat" style={{ width: sheet.width, height: sheet.height }}>
+        <div
+          className="pixel-cat-strip"
+          style={{ width: sheet.width * 2, height: sheet.height, backgroundImage: `url(${sheet.url})`, backgroundSize: `${sheet.width * 2}px ${sheet.height}px` }}
+        />
+      </div>
     </div>
   );
 }

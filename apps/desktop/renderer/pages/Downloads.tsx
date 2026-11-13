@@ -12,6 +12,7 @@ import {
   resumeLabel,
 } from "../lib/downloads";
 import type { DownloadItem } from "../../../../packages/shared/types";
+import Spinner from "../components/Spinner";
 
 function fmtSize(bytes?: number): string {
   if (!bytes) return "";
@@ -132,7 +133,7 @@ export default function Downloads() {
                     {g.title}
                   </button>
                   <div className="mt-1 flex items-center gap-1.5 text-xs text-ink-3">
-                    {active > 0 && <Loader2 size={11} className="animate-spin text-accent" />}
+                    {active > 0 && <Spinner size={11} className="text-accent" />}
                     {summary}
                   </div>
                   {active > 0 && (
@@ -170,10 +171,10 @@ export default function Downloads() {
 
                       {it.status === "downloading" && (
                         <div className="flex items-center gap-1.5 text-xs font-semibold tabular-nums text-ink-2">
-                          <Loader2 size={14} className="animate-spin text-accent" /> {it.progress}%
+                          <Spinner size={14} className="text-accent" /> {it.progress}%
                         </div>
                       )}
-                      {it.status === "queued" && <Loader2 size={14} className="animate-spin text-ink-3" />}
+                      {it.status === "queued" && <Spinner size={14} className="text-ink-3" />}
                       {it.status === "failed" && (
                         <>
                           <AlertCircle size={16} className="text-red-300" />

@@ -18,6 +18,7 @@ import PageHeader from "../../components/PageHeader";
 import EmptyState from "../../components/EmptyState";
 import { followMangaDownloads, useMangaDownloads } from "../../store/useMangaDownloads";
 import { useMangaReader } from "../../store/useMangaReader";
+import Spinner from "../../components/Spinner";
 
 /** Enough of the title to read its downloads offline (AniList may be out of reach). */
 const offlineManga = (item: MangaDownload): MangaMeta => ({
@@ -151,7 +152,7 @@ export default function MangaDownloads() {
                     {head.mangaTitle}
                   </button>
                   <div className="mt-1 flex items-center gap-1.5 text-xs text-ink-3">
-                    {active > 0 && <Loader2 size={11} className="animate-spin text-accent" />}
+                    {active > 0 && <Spinner size={11} className="text-accent" />}
                     {summary}
                   </div>
                 </div>
@@ -216,7 +217,7 @@ export default function MangaDownloads() {
                         )}
                       </div>
 
-                      {item.status === "queued" && <Loader2 size={14} className="animate-spin text-ink-3" />}
+                      {item.status === "queued" && <Spinner size={14} className="text-ink-3" />}
                       {item.status === "failed" && (
                         <>
                           <AlertCircle size={16} className="text-red-300" />

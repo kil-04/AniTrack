@@ -34,6 +34,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -58,6 +60,73 @@ import com.sanjay.anitrack.next.R
 
 // Shared building blocks for every screen. Keep screens on these so spacing,
 // shapes and colours stay consistent across anime and manga mode.
+
+/*
+ * The finish (desktop: renderer/index.css "Finish"). In the default look surfaces read as lit
+ * glass: an edge that catches white light at the top-left and the mode's colour at the
+ * bottom-right. Pixel mode has no lit glass; there the same places get the palette's plain frame.
+ * Everything here is drawn once and stays still.
+ */
+
+/** The lit edge for a surface of [shape]; drawn over the content, so it also frames artwork. */
+fun Modifier.litEdge(shape: Shape): Modifier =
+    if (AniColors.pixelMode.value) border(1.5.dp, AniColors.Border, shape)
+    else border(
+        1.dp,
+        Brush.linearGradient(
+            0f to Color.White.copy(alpha = 0.30f),
+            0.34f to Color.White.copy(alpha = 0.06f),
+            0.58f to Color.Transparent,
+            1f to AniColors.Accent.copy(alpha = 0.55f),
+        ),
+        shape,
+    )
+
+/** A cover's frame: the app's corners of [radius] with the lit edge on top of the art. */
+fun Modifier.coverFrame(radius: Dp = 12.dp): Modifier {
+    val shape = aniShape(radius)
+    return clip(shape).litEdge(shape)
+}
+
+/** A tinted tile's fill: the tint, stronger toward the light. Pixel mode keeps the flat tint. */
+private fun Modifier.tileFill(tint: Color, shape: Shape): Modifier =
+    if (AniColors.pixelMode.value) background(tint).border(1.dp, tint.copy(alpha = (tint.alpha * 1.3f).coerceAtMost(1f)), shape)
+    else background(
+        Brush.linearGradient(
+            listOf(tint.copy(alpha = (tint.alpha * 1.75f).coerceAtMost(1f)), tint.copy(alpha = tint.alpha * 0.5f)),
+        ),
+    ).border(
+        1.dp,
+        Brush.linearGradient(listOf(Color.White.copy(alpha = 0.22f), tint.copy(alpha = (tint.alpha * 1.6f).coerceAtMost(1f)))),
+        shape,
+    )
+
+/**
+ * The default look's night behind the pages: the mode's colour glowing in from two corners
+ * (desktop: .app-ambient). Still, so it costs nothing while a page scrolls.
+ */
+@Composable
+fun AniBackdrop(modifier: Modifier = Modifier) {
+    val accent = AniColors.Accent
+    val deep = AniColors.AccentDeep
+    Canvas(modifier) {
+        val reach = maxOf(size.width, size.height)
+        drawRect(
+            Brush.radialGradient(
+                listOf(accent.copy(alpha = 0.14f), accent.copy(alpha = 0.04f), Color.Transparent),
+                center = Offset(-size.width * 0.06f, -size.height * 0.14f),
+                radius = reach * 0.72f,
+            ),
+        )
+        drawRect(
+            Brush.radialGradient(
+                listOf(deep.copy(alpha = 0.10f), Color.Transparent),
+                center = Offset(size.width * 1.06f, size.height * 1.12f),
+                radius = reach * 0.7f,
+            ),
+        )
+    }
+}
 
 /**
  * The AniTrack logo: the brand art (res/drawable-nodpi/brand_logo.png) in a rounded tile.
@@ -103,7 +172,7 @@ fun IconTile(
 ) {
     val shape = aniShape(size * 0.28f)
     Box(
-        modifier.size(size).clip(shape).background(background).border(1.dp, tint.copy(alpha = 0.22f), shape),
+        modifier.size(size).clip(shape).tileFill(background, shape),
         contentAlignment = Alignment.Center,
     ) {
         Icon(icon, null, tint = tint, modifier = Modifier.size(size * 0.52f))
@@ -200,13 +269,19 @@ internal fun SectionHeader(
                 .clip(aniShape(2.dp)).background(AniColors.BrandGradient),
         )
         Spacer(Modifier.width(10.dp))
-        Text(
-            title,
-            style = MaterialTheme.typography.titleLarge,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
+        // The box takes the row's width so the text keeps its own: the title then runs from white
+        // into the mode's colour across its own letters, not across the screen.
+        Box(Modifier.weight(1f)) {
+            val style = MaterialTheme.typography.titleLarge
+            Text(
+                title,
+                style = if (AniColors.pixelMode.value) style else style.copy(
+                    brush = Brush.horizontalGradient(0.3f to AniColors.Text, 1f to lerp(AniColors.Text, AniColors.AccentBright, 0.85f)),
+                ),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
         trailing?.invoke(this)
         if (onClick != null) {
             Row(
@@ -239,8 +314,7 @@ fun EmptyState(
         // Pixel mode draws a sprite for the occasion (pixelSpriteForIcon) instead of the icon.
         if (AniColors.pixelMode.value) BobbingSprite(pixelSpriteForIcon(icon.name), 72.dp)
         else Box(
-            Modifier.size(76.dp).clip(tile).background(AniColors.Accent.copy(alpha = 0.13f))
-                .border(1.dp, AniColors.Accent.copy(alpha = 0.25f), tile),
+            Modifier.size(76.dp).clip(tile).tileFill(AniColors.Accent.copy(alpha = 0.15f), tile),
             contentAlignment = Alignment.Center,
         ) {
             Icon(icon, null, tint = AniColors.Accent, modifier = Modifier.size(34.dp))
@@ -425,8 +499,9 @@ fun PillButton(
     val alpha = if (enabled) 1f else 0.45f
     val shape = aniShape(if (compact) 12.dp else 14.dp)
     val gradient = style == PillStyle.Primary || style == PillStyle.Light
+    val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Row(
-        modifier.height(if (compact) 36.dp else 46.dp)
+        modifier.pressScale(interaction).height(if (compact) 36.dp else 46.dp)
             .then(
                 if (gradient && enabled) Modifier.shadow(12.dp, shape, ambientColor = AniColors.Accent, spotColor = AniColors.Accent)
                 else Modifier,
@@ -437,13 +512,19 @@ fun PillButton(
                 else Modifier.background(bg.copy(alpha = bg.alpha * alpha)),
             )
             .then(
-                when (style) {
-                    PillStyle.Outline -> Modifier.border(1.dp, AniColors.Border, shape)
-                    PillStyle.Tonal -> Modifier.border(1.dp, Color.White.copy(alpha = 0.12f), shape)
+                when {
+                    style == PillStyle.Outline -> Modifier.border(1.dp, AniColors.Border, shape)
+                    style == PillStyle.Tonal -> Modifier.border(1.dp, Color.White.copy(alpha = 0.12f), shape)
+                    // The main button catches the light along its top edge.
+                    gradient && !AniColors.pixelMode.value -> Modifier.border(
+                        1.dp,
+                        Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.42f * alpha), Color.White.copy(alpha = 0.04f * alpha))),
+                        shape,
+                    )
                     else -> Modifier
                 },
             )
-            .clickable(enabled = enabled && !loading, onClick = onClick)
+            .clickable(interactionSource = interaction, indication = androidx.compose.foundation.LocalIndication.current, enabled = enabled && !loading, onClick = onClick)
             .padding(horizontal = if (compact) 14.dp else 20.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
@@ -487,8 +568,12 @@ fun PillTabs(
             val shape = aniShape(50)
             Row(
                 Modifier.height(if (compact) 32.dp else 38.dp).clip(shape)
-                    .background(if (on) AniColors.AccentSoft else AniColors.SurfaceHigh)
-                    .border(1.dp, if (on) AniColors.Accent.copy(alpha = 0.45f) else AniColors.BorderSoft, shape)
+                    .then(
+                        if (on && !AniColors.pixelMode.value) Modifier.background(
+                            Brush.linearGradient(listOf(AniColors.AccentBright.copy(alpha = 0.34f), AniColors.AccentDeep.copy(alpha = 0.20f))),
+                        ) else Modifier.background(if (on) AniColors.AccentSoft else AniColors.SurfaceHigh),
+                    )
+                    .border(1.dp, if (on) AniColors.Accent.copy(alpha = 0.6f) else AniColors.BorderSoft, shape)
                     .clickable(enabled = !on) { onSelect(key) }
                     .padding(horizontal = if (compact) 12.dp else 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -564,7 +649,19 @@ fun AniCard(
     Column(
         modifier.fillMaxWidth().clip(shape)
             .background(Brush.verticalGradient(listOf(AniColors.SurfaceHigh, AniColors.Surface)))
-            .border(1.dp, Color.White.copy(alpha = 0.07f), shape)
+            .then(
+                if (AniColors.pixelMode.value) Modifier.border(1.dp, Color.White.copy(alpha = 0.07f), shape)
+                else Modifier.border(
+                    1.dp,
+                    Brush.linearGradient(
+                        0f to Color.White.copy(alpha = 0.17f),
+                        0.32f to Color.White.copy(alpha = 0.05f),
+                        0.62f to Color.White.copy(alpha = 0.03f),
+                        1f to AniColors.Accent.copy(alpha = 0.32f),
+                    ),
+                    shape,
+                ),
+            )
             .padding(padding),
         content = content,
     )

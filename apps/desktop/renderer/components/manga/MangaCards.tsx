@@ -10,9 +10,9 @@ export function MangaCard({ manga, badge, size }: { manga: Pick<MangaMeta, "id" 
   return (
     <Link
       to={`/manga/${manga.id}`}
-      className={`group block ${size === "row" ? "w-40 flex-shrink-0" : ""}`}
+      className={`rise-in group block ${size === "row" ? "w-40 flex-shrink-0" : ""}`}
     >
-      <div className="relative aspect-[2/3] overflow-hidden rounded-2xl bg-surface-1 shadow-card ring-1 ring-white/[0.06] transition-all duration-300 ease-out group-hover:-translate-y-1.5 group-hover:shadow-glow-lg group-hover:ring-2 group-hover:ring-accent/70">
+      <div className="relative aspect-[2/3] card-fx overflow-hidden rounded-2xl bg-surface-1 shadow-card ring-1 ring-white/[0.06] transition-all duration-300 ease-out group-hover:-translate-y-1.5 group-hover:shadow-glow-lg group-hover:ring-2 group-hover:ring-accent/70">
         {manga.cover && (
           <img src={manga.cover} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover transition duration-700 ease-out group-hover:scale-[1.07]" />
         )}
@@ -46,7 +46,7 @@ export function MangaRow({ title, items, action }: { title: string; items: Manga
         <button onClick={() => scroll(-1)} className="absolute left-2 top-1/2 z-30 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full glass shadow-pop transition hover:scale-105 group-hover/row:flex" aria-label="Scroll left">
           <ChevronLeft size={26} />
         </button>
-        <div ref={scroller} className="no-scrollbar flex gap-4 overflow-x-auto px-8 pb-4 pt-2">
+        <div ref={scroller} className="stagger no-scrollbar flex gap-4 overflow-x-auto px-8 pb-4 pt-2">
           {items.map((manga) => <MangaCard key={manga.id} manga={manga} size="row" />)}
         </div>
         <button onClick={() => scroll(1)} className="absolute right-2 top-1/2 z-30 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full glass shadow-pop transition hover:scale-105 group-hover/row:flex" aria-label="Scroll right">

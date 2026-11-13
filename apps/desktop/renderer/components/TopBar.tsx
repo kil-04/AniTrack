@@ -6,6 +6,7 @@ import { BackgroundMusicButton } from "./BackgroundMusic";
 import { MangaSearchBox } from "./manga/MangaCards";
 import { modeForPath } from "../lib/manga-api";
 import { NovelSearchBox } from "./novel/NovelCards";
+import Spinner from "./Spinner";
 
 /**
  * The slim header above every page: history buttons, the mode's search and sync
@@ -35,7 +36,7 @@ export default function TopBar() {
       <div className="titlebar-no-drag ml-auto flex items-center gap-3">
         {scanStatus && (
           <span className="hidden items-center gap-2 rounded-full border border-white/[0.07] bg-white/[0.04] px-3 py-1.5 text-xs text-ink-2 lg:inline-flex">
-            <RefreshCw size={12} className="animate-spin text-accent" />
+            <Spinner icon={RefreshCw} size={12} className="text-accent" />
             {scanStatus}
           </span>
         )}

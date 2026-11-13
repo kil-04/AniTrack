@@ -3,6 +3,7 @@ import { Loader2, Pause, Play } from "lucide-react";
 import type { SkipTimes } from "../../lib/skip-times";
 import { SkipOverlay } from "./SkipOverlay";
 import { GestureFeedback } from "./useVideoGestures";
+import Spinner from "../Spinner";
 
 interface UpNextState {
   episode: number;
@@ -145,13 +146,13 @@ export function StreamVideoArea({
       )}
       {loadingStream && (
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 text-white/40">
-          <Loader2 size={36} className="animate-spin" />
+          <Spinner size={36} />
           <span className="text-sm">{fallbackNotice ?? "Resolving stream…"}</span>
         </div>
       )}
       {buffering && !loadingStream && !streamError && currentEpisode && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-          <Loader2 size={44} className="animate-spin text-white/70 drop-shadow-lg" />
+          <Spinner size={44} className="text-white/70 drop-shadow-lg" />
         </div>
       )}
       {streamError && !loadingStream && (

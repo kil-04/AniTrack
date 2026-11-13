@@ -1,5 +1,5 @@
-import { lazy, Suspense, useEffect } from "react";
-import { Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef } from "react";
+import { Navigate, Route, Routes, useLocation, useNavigationType } from "react-router-dom";
 import TopBar from "./components/TopBar";
 import AppSidebar from "./components/AppSidebar";
 import BottomNav from "./components/BottomNav";
@@ -17,21 +17,14 @@ import { isCapacitor } from "./lib/platform";
 import { subscribeDownloads } from "./lib/downloads";
 import { deleteAnimeProgress } from "./lib/supabase-sync";
 import { holdForPlayerRoute, startBgMusic } from "./store/useBgMusic";
-import { AnimatePresence, motion } from "framer-motion";
+import { fadeInWindow } from "./lib/motion";
 import type { MalAuthState } from "../../../packages/shared/types";
 
-// Short and opacity-led: AnimatePresence waits for the exit before the next page
-// mounts, so 0.2 s each way made every navigation take ~0.4 s.
+// A click swaps the page in the same frame and the new one rises in (index.css
+// `.page-in`, a compositor animation). There is no exit animation: waiting for one
+// left the page area blank while the next page rendered.
 const PageTransition = ({ children }: { children: React.ReactNode }) => (
-  <motion.div
-    initial={{ opacity: 0, y: 6 }}
-    animate={{ opacity: 1, y: 0 }}
-    exit={{ opacity: 0, transition: { duration: 0.07 } }}
-    transition={{ duration: 0.14, ease: "easeOut" }}
-    className="h-full w-full"
-  >
-    {children}
-  </motion.div>
+  <div className="page-in h-full w-full">{children}</div>
 );
 
 const ShowDetail       = lazy(() => import("./pages/ShowDetail"));
@@ -65,8 +58,23 @@ const NovelDetail      = lazy(() => import("./pages/novel/NovelDetail"));
 const NovelReader      = lazy(() => import("./pages/novel/NovelReader"));
 const NovelDownloads   = lazy(() => import("./pages/novel/NovelDownloads"));
 
+/** Every page's code, fetched while the app is idle so no page is waited for when it is opened. */
+const PAGE_CHUNKS: (() => Promise<unknown>)[] = [
+  () => import("./pages/ShowDetail"), () => import("./pages/StreamPlayer"), () => import("./pages/Filter"),
+  () => import("./pages/Library"), () => import("./pages/ContinueWatching"), () => import("./pages/Schedule"),
+  () => import("./pages/LatestEpisodes"), () => import("./pages/Downloads"), () => import("./pages/Settings"),
+  () => import("./pages/manga/MangaHome"), () => import("./pages/manga/MangaDetail"), () => import("./pages/manga/MangaSearch"),
+  () => import("./pages/manga/MangaList"), () => import("./pages/manga/MangaUpdates"), () => import("./pages/manga/MangaDownloads"),
+  () => import("./pages/manga/MangaReader"), () => import("./pages/novel/NovelHome"), () => import("./pages/novel/NovelDetail"),
+  () => import("./pages/novel/NovelSearch"), () => import("./pages/novel/NovelList"), () => import("./pages/novel/NovelDownloads"),
+  () => import("./pages/novel/NovelReader"), () => import("./pages/TimeMachine"), () => import("./pages/Songs"),
+  () => import("./pages/TasteGenome"), () => import("./pages/YearReview"), () => import("./pages/Museum"), () => import("./pages/CityPop"),
+];
+
+// Shown only while a page's code is still being fetched (the first seconds after launch),
+// and only if that takes long enough to notice (`.late-in`).
 const PageFallback = () => (
-  <div className="flex h-full items-center justify-center gap-2 text-sm text-ink-3">
+  <div className="late-in flex h-full items-center justify-center gap-2 text-sm text-ink-3">
     <span className="h-4 w-4 animate-spin rounded-full border-2 border-accent/30 border-t-accent" />
     Loading…
   </div>
@@ -86,6 +94,11 @@ export default function App() {
   const isTablet      = useMediaQuery(TABLET_LANDSCAPE);
   const skin          = useSkin();
   const motion        = useMotion();
+  const navType       = useNavigationType();
+  const mainRef       = useRef<HTMLElement>(null);
+  /** Where each visited page was scrolled to, by history entry. */
+  const scrollByEntry = useRef(new Map<string, number>());
+  const entryKey      = useRef(location.key);
 
   const inStreaming   = location.pathname === "/stream";
   const inReader      = location.pathname === "/manga/read";
@@ -97,9 +110,44 @@ export default function App() {
   }, [location.pathname, inReader, inNovelReader]);
   // The accent follows the mode (azure for anime, deeper blues for manga and novels): see index.css.
   const appMode = inReader ? "manga" : inNovelReader ? "novel" : modeForPath(location.pathname);
-  useEffect(() => {
+  const shownMode = useRef<string | null>(null);
+  useLayoutEffect(() => {
     document.documentElement.dataset.mode = appMode;
+    // Switching mode recolours the whole window (sidebar, top bar, page): it fades in on the
+    // new colours instead of snapping. Not on launch, when there is nothing to switch from.
+    if (shownMode.current && shownMode.current !== appMode) fadeInWindow();
+    shownMode.current = appMode;
   }, [appMode]);
+
+  // A new page starts at the top; Back and Forward return to where that page was left.
+  // (The scroller is shared by every page, so it used to keep the last page's position.)
+  useLayoutEffect(() => {
+    const main = mainRef.current;
+    entryKey.current = location.key;
+    if (!main) return;
+    if (navType !== "POP") {
+      main.scrollTop = 0;
+      return;
+    }
+    const target = scrollByEntry.current.get(location.key) ?? 0;
+    main.scrollTop = target;
+    if (target <= 0 || main.scrollTop >= target - 2) return;
+    // The page is still filling in (rows mount after the first paint): follow it down
+    // for a moment, unless the reader starts scrolling themselves.
+    let frames = 0;
+    let id = 0;
+    const stop = () => { cancelAnimationFrame(id); main.removeEventListener("wheel", stop); main.removeEventListener("pointerdown", stop); window.removeEventListener("keydown", stop); };
+    const follow = () => {
+      main.scrollTop = target;
+      if (main.scrollTop >= target - 2 || ++frames > 180) stop();
+      else id = requestAnimationFrame(follow);
+    };
+    main.addEventListener("wheel", stop, { passive: true });
+    main.addEventListener("pointerdown", stop, { passive: true });
+    window.addEventListener("keydown", stop);
+    id = requestAnimationFrame(follow);
+    return stop;
+  }, [location.pathname, location.key, navType]);
   const isPlayerRoute = location.pathname === "/stream-player";
   const playerSearch  = usePlayerStore((s) => s.search);
 
@@ -174,22 +222,21 @@ export default function App() {
     return subscribeDownloads(() => {});
   }, []);
 
-  // Warm the heaviest route chunks (player + detail) once the app is idle so the
-  // first stream open is instant instead of showing the "Loading…" fallback.
+  // Fetch every page's code once the app is idle, one page per idle moment (the player
+  // and the detail page first), so opening a page never waits for its code.
   useEffect(() => {
-    const prefetch = () => {
-      import("./pages/ShowDetail");
-      import("./pages/StreamPlayer");
+    let next = 0;
+    let id = 0;
+    let stopped = false;
+    const ric = (window as any).requestIdleCallback as ((cb: () => void, opts?: { timeout: number }) => number) | undefined;
+    const schedule = () => { id = ric ? ric(step, { timeout: 4000 }) : window.setTimeout(step, 400); };
+    const step = () => {
+      if (stopped || next >= PAGE_CHUNKS.length) return;
+      void PAGE_CHUNKS[next++]().catch(() => {});
+      schedule();
     };
-    const ric = (window as any).requestIdleCallback as
-      | ((cb: () => void) => number)
-      | undefined;
-    if (ric) {
-      const id = ric(prefetch);
-      return () => (window as any).cancelIdleCallback?.(id);
-    }
-    const id = setTimeout(prefetch, 2500);
-    return () => clearTimeout(id);
+    schedule();
+    return () => { stopped = true; if (ric) (window as any).cancelIdleCallback?.(id); else clearTimeout(id); };
   }, []);
 
   // Persistent player overlay — full-screen on /stream-player, floating mini
@@ -252,9 +299,12 @@ export default function App() {
       {skin === "pixel" && <PixelAmbient motion={motion && !isPlayerRoute} />}
       <UpdateBanner />
       {showTopBar && <TopBar />}
-      <main className="thin-scrollbar flex-1 overflow-y-auto">
+      <main
+        ref={mainRef}
+        className="thin-scrollbar flex-1 overflow-y-auto"
+        onScroll={(event) => { scrollByEntry.current.set(entryKey.current, event.currentTarget.scrollTop); }}
+      >
         <Suspense fallback={<PageFallback />}>
-          <AnimatePresence mode="wait">
             <Routes location={location} key={location.pathname}>
               <Route path="/"                   element={<PageTransition><Home /></PageTransition>} />
               <Route path="/library"            element={<PageTransition><Library /></PageTransition>} />
@@ -286,7 +336,6 @@ export default function App() {
               <Route path="/novels/downloads"   element={<PageTransition><NovelDownloads /></PageTransition>} />
               <Route path="/novels/t/:source/:id" element={<PageTransition><NovelDetail /></PageTransition>} />
             </Routes>
-          </AnimatePresence>
         </Suspense>
       </main>
       {showBottomNav && <BottomNav />}

@@ -14,6 +14,7 @@ import {
   enqueueBatch,
   removeDownload,
 } from "../lib/downloads";
+import Spinner from "./Spinner";
 
 interface Props {
   animeTitle: string;
@@ -289,7 +290,7 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
 
         {!selected && searching && (
           <div className="flex items-center gap-2 py-4 text-sm text-white/40">
-            <Loader2 size={14} className="animate-spin" /> Loading episodes…
+            <Spinner size={14} /> Loading episodes…
           </div>
         )}
 
@@ -357,7 +358,7 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
                     className="btn btn-secondary"
                     title="Download the next 100 episodes from your resume point"
                   >
-                    {batchBusy ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                    {batchBusy ? <Spinner size={14} /> : <Download size={14} />}
                     Download 100
                   </button>
                   <button
@@ -402,7 +403,7 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
                   disabled={batchBusy || !rangeFrom || !rangeTo}
                   className="btn btn-primary btn-sm"
                 >
-                  {batchBusy ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} Download range
+                  {batchBusy ? <Spinner size={14} /> : <Download size={14} />} Download range
                 </button>
                 <span className="text-[11px] text-white/30">up to 100 at a time</span>
               </div>
@@ -410,7 +411,7 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
 
             {loadingEps ? (
               <div className="flex items-center gap-2 py-4 text-sm text-white/40">
-                <Loader2 size={14} className="animate-spin" /> Loading episodes…
+                <Spinner size={14} /> Loading episodes…
               </div>
             ) : (
               <>
@@ -474,8 +475,8 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
                               }`}
                             >
                               {st === "done" ? <><Check size={13} /> Saved</>
-                                : st === "downloading" ? <><Loader2 size={13} className="animate-spin" /> {dl?.progress ?? 0}%</>
-                                : st === "queued" ? <><Loader2 size={13} className="animate-spin" /> Queued</>
+                                : st === "downloading" ? <><Spinner size={13} /> {dl?.progress ?? 0}%</>
+                                : st === "queued" ? <><Spinner size={13} /> Queued</>
                                 : st === "failed" ? <><Download size={13} /> Retry</>
                                 : <><Download size={13} /> Download</>}
                             </button>
@@ -548,7 +549,7 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
         <div>
           {searching ? (
             <div className="flex items-center gap-2 text-xs text-ink-3">
-              <Loader2 size={12} className="animate-spin text-accent" /> Searching providers...
+              <Spinner size={12} className="text-accent" /> Searching providers...
             </div>
           ) : results.length === 0 ? (
             <div className="text-xs text-ink-3">No results found on the available providers.</div>
@@ -605,7 +606,7 @@ export default function ProviderPanel({ animeTitle, animeTitleAlt, animeTitleRom
 
           {loadingEps ? (
             <div className="flex items-center gap-2 py-2 text-xs text-ink-3">
-              <Loader2 size={12} className="animate-spin text-accent" /> Loading episodes...
+              <Spinner size={12} className="text-accent" /> Loading episodes...
             </div>
           ) : (
             <>

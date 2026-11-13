@@ -12,6 +12,7 @@ import {
   type TrackedTitle,
 } from "../../../../../packages/shared/manga";
 import { mangaApi, titlePref } from "../../lib/manga-api";
+import Spinner from "../../components/Spinner";
 
 interface UpdateEntry extends TrackedTitle {
   latest: number | null;
@@ -93,7 +94,7 @@ export default function MangaUpdates() {
       <PageHeader scene="dusk-line" icon={Sparkles} title="Updates" subtitle="Newest chapters for manga in your list and reading history">
         {loading ? (
           <span className="chip h-8 text-[13px]">
-            <Loader2 size={14} className="animate-spin text-accent" /> Checking sources…
+            <Spinner size={14} className="text-accent" /> Checking sources…
           </span>
         ) : (
           <button onClick={() => setAttempt((n) => n + 1)} className="btn btn-secondary btn-sm" title="Check again">

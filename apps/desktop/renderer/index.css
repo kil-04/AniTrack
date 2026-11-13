@@ -119,16 +119,62 @@ video::cue {
     rgb(var(--bg));
 }
 
-/* The hero rail's countdown bar (8 s per slide, see pages/Home.tsx). */
+/* ── Motion ──────────────────────────────────────────────────────────────────────────────────
+   One easing and three lengths for the whole app. Everything below animates opacity and
+   transform only, so the compositor runs it: a page that is busy rendering never drops these
+   frames. Pixel mode moves in steps instead of easing (further down). */
+:root {
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --t-fast: 140ms;
+  --t-med: 240ms;
+  --t-slow: 420ms;
+}
+
+/* A page arriving (App.tsx): the old page stays until this one is ready, then it rises in. */
+@keyframes page-in { from { opacity: 0; transform: translateY(10px); } }
+.page-in { animation: page-in var(--t-med) var(--ease-out) both; }
+
+/* Cards and tiles arriving; in a `.stagger` row they come one after another. */
+@keyframes rise-in { from { opacity: 0; transform: translateY(14px) scale(0.985); } }
+.rise-in { animation: rise-in var(--t-slow) var(--ease-out) both; }
+.stagger > :nth-child(2) { animation-delay: 30ms; }
+.stagger > :nth-child(3) { animation-delay: 60ms; }
+.stagger > :nth-child(4) { animation-delay: 90ms; }
+.stagger > :nth-child(5) { animation-delay: 120ms; }
+.stagger > :nth-child(6) { animation-delay: 150ms; }
+.stagger > :nth-child(7) { animation-delay: 180ms; }
+.stagger > :nth-child(8) { animation-delay: 210ms; }
+/* Only what can be on screen arrives animated: each animated card is a layer of its own while it
+   moves, and a page of several hundred (a long list, five rows of sixty) took over a second to
+   lay out and composite. The rest of a row or grid is simply there. */
+.stagger > .rise-in:nth-child(n + 9),
+.rise-in:nth-child(n + 25) { animation: none; }
+
+@keyframes skeleton-sweep { to { transform: translateX(100%); } }
+
+/* Something that only matters if it stays: invisible for a moment, then there. */
+@keyframes late-in { to { opacity: 1; } }
+.late-in { opacity: 0; animation: late-in 1ms linear 250ms forwards; }
+
+/* A banner that melts into the page below it instead of ending on a line. */
+.banner-fade { -webkit-mask-image: linear-gradient(to bottom, #000 58%, transparent 100%); mask-image: linear-gradient(to bottom, #000 58%, transparent 100%); }
+
+@media (prefers-reduced-motion: reduce) {
+  .page-in, .rise-in, [data-skin="pixel"] .page-in::after { animation: none; }
+}
+
+/* The hero rail's countdown bar (8 s per slide, see pages/Home.tsx): scaled, not widened. Animating
+   its width laid the page out on every frame, which kept an idle Home's main thread ~90% busy. */
 @keyframes heroProgress {
-  from { width: 0%; }
-  to { width: 100%; }
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
 }
 
 @layer components {
   /* Buttons */
   .btn {
-    @apply inline-flex h-10 select-none items-center justify-center gap-2 whitespace-nowrap rounded-xl px-4 text-sm font-semibold transition-all duration-200 disabled:pointer-events-none disabled:opacity-40;
+    @apply inline-flex h-10 select-none items-center justify-center gap-2 whitespace-nowrap rounded-xl px-4 text-sm font-semibold transition-all duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] active:scale-[0.97] disabled:pointer-events-none disabled:opacity-40;
   }
   .btn-sm { @apply h-8 gap-1.5 rounded-lg px-3 text-xs; }
   .btn-lg { @apply h-12 gap-2.5 rounded-2xl px-6 text-[15px]; }
@@ -168,10 +214,131 @@ video::cue {
     @apply h-10 w-full rounded-xl border border-white/[0.08] bg-surface-2/70 px-3.5 text-sm text-white outline-none transition placeholder:text-ink-3 focus:border-accent/60 focus:bg-surface-2 focus:ring-4 focus:ring-accent/15;
   }
   .section-title { @apply text-[22px] font-bold tracking-tight text-white; }
-  .skeleton {
-    @apply bg-[linear-gradient(90deg,rgb(255_255_255/0.04)_0%,rgb(255_255_255/0.09)_50%,rgb(255_255_255/0.04)_100%)] bg-[length:800px_100%] animate-shimmer;
+  /* A placeholder with a light sweeping across it. The sweep is a layer moved by transform (the
+     compositor's job); sliding the background instead repainted every placeholder on every frame. */
+  .skeleton { @apply relative overflow-hidden bg-white/[0.05]; }
+  .skeleton::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent 0%, rgb(255 255 255 / 0.07) 50%, transparent 100%);
+    animation: skeleton-sweep 1.5s var(--ease-in-out) infinite;
   }
 }
+
+/* ── Finish (the default look) ────────────────────────────────────────────────────────────────
+   What makes surfaces read as lit glass instead of flat boxes: an edge that catches the light at
+   the top-left and the mode's colour at the bottom-right, a sheen that crosses a cover when it is
+   pointed at, titles that run into the accent, and a fine dot grid in the window's night. All of
+   it is static or moves by transform only. Pixel mode has its own finish further down. */
+html:not([data-skin="pixel"]) .app-ambient {
+  background:
+    radial-gradient(1000px 520px at -8% -16%, rgb(var(--accent) / 0.12), transparent 62%),
+    radial-gradient(860px 500px at 108% -20%, rgb(var(--accent-alt) / 0.07), transparent 60%),
+    radial-gradient(1200px 700px at 50% 125%, rgb(var(--accent-2) / 0.07), transparent 70%),
+    radial-gradient(circle, rgb(255 255 255 / 0.045) 1px, transparent 1.6px) 0 0 / 26px 26px,
+    rgb(var(--bg));
+}
+
+/* The lit edge, on covers (.card-fx) and the home pages' hero (.hero-fx): a one-pixel ring drawn
+   as a gradient and cut out with a mask, so it follows the rounded corners. */
+.card-fx::after,
+.hero-fx::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  padding: 1px;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(145deg, rgb(255 255 255 / 0.30), rgb(255 255 255 / 0.05) 34%, transparent 58%, rgb(var(--accent) / 0.55));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+.hero-fx::after { z-index: 30; padding: 1.5px; }
+/* The sheen: parked off the left edge, it crosses the cover once when the card is pointed at
+   (and is simply gone again when the pointer leaves: no sweep back). */
+.card-fx::before {
+  content: "";
+  position: absolute;
+  top: -10%;
+  bottom: -10%;
+  left: -80%;
+  width: 60%;
+  z-index: 3;
+  pointer-events: none;
+  background: linear-gradient(100deg, transparent, rgb(255 255 255 / 0.16), transparent);
+  transform: skewX(-12deg);
+  opacity: 0;
+}
+.group:hover .card-fx::before,
+.card-fx:hover::before {
+  opacity: 1;
+  transform: translateX(420%) skewX(-12deg);
+  transition: transform 750ms var(--ease-out), opacity 120ms linear;
+}
+
+/* Section titles run from white into the mode's colour. */
+html:not([data-skin="pixel"]) .section-title {
+  background: linear-gradient(95deg, rgb(var(--text)) 35%, rgb(var(--accent-hover)) 135%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* The main button: a highlight along its top edge, and a band of light that crosses it on hover. */
+html:not([data-skin="pixel"]) .btn-primary {
+  background-image:
+    linear-gradient(105deg, transparent 38%, rgb(255 255 255 / 0.26) 50%, transparent 62%),
+    linear-gradient(135deg, rgb(var(--accent-hover)) 0%, rgb(var(--accent)) 45%, rgb(var(--accent-2)) 100%);
+  background-size: 260% 100%, 100% 100%;
+  background-position: 130% 0, 0 0;
+  background-repeat: no-repeat;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.30), 0 10px 30px -10px rgb(var(--accent) / 0.65);
+}
+html:not([data-skin="pixel"]) .btn-primary:hover {
+  background-position: -30% 0, 0 0;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.36), 0 18px 50px -14px rgb(var(--accent) / 0.7);
+  transition: background-position 650ms var(--ease-out), transform 200ms var(--ease-out), box-shadow 200ms, filter 200ms;
+}
+
+/* Icon tiles and panels catch the same light (left alone where a page gives them its own colour). */
+html:not([data-skin="pixel"]) .icon-tile:not([class*=" bg-"]) {
+  background-image: linear-gradient(145deg, rgb(var(--accent) / 0.30), rgb(var(--accent-2) / 0.10));
+  box-shadow: inset 0 0 0 1px rgb(var(--accent) / 0.22), inset 0 1px 0 rgb(255 255 255 / 0.14), 0 8px 20px -10px rgb(var(--accent) / 0.7);
+}
+html:not([data-skin="pixel"]) .panel:not([class*=" bg-"]):not([class*=" border-"]) {
+  border-color: transparent;
+  background:
+    linear-gradient(rgb(var(--surface-1) / 0.88), rgb(var(--surface-1) / 0.88)) padding-box,
+    linear-gradient(150deg, rgb(255 255 255 / 0.18), rgb(255 255 255 / 0.05) 32%, rgb(255 255 255 / 0.03) 62%, rgb(var(--accent) / 0.32)) border-box;
+}
+html:not([data-skin="pixel"]) .chip-active { box-shadow: 0 6px 18px -8px rgb(var(--accent) / 0.7); }
+
+/* A thread of the accent under the top bar and down the sidebar's edge. */
+html:not([data-skin="pixel"]) header.titlebar-drag::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg, rgb(var(--accent) / 0.55), rgb(var(--accent) / 0.12) 45%, transparent 80%);
+}
+html:not([data-skin="pixel"]) aside.z-40::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -1px;
+  width: 1px;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgb(var(--accent) / 0.55), rgb(var(--accent) / 0.10) 40%, transparent 75%);
+}
+.thin-scrollbar::-webkit-scrollbar-thumb:hover { background-color: rgb(var(--accent) / 0.55); }
 
 /* ── Pixel mode (Settings → Appearance, lib/skin.ts) ─────────────────────────────────────────
    City Pop's retrowave pixel art across the app: night-purple surfaces, neon accents per mode,
@@ -320,7 +487,8 @@ video::cue {
 [data-skin="pixel"] .btn,
 [data-skin="pixel"] .chip,
 [data-skin="pixel"] .badge,
-[data-skin="pixel"] aside nav a,
+[data-skin="pixel"] aside a,
+[data-skin="pixel"] aside button.text-xs,
 [data-skin="pixel"] .wordmark {
   font-family: var(--pixel-font);
   font-size-adjust: cap-height 0.7;
@@ -359,12 +527,63 @@ video::cue {
 [data-skin="pixel"] .icon-tile { box-shadow: 2px 2px 0 0 rgb(var(--pixel-shadow)); }
 [data-skin="pixel"] button:focus-visible,
 [data-skin="pixel"] a:focus-visible { outline: 2px dashed rgb(var(--accent-alt)); }
+
+/* Pixel mode moves in steps: pages and cards arrive in a few frames, like sprites, and the
+   window switches looks in steps too. Buttons press into their hard shadow instead of shrinking. */
+/* A page doesn't fade or slide in here: fading it would re-run the hero's pixelating filter on
+   every frame (opening Home took 1.8 s instead of 0.7 s, measured). It is simply there, under a
+   veil in the night colour that lifts in four steps: one flat layer, like a screen switching on. */
+@keyframes pixel-wipe { from { opacity: 0.9; } to { opacity: 0; } }
+[data-skin="pixel"] .page-in { position: relative; animation: none; }
+[data-skin="pixel"] .page-in::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+  background: rgb(var(--pixel-night));
+  opacity: 0;
+  animation: pixel-wipe 180ms steps(4, end);
+}
+[data-skin="pixel"] .rise-in { animation-timing-function: steps(4, end); animation-duration: 280ms; }
+[data-skin="pixel"] .btn:active { scale: 1; transform: translate(2px, 2px); }
+[data-skin="pixel"] .skeleton::after { animation-timing-function: steps(8, end); background: rgb(var(--accent) / 0.12); width: 34%; }
+/* Pixel mode's finish. No lit edges or sheens here: a cover that is pointed at steps up and to
+   the left off its shadow, which takes the mode's colour, inside an accent outline; the hero wears
+   the same frame as the page banners; and the window darkens toward its corners like a tube. */
+[data-skin="pixel"] .card-fx::before,
+[data-skin="pixel"] .card-fx::after,
+[data-skin="pixel"] .hero-fx::after { display: none; }
+[data-skin="pixel"] .card-fx { transition: transform 90ms steps(2, end), box-shadow 90ms steps(2, end) !important; }
+[data-skin="pixel"] .group:hover .card-fx,
+[data-skin="pixel"] .card-fx:hover {
+  transform: translate(-3px, -3px) !important;
+  box-shadow: 7px 7px 0 0 rgb(var(--accent-2)) !important;
+  outline: 2px solid rgb(var(--accent));
+  outline-offset: -2px;
+}
+[data-skin="pixel"] .hero-fx { border: 2px solid rgb(var(--accent)); box-shadow: 6px 6px 0 0 rgb(var(--accent-2) / 0.45) !important; }
+[data-skin="pixel"] .app-ambient::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  pointer-events: none;
+  background: radial-gradient(ellipse 120% 105% at 50% 45%, transparent 60%, rgb(var(--pixel-shadow) / 0.5) 100%);
+}
+/* The Top 10 panel's header: the pixel font is wide, so its tabs sit closer together. */
+[data-skin="pixel"] .top10-tab { padding-left: 6px; padding-right: 6px; }
+/* Spinners turn in eight steps, like a sprite. */
+[data-skin="pixel"] .animate-spin { animation-timing-function: steps(8, end); }
+
 [data-skin="pixel"] ::selection { background: rgb(var(--accent) / 0.5); }
 
 /* Home's hero in Pixel mode: its art pixelated (components/PixelScene.tsx's filter) under a CRT
    screen; in blue, the banners' haze and rolling bar too. */
 .pixel-screen { display: none; pointer-events: none; }
-[data-skin="pixel"] .hero-art { filter: url(#pixelate-8); }
+/* The art holds still: the pixelating filter can't run on the GPU, so the slow zoom the default
+   look has re-ran it on every frame for as long as Home was open (and pixels don't glide anyway). */
+[data-skin="pixel"] .hero-art { filter: url(#pixelate-8); transform: none !important; transition: none !important; }
 [data-skin="pixel"] .pixel-screen {
   display: block;
   background: repeating-linear-gradient(to bottom, rgb(0 0 0 / 0.18) 0 1px, transparent 1px 3px);
@@ -394,6 +613,7 @@ video::cue {
    take turns by opacity in steps; the cat moves by transform, sized by its strip (container units). */
 .pixel-dog { position: absolute; right: 18px; bottom: calc(100% - 2px); width: 32px; height: 24px; pointer-events: none; }
 .pixel-dog > *, .pixel-walker-cat > * { position: absolute; left: 0; bottom: 0; }
+.pixel-dog > * > svg, .pixel-walker-cat > * > svg { display: block; }
 .pixel-frame-b { opacity: 0; }
 @keyframes pixel-frame-a { 0% { opacity: 1; } 50% { opacity: 0; } }
 @keyframes pixel-frame-b { 0% { opacity: 0; } 50% { opacity: 1; } 100% { opacity: 1; } }
@@ -573,8 +793,9 @@ video::cue {
 .pixel-skyline-blink { animation: pixel-blink 2.8s steps(1) infinite; }
 @keyframes pixel-blink { 0% { opacity: 0; } 50% { opacity: 1; } }
 .pixel-cat-path { position: absolute; left: 0; right: 0; bottom: 3px; height: 36px; }
-.pixel-cat { position: absolute; left: 0; bottom: 0; image-rendering: pixelated; animation: pixel-cat-step 0.44s steps(2) infinite, pixel-cat-walk 75s steps(420) infinite; }
-@keyframes pixel-cat-step { from { background-position: 0 0; } to { background-position: -96px 0; } }
+.pixel-cat { position: absolute; left: 0; bottom: 0; overflow: hidden; animation: pixel-cat-walk 75s steps(420) infinite; }
+.pixel-cat-strip { image-rendering: pixelated; animation: pixel-cat-step 0.44s steps(2) infinite; }
+@keyframes pixel-cat-step { from { transform: translateX(0); } to { transform: translateX(-100%); } }
 @keyframes pixel-cat-walk {
   0% { transform: translateX(-60px); }
   45% { transform: translateX(calc(100cqw + 12px)); }

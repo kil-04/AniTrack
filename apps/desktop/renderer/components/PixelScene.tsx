@@ -26,7 +26,7 @@ export function PixelSceneCanvas({ scene, pixel = 3 }: { scene: PixelSceneId; pi
       element.height = height;
       const context = element.getContext("2d");
       if (!context) return;
-      const parts = pixelSceneParts(scene, width, height);
+      const parts = sceneParts(scene, width, height);
       for (const p of parts.rects) {
         context.fillStyle = p.color;
         context.fillRect(p.x, p.y, p.w, p.h);
@@ -44,6 +44,22 @@ export function PixelSceneCanvas({ scene, pixel = 3 }: { scene: PixelSceneId; pi
       <div ref={layer} className="pixel-actors" aria-hidden="true" />
     </>
   );
+}
+
+/**
+ * A scene's parts at a size, worked out once: going back to a page (or Home, with its banners
+ * between the rows) draws the picture it drew before instead of composing it again.
+ */
+const partsCache = new Map<string, ReturnType<typeof pixelSceneParts>>();
+function sceneParts(scene: PixelSceneId, width: number, height: number) {
+  const key = `${scene}:${width}x${height}`;
+  let parts = partsCache.get(key);
+  if (!parts) {
+    parts = pixelSceneParts(scene, width, height);
+    if (partsCache.size >= 40) partsCache.delete(partsCache.keys().next().value!);
+    partsCache.set(key, parts);
+  }
+  return parts;
 }
 
 /** One moving part: its own canvas, placed in percent of the scene so it scales with it. */

@@ -4,6 +4,7 @@ import PageHeader from "../components/PageHeader";
 import LatestEpCard from "../components/LatestEpCard";
 import { useAppStore } from "../store/useAppStore";
 import type { RecentEpisode } from "../../../../packages/shared/types";
+import Spinner from "../components/Spinner";
 
 interface LoadedPage {
   page: number;
@@ -67,7 +68,7 @@ export default function LatestEpisodes() {
     <div ref={top} className="mx-auto max-w-[1500px] scroll-mt-6 px-8 py-8">
       <PageHeader scene="tower" icon={Sparkles} title="Latest Episodes" subtitle="Recently aired episodes across AniList, newest first">
         <button onClick={refresh} disabled={busy} className="btn btn-ghost btn-sm">
-          <RefreshCw size={13} className={busy ? "animate-spin" : ""} />
+          <Spinner icon={RefreshCw} size={13} spinning={busy} />
           Refresh
         </button>
       </PageHeader>

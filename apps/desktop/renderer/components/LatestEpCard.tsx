@@ -52,13 +52,13 @@ const LatestEpCard = React.memo(function LatestEpCard({ ep, className = "w-full"
 
   return (
     <>
-      <div className={className}>
+      <div className={`rise-in ${className ?? ""}`}>
         <Link
           to={`/anime/${anime.id}`}
           ref={cardRef}
           onMouseEnter={showTooltip}
           onMouseLeave={() => setIsHovered(false)}
-          className="group relative block aspect-[16/9] w-full overflow-hidden rounded-2xl bg-surface-1 shadow-card outline-none ring-1 ring-white/[0.06] transition-all duration-300 ease-out hover:z-10 hover:-translate-y-1.5 hover:shadow-glow-lg hover:ring-2 hover:ring-accent/70"
+          className="group relative block aspect-[16/9] w-full card-fx overflow-hidden rounded-2xl bg-surface-1 shadow-card outline-none ring-1 ring-white/[0.06] transition-all duration-300 ease-out hover:z-10 hover:-translate-y-1.5 hover:shadow-glow-lg hover:ring-2 hover:ring-accent/70"
         >
           {image ? (
             <img src={image} alt={anime.title} className="h-full w-full object-cover opacity-90 transition-transform duration-700 ease-out group-hover:scale-[1.07]" loading="lazy" onLoad={(event) => rejectOversizedImage(event, anime.coverImage)} />

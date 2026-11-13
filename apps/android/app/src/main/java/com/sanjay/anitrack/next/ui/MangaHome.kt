@@ -204,11 +204,11 @@ private fun ContinueReadingCard(
     onOpen: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    Column(Modifier.width(POSTER_WIDTH.dp).clip(aniShape(12.dp)).clickable(onClick = onOpen)) {
+    Column(Modifier.width(POSTER_WIDTH.dp).pressable(aniShape(12.dp), onClick = onOpen)) {
         Box {
             PosterImage(
                 row.cover, row.title,
-                Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).clip(aniShape(12.dp)),
+                Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).coverFrame(12.dp),
             )
             Box(Modifier.matchParentSize().clip(aniShape(12.dp)).background(BottomScrim))
             Tag(
@@ -236,11 +236,11 @@ private fun ContinueReadingCard(
 @Composable
 fun MangaCard(manga: Manga, onClick: (Manga) -> Unit, width: Int? = POSTER_WIDTH) {
     val outer = if (width != null) Modifier.width(width.dp) else Modifier.fillMaxWidth()
-    Column(outer.clip(aniShape(12.dp)).clickable { onClick(manga) }) {
+    Column(outer.pressable(aniShape(12.dp)) { onClick(manga) }) {
         Box {
             PosterImage(
                 manga.cover, manga.title,
-                Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).clip(aniShape(12.dp)),
+                Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).coverFrame(12.dp),
             )
             manga.kind?.takeIf { it != "Manga" }?.let { kind ->
                 Tag(kind, Modifier.align(Alignment.TopStart).padding(6.dp), tone = TagTone.Glass)

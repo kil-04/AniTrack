@@ -5,16 +5,21 @@ import App from "./App";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { lastMode, modeHome } from "./lib/manga-api";
 import { applySkin } from "./lib/skin";
+import { installImageFade } from "./lib/motion";
 import "./index.css";
 
 // Pixel mode (or not) before the first paint, so the app never flashes the other look.
 applySkin();
+installImageFade();
 
 function renderApp() {
   ReactDOM.createRoot(document.getElementById("root")!).render(
     <React.StrictMode>
       <ErrorBoundary>
-        <HashRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        {/* No v7_startTransition: as a transition, a page change was rendered in slices that any
+            timer on the old page (the hero rail, the jukebox) restarted, so a click could take
+            seconds to show. A page change now renders at once, like any other click. */}
+        <HashRouter future={{ v7_relativeSplatPath: true }}>
           <App />
         </HashRouter>
       </ErrorBoundary>

@@ -31,8 +31,8 @@ export function NovelCover({ cover, title, className = "" }: { cover: string | n
 /** A novel cover card: art, status, rating, and an optional badge (e.g. "Ch 12"). */
 export function NovelCard({ novel, badge, size, showSource }: { novel: Card; badge?: string | null; size?: "row"; showSource?: boolean }) {
   return (
-    <Link to={novelTitlePath(novel.sourceId, novel.id)} className={`group block ${size === "row" ? "w-40 flex-shrink-0" : ""}`}>
-      <div className="relative aspect-[2/3] overflow-hidden rounded-2xl bg-surface-1 shadow-card ring-1 ring-white/[0.06] transition-all duration-300 ease-out group-hover:-translate-y-1.5 group-hover:shadow-glow-lg group-hover:ring-2 group-hover:ring-accent/70">
+    <Link to={novelTitlePath(novel.sourceId, novel.id)} className={`rise-in group block ${size === "row" ? "w-40 flex-shrink-0" : ""}`}>
+      <div className="relative aspect-[2/3] card-fx overflow-hidden rounded-2xl bg-surface-1 shadow-card ring-1 ring-white/[0.06] transition-all duration-300 ease-out group-hover:-translate-y-1.5 group-hover:shadow-glow-lg group-hover:ring-2 group-hover:ring-accent/70">
         <NovelCover cover={novel.cover} title={novel.title} className="transition duration-700 ease-out group-hover:scale-[1.07]" />
         <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/90 to-transparent" />
         {novel.status === "completed" && <span className="badge badge-glass absolute left-2 top-2">Complete</span>}
@@ -71,7 +71,7 @@ export function NovelRow({ title, items, action }: { title: string; items: Card[
         <button onClick={() => scroll(-1)} className="absolute left-2 top-1/2 z-30 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full glass shadow-pop transition hover:scale-105 group-hover/row:flex" aria-label="Scroll left">
           <ChevronLeft size={26} />
         </button>
-        <div ref={scroller} className="no-scrollbar flex gap-4 overflow-x-auto px-8 pb-4 pt-2">
+        <div ref={scroller} className="stagger no-scrollbar flex gap-4 overflow-x-auto px-8 pb-4 pt-2">
           {items.map((novel) => <NovelCard key={`${novel.sourceId}:${novel.id}`} novel={novel} size="row" />)}
         </div>
         <button onClick={() => scroll(1)} className="absolute right-2 top-1/2 z-30 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full glass shadow-pop transition hover:scale-105 group-hover/row:flex" aria-label="Scroll right">

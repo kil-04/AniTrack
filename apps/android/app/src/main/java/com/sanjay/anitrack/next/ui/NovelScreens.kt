@@ -81,9 +81,9 @@ internal fun NovelCover(cover: String?, title: String, modifier: Modifier = Modi
 @Composable
 fun NovelCardView(novel: NovelCard, onOpen: OpenNovel, width: Int? = POSTER_WIDTH, badge: String? = null) {
     val outer = if (width != null) Modifier.width(width.dp) else Modifier.fillMaxWidth()
-    Column(outer.clip(aniShape(12.dp)).clickable { onOpen(novel.source, novel.id) }) {
+    Column(outer.pressable(aniShape(12.dp)) { onOpen(novel.source, novel.id) }) {
         Box {
-            NovelCover(novel.cover, novel.title, Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).clip(aniShape(12.dp)))
+            NovelCover(novel.cover, novel.title, Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).coverFrame(12.dp))
             if (novel.status == "completed") Tag("Complete", Modifier.align(Alignment.TopStart).padding(6.dp), tone = TagTone.Glass)
             if (novel.mtl) Tag("MTL", Modifier.align(Alignment.TopStart).padding(6.dp), tone = TagTone.Glass)
             novel.rating?.let { ScoreBadge("%.1f".format(it), Modifier.align(Alignment.TopEnd).padding(6.dp), onImage = true) }
@@ -160,9 +160,9 @@ fun NovelHomeScreen(onOpen: OpenNovel, onRead: () -> Unit, onBrowseGenre: (Strin
                 LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     items(reading, key = { "${it.source.key}:${it.titleId}" }) { row ->
                         val fresh = updates.firstOrNull { it.source == row.source && it.titleId == row.titleId }?.newCount ?: 0
-                        Column(Modifier.width(POSTER_WIDTH.dp).clip(aniShape(12.dp)).clickable { resume(row) }) {
+                        Column(Modifier.width(POSTER_WIDTH.dp).pressable(aniShape(12.dp)) { resume(row) }) {
                             Box {
-                                NovelCover(row.cover, row.title, Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).clip(aniShape(12.dp)))
+                                NovelCover(row.cover, row.title, Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).coverFrame(12.dp))
                                 Box(Modifier.matchParentSize().clip(aniShape(12.dp)).background(BottomScrim))
                                 if (fresh > 0) Tag("+$fresh NEW", Modifier.align(Alignment.TopStart).padding(8.dp), tone = TagTone.SuccessSolid)
                                 else Tag(row.chapterLabel.uppercase(), Modifier.align(Alignment.TopStart).padding(8.dp), tone = TagTone.Accent)
@@ -614,7 +614,7 @@ fun NovelDetailScreen(source: NovelSourceId, titleId: String, onRead: () -> Unit
                 PosterImage(d.card.cover, null, Modifier.fillMaxWidth().height(280.dp).blur(32.dp))
                 Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.45f), AniColors.Bg))))
                 Row(Modifier.padding(start = 24.dp, end = 24.dp, top = 40.dp), verticalAlignment = Alignment.Bottom) {
-                    NovelCover(d.card.cover, d.card.title, Modifier.width(if (wide) 170.dp else 120.dp).aspectRatio(1f / POSTER_RATIO).clip(aniShape(14.dp)))
+                    NovelCover(d.card.cover, d.card.title, Modifier.width(if (wide) 170.dp else 120.dp).aspectRatio(1f / POSTER_RATIO).coverFrame(14.dp))
                     Spacer(Modifier.width(20.dp))
                     Column(Modifier.weight(1f)) {
                         Text(d.card.title, style = MaterialTheme.typography.headlineMedium, color = Color.White, maxLines = 3, overflow = TextOverflow.Ellipsis)

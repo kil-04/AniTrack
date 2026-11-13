@@ -385,7 +385,12 @@ fun AppShell() {
                 // it holds still while the player or a reader is in front.
                 if (com.sanjay.anitrack.next.ui.AniColors.pixelMode.value) {
                     com.sanjay.anitrack.next.ui.PixelAmbient(Modifier.matchParentSize(), animate = !hideChrome)
+                } else if (!hideChrome) {
+                    com.sanjay.anitrack.next.ui.AniBackdrop(Modifier.matchParentSize())
                 }
+                // Screens change with the navigation library's own cross-fade: the old screen fades out
+                // as the new one fades in, over the same time. (A quicker, stepped version was tried on
+                // 13 Nov 2026 and felt disconnected on the tablet, so it was taken out again.)
                 NavHost(nav, startDestination = "home") {
                     composable("home") {
                         com.sanjay.anitrack.next.ui.HomeScreen(

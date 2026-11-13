@@ -204,7 +204,7 @@ function HeroCarousel({ items, reading }: { items: Card[]; reading: NovelReading
     <section
       onMouseEnter={() => { paused.current = true; }}
       onMouseLeave={() => { paused.current = false; }}
-      className="group/hero relative mx-8 mb-12 mt-6 h-[min(54vh,520px)] min-h-[400px] overflow-hidden rounded-[28px] bg-surface-1 shadow-pop ring-1 ring-white/[0.07]"
+      className="group/hero relative mx-8 mb-12 mt-6 h-[min(54vh,520px)] min-h-[400px] hero-fx overflow-hidden rounded-[28px] bg-surface-1 shadow-pop ring-1 ring-white/[0.07]"
     >
       {items.map((item, i) => (
         item.cover ? (

@@ -8,6 +8,7 @@ import {
   Home,
   Loader2,
 } from "lucide-react";
+import Spinner from "../components/Spinner";
 
 export default function StreamingPage() {
   const [params] = useSearchParams();
@@ -107,7 +108,7 @@ export default function StreamingPage() {
           onClick={() => webviewRef.current?.reload()}
           className="flex h-7 w-7 items-center justify-center rounded text-white/60 hover:bg-white/10"
         >
-          {loading ? <Loader2 size={14} className="animate-spin" /> : <RotateCcw size={14} />}
+          {loading ? <Spinner size={14} /> : <RotateCcw size={14} />}
         </button>
         <button
           onClick={() => webviewRef.current?.loadURL("https://anikototv.to/")}

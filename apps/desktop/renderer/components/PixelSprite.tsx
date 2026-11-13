@@ -22,9 +22,11 @@ export const PixelSprite = memo(function PixelSprite({ id, scale = 2, className 
 /** Pixel mode's dog, sitting on a panel's top edge and wagging its tail: two frames taking turns (Android: PixelDog). */
 export function PixelDog() {
   return (
+    // Each frame sits in a span and the span is what blinks: an opacity animation on the
+    // <svg> itself runs on the main thread (see Spinner.tsx).
     <span className="pixel-dog" aria-hidden="true">
-      <PixelSprite id="dog-sit-1" scale={2} />
-      <PixelSprite id="dog-sit-2" scale={2} className="pixel-frame-b" />
+      <span><PixelSprite id="dog-sit-1" scale={2} /></span>
+      <span className="pixel-frame-b"><PixelSprite id="dog-sit-2" scale={2} /></span>
     </span>
   );
 }
@@ -34,8 +36,8 @@ export function PixelWalker() {
   return (
     <div className="pixel-walker" aria-hidden="true">
       <span className="pixel-walker-cat">
-        <PixelSprite id="cat-walk-1" scale={2} />
-        <PixelSprite id="cat-walk-2" scale={2} className="pixel-frame-b" />
+        <span><PixelSprite id="cat-walk-1" scale={2} /></span>
+        <span className="pixel-frame-b"><PixelSprite id="cat-walk-2" scale={2} /></span>
       </span>
     </div>
   );

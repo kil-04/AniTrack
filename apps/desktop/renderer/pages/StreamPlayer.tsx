@@ -72,6 +72,7 @@ import {
   sleepStopsAtEpisodeEnd,
   type SleepMode,
 } from "../../../../packages/shared/sleep-timer";
+import Spinner from "../components/Spinner";
 
 installMediaSourceCodecShim();
 
@@ -2415,7 +2416,7 @@ export default function StreamPlayer({
             <div className="truncate text-sm font-semibold">{animeTitle}</div>
             {currentEp && <div className="text-xs text-white/50">Episode {currentEp.episodeNumber ?? currentEp.episode}</div>}
           </div>
-          {loadingStream && <Loader2 size={14} className="animate-spin text-white/40" />}
+          {loadingStream && <Spinner size={14} className="text-white/40" />}
         </div>
 
         {/* Video — 16:9 in portrait, full-bleed in fullscreen, fills the card when mini */}
@@ -2468,7 +2469,7 @@ export default function StreamPlayer({
           {animeTitle}
         </button>
         {currentEp && <span className="text-sm text-white/50">— Episode {currentEp.episodeNumber ?? currentEp.episode}</span>}
-        {loadingStream && <Loader2 size={13} className="ml-auto animate-spin text-white/40" />}
+        {loadingStream && <Spinner size={13} className="ml-auto text-white/40" />}
         {streamError && !loadingStream && (
           <span className="ml-auto max-w-xs truncate text-xs text-red-400">{streamError}</span>
         )}

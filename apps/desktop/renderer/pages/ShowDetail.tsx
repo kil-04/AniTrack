@@ -208,7 +208,7 @@ export default function ShowDetail() {
     <div className="relative pb-16">
 
       {/* Banner */}
-      <div className="relative h-[46vh] max-h-[480px] min-h-[320px] w-full overflow-hidden">
+      <div className="banner-fade relative h-[46vh] max-h-[480px] min-h-[320px] w-full overflow-hidden">
         {bannerSrc && (
           <img src={bannerSrc} alt="" className="h-full w-full scale-105 object-cover object-top" onLoad={(event) => rejectOversizedImage(event, anime.coverImage)} />
         )}

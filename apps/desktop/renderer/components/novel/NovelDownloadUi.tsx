@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Download, HardDriveDownload, Loader2, RotateCcw, Square, Trash2, X } from "lucide-react";
 import type { NovelChapter, NovelDownloadTitle } from "../../../../../packages/shared/novel";
 import { humanBytes } from "../../lib/novel-api";
+import Spinner from "../Spinner";
 
 const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
 
@@ -12,9 +13,9 @@ export function ChapterSaveMark({ state, onSave }: { state: "none" | "queued" | 
     case "saved":
       return <span className={`${box} text-emerald-400`} title="Saved: reads offline"><HardDriveDownload size={16} /></span>;
     case "saving":
-      return <span className={`${box} text-accent`} title="Saving now"><Loader2 size={16} className="animate-spin" /></span>;
+      return <span className={`${box} text-accent`} title="Saving now"><Spinner size={16} /></span>;
     case "queued":
-      return <span className={`${box} text-white/40`} title="Waiting to save"><Loader2 size={15} className="animate-spin" /></span>;
+      return <span className={`${box} text-white/40`} title="Waiting to save"><Spinner size={15} /></span>;
     case "failed":
       return (
         <button onClick={onSave} className={`${box} text-red-400 hover:bg-white/10`} title="Couldn't save this chapter. Click to retry.">
@@ -81,7 +82,7 @@ export function NovelDownloadButton({
   return (
     <div ref={box} className="relative">
       <button onClick={() => setOpen(!open)} className="btn btn-secondary btn-lg" title="Save chapters to read offline">
-        {busy ? <Loader2 size={17} className="animate-spin" /> : <Download size={17} />}
+        {busy ? <Spinner size={17} /> : <Download size={17} />}
         {busy ? `Saving · ${state!.queued.toLocaleString()} left` : state?.saved ? `${state.saved.toLocaleString()} offline` : "Download"}
       </button>
       {open && (

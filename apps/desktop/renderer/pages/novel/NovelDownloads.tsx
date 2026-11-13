@@ -6,6 +6,7 @@ import { novelSourceLabel } from "../../../../../packages/shared/novel";
 import { NovelCover } from "../../components/novel/NovelCards";
 import { useNovelDownloads } from "../../hooks/useNovelDownloads";
 import { humanBytes, novelApi, novelTitlePath } from "../../lib/novel-api";
+import Spinner from "../../components/Spinner";
 
 /** Novels saved to read offline, with live progress for the ones still downloading. */
 export default function NovelDownloads() {
@@ -49,7 +50,7 @@ export default function NovelDownloads() {
                   {busy && (
                     <div className="mt-3">
                       <div className="mb-1 flex items-center gap-2 text-xs text-ink-2">
-                        <Loader2 size={12} className="animate-spin text-accent" />
+                        <Spinner size={12} className="text-accent" />
                         <span className="truncate">{t.current ? `Saving ${t.current}` : "Waiting…"} · {t.queued.toLocaleString()} left</span>
                       </div>
                       <div className="h-1.5 overflow-hidden rounded-full bg-white/10">

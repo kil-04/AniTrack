@@ -2,6 +2,7 @@ import type { FormEventHandler } from "react";
 import { ChevronDown, Loader2 } from "lucide-react";
 import { streamVariant } from "../../lib/provider-api";
 import SelectField from "../SelectField";
+import Spinner from "../Spinner";
 
 export interface EpisodeRange {
   start: number;
@@ -173,7 +174,7 @@ export function StreamEpisodePanel({
       <div className="flex-1 overflow-y-auto p-2">
         {loading ? (
           <div className="flex h-20 items-center justify-center">
-            <Loader2 size={16} className="animate-spin text-white/40" />
+            <Spinner size={16} className="text-white/40" />
           </div>
         ) : (
           <div className="grid grid-cols-5 gap-1">

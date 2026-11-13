@@ -40,7 +40,7 @@ const Row = React.memo(function Row({ title, children }: Props) {
         </button>
         <div
           ref={ref}
-          className="no-scrollbar flex gap-4 overflow-x-auto scroll-smooth px-8 pb-4 pt-2"
+          className="stagger no-scrollbar flex gap-4 overflow-x-auto scroll-smooth px-8 pb-4 pt-2"
         >
           {children}
         </div>

@@ -3,7 +3,6 @@ import { Link } from "react-router-dom";
 import { createPortal } from "react-dom";
 import type { AnimeMeta } from "../../../../packages/shared/types";
 import { Play, Captions, Star } from "lucide-react";
-import { motion } from "framer-motion";
 
 interface Props {
   anime: AnimeMeta;
@@ -108,12 +107,7 @@ const Card = React.memo(function Card({ anime, progressPercent, episode, size }:
 
   return (
     <>
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4, ease: "easeOut" }}
-        className={`shrink-0 ${fixed ? sizing : ""}`}
-      >
+      <div className={`rise-in shrink-0 ${fixed ? sizing : ""}`}>
         <Link
           to={`/anime/${anime.id}`}
           state={{ anime: displayAnime }}
@@ -122,7 +116,7 @@ const Card = React.memo(function Card({ anime, progressPercent, episode, size }:
           onMouseLeave={() => setIsHovered(false)}
           className={`group block w-full h-full ${fixed ? "" : sizing} outline-none`}
         >
-          <div className="relative h-full w-full overflow-hidden rounded-2xl bg-surface-1 shadow-card ring-1 ring-white/[0.06] transition-all duration-300 ease-out group-hover:z-10 group-hover:-translate-y-1.5 group-hover:shadow-glow-lg group-hover:ring-2 group-hover:ring-accent/70">
+          <div className="relative h-full w-full card-fx overflow-hidden rounded-2xl bg-surface-1 shadow-card ring-1 ring-white/[0.06] transition-all duration-300 ease-out group-hover:z-10 group-hover:-translate-y-1.5 group-hover:shadow-glow-lg group-hover:ring-2 group-hover:ring-accent/70">
             {anime.coverImage ? (
               <img src={anime.coverImage} alt={anime.title} className="h-full w-full object-cover transition-transform duration-700 ease-out group-hover:scale-[1.07]" loading="lazy" />
             ) : (
@@ -180,7 +174,7 @@ const Card = React.memo(function Card({ anime, progressPercent, episode, size }:
             )}
           </div>
         </Link>
-      </motion.div>
+      </div>
       {tooltipPortal}
     </>
   );

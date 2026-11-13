@@ -63,7 +63,7 @@ export default function MangaHome() {
   return (
     <div className="pb-16">
       {hero ? (
-        <section className="relative mx-8 mb-12 mt-6 h-[min(56vh,540px)] min-h-[400px] overflow-hidden rounded-[28px] bg-surface-1 shadow-pop ring-1 ring-white/[0.07]">
+        <section className="relative mx-8 mb-12 mt-6 h-[min(56vh,540px)] min-h-[400px] hero-fx overflow-hidden rounded-[28px] bg-surface-1 shadow-pop ring-1 ring-white/[0.07]">
           {hero.banner || hero.cover ? (
             <img src={hero.banner ?? hero.cover!} alt="" className="absolute inset-0 h-full w-full scale-[1.04] object-cover object-center" />
           ) : null}

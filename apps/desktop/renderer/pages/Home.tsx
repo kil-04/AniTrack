@@ -16,11 +16,16 @@ import { ThemeRadioButton } from "../components/ThemeSongs";
 import { providerClient } from "../lib/provider-api";
 import { rejectOversizedImage, safeImageSrc } from "../lib/image-guard";
 import { useSkin } from "../lib/skin";
+import { useAfterPaint } from "../lib/motion";
 import { PixelSprite, PixelWalker } from "../components/PixelSprite";
 import { PixelInterlude } from "../components/PixelScene";
+import Spinner from "../components/Spinner";
 
 export default function Home() {
   const pixel = useSkin() === "pixel";
+  // The rows below the fold mount after the top of the page is on screen, so opening Home
+  // shows its hero at once instead of waiting for every row to render.
+  const belowFold = useAfterPaint();
   const trending = useAppStore((s) => s.trending);
   const recommendations = useAppStore((s) => s.recommendations);
   const latestEpisodes = useAppStore((s) => s.latestEpisodes);
@@ -249,7 +254,7 @@ export default function Home() {
           onMouseUp={handleMouseUp}
           onWheel={handleWheel}
           onDragStart={(e) => e.preventDefault()}
-          className="group relative mx-8 mb-12 mt-6 h-[min(64vh,600px)] min-h-[440px] shrink-0 cursor-grab select-none overflow-hidden rounded-[28px] bg-surface-1 shadow-pop ring-1 ring-white/[0.07] active:cursor-grabbing"
+          className="group relative mx-8 mb-12 mt-6 h-[min(64vh,600px)] min-h-[440px] shrink-0 cursor-grab select-none hero-fx overflow-hidden rounded-[28px] bg-surface-1 shadow-pop ring-1 ring-white/[0.07] active:cursor-grabbing"
         >
           {heroItems.map((anime, idx) => (
             <div
@@ -339,7 +344,7 @@ export default function Home() {
                   className="h-full w-full object-cover"
                 />
                 {idx === heroIndex && (
-                  <span key={heroIndex} className="absolute bottom-0 left-0 h-[3px] bg-accent-gradient animate-[heroProgress_8s_linear_forwards]" />
+                  <span key={heroIndex} className="absolute inset-x-0 bottom-0 h-[3px] origin-left bg-accent-gradient animate-[heroProgress_8s_linear_forwards]" />
                 )}
               </button>
             ))}
@@ -375,7 +380,7 @@ export default function Home() {
               disabled={cwRefreshing}
               className="btn btn-ghost btn-sm"
             >
-              <RefreshCw size={13} className={cwRefreshing ? "animate-spin" : ""} />
+              <Spinner icon={RefreshCw} size={13} spinning={cwRefreshing} />
               Refresh
             </button>
           </SectionHeader>
@@ -418,7 +423,7 @@ export default function Home() {
             disabled={latestLoading}
             className="btn btn-ghost btn-sm"
           >
-            <RefreshCw size={13} className={latestLoading ? "animate-spin" : ""} />
+            <Spinner icon={RefreshCw} size={13} spinning={latestLoading} />
             Refresh
           </button>
           <Link to="/latest" className="btn btn-ghost btn-sm">
@@ -448,7 +453,7 @@ export default function Home() {
       {pixel && <PixelInterlude scene="station" title="Tonight's line-up" subtitle="Episodes airing this week, in your time zone" to="/schedule" />}
 
       {/* Discovery sections + Top 10 sidebar (Anikoto-style) */}
-      <div className="flex gap-4">
+      {belowFold && <div className="flex gap-4">
         <div className="min-w-0 flex-1">
           {recommendationCards.length > 0 && (
             <Row title="For You">
@@ -474,7 +479,7 @@ export default function Home() {
             <Top10Sidebar />
           </div>
         </aside>
-      </div>
+      </div>}
       {/* Pixel mode ends Home on a little scene, as the Android app does. */}
       {pixel && (
         <footer className="pixel-footer" aria-hidden="true">

@@ -28,6 +28,7 @@ import { ChapterSaveMark, NovelDownloadButton } from "../../components/novel/Nov
 import { useNovelTitleDownloads } from "../../hooks/useNovelDownloads";
 import { novelApi, novelReaderPath, novelTitlePath, unwrap } from "../../lib/novel-api";
 import { novelReadingChanged, novelRemoved, onNovelSync, syncNovelReading } from "../../lib/novel-sync";
+import Spinner from "../../components/Spinner";
 
 const PAGE = 100;
 
@@ -335,7 +336,7 @@ export default function NovelDetail() {
                   className={`chip ${on ? "chip-active" : ""}`}
                   title={on ? `Reading from ${s.label}` : has ? `Switch to ${s.label}` : `Find this novel on ${s.label}`}
                 >
-                  {busy ? <Loader2 size={12} className="animate-spin" /> : has ? <Link2 size={12} className={on ? "text-accent" : ""} /> : <Search size={12} />}
+                  {busy ? <Spinner size={12} /> : has ? <Link2 size={12} className={on ? "text-accent" : ""} /> : <Search size={12} />}
                   {s.label}
                 </button>
               );
@@ -401,7 +402,7 @@ export default function NovelDetail() {
               <span>{list.length.toLocaleString()} chapters on {novelSourceLabel(sourceId)}</span>
               {downloads.saved.size > 0 && <span className="text-emerald-300/80">{downloads.saved.size.toLocaleString()} saved offline</span>}
               {chapters.naming && (
-                <span className="flex items-center gap-1.5"><Loader2 size={11} className="animate-spin" /> Later chapter names are still loading; every chapter can be read already.</span>
+                <span className="flex items-center gap-1.5"><Spinner size={11} /> Later chapter names are still loading; every chapter can be read already.</span>
               )}
               {chapters.stale && (
                 <span className="flex items-center gap-2 text-amber-300/80">

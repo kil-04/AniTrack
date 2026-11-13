@@ -33,6 +33,7 @@ import { mangaApi, setTitlePref, titlePref } from "../../lib/manga-api";
 import { followMangaDownloads, useMangaDownloads } from "../../store/useMangaDownloads";
 import { useMangaReader } from "../../store/useMangaReader";
 import { mangaReadingChanged, onMangaSync, syncMangaReading, unmarkMangaChapters } from "../../lib/manga-sync";
+import Spinner from "../../components/Spinner";
 
 type Load =
   | { state: "loading" }
@@ -444,7 +445,7 @@ export default function MangaDetail() {
             <div className="mb-3 flex flex-wrap items-center gap-x-2 text-xs text-ink-3">
               <span>{reading.length} chapters on {ready.source.label}{activeGroup ? ` · ${activeGroup}` : ""}{offline ? ` · ${offline} downloaded` : ""}</span>
               {ready.saved != null && ready.refresh === "loading" && (
-                <span className="flex items-center gap-1.5"><RefreshCw size={11} className="animate-spin" /> Refreshing (list from {ago(ready.saved)})</span>
+                <span className="flex items-center gap-1.5"><Spinner icon={RefreshCw} size={11} /> Refreshing (list from {ago(ready.saved)})</span>
               )}
               {ready.saved != null && ready.refresh != null && ready.refresh !== "loading" && (
                 <span className="flex items-center gap-2 text-amber-300/80">

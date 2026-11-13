@@ -2,7 +2,6 @@ import React, { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { Play, X } from "lucide-react";
-import { motion } from "framer-motion";
 import { secondsToTimestamp } from "../lib/format";
 import { deleteAnimeProgress } from "../lib/supabase-sync";
 import { downloadsSupported, getDownloads } from "../lib/downloads";
@@ -117,12 +116,7 @@ const ContinueWatchingCard = React.memo(function ContinueWatchingCard({ item, pa
   ) : null;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, scale: 0.95 }}
-      animate={{ opacity: 1, scale: 1 }}
-      transition={{ duration: 0.4, ease: "easeOut" }}
-      className="group relative w-72 shrink-0"
-    >
+    <div className="rise-in group relative w-72 shrink-0">
       <button
         onClick={(e) => {
           e.preventDefault();
@@ -143,7 +137,7 @@ const ContinueWatchingCard = React.memo(function ContinueWatchingCard({ item, pa
         onMouseLeave={() => setIsHovered(false)}
         className="block outline-none"
       >
-        <div className="relative aspect-video w-72 overflow-hidden rounded-2xl bg-surface-1 shadow-card ring-1 ring-white/[0.06] transition-all duration-300 ease-out group-hover:z-10 group-hover:-translate-y-1.5 group-hover:shadow-glow-lg group-hover:ring-2 group-hover:ring-accent/70">
+        <div className="relative aspect-video w-72 card-fx overflow-hidden rounded-2xl bg-surface-1 shadow-card ring-1 ring-white/[0.06] transition-all duration-300 ease-out group-hover:z-10 group-hover:-translate-y-1.5 group-hover:shadow-glow-lg group-hover:ring-2 group-hover:ring-accent/70">
           {displayAnime.coverImage ? (
             <img
               src={displayAnime.coverImage}
@@ -201,7 +195,7 @@ const ContinueWatchingCard = React.memo(function ContinueWatchingCard({ item, pa
         </div>
       </Link>
       {tooltipPortal}
-    </motion.div>
+    </div>
   );
 });
 

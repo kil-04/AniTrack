@@ -114,7 +114,7 @@ internal fun StorySection(anime: Anime, onOpenManga: (Int) -> Unit) {
     ) {
         PosterImage(
             book.cover, book.title,
-            Modifier.width(if (wide) 96.dp else 78.dp).aspectRatio(1f / POSTER_RATIO).clip(aniShape(10.dp)),
+            Modifier.width(if (wide) 96.dp else 78.dp).aspectRatio(1f / POSTER_RATIO).coverFrame(10.dp),
         )
         Spacer(Modifier.width(16.dp))
         Column(Modifier.weight(1f)) {
@@ -190,11 +190,11 @@ internal fun MoreInPrintSection(anime: Anime, onOpenManga: (Int) -> Unit) {
             items(more.size) { i ->
                 val link = more[i]
                 val book = link.manga
-                Column(Modifier.width(118.dp).clip(aniShape(12.dp)).clickable { onOpenManga(book.id) }) {
+                Column(Modifier.width(118.dp).pressable(aniShape(12.dp)) { onOpenManga(book.id) }) {
                     Box {
                         PosterImage(
                             book.cover, book.title,
-                            Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).clip(aniShape(12.dp)),
+                            Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).coverFrame(12.dp),
                         )
                         Tag(
                             printRelationLabels[link.type] ?: link.type.lowercase().replaceFirstChar { it.uppercase() },
@@ -243,11 +243,11 @@ internal fun AdaptationsSection(manga: Manga, onOpenAnime: (Int) -> Unit) {
         LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             items(shows.size) { i ->
                 val show = shows[i]
-                Column(Modifier.width(128.dp).clip(aniShape(12.dp)).clickable { onOpenAnime(show.id) }) {
+                Column(Modifier.width(128.dp).pressable(aniShape(12.dp)) { onOpenAnime(show.id) }) {
                     Box {
                         PosterImage(
                             show.cover, show.title,
-                            Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).clip(aniShape(12.dp)),
+                            Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).coverFrame(12.dp),
                         )
                         formatLabel(show.format)?.let {
                             Tag(it, Modifier.align(Alignment.TopStart).padding(8.dp), tone = TagTone.Glass)

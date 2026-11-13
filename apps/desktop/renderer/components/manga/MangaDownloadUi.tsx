@@ -8,6 +8,7 @@ import {
   type MangaChapter,
   type MangaDownload,
 } from "../../../../../packages/shared/manga";
+import Spinner from "../Spinner";
 
 const CONTROL = "flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full transition";
 
@@ -32,7 +33,7 @@ export function ChapterDownloadButton({ item, onDownload }: { item: MangaDownloa
         </button>
       );
     case "queued":
-      return <span className={`${CONTROL} text-white/40`} title="Queued"><Loader2 size={15} className="animate-spin" /></span>;
+      return <span className={`${CONTROL} text-white/40`} title="Queued"><Spinner size={15} /></span>;
     case "downloading":
       return <span className={CONTROL} title={`Downloading ${item.done}/${item.total}`}><ProgressRing value={item.total ? item.done / item.total : 0} /></span>;
     case "done":

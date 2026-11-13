@@ -24,11 +24,11 @@ internal const val POSTER_RATIO = 1.45f
 @Composable
 fun AnimeCard(anime: Anime, onClick: (Anime) -> Unit, width: Int? = POSTER_WIDTH) {
     val outer = if (width != null) Modifier.width(width.dp) else Modifier.fillMaxWidth()
-    Column(outer.clip(aniShape(12.dp)).clickable { onClick(anime) }) {
+    Column(outer.pressable(aniShape(12.dp)) { onClick(anime) }) {
         Box {
             PosterImage(
                 anime.cover, anime.title,
-                Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).clip(aniShape(12.dp)),
+                Modifier.fillMaxWidth().aspectRatio(1f / POSTER_RATIO).coverFrame(12.dp),
             )
             ScoreBadge(aniScore(anime.score), Modifier.align(Alignment.TopEnd).padding(6.dp), onImage = true)
         }

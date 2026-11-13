@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { fadeInWindow } from "./motion";
 
 /**
  * The app's look, per device: the midnight default, or Pixel mode (retrowave pixel art across the
@@ -40,18 +41,23 @@ function save(key: string, value: string) {
   try { localStorage.setItem(key, value); } catch { /* storage unavailable: this session only */ }
 }
 
+/** The look changes at once and the window fades in on it (lib/motion.ts) instead of snapping. */
 export function setSkin(skin: Skin) {
+  if (skin === current) return;
   current = skin;
   save(KEY, skin);
   applySkin(skin);
   listeners.forEach((listener) => listener());
+  fadeInWindow();
 }
 
 export function setPalette(next: PixelPalette) {
+  if (next === palette) return;
   palette = next;
   save(PALETTE_KEY, next);
   applySkin();
   listeners.forEach((listener) => listener());
+  fadeInWindow();
 }
 
 export function setMotion(on: boolean) {

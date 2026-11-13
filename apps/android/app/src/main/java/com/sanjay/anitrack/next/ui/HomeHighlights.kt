@@ -23,11 +23,11 @@ import com.sanjay.anitrack.next.data.Anime
 /** Landscape "Latest Episodes" card with an EP badge. */
 @Composable
 internal fun LatestCard(anime: Anime, episode: Int, onOpen: (Anime) -> Unit, modifier: Modifier = Modifier.width(232.dp)) {
-    Column(modifier.clip(aniShape(12.dp)).clickable { onOpen(anime) }) {
+    Column(modifier.pressable(aniShape(12.dp)) { onOpen(anime) }) {
         Box {
             PosterImage(
                 anime.banner ?: anime.cover, anime.title,
-                Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(aniShape(12.dp)),
+                Modifier.fillMaxWidth().aspectRatio(16f / 9f).coverFrame(12.dp),
             )
             Tag("EP $episode", Modifier.align(Alignment.TopStart).padding(8.dp), tone = TagTone.Accent)
             ScoreBadge(aniScore(anime.score), Modifier.align(Alignment.TopEnd).padding(8.dp), onImage = true)
