@@ -6,6 +6,7 @@ import {
   htmlAttribute,
 } from "./anikoto-config";
 import { anikotoFetch } from "./anikoto-browser";
+import { decodeEntities } from "../../../../../packages/shared/novel";
 
 export interface AnikotoTopItem {
   slug: string;
@@ -44,8 +45,9 @@ export function parseAnikotoTop(html: string): AnikotoTopResult {
       const poster = (p.match(/<img[^>]+src="([^"]+)"/) || [])[1] || "";
       const alt = (p.match(/alt="([^"]*)"/) || [])[1] || "";
       const nameM = p.match(/class="name[^"]*"[^>]*>\s*([^<]+?)\s*</);
-      const title = ((nameM && nameM[1]) || alt).trim();
-      const titleJp = htmlAttribute(p, anikotoSelector("searchTitleAttribute")) || "";
+      // The page writes titles as HTML ("Devils&#039; Crest"): the app shows text.
+      const title = decodeEntities((nameM && nameM[1]) || alt).trim();
+      const titleJp = decodeEntities(htmlAttribute(p, anikotoSelector("searchTitleAttribute")) || "");
       const showId = (p.match(/data-tip="([^"]*)"/) || [])[1] || "";
       const sub = (p.match(/ep-status sub[\s\S]*?<span>\s*(\d+)/) || [])[1];
       const dub = (p.match(/ep-status dub[\s\S]*?<span>\s*(\d+)/) || [])[1];

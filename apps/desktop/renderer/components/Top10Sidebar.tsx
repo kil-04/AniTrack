@@ -47,14 +47,14 @@ export default function Top10Sidebar() {
     <div className="panel relative p-4">
       {/* Pixel mode's dog keeps the chart company. */}
       {pixel && <PixelDog />}
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-lg font-bold tracking-tight">Top 10</h2>
-        <div className="flex rounded-lg border border-white/[0.07] bg-white/[0.04] p-0.5 text-[11px] font-semibold">
+      <div className="mb-4 flex items-center justify-between gap-2">
+        <h2 className="section-title shrink-0 whitespace-nowrap text-lg font-bold tracking-tight">Top 10</h2>
+        <div className="flex min-w-0 rounded-lg border border-white/[0.07] bg-white/[0.04] p-0.5 text-[11px] font-semibold">
           {tabs.map((t) => (
             <button
               key={t.id}
               onClick={() => setTab(t.id)}
-              className={`rounded-md px-2.5 py-1 transition-colors ${
+              className={`top10-tab whitespace-nowrap rounded-md px-2.5 py-1 transition-colors ${
                 tab === t.id ? "bg-accent-gradient text-white shadow-glow" : "text-ink-3 hover:text-white"
               }`}
             >

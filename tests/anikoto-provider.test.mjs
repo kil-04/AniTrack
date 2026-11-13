@@ -232,3 +232,16 @@ test("Anikoto search reads page 2 only when it is linked, or when pagination mar
   assert.equal(anikotoSearchHasNextPage(searchCard("a", "A")), true);
   assert.deepEqual(anikotoSearchCards(`<div class="m-item">x</div>`, "item"), []);
 });
+
+test("the Top 10 chart shows titles as text, not as the page's HTML", async () => {
+  const { parseAnikotoTop } = await import("../apps/desktop/main/services/providers/anikoto-top.ts");
+  const html = `<section id="top-anime"><div class="tab-content" data-name="day">
+    <a class="item" href="/watch/devils-crest-abc12" data-tip="77"><img src="https://img.test/a.jpg" alt="Devils&#039; Crest">
+      <div class="name d-title" data-jp="Akuma no Monsh&#333; &amp; Co.">Devils&#039; Crest</div></a>
+    <a class="item" href="/watch/returner-xyz34"><img src="https://img.test/b.jpg" alt="x">
+      <div class="name d-title" data-jp="">A Returner&#39;s Magic &amp; More</div></a>
+  </div></section>`;
+  const top = parseAnikotoTop(html);
+  assert.deepEqual(top.day.map((item) => item.title), ["Devils' Crest", "A Returner's Magic & More"]);
+  assert.equal(top.day[0].titleJp, "Akuma no Monshō & Co.");
+});
