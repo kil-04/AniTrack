@@ -3,17 +3,29 @@ import assert from "node:assert/strict";
 import { RequestPace } from "../apps/desktop/main/services/novel/pace.ts";
 
 // The request budget Novel Phoenix's reader, chapter-list fill and downloads share.
+// Timers can run late on a busy machine but never early, so these tests check what
+// is let through at once, the order, and minimum waits: never how fast something was.
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Lets every already-granted request settle, without letting any timer fire. */
+const settle = () => new Promise((resolve) => setImmediate(resolve));
 
 test("request pace: a burst goes at once, then one request per refill", async () => {
-  const pace = new RequestPace(3, 40);
+  // A refill far longer than any stall of the machine: only the burst can have gone when we look.
+  const burst = new RequestPace(3, 1500);
+  let gone = 0;
+  const fourth = Array.from({ length: 4 }, () => burst.take().then(() => { gone++; }));
+  await settle();
+  assert.equal(gone, 3, "the first three go at once");
+  const waited = Date.now();
+  await Promise.all(fourth);
+  assert.ok(Date.now() - waited >= 1000, "the fourth waits for a refill");
+
+  // After the burst, each request waits at least one more refill.
+  const pace = new RequestPace(1, 40);
   const started = Date.now();
   const at = [];
-  await Promise.all(Array.from({ length: 6 }, () => pace.take().then(() => at.push(Date.now() - started))));
-  assert.equal(at.length, 6);
-  assert.ok(at[2] < 30, `the first three go at once (${at})`);
-  // Timers can run late but never early: each later request waits at least one more refill.
-  assert.ok(at[3] >= 35 && at[4] >= 75 && at[5] >= 115, `the rest are spaced (${at})`);
+  await Promise.all(Array.from({ length: 4 }, () => pace.take().then(() => at.push(Date.now() - started))));
+  assert.ok(at[1] >= 35 && at[2] >= 75 && at[3] >= 115, `the rest are spaced (${at})`);
 });
 
 test("request pace: what's on screen goes before background work, oldest first among equals", async () => {
@@ -36,7 +48,9 @@ test("request pace: an idle budget fills back up, but never past its burst", asy
   await sleep(150);
   const started = Date.now();
   const at = [];
-  await Promise.all(Array.from({ length: 3 }, () => pace.take().then(() => at.push(Date.now() - started))));
-  assert.ok(at[1] < 15, `two are ready after a rest (${at})`);
-  assert.ok(at[2] >= 15, `the third still waits (${at})`);
+  const all = Array.from({ length: 3 }, () => pace.take().then(() => at.push(Date.now() - started)));
+  await settle();
+  assert.equal(at.length, 2, "two are ready after a rest, however long it was");
+  await Promise.all(all);
+  assert.ok(at[2] >= 15, `the third still waits for a refill (${at})`);
 });

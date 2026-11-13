@@ -76,6 +76,17 @@ android {
             )
             if (releaseSigningReady) signingConfig = signingConfigs.getByName("release")
         }
+        // The release build's optimisation in the debug app's seat: same package id and key as
+        // the debug build, so it installs over the debug app (never the signed one) and keeps its
+        // data. For judging how smooth a change really is on a device: a debug build runs
+        // unoptimised code and drops far more frames than what ships. No debug-only probes.
+        create("qa") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-qa"
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
+        }
     }
 
     buildFeatures {
